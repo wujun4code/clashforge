@@ -1,0 +1,53 @@
+[core]
+binary = "/usr/bin/mihomo"
+runtime_dir = "/var/run/metaclash"
+data_dir = "/etc/metaclash"
+geoip_path = "/usr/share/metaclash/Country.mmdb"
+geosite_path = "/usr/share/metaclash/geosite.dat"
+max_restarts = 3
+
+[ports]
+http = 7890
+socks = 7891
+mixed = 7893
+redir = 7892
+tproxy = 7895
+dns = 7874
+mihomo_api = 9090
+ui = 7777
+
+[network]
+mode = "tproxy"
+firewall_backend = "auto"
+bypass_lan = true
+bypass_china = false
+ipv6 = false
+bypass_cidr = []
+
+[dns]
+enable = true
+mode = "fake-ip"
+nameservers = ["119.29.29.29", "223.5.5.5"]
+fallback = ["8.8.8.8", "1.1.1.1"]
+doh = ["https://doh.pub/dns-query"]
+fake_ip_filter = ["+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"]
+dnsmasq_mode = "upstream"
+
+[update]
+auto_subscription = true
+subscription_interval = "6h"
+auto_geoip = true
+geoip_interval = "168h"
+auto_geosite = true
+geosite_interval = "168h"
+geoip_url = "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
+geosite_url = "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+
+[security]
+api_secret = ""
+allow_lan = true
+
+[log]
+level = "info"
+file = ""
+max_size_mb = 10
