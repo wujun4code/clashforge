@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -26,7 +27,13 @@ var buildVersion = version // overridden by ldflags: -X main.buildVersion=v1.0.0
 
 func main() {
 	cfgPath := flag.String("config", "/etc/metaclash/config.toml", "path to config file")
+	showVersion := flag.Bool("v", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(buildVersion)
+		os.Exit(0)
+	}
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
