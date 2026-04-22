@@ -15,6 +15,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/daemon"
+	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
 const version = "0.1.0-dev"
@@ -55,12 +56,18 @@ func main() {
 		MaxRestarts: cfg.Core.MaxRestarts,
 	})
 
+	subManager := subscription.NewManager(cfg.Core.DataDir)
+	if err := subManager.Load(); err != nil {
+		log.Warn().Err(err).Msg("load subscriptions")
+	}
+
 	router := api.NewRouter(api.Dependencies{
 		Version:    version,
 		StartedAt:  time.Now(),
 		ConfigPath: *cfgPath,
 		Config:     cfg,
 		Core:       coreManager,
+		SubManager: subManager,
 	})
 
 	addr := cfg.UIListenAddr()
@@ -71,7 +78,7 @@ func main() {
 	}
 
 	go func() {
-		log.Info().Str("addr", addr).Msg("http server listening")
+		log.Info().Str("addr", addr).Str("version", version).Msg("clashforge started")
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal().Err(err).Msg("http server failed")
 		}
@@ -89,4 +96,5 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("http shutdown")
 	}
+	log.Info().Msg("clashforge exited")
 }
