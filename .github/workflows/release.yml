@@ -135,11 +135,13 @@ jobs:
             suffix: linux-amd64
             openwrt_arch: x86_64
             pkg_arch: x86_64
+            mihomo_asset: mihomo-linux-amd64-compatible
 
           - name: aarch64
             suffix: linux-arm64
             openwrt_arch: aarch64_generic
             pkg_arch: aarch64_generic
+            mihomo_asset: mihomo-linux-arm64
 
     steps:
       - uses: actions/checkout@v5
@@ -167,6 +169,17 @@ jobs:
           name: clashforge-${{ matrix.suffix }}
           path: dist/
 
+      - name: Download bundled mihomo
+        run: |
+          MIHOMO_VER=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+          echo "Downloading mihomo $MIHOMO_VER for ${{ matrix.mihomo_asset }}"
+          curl -L -o /tmp/mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${{ matrix.mihomo_asset }}-${MIHOMO_VER}.gz"
+          gunzip /tmp/mihomo.gz
+          chmod +x /tmp/mihomo
+          echo "mihomo version: $(/tmp/mihomo -v 2>&1 | head -1)"
+
       - name: Build IPK
         run: |
           VERSION="${{ steps.version.outputs.pkg_version }}"
@@ -180,19 +193,24 @@ jobs:
           mkdir -p ipk/etc/init.d
           mkdir -p ipk/usr/share/metaclash
 
-          # Copy binary
+          # Copy clashforge binary
           cp dist/clashforge-${{ matrix.suffix }} ipk/usr/bin/clashforge
           chmod 755 ipk/usr/bin/clashforge
+
+          # Bundle mihomo as mihomo-clashforge (won't conflict with system mihomo)
+          cp /tmp/mihomo ipk/usr/bin/mihomo-clashforge
+          chmod 755 ipk/usr/bin/mihomo-clashforge
 
           # Config files
           cp openwrt/files/etc/metaclash/config.toml.example  ipk/etc/metaclash/config.toml.example
           cp openwrt/files/etc/metaclash/overrides.yaml.example ipk/etc/metaclash/overrides.yaml.example
 
-          # init.d script
+          # init.d script (smart mihomo detection)
           cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge
           chmod 755 ipk/etc/init.d/clashforge
 
           # control file
+          MIHOMO_VER=$(/tmp/mihomo -v 2>&1 | grep -o 'v[0-9][^ ]*' | head -1 || echo 'unknown')
           cat > ipk/CONTROL/control << EOF
           Package: clashforge
           Version: ${VERSION}
@@ -200,21 +218,20 @@ jobs:
           Maintainer: wujun4code
           Section: net
           Priority: optional
-          Depends: ca-bundle, ip-full, kmod-nft-tproxy
+          Depends: ca-bundle, ip-full
           Source: https://github.com/wujun4code/clashforge
           Description: Mihomo (Clash.Meta) proxy manager for OpenWrt.
-           Lightweight management daemon: config generation, subscription
-           management, nftables/iptables TProxy, Web UI, REST API.
-           Single static binary with embedded React UI, no Ruby/Lua required.
+           Includes bundled mihomo ${MIHOMO_VER}. Auto-detects system mihomo if present.
+           Web UI on port 7777. Zero configuration required after install.
           EOF
 
-          # conffiles (prevent opkg from overwriting user-edited configs)
+          # conffiles
           cat > ipk/CONTROL/conffiles << EOF
           /etc/metaclash/config.toml
           /etc/metaclash/overrides.yaml
           EOF
 
-          # postinst script
+          # postinst
           cat > ipk/CONTROL/postinst << 'POSTINST'
           #!/bin/sh
           # Create default configs if not already present
@@ -222,14 +239,25 @@ jobs:
             cp /etc/metaclash/config.toml.example /etc/metaclash/config.toml
           [ -f /etc/metaclash/overrides.yaml ] || \
             cp /etc/metaclash/overrides.yaml.example /etc/metaclash/overrides.yaml
-          # Enable service
+          # Enable & start service
           /etc/init.d/clashforge enable 2>/dev/null || true
-          echo "ClashForge installed. Edit /etc/metaclash/config.toml then:"
-          echo "  /etc/init.d/clashforge start"
+          echo ""
+          echo "====================================="
+          echo " ClashForge installed successfully!"
+          echo "====================================="
+          echo " Bundled mihomo: /usr/bin/mihomo-clashforge"
+          echo " System mihomo (if present) will be preferred."
+          echo ""
+          echo " Quick start:"
+          echo "   1. Edit /etc/metaclash/overrides.yaml"
+          echo "      (add your subscription URL or proxy nodes)"
+          echo "   2. /etc/init.d/clashforge start"
+          echo "   3. Open http://$(uname -n 2>/dev/null || echo 'router'):7777"
+          echo "====================================="
           POSTINST
           chmod 755 ipk/CONTROL/postinst
 
-          # prerm script
+          # prerm
           cat > ipk/CONTROL/prerm << 'PRERM'
           #!/bin/sh
           /etc/init.d/clashforge stop 2>/dev/null || true
@@ -239,24 +267,11 @@ jobs:
 
           # Build the IPK (ar archive)
           cd ipk
-
-          # Create data.tar.gz
-          tar czf ../data.tar.gz \
-            --owner=0 --group=0 \
-            usr etc
-
-          # Create control.tar.gz
+          tar czf ../data.tar.gz --owner=0 --group=0 usr etc
           cd CONTROL
-          tar czf ../../control.tar.gz \
-            --owner=0 --group=0 \
-            control conffiles postinst prerm
-          cd ..
-
-          # debian-binary marker
-          echo "2.0" > ../debian-binary
-
-          # Assemble the .ipk
-          cd ..
+          tar czf ../../control.tar.gz --owner=0 --group=0 control conffiles postinst prerm
+          cd ../.. 
+          echo "2.0" > debian-binary
           ar r "$PKG_NAME" debian-binary control.tar.gz data.tar.gz
           ls -lh "$PKG_NAME"
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
