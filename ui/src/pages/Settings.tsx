@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { getConfig, updateConfig, getOverrides, updateOverrides } from '../api/client'
-import { Save, Upload, FileText, CheckCircle2, AlertCircle } from 'lucide-react'
+import { getConfig, updateConfig, getOverrides, updateOverrides, generateConfig } from '../api/client'
+import { Save, Upload, FileText, CheckCircle2, AlertCircle, ArrowRight } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -50,8 +51,10 @@ export function Settings() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [importDone, setImportDone] = useState(false)
   const [tab, setTab] = useState<'import' | 'general' | 'overrides'>('import')
   const fileRef = useRef<HTMLInputElement>(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     getConfig().then(setCfg).catch(() => null)
@@ -99,14 +102,16 @@ export function Settings() {
 
   // Handle file upload or paste of full Clash YAML config
   const handleImport = async (content: string) => {
-    setSaving(true); setSaveError('')
+    setSaving(true); setSaveError(''); setImportDone(false)
     try {
-      // Validate it looks like YAML
       if (!content.trim()) { setSaveError('内容为空'); setSaving(false); return }
       await updateOverrides(content)
       setOverrides(content)
+      // Auto-generate mihomo config
+      await generateConfig().catch(() => null)
+      setImportDone(true)
       setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
+      setTimeout(() => setSaved(false), 5000)
     } catch(e: unknown) {
       setSaveError('YAML 格式不正确：' + String(e))
     } finally { setSaving(false) }
@@ -196,6 +201,22 @@ export function Settings() {
             >
               <Save size={14}/> {saving ? '导入中…' : '导入并应用'}
             </button>
+
+            {importDone && (
+              <div className="rounded-xl bg-success/10 border border-success/20 px-4 py-3 flex items-start gap-3">
+                <CheckCircle2 size={16} className="text-success flex-shrink-0 mt-0.5"/>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-success">配置已导入并生成</p>
+                  <p className="text-xs text-muted mt-1">现在可以回到首页启动核心，节点信息会在「节点」页面显示。</p>
+                  <button
+                    className="mt-2 flex items-center gap-1.5 text-xs text-brand hover:text-blue-300 transition-colors"
+                    onClick={() => navigate('/')}
+                  >
+                    <ArrowRight size={12}/> 去首页启动核心
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

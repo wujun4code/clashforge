@@ -73,6 +73,10 @@ func handleTriggerSubscriptionUpdate(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusNotFound, "SUB_NOT_FOUND", err.Error())
 			return
 		}
+		// Regenerate config after update completes (async)
+		go func() {
+			generateMihomoConfig(deps) //nolint:errcheck
+		}()
 		JSON(w, http.StatusAccepted, map[string]string{"message": "update started"})
 	}
 }
@@ -80,6 +84,9 @@ func handleTriggerSubscriptionUpdate(deps Dependencies) http.HandlerFunc {
 func handleTriggerUpdateAll(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_ = deps.SubManager.TriggerUpdateAll()
+		go func() {
+			generateMihomoConfig(deps) //nolint:errcheck
+		}()
 		JSON(w, http.StatusAccepted, map[string]string{"message": "update all started"})
 	}
 }

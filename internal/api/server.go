@@ -47,6 +47,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))
 		api.Get("/config/overrides", handleGetOverrides(deps))
 		api.Put("/config/overrides", handleUpdateOverrides(deps))
+		api.Post("/config/generate", handleGenerateConfig(deps))
 		api.Post("/core/start", handleCoreStart(deps))
 		api.Post("/core/stop", handleCoreStop(deps))
 		api.Post("/core/restart", handleCoreRestart(deps))

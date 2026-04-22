@@ -21,7 +21,6 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusBadRequest, "CONFIG_PARSE_ERROR", err.Error())
 			return
 		}
-		// Simple partial update via JSON round-trip
 		data, err := json.Marshal(deps.Config)
 		if err != nil {
 			Err(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
@@ -102,6 +101,71 @@ func handleUpdateOverrides(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
 			return
 		}
-		JSON(w, http.StatusOK, map[string]bool{"updated": true})
+		// Auto-generate mihomo config after overrides update
+		generated, err := generateMihomoConfig(deps)
+		if err != nil {
+			// Non-fatal: config saved but generation failed
+			JSON(w, http.StatusOK, map[string]interface{}{
+				"updated":         true,
+				"config_generated": false,
+				"warning":         err.Error(),
+			})
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"updated":         true,
+			"config_generated": generated,
+		})
 	}
+}
+
+// handleGenerateConfig generates the mihomo YAML from current config + subscriptions + overrides
+func handleGenerateConfig(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		generated, err := generateMihomoConfig(deps)
+		if err != nil {
+			Err(w, http.StatusInternalServerError, "CONFIG_GENERATE_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"generated":   generated,
+			"config_file": deps.Config.Core.RuntimeDir + "/mihomo-config.yaml",
+		})
+	}
+}
+
+// generateMihomoConfig generates and writes the mihomo config, returns true if successful
+func generateMihomoConfig(deps Dependencies) (bool, error) {
+	if deps.SubManager == nil {
+		return false, nil
+	}
+	nodes := deps.SubManager.GetAllCachedNodes()
+
+	generated, err := config.Generate(deps.Config, nodes)
+	if err != nil {
+		return false, err
+	}
+
+	// Load overrides
+	overridesPath := deps.Config.Core.DataDir + "/overrides.yaml"
+	overridesData, _ := os.ReadFile(overridesPath)
+
+	merged, err := config.MergeWithOverrides(generated, overridesData)
+	if err != nil {
+		return false, err
+	}
+
+	data, err := config.MarshalYAML(merged)
+	if err != nil {
+		return false, err
+	}
+
+	outPath := deps.Config.Core.RuntimeDir + "/mihomo-config.yaml"
+	if err := os.MkdirAll(deps.Config.Core.RuntimeDir, 0o755); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }

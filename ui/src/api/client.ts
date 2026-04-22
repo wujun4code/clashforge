@@ -69,3 +69,7 @@ export const getConfig        = () => request<Record<string,unknown>>('GET', '/c
 export const updateConfig     = (p: Record<string,unknown>) => request('PUT', '/config', p)
 export const getOverrides     = () => request<{content:string}>('GET', '/config/overrides')
 export const updateOverrides  = (content: string) => request('PUT', '/config/overrides', { content })
+export const generateConfig   = () => request<{generated: boolean; config_file: string}>('POST', '/config/generate')
+export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
+
+export interface LogEntry { level: string; msg: string; ts: number }

@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { useSSE } from '../hooks/useSSE'
 import {
   getStatus, startCore, stopCore, restartCore, reloadCore,
-  triggerUpdateAll, getSubscriptions, getOverrides
+  triggerUpdateAll, getSubscriptions, getOverrides, generateConfig
 } from '../api/client'
 import type { StatusData } from '../api/client'
 import { formatBytes, formatUptime } from '../utils/format'
@@ -319,6 +319,9 @@ export function Dashboard() {
           <span className="text-xs text-muted font-medium uppercase tracking-wider">快捷操作</span>
           <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5" onClick={() => action('update', triggerUpdateAll)} disabled={loading === 'update'}>
             <Download size={12} className={loading === 'update' ? 'animate-bounce' : ''}/> 更新所有订阅
+          </button>
+          <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5" onClick={() => action('generate', generateConfig)} disabled={loading === 'generate'}>
+            <Zap size={12} className={loading === 'generate' ? 'animate-spin' : ''}/> 重新生成配置
           </button>
           <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5" onClick={refresh}>
             <RefreshCw size={12}/> 刷新
