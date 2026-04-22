@@ -55,6 +55,7 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		*deps.Config = newCfg
+		refreshNetfilterManager(deps)
 		generated, genErr := generateMihomoConfig(deps)
 		if genErr != nil {
 			JSON(w, http.StatusOK, map[string]interface{}{

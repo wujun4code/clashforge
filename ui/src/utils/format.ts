@@ -13,6 +13,22 @@ export function formatUptime(secs: number): string {
   return `${h}h ${m}m`
 }
 
+export function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '--'
+  return `${value.toFixed(1)}%`
+}
+
+export function formatMB(value: number): string {
+  if (!Number.isFinite(value)) return '--'
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} GB`
+  return `${value.toFixed(1)} MB`
+}
+
+export function formatGB(value: number): string {
+  if (!Number.isFinite(value)) return '--'
+  return `${value.toFixed(1)} GB`
+}
+
 export function latencyColor(ms: number): string {
   if (ms <= 0) return 'text-muted'
   if (ms < 100) return 'text-success'

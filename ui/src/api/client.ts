@@ -89,6 +89,135 @@ export interface HealthCheckData {
   }
 }
 
+export interface OverviewSummary {
+  core_running: boolean
+  clashforge_healthy: boolean
+  conflict_count: number
+  takeover_ready: number
+  message: string
+}
+
+export interface OverviewSystemUsage {
+  cpu_percent: number
+  memory_total_mb: number
+  memory_used_mb: number
+  memory_percent: number
+  disk_total_gb: number
+  disk_used_gb: number
+  disk_percent: number
+}
+
+export interface OverviewProcessUsage {
+  id: string
+  name: string
+  pid: number
+  running: boolean
+  cpu_percent: number
+  memory_rss_mb: number
+  uptime: number
+  command?: string
+}
+
+export interface OverviewAppStorage {
+  runtime_mb: number
+  data_mb: number
+  binary_mb: number
+  total_mb: number
+}
+
+export interface OverviewIPCheck {
+  provider: string
+  ok: boolean
+  ip?: string
+  location?: string
+  error?: string
+}
+
+export interface OverviewAccessCheck {
+  name: string
+  url: string
+  description: string
+  via: string
+  ok: boolean
+  status_code?: number
+  latency_ms?: number
+  error?: string
+}
+
+export interface OverviewProcessRef {
+  pid: number
+  name: string
+  command?: string
+  service?: string
+}
+
+export interface OverviewPortOwner {
+  port: number
+  proto: string
+  owner: string
+  pid?: number
+  command?: string
+}
+
+export interface OverviewAction {
+  module: string
+  label: string
+  mode?: string
+  stop_services?: string[]
+}
+
+export interface OverviewModule {
+  id: string
+  title: string
+  category: string
+  status: 'active' | 'conflict' | 'available' | 'inactive' | string
+  current_owner: string
+  managed_by_clashforge: boolean
+  purpose: string
+  takeover_effect: string
+  current_mode?: string
+  recommended_mode?: string
+  takeover_supported: boolean
+  action?: OverviewAction
+  processes?: OverviewProcessRef[]
+  ports?: OverviewPortOwner[]
+  notes?: string[]
+}
+
+export interface OverviewInfluence {
+  id: string
+  name: string
+  description: string
+  affects: string[]
+  running: boolean
+  stoppable: boolean
+  service?: string
+  processes?: OverviewProcessRef[]
+  ports?: OverviewPortOwner[]
+}
+
+export interface OverviewData {
+  checked_at: string
+  summary: OverviewSummary
+  resources: {
+    system: OverviewSystemUsage
+    processes: OverviewProcessUsage[]
+    app: OverviewAppStorage
+  }
+  ip_checks: OverviewIPCheck[]
+  access_checks: OverviewAccessCheck[]
+  modules: OverviewModule[]
+  influences: OverviewInfluence[]
+}
+
+export interface OverviewTakeoverResponse {
+  updated: boolean
+  message: string
+  stopped?: string[]
+  needs_restart?: boolean
+  overview: OverviewData
+}
+
 export interface ProxyNode {
   name: string; type: string; server?: string; port?: number
   history?: { time: string; delay: number }[]
@@ -115,7 +244,9 @@ export interface LogEntry { type: string; payload: string; time?: string }
 
 // ---- API calls ----
 export const getStatus        = () => request<StatusData>('GET', '/status')
+export const getOverview      = () => request<OverviewData>('GET', '/overview')
 export const getHealthCheck   = (target?: string) => request<HealthCheckData>('GET', `/health/check${target ? `?target=${encodeURIComponent(target)}` : ''}`)
+export const takeoverOverviewModule = (payload: { module: string; mode?: string; stop_services?: string[] }) => request<OverviewTakeoverResponse>('POST', '/overview/takeover', payload)
 export const startCore        = () => request('POST', '/core/start')
 export const stopCore         = () => request('POST', '/core/stop')
 export const restartCore      = () => request('POST', '/core/restart')
