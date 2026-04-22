@@ -268,71 +268,9 @@ jobs:
           PRERM
           chmod 755 ipk/CONTROL/prerm
 
-          # Build the IPK — pure Python for maximum opkg compatibility
-          # opkg requires ar members in EXACT order: debian-binary, control.tar.gz, data.tar.gz
-          PKG_NAME="$PKG_NAME" python3 << 'PYEOF'
-import os, sys, tarfile
-
-pkg_name = os.environ['PKG_NAME']
-
-def make_tar_gz(out, base_dir, arcnames):
-    with tarfile.open(out, 'w:gz', compresslevel=9) as tar:
-        for name in sorted(arcnames):
-            full = os.path.join(base_dir, name)
-            if not os.path.exists(full):
-                continue
-            def filt(info, _n=name):
-                info.uid = info.gid = 0
-                info.uname = info.gname = 'root'
-                info.mtime = 0
-                return info
-            tar.add(full, arcname=('./'+name), recursive=True, filter=filt)
-
-# Collect data members (everything except CONTROL/)
-data_names = []
-for root, dirs, files in os.walk('ipk'):
-    for f in files:
-        p = os.path.relpath(os.path.join(root, f), 'ipk')
-        if not p.startswith('CONTROL'):
-            data_names.append(p)
-make_tar_gz('data.tar.gz', 'ipk', data_names)
-
-# Collect control members
-ctrl_names = [f for f in ['control','conffiles','postinst','prerm']
-              if os.path.exists(f'ipk/CONTROL/{f}')]
-make_tar_gz('control.tar.gz', 'ipk/CONTROL', ctrl_names)
-
-# debian-binary
-with open('debian-binary','w') as f: f.write('2.0\n')
-
-# Build ar archive (opkg-compatible)
-def ar_hdr(name, size):
-    return (
-        name.encode().ljust(16)[:16] +
-        b'0           '[:12] +  # mtime
-        b'0     '[:6]  +        # uid
-        b'0     '[:6]  +        # gid
-        b'100644  '[:8] +       # mode
-        str(size).encode().ljust(10)[:10] +
-        b'`\n'
-    )
-
-members = [('debian-binary','debian-binary'),
-           ('control.tar.gz','control.tar.gz'),
-           ('data.tar.gz','data.tar.gz')]
-
-with open(pkg_name,'wb') as ipk:
-    ipk.write(b'!<arch>\n')
-    for arcname, fname in members:
-        with open(fname,'rb') as f: data = f.read()
-        ipk.write(ar_hdr(arcname, len(data)))
-        ipk.write(data)
-        if len(data) % 2: ipk.write(b'\n')  # even padding
-
-print(f'Built {pkg_name} ({os.path.getsize(pkg_name):,} bytes)')
-PYEOF
+          # Build the IPK using the dedicated packaging script
+          PKG_NAME="$PKG_NAME" python3 scripts/build_ipk.py
           ls -lh "$PKG_NAME"
-          ar t "$PKG_NAME"
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPK artifact
