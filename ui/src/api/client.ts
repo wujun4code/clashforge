@@ -56,7 +56,20 @@ export const reloadCore       = () => request('POST', '/core/reload')
 export const getCoreVersion   = () => request<{current:string;latest:string;has_update:boolean}>('GET', '/core/version')
 export const getProxies       = () => request<ProxiesData>('GET', '/proxies')
 export const selectProxy      = (group: string, name: string) => request('PUT', `/proxies/${encodeURIComponent(group)}/select`, { name })
-export const testLatency      = (proxies: string[]) => request<Record<string,number>>('POST', '/proxies/test-latency', { proxies, url: 'http://www.gstatic.com/generate_204', timeout: 5000 })
+export const testLatency      = async (proxies: string[]): Promise<Record<string, number>> => {
+  const TEST_URL = 'http://www.gstatic.com/generate_204'
+  const TIMEOUT  = 5000
+  const results = await Promise.allSettled(
+    proxies.map(name =>
+      request<{ delay: number }>('GET', `/proxies/${encodeURIComponent(name)}/delay?url=${encodeURIComponent(TEST_URL)}&timeout=${TIMEOUT}`)
+        .then(d => ({ name, delay: d.delay }))
+        .catch(() => ({ name, delay: -1 }))
+    )
+  )
+  return Object.fromEntries(
+    results.map((r, i) => [proxies[i], r.status === 'fulfilled' ? r.value.delay : -1])
+  )
+}
 export const getConnections   = () => request<{connections: Connection[]}>('GET', '/connections')
 export const closeAllConns    = () => request('DELETE', '/connections')
 export const getSubscriptions = () => request<{subscriptions: Subscription[]}>('GET', '/subscriptions')

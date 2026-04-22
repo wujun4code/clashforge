@@ -64,6 +64,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		// Proxy pass-through to mihomo API
 		api.Get("/proxies", proxyToMihomo(deps, "/proxies"))
 		api.Put("/proxies/{group}/select", proxyMihomoWithParam(deps, "/proxies/", "", "group"))
+		api.Get("/proxies/{name}/delay", proxyMihomoWithParam(deps, "/proxies/", "/delay", "name"))
 		api.Get("/connections", proxyToMihomo(deps, "/connections"))
 		api.Delete("/connections", proxyToMihomo(deps, "/connections"))
 		if deps.SSEBroker != nil {

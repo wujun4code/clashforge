@@ -3,14 +3,15 @@ import { useStore } from '../store'
 import { useSSE } from '../hooks/useSSE'
 import {
   getStatus, startCore, stopCore, restartCore, reloadCore,
-  triggerUpdateAll, getSubscriptions, getOverrides, generateConfig
+  triggerUpdateAll, getSubscriptions, getOverrides, generateConfig,
+  getConfig, updateConfig,
 } from '../api/client'
 import type { StatusData } from '../api/client'
 import { formatBytes, formatUptime } from '../utils/format'
 import {
   AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip
 } from 'recharts'
-import { RefreshCw, RotateCcw, Zap, Download, Play, Square, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { RefreshCw, RotateCcw, Zap, Download, Play, Square, AlertTriangle, CheckCircle2, Settings } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 // ── Config readiness check ─────────────────────────────────────────────────
@@ -182,6 +183,121 @@ function CoreControl({ state, loading, ready, onStart, onStop, onRestart, onRelo
   )
 }
 
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
+      className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${checked ? 'bg-brand' : 'bg-surface-3'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
+      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${checked ? 'left-4' : 'left-0.5'}`}/>
+    </button>
+  )
+}
+
+function NetworkSettings({ status, onRefresh }: { status: StatusData | null; onRefresh: () => void }) {
+  const navigate = useNavigate()
+  const [cfg, setCfg] = useState<Record<string, unknown> | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => { getConfig().then(setCfg).catch(() => null) }, [])
+
+  const get = (path: string[]): unknown => {
+    if (!cfg) return ''
+    let cur = cfg as Record<string, unknown>
+    for (const k of path) cur = (cur[k] ?? '') as Record<string, unknown>
+    return cur
+  }
+
+  const set = async (path: string[], value: unknown) => {
+    if (!cfg) return
+    const updated = JSON.parse(JSON.stringify(cfg))
+    let cur = updated
+    for (let i = 0; i < path.length - 1; i++) cur = cur[path[i]] as Record<string, unknown>
+    cur[path[path.length - 1]] = value
+    setCfg(updated)
+    setSaving(true)
+    try {
+      await updateConfig(updated)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1500)
+      onRefresh()
+    } catch { /* ignore */ } finally { setSaving(false) }
+  }
+
+  const mode = get(['network', 'mode']) as string || 'none'
+  const firewall = get(['network', 'firewall_backend']) as string || 'none'
+  const bypassLan = !!get(['network', 'bypass_lan'])
+  const dnsEnable = !!get(['dns', 'enable'])
+
+  return (
+    <div className="card px-5 py-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-slate-300">网络设置</h2>
+        <div className="flex items-center gap-2">
+          {saved && <span className="text-xs text-success">已保存</span>}
+          {saving && <span className="text-xs text-muted">保存中…</span>}
+          <button className="btn-ghost py-1 px-2 text-xs flex items-center gap-1.5" onClick={() => navigate('/settings')}>
+            <Settings size={11}/> 高级
+          </button>
+        </div>
+      </div>
+
+      {status && (
+        <div className="space-y-3 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-muted">订阅数量</span>
+            <span className="text-slate-200 font-medium">{status.subscriptions.enabled} / {status.subscriptions.total} 启用</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted">版本</span>
+            <span className="text-slate-200 font-medium">{status.metaclash.version}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted">运行时长</span>
+            <span className="text-slate-200 font-medium">{formatUptime(status.metaclash.uptime)}</span>
+          </div>
+
+          {cfg && <>
+            <div className="border-t border-white/5 pt-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-muted">透明代理模式</span>
+                <select
+                  value={mode}
+                  onChange={e => set(['network', 'mode'], e.target.value)}
+                  className="bg-surface-2 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-brand"
+                >
+                  {['none', 'tproxy', 'redir', 'tun'].map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted">防火墙后端</span>
+                <select
+                  value={firewall}
+                  onChange={e => set(['network', 'firewall_backend'], e.target.value)}
+                  className="bg-surface-2 border border-white/10 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-brand"
+                >
+                  {['none', 'auto', 'nftables', 'iptables'].map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted">绕过局域网</span>
+                <Toggle checked={bypassLan} onChange={v => set(['network', 'bypass_lan'], v)} />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted">启用 DNS</span>
+                <Toggle checked={dnsEnable} onChange={v => set(['dns', 'enable'], v)} />
+              </div>
+            </div>
+          </>}
+        </div>
+      )}
+      {!status && <p className="text-muted text-sm">加载中…</p>}
+    </div>
+  )
+}
+
 const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { value: number; name: string }[] }) => {
   if (!active || !payload?.length) return null
   return (
@@ -291,30 +407,7 @@ export function Dashboard() {
           onNavigateConfig={() => navigate('/subscriptions')}
         />
 
-        <div className="card px-5 py-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-slate-300">网络状态</h2>
-            <button className="btn-ghost py-1 px-2 text-xs flex items-center gap-1.5" onClick={refresh}>
-              <Zap size={12}/> 刷新
-            </button>
-          </div>
-          {status ? (
-            <div className="space-y-2.5 text-sm">
-              {[
-                ['透明代理模式', status.network.mode],
-                ['防火墙后端', status.network.firewall_backend],
-                ['订阅数量', `${status.subscriptions.enabled} / ${status.subscriptions.total} 启用`],
-                ['版本', status.metaclash.version],
-                ['运行时长', formatUptime(status.metaclash.uptime)],
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between">
-                  <span className="text-muted">{k}</span>
-                  <span className="text-slate-200 font-medium">{v}</span>
-                </div>
-              ))}
-            </div>
-          ) : <p className="text-muted text-sm">加载中…</p>}
-        </div>
+        <NetworkSettings status={status} onRefresh={refresh} />
       </div>
 
       {/* quick actions */}
