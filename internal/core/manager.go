@@ -83,7 +83,10 @@ func (m *CoreManager) Start(ctx context.Context) error {
 
 func (m *CoreManager) startLocked(ctx context.Context) error {
 	m.setState(StateStarting, 0)
-	cmd := exec.CommandContext(ctx, m.cfg.Binary, "-d", filepath.Dir(m.cfg.ConfigFile), "-f", m.cfg.ConfigFile)
+	// The caller context only scopes readiness waiting, not mihomo's lifetime.
+	// Using CommandContext here would kill the long-running child as soon as an
+	// HTTP request context is canceled or times out.
+	cmd := exec.Command(m.cfg.Binary, "-d", filepath.Dir(m.cfg.ConfigFile), "-f", m.cfg.ConfigFile)
 	cmd.Stdout = newCoreLogWriter("stdout")
 	cmd.Stderr = newCoreLogWriter("stderr")
 	if err := cmd.Start(); err != nil {

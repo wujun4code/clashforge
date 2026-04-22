@@ -43,6 +43,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(authMiddleware(deps.Config.Security.APISecret))
 		api.Get("/status", handleStatus(deps))
+		api.Get("/health/check", handleHealthCheck(deps))
 		api.Get("/config", handleGetConfig(deps))
 		api.Put("/config", handleUpdateConfig(deps))
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))

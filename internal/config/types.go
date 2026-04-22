@@ -38,6 +38,7 @@ type PortsConfig struct {
 type NetworkConfig struct {
 	Mode            string   `toml:"mode" json:"mode"`
 	FirewallBackend string   `toml:"firewall_backend" json:"firewall_backend"`
+	ApplyOnStart    bool     `toml:"apply_on_start" json:"apply_on_start"`
 	BypassLAN       bool     `toml:"bypass_lan" json:"bypass_lan"`
 	BypassChina     bool     `toml:"bypass_china" json:"bypass_china"`
 	IPv6            bool     `toml:"ipv6" json:"ipv6"`
@@ -52,6 +53,7 @@ type DNSConfig struct {
 	DoH          []string `toml:"doh" json:"doh"`
 	FakeIPFilter []string `toml:"fake_ip_filter" json:"fake_ip_filter"`
 	DnsmasqMode  string   `toml:"dnsmasq_mode" json:"dnsmasq_mode"`
+	ApplyOnStart bool     `toml:"apply_on_start" json:"apply_on_start"`
 }
 
 type UpdateConfig struct {
@@ -86,9 +88,9 @@ func Default() *MetaclashConfig {
 			GeositePath: "/usr/share/metaclash/geosite.dat",
 			MaxRestarts: 3,
 		},
-		Ports:    PortsConfig{HTTP: 7890, SOCKS: 7891, Mixed: 7893, Redir: 7892, TProxy: 7895, DNS: 7874, MihomoAPI: 9090, UI: 7777},
-		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", BypassLAN: true, BypassChina: false, IPv6: false, BypassCIDR: []string{}},
-		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"119.29.29.29", "223.5.5.5"}, Fallback: []string{"8.8.8.8", "1.1.1.1"}, DoH: []string{"https://doh.pub/dns-query"}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "upstream"},
+		Ports:    PortsConfig{HTTP: 17890, SOCKS: 17891, Mixed: 17893, Redir: 17892, TProxy: 17895, DNS: 17874, MihomoAPI: 19090, UI: 7777},
+		Network:  NetworkConfig{Mode: "none", FirewallBackend: "auto", ApplyOnStart: false, BypassLAN: true, BypassChina: false, IPv6: false, BypassCIDR: []string{}},
+		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"119.29.29.29", "223.5.5.5"}, Fallback: []string{"8.8.8.8", "1.1.1.1"}, DoH: []string{"https://doh.pub/dns-query"}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "none", ApplyOnStart: false},
 		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"},
 		Security: SecurityConfig{APISecret: "", AllowLAN: true},
 		Log:      LogConfig{Level: "info", File: "", MaxSizeMB: 10},

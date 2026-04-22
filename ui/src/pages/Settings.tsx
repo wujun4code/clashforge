@@ -239,10 +239,13 @@ export function Settings() {
           <div className="card px-5 py-5 space-y-4">
             <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">网络</h2>
             <Field label="透明代理模式">
-              <SelectInput value={get(['network','mode']) as string || 'tproxy'} onChange={v => set(['network','mode'],v)} options={['tproxy','redir','tun','none']} />
+              <SelectInput value={get(['network','mode']) as string || 'none'} onChange={v => set(['network','mode'],v)} options={['none','tproxy','redir','tun']} />
             </Field>
             <Field label="防火墙后端">
               <SelectInput value={get(['network','firewall_backend']) as string || 'auto'} onChange={v => set(['network','firewall_backend'],v)} options={['auto','nftables','iptables','none']} />
+            </Field>
+            <Field label="启动时接管透明代理">
+              <Toggle checked={!!get(['network','apply_on_start'])} onChange={v => set(['network','apply_on_start'],v)} />
             </Field>
             <Field label="绕过局域网">
               <Toggle checked={!!get(['network','bypass_lan'])} onChange={v => set(['network','bypass_lan'],v)} />
@@ -250,6 +253,9 @@ export function Settings() {
             <Field label="绕过中国大陆 IP">
               <Toggle checked={!!get(['network','bypass_china'])} onChange={v => set(['network','bypass_china'],v)} />
             </Field>
+            <p className="text-xs text-muted leading-5 border-t border-white/5 pt-3">
+              默认不在启动时接管透明代理。开启后需要重启 clashforge 服务，启动阶段才会应用 nft / TProxy 规则。
+            </p>
           </div>
 
           <div className="card px-5 py-5 space-y-4">
@@ -261,8 +267,14 @@ export function Settings() {
               <SelectInput value={get(['dns','mode']) as string || 'fake-ip'} onChange={v => set(['dns','mode'],v)} options={['fake-ip','redir-host']} />
             </Field>
             <Field label="dnsmasq 共存">
-              <SelectInput value={get(['dns','dnsmasq_mode']) as string || 'upstream'} onChange={v => set(['dns','dnsmasq_mode'],v)} options={['upstream','replace','none']} />
+              <SelectInput value={get(['dns','dnsmasq_mode']) as string || 'none'} onChange={v => set(['dns','dnsmasq_mode'],v)} options={['none','upstream','replace']} />
             </Field>
+            <Field label="启动时接管 DNS">
+              <Toggle checked={!!get(['dns','apply_on_start'])} onChange={v => set(['dns','apply_on_start'],v)} />
+            </Field>
+            <p className="text-xs text-muted leading-5 border-t border-white/5 pt-3">
+              默认只启动 mihomo 自己的 DNS 能力，不改写 dnsmasq。开启后需要重启 clashforge 服务，启动阶段才会接管 DNS。
+            </p>
           </div>
 
           <button className="btn-primary flex items-center gap-2" onClick={saveGeneral} disabled={saving}>

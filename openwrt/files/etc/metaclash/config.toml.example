@@ -7,20 +7,21 @@ geosite_path = "/usr/share/metaclash/geosite.dat"
 max_restarts = 3
 
 [ports]
-http = 7890
-socks = 7891
-mixed = 7893
-redir = 7892
-tproxy = 7895
-dns = 7874
-mihomo_api = 9090
+http = 17890
+socks = 17891
+mixed = 17893
+redir = 17892
+tproxy = 17895
+dns = 17874
+mihomo_api = 19090
 ui = 7777
 
 [network]
-# mode = "tproxy" 透明代理（需要 kmod-nft-tproxy，与 OpenClash 不共存）
-# mode = "none"  仅端口代理，可与 OpenClash 安全共存
+# mode = "tproxy" 透明代理（需要手动开启 apply_on_start）
+# mode = "none"  仅端口代理，默认安全启动
 mode = "none"
 firewall_backend = "auto"
+apply_on_start = false
 bypass_lan = true
 bypass_china = false
 ipv6 = false
@@ -33,7 +34,8 @@ nameservers = ["119.29.29.29", "223.5.5.5"]
 fallback = ["8.8.8.8", "1.1.1.1"]
 doh = ["https://doh.pub/dns-query"]
 fake_ip_filter = ["+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"]
-dnsmasq_mode = "upstream"
+dnsmasq_mode = "none"
+apply_on_start = false
 
 [update]
 auto_subscription = true

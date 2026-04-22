@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -47,6 +48,8 @@ func main() {
 		zerolog.SetGlobalLevel(level)
 	}
 
+	normalizeLegacyDefaultPorts(cfg)
+
 	for _, dir := range []string{cfg.Core.RuntimeDir, cfg.Core.DataDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Fatal().Err(err).Str("dir", dir).Msg("create directory")
@@ -72,6 +75,9 @@ func main() {
 	if err := subManager.Load(); err != nil {
 		log.Warn().Err(err).Msg("load subscriptions")
 	}
+	if err := writeRuntimeMihomoConfig(cfg, subManager); err != nil {
+		log.Error().Err(err).Msg("generate mihomo config")
+	}
 
 	// Netfilter
 	nfManager := netfilter.NewManager(netfilter.Config{
@@ -81,18 +87,31 @@ func main() {
 		DNSPort:         cfg.Ports.DNS,
 		BypassCIDR:      cfg.Network.BypassCIDR,
 	})
-	if cfg.Network.Mode != "none" {
+	coreStarted := false
+	if err := coreManager.Start(context.Background()); err != nil {
+		log.Error().Err(err).Msg("start mihomo failed")
+	} else {
+		coreStarted = true
+	}
+	if coreStarted && cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
 		if err := nfManager.Apply(); err != nil {
 			log.Warn().Err(err).Msg("apply netfilter rules (continuing without)")
 		}
+	} else if cfg.Network.Mode != "none" {
+		log.Info().Str("mode", cfg.Network.Mode).Msg("transparent proxy takeover disabled on startup")
 	}
 
 	// DNS / dnsmasq coexistence
 	dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
-	if cfg.DNS.Enable && dnsMode != dns.ModeNone {
+	dnsManaged := false
+	if coreStarted && cfg.DNS.Enable && cfg.DNS.ApplyOnStart && dnsMode != dns.ModeNone {
 		if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
 			log.Warn().Err(err).Msg("dns setup failed (continuing)")
+		} else {
+			dnsManaged = true
 		}
+	} else if cfg.DNS.Enable && dnsMode != dns.ModeNone {
+		log.Info().Str("dnsmasq_mode", cfg.DNS.DnsmasqMode).Msg("dns takeover disabled on startup")
 	}
 
 	// SSE broker
@@ -141,7 +160,7 @@ func main() {
 	if err := coreManager.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
 		log.Error().Err(err).Msg("stop core")
 	}
-	if cfg.DNS.Enable && dnsMode != dns.ModeNone {
+	if dnsManaged {
 		if err := dns.Restore(dnsMode); err != nil {
 			log.Error().Err(err).Msg("dns restore failed")
 		}
@@ -153,4 +172,59 @@ func main() {
 		log.Error().Err(err).Msg("http shutdown")
 	}
 	log.Info().Msg("clashforge exited cleanly")
+}
+
+func normalizeLegacyDefaultPorts(cfg *config.MetaclashConfig) {
+	remapDefaultPort(&cfg.Ports.HTTP, 7890, 17890, "http")
+	remapDefaultPort(&cfg.Ports.SOCKS, 7891, 17891, "socks")
+	remapDefaultPort(&cfg.Ports.Mixed, 7893, 17893, "mixed")
+	remapDefaultPort(&cfg.Ports.Redir, 7892, 17892, "redir")
+	remapDefaultPort(&cfg.Ports.TProxy, 7895, 17895, "tproxy")
+	remapDefaultPort(&cfg.Ports.DNS, 7874, 17874, "dns")
+	remapDefaultPort(&cfg.Ports.MihomoAPI, 9090, 19090, "mihomo_api")
+}
+
+func remapDefaultPort(current *int, defaultPort, coexistPort int, name string) {
+	if *current != defaultPort {
+		return
+	}
+	*current = coexistPort
+	log.Info().Str("port", name).Int("value", coexistPort).Msg("switching to safe default port")
+}
+
+func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {
+	nodes := []subscription.ProxyNode{}
+	if subManager != nil {
+		nodes = subManager.GetAllCachedNodes()
+	}
+
+	generated, err := config.Generate(cfg, nodes)
+	if err != nil {
+		return err
+	}
+
+	overridesPath := filepath.Join(cfg.Core.DataDir, "overrides.yaml")
+	overridesData, _ := os.ReadFile(overridesPath)
+	merged, err := config.MergeWithOverrides(generated, overridesData)
+	if err != nil {
+		return err
+	}
+
+	merged["port"] = cfg.Ports.HTTP
+	merged["socks-port"] = cfg.Ports.SOCKS
+	merged["mixed-port"] = cfg.Ports.Mixed
+	merged["redir-port"] = cfg.Ports.Redir
+	merged["tproxy-port"] = cfg.Ports.TProxy
+	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
+
+	data, err := config.MarshalYAML(merged)
+	if err != nil {
+		return err
+	}
+
+	outPath := filepath.Join(cfg.Core.RuntimeDir, "mihomo-config.yaml")
+	if err := os.MkdirAll(cfg.Core.RuntimeDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(outPath, data, 0o644)
 }

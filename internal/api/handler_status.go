@@ -23,7 +23,13 @@ func handleStatus(deps Dependencies) http.HandlerFunc {
 			"network": map[string]interface{}{
 				"mode":             deps.Config.Network.Mode,
 				"firewall_backend": deps.Config.Network.FirewallBackend,
-				"rules_applied":    false,
+				"apply_on_start":   deps.Config.Network.ApplyOnStart,
+				"rules_applied":    deps.Netfilter != nil && deps.Netfilter.IsApplied(),
+			},
+			"dns": map[string]interface{}{
+				"enable":         deps.Config.DNS.Enable,
+				"dnsmasq_mode":   deps.Config.DNS.DnsmasqMode,
+				"apply_on_start": deps.Config.DNS.ApplyOnStart,
 			},
 			"subscriptions": func() map[string]interface{} {
 				total, enabled := 0, 0

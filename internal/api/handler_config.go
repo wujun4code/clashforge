@@ -47,8 +47,29 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusBadRequest, "CONFIG_INVALID", err.Error())
 			return
 		}
+		if newCfg.Security.APISecret == "***" && deps.Config.Security.APISecret != "" {
+			newCfg.Security.APISecret = deps.Config.Security.APISecret
+		}
+		if err := config.Save(deps.ConfigPath, &newCfg); err != nil {
+			Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
+			return
+		}
 		*deps.Config = newCfg
-		JSON(w, http.StatusOK, map[string]bool{"updated": true})
+		generated, genErr := generateMihomoConfig(deps)
+		if genErr != nil {
+			JSON(w, http.StatusOK, map[string]interface{}{
+				"updated":          true,
+				"config_generated": false,
+				"needs_restart":    true,
+				"warning":          genErr.Error(),
+			})
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"updated":          true,
+			"config_generated": generated,
+			"needs_restart":    true,
+		})
 	}
 }
 

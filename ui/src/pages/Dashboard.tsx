@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { useSSE } from '../hooks/useSSE'
 import {
+  getHealthCheck,
   getStatus, startCore, stopCore, restartCore, reloadCore,
   triggerUpdateAll, getSubscriptions, getOverrides, generateConfig,
   getConfig, updateConfig,
 } from '../api/client'
-import type { StatusData } from '../api/client'
+import type { HealthCheckData, HealthDNS, HealthPort, HealthProcess, HealthProxyTest, HealthTakeover, StatusData } from '../api/client'
 import { formatBytes, formatUptime } from '../utils/format'
 import {
   AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip
@@ -228,8 +229,10 @@ function NetworkSettings({ status, onRefresh }: { status: StatusData | null; onR
 
   const mode = get(['network', 'mode']) as string || 'none'
   const firewall = get(['network', 'firewall_backend']) as string || 'none'
+  const applyOnStart = !!get(['network', 'apply_on_start'])
   const bypassLan = !!get(['network', 'bypass_lan'])
   const dnsEnable = !!get(['dns', 'enable'])
+  const dnsApplyOnStart = !!get(['dns', 'apply_on_start'])
 
   return (
     <div className="card px-5 py-5">
@@ -282,6 +285,10 @@ function NetworkSettings({ status, onRefresh }: { status: StatusData | null; onR
                 </select>
               </div>
               <div className="flex items-center justify-between">
+                <span className="text-muted">启动时接管透明代理</span>
+                <Toggle checked={applyOnStart} onChange={v => set(['network', 'apply_on_start'], v)} />
+              </div>
+              <div className="flex items-center justify-between">
                 <span className="text-muted">绕过局域网</span>
                 <Toggle checked={bypassLan} onChange={v => set(['network', 'bypass_lan'], v)} />
               </div>
@@ -289,11 +296,134 @@ function NetworkSettings({ status, onRefresh }: { status: StatusData | null; onR
                 <span className="text-muted">启用 DNS</span>
                 <Toggle checked={dnsEnable} onChange={v => set(['dns', 'enable'], v)} />
               </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted">启动时接管 DNS</span>
+                <Toggle checked={dnsApplyOnStart} onChange={v => set(['dns', 'apply_on_start'], v)} />
+              </div>
             </div>
+            <p className="text-xs text-muted leading-5 pt-1 border-t border-white/5">
+              透明代理和 DNS 接管默认关闭。开启后需要重启 clashforge 服务，启动时才会应用。
+            </p>
           </>}
         </div>
       )}
       {!status && <p className="text-muted text-sm">加载中…</p>}
+    </div>
+  )
+}
+
+function ToneDot({ ok }: { ok: boolean }) {
+  return <span className={`w-2 h-2 rounded-full ${ok ? 'bg-success' : 'bg-danger'} flex-shrink-0`}/>
+}
+
+function HealthRow({ title, ok, detail }: { title: string; ok: boolean; detail: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2 border-b border-white/5 last:border-b-0">
+      <div className="flex items-start gap-2 min-w-0">
+        <ToneDot ok={ok} />
+        <div className="min-w-0">
+          <p className="text-sm text-slate-200 font-medium">{title}</p>
+          <p className="text-xs text-muted leading-5 break-words">{detail}</p>
+        </div>
+      </div>
+      <span className={`text-xs font-semibold ${ok ? 'text-success' : 'text-danger'}`}>{ok ? '正常' : '异常'}</span>
+    </div>
+  )
+}
+
+function renderProcessDetail(item: HealthProcess) {
+  const extras = [item.state, item.pid ? `PID ${item.pid}` : '', item.uptime ? `运行 ${formatUptime(item.uptime)}` : ''].filter(Boolean)
+  return [item.message, extras.join(' · ')].filter(Boolean).join(' · ')
+}
+
+function renderPortDetail(item: HealthPort) {
+  return `${item.proto.toUpperCase()} ${item.port} · ${item.message}${item.required ? ' · 必需' : ''}`
+}
+
+function renderTakeoverDetail(item: HealthTakeover) {
+  const extras = [item.mode ? `mode=${item.mode}` : '', item.backend ? `backend=${item.backend}` : '', `启动接管=${item.apply_on_start ? '开' : '关'}`].filter(Boolean)
+  return [item.message, extras.join(' · ')].filter(Boolean).join(' · ')
+}
+
+function renderDNSDetail(item: HealthDNS) {
+  return `${item.message} · dnsmasq_mode=${item.dnsmasq_mode} · 启动接管=${item.apply_on_start ? '开' : '关'} · 监听=${item.listener_ready ? '正常' : '未就绪'}`
+}
+
+function renderProxyDetail(item: HealthProxyTest) {
+  if (!item.listening) return `端口 ${item.port} 未监听`
+  if (!item.ok) return `端口 ${item.port} 请求失败${item.error ? ` · ${item.error}` : ''}`
+  const parts = [`端口 ${item.port}`]
+  if (item.status_code) parts.push(`HTTP ${item.status_code}`)
+  if (item.duration_ms) parts.push(`${item.duration_ms}ms`)
+  return parts.join(' · ')
+}
+
+function HealthPanel({ health, onRefresh }: { health: HealthCheckData | null; onRefresh: () => void }) {
+  if (!health) {
+    return (
+      <div className="card px-5 py-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-300">健康检查</h2>
+          <button className="btn-ghost text-xs py-1.5 flex items-center gap-1.5" onClick={onRefresh}>
+            <RefreshCw size={12}/> 刷新
+          </button>
+        </div>
+        <p className="text-sm text-muted">加载中…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card px-5 py-5 space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-300">健康检查</h2>
+          <p className="text-xs text-muted mt-1">目标站点：{health.proxy_tests.target_url}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <p className={`text-sm font-semibold ${health.summary.healthy ? 'text-success' : 'text-danger'}`}>{health.summary.healthy ? '整体正常' : '存在异常'}</p>
+            <p className="text-xs text-muted">失败 {health.summary.failures} · 警告 {health.summary.warnings}</p>
+          </div>
+          <button className="btn-ghost text-xs py-1.5 flex items-center gap-1.5" onClick={onRefresh}>
+            <RefreshCw size={12}/> 刷新
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-white/8 bg-surface-1/60 px-4 py-4">
+          <p className="text-xs text-muted uppercase tracking-wider mb-2">进程</p>
+          <HealthRow title="clashforge" ok={health.process.clashforge.ok} detail={renderProcessDetail(health.process.clashforge)} />
+          <HealthRow title="mihomo" ok={health.process.mihomo.ok} detail={renderProcessDetail(health.process.mihomo)} />
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-surface-1/60 px-4 py-4">
+          <p className="text-xs text-muted uppercase tracking-wider mb-2">接管状态</p>
+          <HealthRow title="透明代理" ok={health.transparent_proxy.active || !health.transparent_proxy.apply_on_start} detail={renderTakeoverDetail(health.transparent_proxy)} />
+          <HealthRow title="NFT / 防火墙" ok={health.nft.active || !health.nft.apply_on_start} detail={renderTakeoverDetail(health.nft)} />
+          <HealthRow title="DNS" ok={health.dns.active || !health.dns.apply_on_start} detail={renderDNSDetail(health.dns)} />
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-surface-1/60 px-4 py-4 xl:col-span-2">
+          <p className="text-xs text-muted uppercase tracking-wider mb-2">端口监听</p>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-6">
+            {health.ports.map(port => (
+              <HealthRow key={`${port.name}-${port.port}`} title={port.name} ok={port.listening || !port.required} detail={renderPortDetail(port)} />
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-surface-1/60 px-4 py-4 xl:col-span-2">
+          <p className="text-xs text-muted uppercase tracking-wider mb-2">代理链路验证</p>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-6">
+            <HealthRow title="HTTP 代理" ok={health.proxy_tests.http.ok} detail={renderProxyDetail(health.proxy_tests.http)} />
+            <HealthRow title="Mixed 代理" ok={health.proxy_tests.mixed.ok} detail={renderProxyDetail(health.proxy_tests.mixed)} />
+            <HealthRow title="SOCKS5 代理" ok={health.proxy_tests.socks.ok} detail={renderProxyDetail(health.proxy_tests.socks)} />
+            <HealthRow title="Mihomo API" ok={health.proxy_tests.mihomo_api.ok} detail={renderProxyDetail(health.proxy_tests.mihomo_api)} />
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -315,6 +445,7 @@ const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { valu
 export function Dashboard() {
   const { trafficHistory, currentUp, currentDown, connCount, coreState, setCoreState, pushTraffic, setConnCount } = useStore()
   const [status, setStatus] = useState<StatusData | null>(null)
+  const [health, setHealth] = useState<HealthCheckData | null>(null)
   const [loading, setLoading] = useState<string | null>(null)
   const [guideDismissed, setGuideDismissed] = useState(false)
   const navigate = useNavigate()
@@ -326,7 +457,14 @@ export function Dashboard() {
     onConnCount: (d) => setConnCount(d.total),
   })
 
-  const refresh = () => getStatus().then(setStatus).catch(() => null)
+  const refresh = async () => {
+    const [nextStatus, nextHealth] = await Promise.all([
+      getStatus().catch(() => null),
+      getHealthCheck().catch(() => null),
+    ])
+    if (nextStatus) setStatus(nextStatus)
+    if (nextHealth) setHealth(nextHealth)
+  }
   useEffect(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t) }, [])
 
   const action = async (name: string, fn: () => Promise<unknown>) => {
@@ -409,6 +547,8 @@ export function Dashboard() {
 
         <NetworkSettings status={status} onRefresh={refresh} />
       </div>
+
+      <HealthPanel health={health} onRefresh={refresh} />
 
       {/* quick actions */}
       <div className="card px-5 py-4">

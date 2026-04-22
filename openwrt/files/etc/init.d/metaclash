@@ -47,24 +47,6 @@ patch_config_mihomo() {
     sed -i "s|^binary = .*|binary = \"$bin\"|" "$CONFIG" 2>/dev/null || true
 }
 
-coexist_with_openclash() {
-    if /etc/init.d/openclash status 2>/dev/null | grep -q "running"; then
-        log "OpenClash detected — switching to coexistence port set"
-        if grep -q "^http = 7890" "$CONFIG" 2>/dev/null; then
-            sed -i \
-                -e 's/^http = 7890$/http = 17890/' \
-                -e 's/^socks = 7891$/socks = 17891/' \
-                -e 's/^mixed = 7893$/mixed = 17893/' \
-                -e 's/^redir = 7892$/redir = 17892/' \
-                -e 's/^tproxy = 7895$/tproxy = 17895/' \
-                "$CONFIG" 2>/dev/null || true
-        fi
-        if grep -q '^mode = "tproxy"' "$CONFIG" 2>/dev/null; then
-            sed -i 's/^mode = "tproxy"$/mode = "none"/' "$CONFIG" 2>/dev/null || true
-        fi
-    fi
-}
-
 start_service() {
     check_memory || return 1
 
@@ -87,8 +69,6 @@ start_service() {
     fi
     log "Using mihomo: $mihomo_bin"
     patch_config_mihomo "$mihomo_bin"
-
-    coexist_with_openclash
 
     procd_open_instance
     procd_set_param command "$PROG" -config "$CONFIG"

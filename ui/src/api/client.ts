@@ -19,8 +19,74 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export interface StatusData {
   metaclash: { version: string; uptime: number; config_file: string }
   core: { state: string; pid: number; restarts: number; uptime: number }
-  network: { mode: string; firewall_backend: string; rules_applied: boolean }
+  network: { mode: string; firewall_backend: string; apply_on_start: boolean; rules_applied: boolean }
+  dns: { enable: boolean; dnsmasq_mode: string; apply_on_start: boolean }
   subscriptions: { total: number; enabled: number; last_updated: string | null }
+}
+
+export interface HealthProcess {
+  ok: boolean
+  message: string
+  pid?: number
+  state?: string
+  uptime?: number
+}
+
+export interface HealthPort {
+  name: string
+  port: number
+  proto: string
+  required: boolean
+  listening: boolean
+  message: string
+}
+
+export interface HealthTakeover {
+  configured: boolean
+  apply_on_start: boolean
+  active: boolean
+  mode?: string
+  backend?: string
+  rules_applied?: boolean
+  table_present?: boolean
+  message: string
+}
+
+export interface HealthDNS {
+  enabled: boolean
+  apply_on_start: boolean
+  dnsmasq_mode: string
+  active: boolean
+  managed_file_present: boolean
+  listener_ready: boolean
+  message: string
+}
+
+export interface HealthProxyTest {
+  name: string
+  port: number
+  listening: boolean
+  ok: boolean
+  status_code?: number
+  duration_ms?: number
+  error?: string
+}
+
+export interface HealthCheckData {
+  checked_at: string
+  summary: { healthy: boolean; failures: number; warnings: number }
+  process: { clashforge: HealthProcess; mihomo: HealthProcess }
+  ports: HealthPort[]
+  transparent_proxy: HealthTakeover
+  nft: HealthTakeover
+  dns: HealthDNS
+  proxy_tests: {
+    target_url: string
+    http: HealthProxyTest
+    mixed: HealthProxyTest
+    socks: HealthProxyTest
+    mihomo_api: HealthProxyTest
+  }
 }
 
 export interface ProxyNode {
@@ -49,6 +115,7 @@ export interface LogEntry { type: string; payload: string; time?: string }
 
 // ---- API calls ----
 export const getStatus        = () => request<StatusData>('GET', '/status')
+export const getHealthCheck   = (target?: string) => request<HealthCheckData>('GET', `/health/check${target ? `?target=${encodeURIComponent(target)}` : ''}`)
 export const startCore        = () => request('POST', '/core/start')
 export const stopCore         = () => request('POST', '/core/stop')
 export const restartCore      = () => request('POST', '/core/restart')
