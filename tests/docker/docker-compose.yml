@@ -1,0 +1,12 @@
+services:
+  clashforge-test:
+    build:
+      context: ../..
+      dockerfile: tests/docker/Dockerfile
+    container_name: clashforge-integration-test
+    volumes:
+      # Mount private sample config — never committed to git
+      - ../../testdata/sample-clash-config.yaml:/testdata/sample-clash-config.yaml:ro
+    network_mode: bridge
+    # Container exits with test result code
+    # Use: docker compose up --abort-on-container-exit --exit-code-from clashforge-test
