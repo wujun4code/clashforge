@@ -198,6 +198,8 @@ jobs:
           mkdir -p ipk/etc/metaclash
           mkdir -p ipk/etc/init.d
           mkdir -p ipk/usr/share/metaclash
+          mkdir -p ipk/usr/share/luci/menu.d
+          mkdir -p "ipk/www/luci-static/clashforge"
 
           # Copy clashforge binary
           cp dist/clashforge-${{ matrix.suffix }} ipk/usr/bin/clashforge
@@ -209,6 +211,12 @@ jobs:
 
           # Config example files (reference only, not used by postinst)
           # mkdir -p ipk/etc/metaclash  # already created above
+
+          # LuCI navigation entry (adds ClashForge to Services menu)
+          cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json \
+             ipk/usr/share/luci/menu.d/luci-app-clashforge.json
+          cp openwrt/files/www/luci-static/clashforge/main.js \
+             "ipk/www/luci-static/clashforge/main.js"
 
           # init.d script (smart mihomo detection)
           cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge
