@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-build_ipk.py — Build an opkg-compatible IPK package
+build_ipk.py — Build an opkg-compatible IPK package for OpenWrt
+OpenWrt IPK format: outer .tar.gz containing:
+  ./debian-binary
+  ./data.tar.gz
+  ./control.tar.gz
+NOT the Debian ar format!
+
 Usage: PKG_NAME=clashforge_x.x.x_arch.ipk python3 build_ipk.py
 Must be run from the directory containing the 'ipk/' staging tree.
 """
@@ -32,7 +38,7 @@ def make_tar_gz(out_path, base_dir, names):
     print(f"  wrote {out_path} ({os.path.getsize(out_path):,} bytes)")
 
 
-# ── Collect data members (everything under ipk/ except CONTROL/) ──────────
+# ── data.tar.gz — package contents ────────────────────────────────────────
 data_names = []
 for root, dirs, files in os.walk('ipk'):
     for f in files:
@@ -42,7 +48,7 @@ for root, dirs, files in os.walk('ipk'):
 
 make_tar_gz('data.tar.gz', 'ipk', data_names)
 
-# ── Collect control members ────────────────────────────────────────────────
+# ── control.tar.gz — package metadata ─────────────────────────────────────
 ctrl_order = ['control', 'conffiles', 'postinst', 'prerm', 'postrm']
 ctrl_names = [f for f in ctrl_order if os.path.exists(f'ipk/CONTROL/{f}')]
 make_tar_gz('control.tar.gz', 'ipk/CONTROL', ctrl_names)
@@ -51,50 +57,29 @@ make_tar_gz('control.tar.gz', 'ipk/CONTROL', ctrl_names)
 with open('debian-binary', 'w') as fh:
     fh.write('2.0\n')
 
-
-# ── Assemble ar archive ────────────────────────────────────────────────────
-# ar format: global magic + sequence of members
-# Each member header is exactly 60 bytes:
-#   name[16] mtime[12] uid[6] gid[6] mode[8] size[10] fmag[2]
-def ar_header(name: str, size: int) -> bytes:
-    hdr = (
-        name.encode().ljust(16)[:16]    # name, padded/truncated to 16
-        + b'0           '               # mtime (12 chars)
-        + b'0     '                     # uid   (6 chars)
-        + b'0     '                     # gid   (6 chars)
-        + b'100644  '                   # mode  (8 chars)
-        + str(size).encode().ljust(10)[:10]  # size (10 chars)
-        + b'`\n'                        # fmag  (2 chars: backtick + newline)
-    )
-    assert len(hdr) == 60, f"bad header length {len(hdr)}"
-    return hdr
-
-
-members = [
-    ('debian-binary',  'debian-binary'),
-    ('control.tar.gz', 'control.tar.gz'),
-    ('data.tar.gz',    'data.tar.gz'),
-]
-
-with open(pkg_name, 'wb') as ipk:
-    ipk.write(b'!<arch>\n')           # ar global magic (8 bytes)
-    for arc_name, file_name in members:
-        with open(file_name, 'rb') as fh:
-            data = fh.read()
-        ipk.write(ar_header(arc_name, len(data)))
-        ipk.write(data)
-        if len(data) % 2:              # ar requires even alignment
-            ipk.write(b'\n')
+# ── Outer tar.gz (OpenWrt IPK format) ─────────────────────────────────────
+# OpenWrt IPK = tar.gz containing: debian-binary, data.tar.gz, control.tar.gz
+# Order matters: debian-binary first, then data, then control
+with tarfile.open(pkg_name, 'w:gz', compresslevel=9) as outer:
+    for fname in ['debian-binary', 'data.tar.gz', 'control.tar.gz']:
+        ti = tarfile.TarInfo(name='./' + fname)
+        ti.size = os.path.getsize(fname)
+        ti.uid = ti.gid = 0
+        ti.uname = ti.gname = 'root'
+        ti.mtime = 0
+        ti.mode = 0o100644
+        with open(fname, 'rb') as fh:
+            outer.addfile(ti, fh)
 
 final_size = os.path.getsize(pkg_name)
 print(f"Built {pkg_name} ({final_size:,} bytes)")
 
-# ── Quick sanity check ─────────────────────────────────────────────────────
+# ── Verify ─────────────────────────────────────────────────────────────────
 import subprocess
-result = subprocess.run(['ar', 't', pkg_name], capture_output=True, text=True)
-print(f"ar contents: {result.stdout.strip()}")
-if 'debian-binary' not in result.stdout:
-    print("ERROR: ar verification failed!", file=sys.stderr)
+result = subprocess.run(['tar', 'tzf', pkg_name], capture_output=True, text=True)
+print(f"IPK contents: {result.stdout.strip()}")
+if 'debian-binary' not in result.stdout or 'data.tar.gz' not in result.stdout:
+    print("ERROR: IPK verification failed!", file=sys.stderr)
     sys.exit(1)
 
-print("IPK built successfully.")
+print("IPK built successfully (OpenWrt tar.gz format).")
