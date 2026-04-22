@@ -185,6 +185,7 @@ jobs:
           VERSION="${{ steps.version.outputs.pkg_version }}"
           ARCH="${{ matrix.pkg_arch }}"
           PKG_NAME="clashforge_${VERSION}_${ARCH}.ipk"
+          export PKG_NAME
 
           # Create IPK directory structure
           mkdir -p ipk/CONTROL
@@ -249,7 +250,7 @@ jobs:
           echo "====================================================="
           echo " ClashForge installed! Open the Web UI to configure:"
           echo ""
-          echo "   http://${ROUTER_IP}:7777"
+          echo "   http://\${ROUTER_IP}:7777"
           echo ""
           echo " Steps:"
           echo "   1. Open the URL above in your browser"
@@ -269,7 +270,7 @@ jobs:
           chmod 755 ipk/CONTROL/prerm
 
           # Build the IPK using the dedicated packaging script
-          PKG_NAME="$PKG_NAME" python3 scripts/build_ipk.py
+          python3 scripts/build_ipk.py
           ls -lh "$PKG_NAME"
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
