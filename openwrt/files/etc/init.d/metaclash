@@ -70,9 +70,8 @@ start_service() {
     log "Using mihomo: $mihomo_bin"
     patch_config_mihomo "$mihomo_bin"
 
-    procd_open_instance
+    procd_open_instance instance1
     procd_set_param command "$PROG" -config "$CONFIG"
-    procd_set_param pidfile "$PIDFILE"
     procd_set_param respawn 3600 10 3
     # Don't pipe stdout/stderr to console — clashforge writes its own log
     procd_close_instance
