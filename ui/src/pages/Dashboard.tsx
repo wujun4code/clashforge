@@ -303,7 +303,6 @@ export function Dashboard() {
               {[
                 ['透明代理模式', status.network.mode],
                 ['防火墙后端', status.network.firewall_backend],
-                ['规则已应用', status.network.rules_applied ? '是' : '否'],
                 ['订阅数量', `${status.subscriptions.enabled} / ${status.subscriptions.total} 启用`],
                 ['版本', status.metaclash.version],
                 ['运行时长', formatUptime(status.metaclash.uptime)],
