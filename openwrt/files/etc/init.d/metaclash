@@ -11,41 +11,23 @@ CONFIG=/etc/metaclash/config.toml
 PIDFILE=/var/run/metaclash/metaclash.pid
 LOGFILE=/var/log/clashforge.log
 MAX_LOG_KB=512
-# Memory limit in KB — kill clashforge if system free RAM drops below this
-# 32MB free = safe floor for most 64MB+ routers
 MEM_FLOOR_KB=32768
 
 log() {
     logger -t clashforge "$*"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOGFILE" 2>/dev/null
-    # Rotate log if too large
-    local sz
-    sz=$(du -k "$LOGFILE" 2>/dev/null | cut -f1)
-    [ "${sz:-0}" -gt "$MAX_LOG_KB" ] && tail -n 200 "$LOGFILE" > "${LOGFILE}.tmp" \
-        && mv "${LOGFILE}.tmp" "$LOGFILE"
 }
 
 find_mihomo() {
+    # Only check if executable exists — do NOT run -v (exit code is non-zero)
     # Priority 1: User-installed system mihomo
-    if [ -x "/usr/bin/mihomo" ] && /usr/bin/mihomo -v > /dev/null 2>&1; then
+    if [ -x "/usr/bin/mihomo" ]; then
         echo "/usr/bin/mihomo"; return 0
     fi
     # Priority 2: Bundled mihomo (shipped with this IPK)
-    if [ -x "/usr/bin/mihomo-clashforge" ] && /usr/bin/mihomo-clashforge -v > /dev/null 2>&1; then
+    if [ -x "/usr/bin/mihomo-clashforge" ]; then
         echo "/usr/bin/mihomo-clashforge"; return 0
     fi
     return 1
-}
-
-check_port_conflict() {
-    # Check if our UI port 7777 is already in use
-    if netstat -tlnp 2>/dev/null | grep -q ":7777 "; then
-        log "WARNING: port 7777 already in use, clashforge UI may not start"
-    fi
-    # Check proxy ports
-    if netstat -tlnp 2>/dev/null | grep -q ":7890 "; then
-        log "WARNING: port 7890 already in use (OpenClash?). Check config ports."
-    fi
 }
 
 check_memory() {
@@ -53,10 +35,9 @@ check_memory() {
     free_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || \
               awk '/MemFree/{print $2}' /proc/meminfo 2>/dev/null || echo 999999)
     if [ "$free_kb" -lt "$MEM_FLOOR_KB" ]; then
-        log "ERROR: insufficient memory (${free_kb}KB free, need ${MEM_FLOOR_KB}KB). Aborting start."
+        log "ERROR: insufficient memory (${free_kb}KB free). Aborting start."
         return 1
     fi
-    log "Memory OK: ${free_kb}KB available"
     return 0
 }
 
@@ -67,15 +48,8 @@ patch_config_mihomo() {
 }
 
 coexist_with_openclash() {
-    # If OpenClash is running, switch clashforge to non-conflicting ports
     if /etc/init.d/openclash status 2>/dev/null | grep -q "running"; then
         log "OpenClash detected — switching to coexistence port set"
-        # Use alternate ports that won't conflict:
-        #   clashforge HTTP proxy:  17890  (instead of 7890)
-        #   clashforge SOCKS proxy: 17891
-        #   clashforge mixed port:  17893
-        #   clashforge UI stays at: 7777
-        # Patch config only if still using default conflicting ports
         if grep -q "^http = 7890" "$CONFIG" 2>/dev/null; then
             sed -i \
                 -e 's/^http = 7890$/http = 17890/' \
@@ -84,66 +58,47 @@ coexist_with_openclash() {
                 -e 's/^redir = 7892$/redir = 17892/' \
                 -e 's/^tproxy = 7895$/tproxy = 17895/' \
                 "$CONFIG" 2>/dev/null || true
-            log "Ports shifted to 17890+ to avoid OpenClash conflict"
         fi
-        # Also set network.mode=none so we don't fight over iptables/nftables
         if grep -q '^mode = "tproxy"' "$CONFIG" 2>/dev/null; then
             sed -i 's/^mode = "tproxy"$/mode = "none"/' "$CONFIG" 2>/dev/null || true
-            log "Network mode set to 'none' to coexist with OpenClash (transparent proxy disabled)"
-            log "To enable transparent proxy in ClashForge, first disable OpenClash and change mode in config"
         fi
     fi
 }
 
 start_service() {
-    # Memory check
     check_memory || return 1
 
-    # Ensure runtime dirs exist
     mkdir -p /var/run/metaclash
     mkdir -p /etc/metaclash
 
-    # Create default configs if missing
     [ -f "$CONFIG" ] || \
         cp /etc/metaclash/config.toml.example "$CONFIG" 2>/dev/null || true
     [ -f /etc/metaclash/overrides.yaml ] || \
-        cp /etc/metaclash/overrides.yaml.example /etc/metaclash/overrides.yaml 2>/dev/null || true
+        touch /etc/metaclash/overrides.yaml 2>/dev/null || true
 
-    # Find mihomo
     local mihomo_bin
     mihomo_bin=$(find_mihomo)
     if [ -z "$mihomo_bin" ]; then
-        log "ERROR: no mihomo binary found. Install mihomo or use bundled /usr/bin/mihomo-clashforge"
+        log "ERROR: no mihomo binary found at /usr/bin/mihomo or /usr/bin/mihomo-clashforge"
         return 1
     fi
     log "Using mihomo: $mihomo_bin"
     patch_config_mihomo "$mihomo_bin"
 
-    # OpenClash coexistence check
     coexist_with_openclash
-
-    # Port conflict check (informational only)
-    check_port_conflict
-
-    log "Starting clashforge..."
 
     procd_open_instance
     procd_set_param command "$PROG" -config "$CONFIG"
     procd_set_param pidfile "$PIDFILE"
-    # respawn: threshold=3600s window, delay=10s, max_attempts=3
-    # After 3 crashes in 1 hour → give up (prevents reboot loop)
     procd_set_param respawn 3600 10 3
     procd_set_param stdout 1
     procd_set_param stderr 1
-    # Limit memory to 64MB — kernel will OOM-kill before bringing down the router
-    procd_set_param limits "RLIMIT_AS=67108864:67108864"
     procd_close_instance
     log "clashforge started"
 }
 
 stop_service() {
     log "Stopping clashforge..."
-    # procd handles the actual kill; this is just for logging
 }
 
 reload_service() {
@@ -163,7 +118,6 @@ service_triggers() {
 }
 
 boot() {
-    # Delay start slightly on boot to let network settle
     sleep 5
     start "$@"
 }
