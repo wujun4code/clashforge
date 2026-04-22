@@ -17,7 +17,9 @@ mihomo_api = 9090
 ui = 7777
 
 [network]
-mode = "tproxy"
+# mode = "tproxy" 透明代理（需要 kmod-nft-tproxy，与 OpenClash 不共存）
+# mode = "none"  仅端口代理，可与 OpenClash 安全共存
+mode = "none"
 firewall_backend = "auto"
 bypass_lan = true
 bypass_china = false
