@@ -121,5 +121,5 @@ service_triggers() {
 
 boot() {
     sleep 5
-    start "$@"
+    start
 }
