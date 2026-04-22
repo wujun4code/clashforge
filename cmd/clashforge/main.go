@@ -35,7 +35,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logBuf := api.NewLogBuffer(500)
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).Hook(api.NewZerologHook(logBuf))
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -111,6 +112,7 @@ func main() {
 		SubManager: subManager,
 		Netfilter:  nfManager,
 		SSEBroker:  sseBroker,
+		LogBuffer:  logBuf,
 	})
 
 	addr := cfg.UIListenAddr()

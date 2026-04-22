@@ -25,11 +25,23 @@ func handleStatus(deps Dependencies) http.HandlerFunc {
 				"firewall_backend": deps.Config.Network.FirewallBackend,
 				"rules_applied":    false,
 			},
-			"subscriptions": map[string]interface{}{
-				"total":        0,
-				"enabled":      0,
-				"last_updated": nil,
-			},
+			"subscriptions": func() map[string]interface{} {
+				total, enabled := 0, 0
+				if deps.SubManager != nil {
+					subs := deps.SubManager.GetAll()
+					total = len(subs)
+					for _, s := range subs {
+						if s.Enabled {
+							enabled++
+						}
+					}
+				}
+				return map[string]interface{}{
+					"total":        total,
+					"enabled":      enabled,
+					"last_updated": nil,
+				}
+			}(),
 		})
 	}
 }

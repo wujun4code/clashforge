@@ -21,14 +21,15 @@ var uiDist embed.FS
 
 // Dependencies holds all injected services.
 type Dependencies struct {
-	Version   string
-	StartedAt time.Time
+	Version    string
+	StartedAt  time.Time
 	ConfigPath string
 	Config     *config.MetaclashConfig
 	Core       *core.CoreManager
 	SubManager *subscription.Manager
 	Netfilter  *netfilter.Manager
 	SSEBroker  *SSEBroker
+	LogBuffer  *LogBuffer
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -59,6 +60,12 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Put("/subscriptions/{id}", handleUpdateSubscription(deps))
 		api.Delete("/subscriptions/{id}", handleDeleteSubscription(deps))
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
+		api.Get("/logs", handleGetLogs(deps))
+		// Proxy pass-through to mihomo API
+		api.Get("/proxies", proxyToMihomo(deps, "/proxies"))
+		api.Put("/proxies/{group}/select", proxyMihomoWithParam(deps, "/proxies/", "", "group"))
+		api.Get("/connections", proxyToMihomo(deps, "/connections"))
+		api.Delete("/connections", proxyToMihomo(deps, "/connections"))
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}
