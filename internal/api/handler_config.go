@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 
@@ -154,6 +155,14 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
+	// Always enforce ports from config.toml — do not allow overrides to steal ports
+	merged["port"] = deps.Config.Ports.HTTP
+	merged["socks-port"] = deps.Config.Ports.SOCKS
+	merged["mixed-port"] = deps.Config.Ports.Mixed
+	merged["redir-port"] = deps.Config.Ports.Redir
+	merged["tproxy-port"] = deps.Config.Ports.TProxy
+	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", deps.Config.Ports.MihomoAPI)
 
 	data, err := config.MarshalYAML(merged)
 	if err != nil {
