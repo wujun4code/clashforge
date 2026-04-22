@@ -12,3 +12,4 @@ testdata/private/
 *.test
 *.prof
 coverage.out
+internal/api/ui_dist/
