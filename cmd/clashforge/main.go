@@ -22,6 +22,7 @@ import (
 )
 
 const version = "0.1.0-dev"
+var buildVersion = version // overridden by ldflags: -X main.buildVersion=v1.0.0
 
 func main() {
 	cfgPath := flag.String("config", "/etc/metaclash/config.toml", "path to config file")
@@ -95,7 +96,7 @@ func main() {
 
 	// HTTP server
 	router := api.NewRouter(api.Dependencies{
-		Version:    version,
+		Version:    buildVersion,
 		StartedAt:  time.Now(),
 		ConfigPath: *cfgPath,
 		Config:     cfg,
