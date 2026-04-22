@@ -90,14 +90,22 @@ func registerUI(r *chi.Mux) {
 
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 		path := strings.TrimPrefix(req.URL.Path, "/")
-		// Try to open the file from the embed FS
+
 		f, err := uiFS.Open(path)
 		if err == nil {
 			f.Close()
+			// Hashed assets (e.g. index-ABC123.js) can be cached forever.
+			// Everything else (index.html, manifest, icons) must revalidate.
+			if strings.HasPrefix(path, "assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
 			fileServer.ServeHTTP(w, req)
 			return
 		}
-		// SPA fallback: rewrite to index.html
+		// SPA fallback: serve index.html, always revalidate
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		req.URL.Path = "/"
 		fileServer.ServeHTTP(w, req)
 	})
