@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getConfig, updateConfig, getOverrides, updateOverrides } from '../api/client'
-import { Save } from 'lucide-react'
+import { Save, Upload, FileText, CheckCircle2, AlertCircle } from 'lucide-react'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -49,7 +49,9 @@ export function Settings() {
   const [overrides, setOverrides] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [tab, setTab] = useState<'general' | 'overrides'>('general')
+  const [saveError, setSaveError] = useState('')
+  const [tab, setTab] = useState<'import' | 'general' | 'overrides'>('import')
+  const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     getConfig().then(setCfg).catch(() => null)
@@ -74,19 +76,48 @@ export function Settings() {
 
   const saveGeneral = async () => {
     if (!cfg) return
-    setSaving(true)
-    await updateConfig(cfg).catch(() => null)
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setSaving(true); setSaveError('')
+    try {
+      await updateConfig(cfg)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch(e: unknown) {
+      setSaveError(String(e))
+    } finally { setSaving(false) }
   }
 
   const saveOverrides = async () => {
-    setSaving(true)
-    await updateOverrides(overrides).catch(() => null)
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setSaving(true); setSaveError('')
+    try {
+      await updateOverrides(overrides)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch(e: unknown) {
+      setSaveError(String(e))
+    } finally { setSaving(false) }
+  }
+
+  // Handle file upload or paste of full Clash YAML config
+  const handleImport = async (content: string) => {
+    setSaving(true); setSaveError('')
+    try {
+      // Validate it looks like YAML
+      if (!content.trim()) { setSaveError('内容为空'); setSaving(false); return }
+      await updateOverrides(content)
+      setOverrides(content)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch(e: unknown) {
+      setSaveError('YAML 格式不正确：' + String(e))
+    } finally { setSaving(false) }
+  }
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => handleImport(ev.target?.result as string)
+    reader.readAsText(file)
   }
 
   if (!cfg) return <div className="p-6 text-muted text-sm">加载中…</div>
@@ -95,16 +126,79 @@ export function Settings() {
     <div className="p-6 space-y-5 max-w-3xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-white">设置</h1>
-        {saved && <span className="badge badge-success">已保存</span>}
+        <div className="flex items-center gap-2">
+          {saveError && <span className="flex items-center gap-1 text-xs text-danger"><AlertCircle size={12}/>{saveError}</span>}
+          {saved && <span className="flex items-center gap-1 text-xs text-success"><CheckCircle2 size={12}/> 已保存</span>}
+        </div>
       </div>
 
       <div className="flex gap-2">
-        {(['general','overrides'] as const).map(t => (
+        {(['import','general','overrides'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`btn text-xs py-1.5 ${tab === t ? 'btn-primary' : 'btn-ghost'}`}>
-            {t === 'general' ? '常规设置' : 'Overrides YAML'}
+            {t === 'import' ? '📋 导入配置' : t === 'general' ? '常规设置' : 'Overrides YAML'}
           </button>
         ))}
       </div>
+
+      {tab === 'import' && (
+        <div className="space-y-4">
+          {/* Import method 1: File upload */}
+          <div className="card px-5 py-5 space-y-4">
+            <div className="flex items-center gap-2 mb-1">
+              <FileText size={16} className="text-brand"/>
+              <h2 className="text-sm font-semibold text-slate-200">从文件导入</h2>
+            </div>
+            <p className="text-xs text-muted leading-5">
+              直接上传你现有的 Clash / OpenClash YAML 配置文件（config.yaml 或订阅下载的文件）。
+              导入后会作为 Overrides 覆盖生成的配置，优先级最高。
+            </p>
+            <div
+              className="border-2 border-dashed border-white/15 rounded-2xl px-6 py-10 flex flex-col items-center gap-3 hover:border-brand/40 hover:bg-brand/5 transition-all cursor-pointer"
+              onClick={() => fileRef.current?.click()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => {
+                e.preventDefault()
+                const file = e.dataTransfer.files[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = ev => handleImport(ev.target?.result as string)
+                reader.readAsText(file)
+              }}
+            >
+              <Upload size={28} className="text-muted"/>
+              <div className="text-center">
+                <p className="text-sm text-slate-300 font-medium">点击上传或拖放文件</p>
+                <p className="text-xs text-muted mt-1">.yaml / .yml 格式</p>
+              </div>
+              <input ref={fileRef} type="file" accept=".yaml,.yml,.txt" className="hidden" onChange={handleFileUpload} />
+            </div>
+          </div>
+
+          {/* Import method 2: Paste */}
+          <div className="card px-5 py-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <FileText size={16} className="text-brand"/>
+              <h2 className="text-sm font-semibold text-slate-200">直接粘贴 YAML</h2>
+            </div>
+            <p className="text-xs text-muted">把配置内容粘贴到下面，然后点“导入并应用”。</p>
+            <textarea
+              className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-3 text-sm text-white font-mono outline-none focus:border-brand transition-colors resize-none"
+              rows={14}
+              placeholder="port: 7890&#10;proxies:&#10;  - name: my-node&#10;    type: ss&#10;    ...&#10;&#10;或者直接粘贴整份订阅下载的 YAML…"
+              value={overrides}
+              onChange={e => setOverrides(e.target.value)}
+              spellCheck={false}
+            />
+            <button
+              className="btn-primary w-full flex items-center justify-center gap-2"
+              onClick={() => handleImport(overrides)}
+              disabled={saving || !overrides.trim()}
+            >
+              <Save size={14}/> {saving ? '导入中…' : '导入并应用'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {tab === 'general' && (
         <div className="space-y-4">

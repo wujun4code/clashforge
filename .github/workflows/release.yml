@@ -239,21 +239,24 @@ jobs:
             cp /etc/metaclash/config.toml.example /etc/metaclash/config.toml
           [ -f /etc/metaclash/overrides.yaml ] || \
             cp /etc/metaclash/overrides.yaml.example /etc/metaclash/overrides.yaml
-          # Enable & start service
+          # Only enable auto-start, do NOT start now
+          # User must configure subscriptions in Web UI first
           /etc/init.d/clashforge enable 2>/dev/null || true
+          # Start the Web UI process so user can configure
+          /etc/init.d/clashforge start 2>/dev/null || true
+          ROUTER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || echo 'your-router-ip')
           echo ""
-          echo "====================================="
-          echo " ClashForge installed successfully!"
-          echo "====================================="
-          echo " Bundled mihomo: /usr/bin/mihomo-clashforge"
-          echo " System mihomo (if present) will be preferred."
+          echo "====================================================="
+          echo " ClashForge installed! Open the Web UI to configure:"
           echo ""
-          echo " Quick start:"
-          echo "   1. Edit /etc/metaclash/overrides.yaml"
-          echo "      (add your subscription URL or proxy nodes)"
-          echo "   2. /etc/init.d/clashforge start"
-          echo "   3. Open http://$(uname -n 2>/dev/null || echo 'router'):7777"
-          echo "====================================="
+          echo "   http://${ROUTER_IP}:7777"
+          echo ""
+          echo " Steps:"
+          echo "   1. Open the URL above in your browser"
+          echo "   2. Go to [Subscriptions] tab, add your sub URL"
+          echo "      OR go to [Settings] tab, paste your YAML config"
+          echo "   3. Click [Start Core] button on the Dashboard"
+          echo "====================================================="
           POSTINST
           chmod 755 ipk/CONTROL/postinst
 
