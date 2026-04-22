@@ -47,6 +47,16 @@ if [ ! -f /etc/metaclash/overrides.yaml ]; then
   printf '# ClashForge overrides\n' > /etc/metaclash/overrides.yaml
 fi
 
+# Belt-and-suspenders: kill any surviving clashforge process before starting
+# (handles the case where prerm couldn't reach a manually-started process)
+for pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
+  cmdline=$(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' ')
+  case "$cmdline" in
+    */usr/bin/clashforge*) kill -9 "$pid" 2>/dev/null || true ;;
+  esac
+done
+rm -f /var/run/metaclash/metaclash.pid
+
 /etc/init.d/clashforge enable 2>/dev/null || true
 /etc/init.d/clashforge start 2>/dev/null || true
 

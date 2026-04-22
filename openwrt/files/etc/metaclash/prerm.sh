@@ -1,23 +1,30 @@
 #!/bin/sh
 
-# 1. Disable auto-respawn so procd won't restart the service after we kill it
+# 1. Disable auto-respawn so procd won't restart after we kill
 /etc/init.d/clashforge disable 2>/dev/null || true
 
-# 2. Ask procd to stop gracefully
+# 2. Graceful stop via procd
 /etc/init.d/clashforge stop 2>/dev/null || true
 
-# 3. Give procd up to 5 s to stop; force-kill what remains
-i=0
-while [ $i -lt 5 ]; do
-  pgrep -f '/usr/bin/clashforge' >/dev/null 2>&1 || break
-  sleep 1
-  i=$((i+1))
-done
-kill -9 $(pgrep -f '/usr/bin/clashforge' 2>/dev/null) 2>/dev/null || true
-kill -9 $(pgrep -f 'mihomo-clashforge'   2>/dev/null) 2>/dev/null || true
+# 3. Kill by pidfile (covers procd-managed process)
+PIDFILE=/var/run/metaclash/metaclash.pid
+if [ -f "$PIDFILE" ]; then
+  PID=$(cat "$PIDFILE" 2>/dev/null)
+  [ -n "$PID" ] && kill -9 "$PID" 2>/dev/null || true
+fi
 
-# 4. Remove procd service instance so it won't respawn
+# 4. Kill any remaining clashforge/mihomo processes by scanning /proc
+# (covers manually-started processes that procd doesn't know about)
+for pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
+  cmdline=$(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' ')
+  case "$cmdline" in
+    */usr/bin/clashforge*)  kill -9 "$pid" 2>/dev/null || true ;;
+    */usr/bin/mihomo-clashforge*) kill -9 "$pid" 2>/dev/null || true ;;
+  esac
+done
+
+# 5. Remove procd service instance so it won't respawn
 ubus call service delete '{"name":"clashforge"}' 2>/dev/null || true
 
-# 5. Clean up pid files
+# 6. Clean up pid files
 rm -f /var/run/metaclash/metaclash.pid /var/run/metaclash/mihomo.pid
