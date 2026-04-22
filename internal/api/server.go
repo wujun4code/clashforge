@@ -1,7 +1,10 @@
 package api
 
 import (
+	"embed"
+	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,16 +16,19 @@ import (
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
+//go:embed ui_dist
+var uiDist embed.FS
+
 // Dependencies holds all injected services.
 type Dependencies struct {
-	Version       string
-	StartedAt     time.Time
-	ConfigPath    string
-	Config        *config.MetaclashConfig
-	Core          *core.CoreManager
-	SubManager    *subscription.Manager
-	Netfilter     *netfilter.Manager
-	SSEBroker     *SSEBroker
+	Version   string
+	StartedAt time.Time
+	ConfigPath string
+	Config     *config.MetaclashConfig
+	Core       *core.CoreManager
+	SubManager *subscription.Manager
+	Netfilter  *netfilter.Manager
+	SSEBroker  *SSEBroker
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -35,33 +41,23 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(authMiddleware(deps.Config.Security.APISecret))
-
-		// Status
 		api.Get("/status", handleStatus(deps))
-
-		// Config
 		api.Get("/config", handleGetConfig(deps))
 		api.Put("/config", handleUpdateConfig(deps))
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))
 		api.Get("/config/overrides", handleGetOverrides(deps))
 		api.Put("/config/overrides", handleUpdateOverrides(deps))
-
-		// Core management
 		api.Post("/core/start", handleCoreStart(deps))
 		api.Post("/core/stop", handleCoreStop(deps))
 		api.Post("/core/restart", handleCoreRestart(deps))
 		api.Post("/core/reload", handleCoreReload(deps))
 		api.Get("/core/version", handleCoreVersion(deps))
-
-		// Subscriptions
 		api.Get("/subscriptions", handleGetSubscriptions(deps))
 		api.Post("/subscriptions", handleAddSubscription(deps))
 		api.Post("/subscriptions/update-all", handleTriggerUpdateAll(deps))
 		api.Put("/subscriptions/{id}", handleUpdateSubscription(deps))
 		api.Delete("/subscriptions/{id}", handleDeleteSubscription(deps))
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
-
-		// Real-time events
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}
@@ -71,5 +67,28 @@ func NewRouter(deps Dependencies) http.Handler {
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Serve embedded React SPA
+	registerUI(r)
+
 	return r
+}
+
+func registerUI(r *chi.Mux) {
+	uiFS, err := fs.Sub(uiDist, "ui_dist")
+	if err != nil {
+		return
+	}
+	fileServer := http.FileServer(http.FS(uiFS))
+
+	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		path := strings.TrimPrefix(req.URL.Path, "/")
+		// Try to serve the static file
+		if _, err := uiFS.(fs.StatFS).Stat(path); err == nil {
+			fileServer.ServeHTTP(w, req)
+			return
+		}
+		// SPA fallback: serve index.html
+		req.URL.Path = "/"
+		fileServer.ServeHTTP(w, req)
+	})
 }

@@ -1,12 +1,20 @@
 services:
+  # ── Traffic integration test (uses mihomo + real proxy) ──────────────────
   clashforge-test:
     build:
       context: ../..
       dockerfile: tests/docker/Dockerfile
     container_name: clashforge-integration-test
     volumes:
-      # Mount private sample config — never committed to git
       - ../../testdata/sample-clash-config.yaml:/testdata/sample-clash-config.yaml:ro
-    network_mode: bridge
-    # Container exits with test result code
-    # Use: docker compose up --abort-on-container-exit --exit-code-from clashforge-test
+
+  # ── API integration test (uses production image, no mihomo needed) ────────
+  clashforge-api-test:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: clashforge-api-test
+    entrypoint: ["/bin/sh", "/api_test_entrypoint.sh"]
+    volumes:
+      - ./api_test.sh:/api_test.sh:ro
+      - ./api_test_entrypoint.sh:/api_test_entrypoint.sh:ro
