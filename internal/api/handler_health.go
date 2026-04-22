@@ -178,6 +178,7 @@ func buildMihomoHealthMessage(state string, apiReady bool) string {
 func buildTransparentProxyHealth(deps Dependencies) healthTakeover {
 	configured := deps.Config.Network.Mode != "none"
 	active := deps.Netfilter != nil && deps.Netfilter.IsApplied()
+	backend := actualNetfilterBackend(deps)
 	message := "transparent proxy mode disabled in config"
 	if configured && !deps.Config.Network.ApplyOnStart {
 		message = "transparent proxy configured but disabled on startup"
@@ -191,7 +192,7 @@ func buildTransparentProxyHealth(deps Dependencies) healthTakeover {
 		ApplyOnStart: deps.Config.Network.ApplyOnStart,
 		Active:       active,
 		Mode:         deps.Config.Network.Mode,
-		Backend:      deps.Config.Network.FirewallBackend,
+		Backend:      backend,
 		RulesApplied: active,
 		Message:      message,
 	}
@@ -200,6 +201,7 @@ func buildTransparentProxyHealth(deps Dependencies) healthTakeover {
 func buildNFTHealth(deps Dependencies) healthTakeover {
 	tablePresent := nftTablePresent()
 	active := tablePresent && deps.Netfilter != nil && deps.Netfilter.IsApplied()
+	backend := actualNetfilterBackend(deps)
 	message := "nft takeover is inactive"
 	if active {
 		message = "nft rules are present and active"
@@ -211,7 +213,7 @@ func buildNFTHealth(deps Dependencies) healthTakeover {
 		ApplyOnStart: deps.Config.Network.ApplyOnStart,
 		Active:       active,
 		Mode:         deps.Config.Network.Mode,
-		Backend:      deps.Config.Network.FirewallBackend,
+		Backend:      backend,
 		RulesApplied: deps.Netfilter != nil && deps.Netfilter.IsApplied(),
 		TablePresent: tablePresent,
 		Message:      message,
@@ -220,15 +222,21 @@ func buildNFTHealth(deps Dependencies) healthTakeover {
 
 func buildDNSHealth(deps Dependencies) healthDNS {
 	managedFilePresent := fileExists("/etc/dnsmasq.d/clashforge.conf")
-	listenerReady := isTCPPortListening(deps.Config.Ports.DNS)
-	active := deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none" && managedFilePresent
-	message := "dns takeover is disabled"
+	listenerReady := isDNSPortListening(deps.Config.Ports.DNS)
+	active := deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none" && managedFilePresent && listenerReady
+	message := "dns feature is disabled"
 	if deps.Config.DNS.Enable && deps.Config.DNS.DnsmasqMode != "none" && !deps.Config.DNS.ApplyOnStart {
-		message = "dns takeover is configured but disabled on startup"
+		if listenerReady {
+			message = "mihomo dns listener is available without dnsmasq takeover"
+		} else {
+			message = "dns takeover is configured but disabled on startup; mihomo dns listener is not ready"
+		}
 	} else if active {
 		message = "dns takeover is active"
-	} else if deps.Config.DNS.Enable {
+	} else if deps.Config.DNS.Enable && listenerReady {
 		message = "mihomo dns listener is available without dnsmasq takeover"
+	} else if deps.Config.DNS.Enable {
+		message = "mihomo dns listener is not ready"
 	}
 	return healthDNS{
 		Enabled:            deps.Config.DNS.Enable,
@@ -239,6 +247,15 @@ func buildDNSHealth(deps Dependencies) healthDNS {
 		ListenerReady:      listenerReady,
 		Message:            message,
 	}
+}
+
+func actualNetfilterBackend(deps Dependencies) string {
+	if deps.Netfilter != nil {
+		if backend := deps.Netfilter.BackendName(); backend != "" {
+			return backend
+		}
+	}
+	return deps.Config.Network.FirewallBackend
 }
 
 func testMihomoAPI(port int) bool {
@@ -432,6 +449,44 @@ func isTCPPortListening(port int) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+func isDNSPortListening(port int) bool {
+	return isTCPPortListening(port) || isUDPPortListening(port)
+}
+
+func isUDPPortListening(port int) bool {
+	return procNetHasLocalPort("/proc/net/udp", port) || procNetHasLocalPort("/proc/net/udp6", port)
+}
+
+func procNetHasLocalPort(path string, port int) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	wantPort := strings.ToUpper(fmt.Sprintf("%04X", port))
+	scanner := bufio.NewScanner(f)
+	firstLine := true
+	for scanner.Scan() {
+		if firstLine {
+			firstLine = false
+			continue
+		}
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 {
+			continue
+		}
+		localAddr := strings.Split(fields[1], ":")
+		if len(localAddr) != 2 {
+			continue
+		}
+		if strings.EqualFold(localAddr[1], wantPort) {
+			return true
+		}
+	}
+	return false
 }
 
 func fileExists(path string) bool {
