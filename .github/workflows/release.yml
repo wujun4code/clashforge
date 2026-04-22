@@ -245,88 +245,10 @@ jobs:
           # We manage config files manually in postinst to avoid opkg sha256 errors
           touch ipk/CONTROL/conffiles
 
-          # postinst — inlined to guarantee correct default ports (17890 series)
-          # and force-restart on upgrade so new binary is always loaded
-          cat > ipk/CONTROL/postinst << 'POSTINST'
-          #!/bin/sh
-          set -e
-          mkdir -p /etc/metaclash
-          if [ ! -f /etc/metaclash/config.toml ]; then
-            cat > /etc/metaclash/config.toml << 'TOML'
-          [core]
-          binary = "/usr/bin/mihomo-clashforge"
-          runtime_dir = "/var/run/metaclash"
-          data_dir = "/etc/metaclash"
-          max_restarts = 3
-          [ports]
-          http = 17890
-          socks = 17891
-          mixed = 17893
-          redir = 17892
-          tproxy = 17895
-          dns = 17874
-          mihomo_api = 19090
-          ui = 7777
-          [network]
-          mode = "none"
-          firewall_backend = "none"
-          bypass_lan = true
-          bypass_china = false
-          ipv6 = false
-          bypass_cidr = []
-          [dns]
-          enable = false
-          dnsmasq_mode = "none"
-          [security]
-          api_secret = ""
-          allow_lan = true
-          [log]
-          level = "warn"
-          file = ""
-          max_size_mb = 10
-          [update]
-          auto_subscription = true
-          subscription_interval = "6h"
-          auto_geoip = false
-          auto_geosite = false
-          TOML
-          fi
-          if [ ! -f /etc/metaclash/overrides.yaml ]; then
-            printf '# ClashForge overrides\n' > /etc/metaclash/overrides.yaml
-          fi
-          # Force-kill old processes so new binary is loaded on upgrade
-          pkill -9 -f '/usr/bin/clashforge' 2>/dev/null || true
-          pkill -9 -f 'mihomo-clashforge' 2>/dev/null || true
-          rm -f /var/run/metaclash/metaclash.pid /var/run/metaclash/mihomo.pid
-          sleep 1
-          /etc/init.d/clashforge enable 2>/dev/null || true
-          /etc/init.d/clashforge start 2>/dev/null || true
-          ROUTER_IP=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
-          [ -z "$ROUTER_IP" ] && ROUTER_IP="your-router-ip"
-          echo ""
-          echo "ClashForge installed! Web UI: http://${ROUTER_IP}:7777"
-          POSTINST
+          cp openwrt/files/etc/metaclash/postinst.sh ipk/CONTROL/postinst
           chmod 755 ipk/CONTROL/postinst
 
-          # prerm
-          cat > ipk/CONTROL/prerm << 'PRERM'
-          #!/bin/sh
-          # 1. Tell procd to stop and disable the service
-          /etc/init.d/clashforge stop 2>/dev/null || true
-          /etc/init.d/clashforge disable 2>/dev/null || true
-          # 2. Wait for procd to stop the process gracefully
-          sleep 2
-          # 3. Force kill anything still running (procd may restart it once)
-          pkill -9 -f '/usr/bin/clashforge' 2>/dev/null || true
-          pkill -9 -f 'mihomo-clashforge' 2>/dev/null || true
-          sleep 1
-          # 4. Remove pidfiles so procd won't respawn
-          rm -f /var/run/metaclash/metaclash.pid
-          rm -f /var/run/metaclash/mihomo.pid
-          # 5. Double-check procd instance is gone
-          ubus call service list 2>/dev/null | grep -q clashforge && \
-            ubus call service delete '{"name":"clashforge"}' 2>/dev/null || true
-          PRERM
+          cp openwrt/files/etc/metaclash/prerm.sh ipk/CONTROL/prerm
           chmod 755 ipk/CONTROL/prerm
 
           # Build the IPK using the dedicated packaging script
