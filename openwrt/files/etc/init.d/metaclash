@@ -71,8 +71,11 @@ start_service() {
     mkdir -p /var/run/metaclash
     mkdir -p /etc/metaclash
 
+    # Clean up stale pidfile
+    rm -f "$PIDFILE"
+
     [ -f "$CONFIG" ] || \
-        cp /etc/metaclash/config.toml.example "$CONFIG" 2>/dev/null || true
+        touch "$CONFIG" 2>/dev/null || true
     [ -f /etc/metaclash/overrides.yaml ] || \
         touch /etc/metaclash/overrides.yaml 2>/dev/null || true
 

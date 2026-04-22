@@ -59,9 +59,9 @@ fi
 /etc/init.d/clashforge enable 2>/dev/null || true
 /etc/init.d/clashforge start 2>/dev/null || true
 
-ROUTER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' \
-  || hostname -I 2>/dev/null | awk '{print $1}' \
-  || echo 'your-router-ip')
+ROUTER_IP=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
+[ -z "$ROUTER_IP" ] && ROUTER_IP=$(ip -4 addr show 2>/dev/null | awk '/inet /{split($2,a,"/"); if(a[1]!="127.0.0.1") {print a[1]; exit}}')
+[ -z "$ROUTER_IP" ] && ROUTER_IP="your-router-ip"
 
 echo ""
 echo "====================================================="
