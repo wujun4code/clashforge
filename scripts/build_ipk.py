@@ -34,7 +34,7 @@ def make_tar_gz(out_path, base_dir, names):
                 info.mtime = 0
                 return info
 
-            tar.add(full, arcname='./' + name, recursive=True, filter=_filt)
+            tar.add(full, arcname=name, recursive=True, filter=_filt)
     print(f"  wrote {out_path} ({os.path.getsize(out_path):,} bytes)")
 
 
@@ -62,7 +62,7 @@ with open('debian-binary', 'w') as fh:
 # Order matters: debian-binary first, then data, then control
 with tarfile.open(pkg_name, 'w:gz', compresslevel=9) as outer:
     for fname in ['debian-binary', 'data.tar.gz', 'control.tar.gz']:
-        ti = tarfile.TarInfo(name='./' + fname)
+        ti = tarfile.TarInfo(name=fname)
         ti.size = os.path.getsize(fname)
         ti.uid = ti.gid = 0
         ti.uname = ti.gname = 'root'

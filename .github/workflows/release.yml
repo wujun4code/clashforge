@@ -255,7 +255,7 @@ jobs:
           echo "====================================================="
           echo " ClashForge installed! Open the Web UI to configure:"
           echo ""
-          echo "   http://\${ROUTER_IP}:7777"
+          echo "   http://${ROUTER_IP}:7777"
           echo ""
           echo " Steps:"
           echo "   1. Open the URL above in your browser"
