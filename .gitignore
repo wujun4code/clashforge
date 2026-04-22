@@ -1,6 +1,6 @@
 # Binary and build outputs
 bin/
-clashforge
+/clashforge
 
 # Private test data - NEVER commit these
 testdata/sample-clash-config.yaml
