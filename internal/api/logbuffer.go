@@ -2,6 +2,7 @@ package api
 
 import (
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -70,7 +71,4 @@ func (h ZerologHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 	h.buf.Add(level.String(), msg, timeNowUnix())
 }
 
-// timeNowUnix is a package-level var so tests can override it.
-var timeNowUnix = func() int64 {
-	return zerolog.TimestampFunc()().Unix()
-}
+var timeNowUnix = func() int64 { return time.Now().Unix() }
