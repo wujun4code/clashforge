@@ -1,0 +1,19 @@
+{
+  "luci-app-clashforge": {
+    "description": "Grant UCI access for ClashForge",
+    "read": {
+      "file": {
+        "/var/log/clashforge.log": [ "read" ],
+        "/etc/metaclash/*": [ "read" ]
+      },
+      "ubus": {
+        "session": [ "access", "login" ]
+      }
+    },
+    "write": {
+      "file": {
+        "/etc/metaclash/*": [ "write" ]
+      }
+    }
+  }
+}

@@ -200,6 +200,7 @@ jobs:
           mkdir -p ipk/usr/share/metaclash
           mkdir -p ipk/usr/share/luci/menu.d
           mkdir -p "ipk/www/luci-static/resources/view/clashforge"
+          mkdir -p ipk/usr/share/rpcd/acl.d
 
           # Copy clashforge binary
           cp dist/clashforge-${{ matrix.suffix }} ipk/usr/bin/clashforge
@@ -217,6 +218,8 @@ jobs:
              ipk/usr/share/luci/menu.d/luci-app-clashforge.json
           cp openwrt/files/www/luci-static/resources/view/clashforge/main.js \
              "ipk/www/luci-static/resources/view/clashforge/main.js"
+          cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json \
+             ipk/usr/share/rpcd/acl.d/luci-app-clashforge.json
 
           # init.d script (smart mihomo detection)
           cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge
