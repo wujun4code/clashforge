@@ -116,7 +116,7 @@ func handleHealthCheck(deps Dependencies) http.HandlerFunc {
 				},
 				"mihomo": healthProcess{
 					OK:      coreStatus.State == "running" && mihomoAPIReady,
-					Message: buildMihomoHealthMessage(coreStatus.State, mihomoAPIReady),
+					Message: buildMihomoHealthMessage(string(coreStatus.State), mihomoAPIReady),
 					PID:     coreStatus.PID,
 					State:   string(coreStatus.State),
 					Uptime:  coreStatus.Uptime,
