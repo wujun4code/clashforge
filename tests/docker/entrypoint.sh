@@ -38,8 +38,20 @@ if [ ! -f "$OVERRIDES" ]; then
 fi
 pass "sample config present: $OVERRIDES"
 
-mihomo -v 2>&1 | head -1 | grep -q "Mihomo Meta" && pass "mihomo binary ok" || { fail "mihomo binary broken"; exit 1; }
-genconfig --help 2>&1 | head -1; pass "genconfig binary ok"
+MIHOMO_VER=$(mihomo -v 2>&1 || true)
+if echo "$MIHOMO_VER" | grep -q "Mihomo Meta"; then
+    pass "mihomo binary ok: $(echo $MIHOMO_VER | head -c 60)"
+else
+    fail "mihomo binary broken: $MIHOMO_VER"
+    exit 1
+fi
+GENCONFIG_HELP=$(genconfig -h 2>&1 || true)
+if echo "$GENCONFIG_HELP" | grep -q "overrides"; then
+    pass "genconfig binary ok"
+else
+    fail "genconfig binary broken"
+    exit 1
+fi
 
 # ----------------------------------------------------------------
 section "Step 2: Generate mihomo config via clashforge"
@@ -108,13 +120,38 @@ else
     fail "node 'wujun-sg' not found in mihomo API"
 fi
 
-CURRENT_GROUP=$(echo "$API_OUT" | python3 -c "
+# Find the selector group name and set it to wujun-sg
+SELECTOR_NAME=$(echo "$API_OUT" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-pg=d['proxies'].get('Proxy',{})
-print(pg.get('now','unknown'))
+for name,p in d['proxies'].items():
+    if p.get('type')=='Selector' and name not in ('GLOBAL',):
+        print(name)
+        break
+" 2>/dev/null || echo "")
+
+if [ -z "$SELECTOR_NAME" ]; then
+    fail "could not find Selector proxy group"
+else
+    info "found selector group: $SELECTOR_NAME"
+    HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+        -X PUT "http://127.0.0.1:9090/proxies/${SELECTOR_NAME}" \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"wujun-sg"}')
+    if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+        pass "Proxy group '$SELECTOR_NAME' set to wujun-sg (HTTP $HTTP_CODE)"
+    else
+        # Some mihomo versions return 400 if group is already correct or needs different format
+        info "PUT returned HTTP $HTTP_CODE — checking current selection"
+    fi
+fi
+
+CURRENT_GROUP=$(curl -sf "http://127.0.0.1:9090/proxies/${SELECTOR_NAME:-Proxy}" 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('now','unknown'))
 " 2>/dev/null || echo "unknown")
-info "Proxy group currently selected: $CURRENT_GROUP"
+info "Proxy group '$SELECTOR_NAME' currently: $CURRENT_GROUP"
 
 # ----------------------------------------------------------------
 section "Step 7: Network baseline (direct, no proxy)"

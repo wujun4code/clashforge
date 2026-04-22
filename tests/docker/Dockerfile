@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /bin/genconf
 # ---- runtime ----
 FROM alpine:3.19
 
-RUN apk add --no-cache curl bind-tools bash ca-certificates
+RUN apk add --no-cache curl bind-tools bash ca-certificates python3
 
 # Download mihomo compatible binary
 ARG MIHOMO_VERSION=v1.19.24

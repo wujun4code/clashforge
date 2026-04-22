@@ -49,37 +49,65 @@ func main() {
 	}
 
 	if *strip {
-		// Remove heavy features for smoke test on this server
+		// Remove heavy features that require internet download during -t validation
 		delete(merged, "rule-providers")
 		delete(merged, "geodata-mode")
 		delete(merged, "geox-url")
-		// Replace rules with simple ones
-		merged["rules"] = []string{
+
+		// Collect actual proxy node names from the proxies list
+		// After yaml.Marshal/Unmarshal the type is []interface{} not []map[string]interface{}
+		var nodeNames []string
+		switch px := merged["proxies"].(type) {
+		case []map[string]interface{}:
+			for _, p := range px {
+				if name, ok := p["name"].(string); ok {
+					nodeNames = append(nodeNames, name)
+				}
+			}
+		case []interface{}:
+			for _, item := range px {
+				if m, ok := item.(map[string]interface{}); ok {
+					if name, ok := m["name"].(string); ok {
+						nodeNames = append(nodeNames, name)
+					}
+				}
+			}
+		}
+		if len(nodeNames) == 0 {
+			nodeNames = []string{"DIRECT"}
+		}
+
+		// Replace proxy-groups with clean minimal set referencing only real nodes
+		// Put wujun-sg first so Proxy group defaults to it on start
+		selectProxies := append(toIface(nodeNames), []interface{}{"Auto", "DIRECT"}...)
+		merged["proxy-groups"] = []interface{}{
+			map[string]interface{}{
+				"name":    "Proxy",
+				"type":    "select",
+				"proxies": selectProxies,
+			},
+			map[string]interface{}{
+				"name":      "Auto",
+				"type":      "url-test",
+				"url":       "http://www.gstatic.com/generate_204",
+				"interval":  300,
+				"tolerance": 50,
+				"proxies":   toIface(nodeNames),
+			},
+		}
+
+		// Simple rules that don't reference GEOIP/GEOSITE/RULE-SET
+		merged["rules"] = []interface{}{
 			"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
 			"IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
 			"IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
-			"MATCH,🚀 节点选择",
+			"MATCH,Proxy",
 		}
-		// Simplify proxy groups - remove references to non-existent rule-set groups
-		if groups, ok := merged["proxy-groups"].([]interface{}); ok {
-			var simple []interface{}
-			for _, g := range groups {
-				m, _ := g.(map[string]interface{})
-				if m == nil { continue }
-				name, _ := m["name"].(string)
-				// Keep only the main groups
-				if name == "🚀 节点选择" || name == "♻️ 自动选择" || name == "🚀 手动切换" ||
-					name == "🌏 新加坡" || name == "🌏 日本" {
-					simple = append(simple, g)
-				}
-			}
-			if len(simple) > 0 {
-				merged["proxy-groups"] = simple
-			}
-		}
-		// Disable DNS to avoid fake-ip issues on server
+
+		// Disable DNS — avoids fake-ip issues outside OpenWrt
 		merged["dns"] = map[string]interface{}{"enable": false}
-		fmt.Fprintln(os.Stderr, "stripped: removed rule-providers, simplified rules and dns")
+
+		fmt.Fprintln(os.Stderr, "stripped: rule-providers/geodata removed, proxy-groups rebuilt from node list")
 	}
 
 	data, err := yaml.Marshal(merged)
@@ -93,4 +121,12 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("config written: %s (%d bytes)\n", *outPath, len(data))
+}
+
+func toIface(ss []string) []interface{} {
+	out := make([]interface{}, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
