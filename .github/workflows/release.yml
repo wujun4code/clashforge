@@ -133,14 +133,19 @@ jobs:
         include:
           - name: x86_64
             suffix: linux-amd64
-            openwrt_arch: x86_64
             pkg_arch: x86_64
             mihomo_asset: mihomo-linux-amd64-compatible
 
-          - name: aarch64
+          # Generic aarch64 (Cortex-A72, A73, A55 on some devices)
+          - name: aarch64_generic
             suffix: linux-arm64
-            openwrt_arch: aarch64_generic
             pkg_arch: aarch64_generic
+            mihomo_asset: mihomo-linux-arm64
+
+          # Cortex-A53 — very common: Raspberry Pi 3, MT7622, MT7981, MT7986...
+          - name: aarch64_cortex-a53
+            suffix: linux-arm64
+            pkg_arch: aarch64_cortex-a53
             mihomo_asset: mihomo-linux-arm64
 
     steps:
