@@ -224,7 +224,12 @@ export function Dashboard() {
 
   return (
     <div className="p-6 space-y-5 max-w-6xl mx-auto">
-      <h1 className="text-lg font-semibold text-white">概览</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-lg font-semibold text-white">概览</h1>
+        {status && (
+          <span className="badge badge-muted font-mono text-xs">v{status.metaclash.version}</span>
+        )}
+      </div>
 
       {/* Setup guide */}
       {showGuide && <SetupGuide onDismiss={() => setGuideDismissed(true)} />}
