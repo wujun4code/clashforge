@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,21 +9,23 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// proxyToMihomo fetches from mihomo, decodes the JSON, and re-encodes it in
+// the standard {"ok":true,"data":...} envelope so the frontend request() helper works.
 func proxyToMihomo(deps Dependencies, mihomoPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		doProxy(w, r, deps.Config.Ports.MihomoAPI, mihomoPath)
+		doProxyWrapped(w, r, deps.Config.Ports.MihomoAPI, mihomoPath)
 	}
 }
 
-// proxyMihomoWithParam builds the mihomo path as prefix + urlParam + suffix.
+// proxyMihomoWithParam is like proxyToMihomo but interpolates a chi URL param into the path.
 func proxyMihomoWithParam(deps Dependencies, prefix, suffix, paramName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		param := chi.URLParam(r, paramName)
-		doProxy(w, r, deps.Config.Ports.MihomoAPI, prefix+param+suffix)
+		doProxyWrapped(w, r, deps.Config.Ports.MihomoAPI, prefix+param+suffix)
 	}
 }
 
-func doProxy(w http.ResponseWriter, r *http.Request, port int, mihomoPath string) {
+func doProxyWrapped(w http.ResponseWriter, r *http.Request, port int, mihomoPath string) {
 	target := fmt.Sprintf("http://127.0.0.1:%d%s", port, mihomoPath)
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
@@ -33,11 +36,7 @@ func doProxy(w http.ResponseWriter, r *http.Request, port int, mihomoPath string
 		Err(w, http.StatusInternalServerError, "PROXY_ERROR", err.Error())
 		return
 	}
-	for k, vv := range r.Header {
-		for _, v := range vv {
-			req.Header.Add(k, v)
-		}
-	}
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -46,11 +45,22 @@ func doProxy(w http.ResponseWriter, r *http.Request, port int, mihomoPath string
 	}
 	defer resp.Body.Close()
 
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		Err(w, http.StatusBadGateway, "MIHOMO_READ_ERROR", err.Error())
+		return
 	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+
+	// No-content responses (e.g. DELETE /connections returns 204)
+	if resp.StatusCode == http.StatusNoContent || len(body) == 0 {
+		JSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		Err(w, http.StatusBadGateway, "MIHOMO_PARSE_ERROR", err.Error())
+		return
+	}
+	JSON(w, http.StatusOK, payload)
 }
