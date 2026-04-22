@@ -252,8 +252,16 @@ jobs:
           # prerm
           cat > ipk/CONTROL/prerm << 'PRERM'
           #!/bin/sh
+          # Stop service
           /etc/init.d/clashforge stop 2>/dev/null || true
           /etc/init.d/clashforge disable 2>/dev/null || true
+          # Kill any lingering processes
+          pkill -f '/usr/bin/clashforge' 2>/dev/null || true
+          pkill -f 'mihomo-clashforge' 2>/dev/null || true
+          sleep 1
+          # Clean up runtime files
+          rm -f /var/run/metaclash/metaclash.pid
+          rm -f /var/run/metaclash/mihomo.pid
           PRERM
           chmod 755 ipk/CONTROL/prerm
 
