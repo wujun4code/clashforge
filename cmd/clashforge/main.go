@@ -15,6 +15,8 @@ import (
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/daemon"
+	"github.com/wujun4code/clashforge/internal/netfilter"
+	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
@@ -31,16 +33,14 @@ func main() {
 		log.Fatal().Err(err).Msg("load config")
 	}
 
-	level, err := zerolog.ParseLevel(cfg.Log.Level)
-	if err == nil {
+	if level, err := zerolog.ParseLevel(cfg.Log.Level); err == nil {
 		zerolog.SetGlobalLevel(level)
 	}
 
-	if err := os.MkdirAll(cfg.Core.RuntimeDir, 0o755); err != nil {
-		log.Fatal().Err(err).Msg("create runtime dir")
-	}
-	if err := os.MkdirAll(cfg.Core.DataDir, 0o755); err != nil {
-		log.Fatal().Err(err).Msg("create data dir")
+	for _, dir := range []string{cfg.Core.RuntimeDir, cfg.Core.DataDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatal().Err(err).Str("dir", dir).Msg("create directory")
+		}
 	}
 
 	pidfile, err := daemon.AcquirePIDFile(cfg.Core.RuntimeDir + "/metaclash.pid")
@@ -49,6 +49,7 @@ func main() {
 	}
 	defer pidfile.Close()
 
+	// Core (mihomo process manager)
 	coreManager := core.NewManager(core.CoreManagerConfig{
 		Binary:      cfg.Core.Binary,
 		ConfigFile:  cfg.Core.RuntimeDir + "/mihomo-config.yaml",
@@ -56,11 +57,34 @@ func main() {
 		MaxRestarts: cfg.Core.MaxRestarts,
 	})
 
+	// Subscriptions
 	subManager := subscription.NewManager(cfg.Core.DataDir)
 	if err := subManager.Load(); err != nil {
 		log.Warn().Err(err).Msg("load subscriptions")
 	}
 
+	// Netfilter
+	nfManager := netfilter.NewManager(netfilter.Config{
+		Mode:            cfg.Network.Mode,
+		FirewallBackend: cfg.Network.FirewallBackend,
+		TProxyPort:      cfg.Ports.TProxy,
+		DNSPort:         cfg.Ports.DNS,
+		BypassCIDR:      cfg.Network.BypassCIDR,
+	})
+	if cfg.Network.Mode != "none" {
+		if err := nfManager.Apply(); err != nil {
+			log.Warn().Err(err).Msg("apply netfilter rules (continuing without)")
+		}
+	}
+
+	// SSE broker
+	sseBroker := api.NewSSEBroker()
+
+	// Scheduler
+	sched := scheduler.New(cfg, subManager)
+	sched.Start()
+
+	// HTTP server
 	router := api.NewRouter(api.Dependencies{
 		Version:    version,
 		StartedAt:  time.Now(),
@@ -68,6 +92,8 @@ func main() {
 		Config:     cfg,
 		Core:       coreManager,
 		SubManager: subManager,
+		Netfilter:  nfManager,
+		SSEBroker:  sseBroker,
 	})
 
 	addr := cfg.UIListenAddr()
@@ -78,14 +104,17 @@ func main() {
 	}
 
 	go func() {
-		log.Info().Str("addr", addr).Str("version", version).Msg("clashforge started")
+		log.Info().Str("addr", addr).Str("version", version).Str("firewall", nfManager.BackendName()).Msg("clashforge started")
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal().Err(err).Msg("http server failed")
 		}
 	}()
 
+	// Wait for signal
 	sig := daemon.Wait()
 	log.Info().Str("signal", sig.String()).Msg("shutdown requested")
+
+	sched.Stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -93,8 +122,11 @@ func main() {
 	if err := coreManager.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
 		log.Error().Err(err).Msg("stop core")
 	}
+	if err := nfManager.Cleanup(); err != nil {
+		log.Error().Err(err).Msg("cleanup netfilter")
+	}
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("http shutdown")
 	}
-	log.Info().Msg("clashforge exited")
+	log.Info().Msg("clashforge exited cleanly")
 }
