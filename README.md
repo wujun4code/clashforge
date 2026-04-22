@@ -1,149 +1,250 @@
 # ClashForge
 
-ClashForge 是一个面向 **OpenWrt 路由器** 的新一代代理管理项目，目标是基于 **mihomo** 的核心能力，重新实现和重构现有 OpenClash 这一类产品在路由器上的管理层、控制层和交付体验。
+ClashForge is a modern **OpenWrt router** management layer built around **mihomo**.
 
-它不是另一个代理协议实现，也不是要替代 mihomo 本身；相反，它的定位是：
+ClashForge 是一个围绕 **mihomo** 构建、面向 **OpenWrt 路由器** 的现代代理管理层。
 
-> **围绕 mihomo 构建一个更轻、更稳、更现代、更易维护的 OpenWrt 路由器管理层。**
+It does not replace mihomo and does not reimplement proxy protocols. It focuses on the parts around mihomo that are painful on routers: lifecycle management, subscription handling, config generation, transparent proxy orchestration, DNS takeover, observability, and delivery.
 
----
-
-## 项目背景
-
-目前 OpenWrt 路由器场景里，用户广泛依赖以下两类上游能力：
-
-- **[vernesong/openclash](https://github.com/vernesong/openclash)**  
-  OpenWrt 上非常成熟的 Clash/Mihomo 客户端与管理方案，具备很强的生态基础和用户基础。
-
-- **[MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)**  
-  负责实际代理协议、规则匹配、DNS、分流、透明代理与控制 API 的核心引擎。
-
-这两个项目都很重要，但在 OpenWrt 实际使用场景里，传统方案也存在一些长期痛点，例如：
-
-- 管理层依赖较多，整体偏重
-- OpenWrt 集成方式历史包袱较大
-- 配置、订阅、透明代理、防火墙规则、UI、状态管理等能力耦合较深
-- 对低配路由器的资源占用与维护成本并不总是理想
-- 对现代 Web UI、原子配置更新、可观测性和工程化演进不够友好
-
-ClashForge 的目标，就是在继承上游成熟能力的前提下，针对 **OpenWrt 路由器场景** 重新设计一层更现代的管理系统。
+它不会替代 mihomo，也不会重复实现代理协议；它重点解决的是路由器场景里围绕 mihomo 的管理层问题，例如：进程生命周期、订阅管理、配置生成、透明代理接管、DNS 接管、可观测性，以及 OpenWrt 的交付体验。
 
 ---
 
-## 设计目标
+## 中文说明
 
-ClashForge 当前设定的方向包括：
+### 项目定位
 
-- 基于 **mihomo**，而不是重复造代理内核
-- 聚焦 **OpenWrt 路由器部署**
-- 尽量做成 **单一静态二进制**
-- 尽量减少运行时依赖
-- 更清晰地拆分：
-  - 核心进程管理
-  - 配置生成
-  - 订阅管理
-  - 防火墙规则管理
-  - Web UI / REST API
-- 强调：
-  - 原子配置更新
-  - 优雅退出
-  - 单实例约束
-  - 可观测性
-  - 更现代的前端与控制体验
+ClashForge 的目标不是再造一个代理内核，而是把 OpenWrt 上的 Mihomo 管理体验重新做一遍，让它更轻、更稳、更现代、更容易长期维护。
 
-一句话说：
+当前项目重点包括：
 
-> **让 OpenWrt 上的 Clash/Mihomo 管理层，从“能用”进化到“工程上更干净、更稳、更长期可维护”。**
+- mihomo 核心进程生命周期管理
+- 配置生成、保存、热重载
+- 订阅拉取、过滤、缓存与合并
+- nftables / iptables 透明代理规则管理
+- DNS 接管与 dnsmasq 协作
+- Web UI、REST API、SSE 实时状态流
+- OpenWrt init.d / IPK 打包与发布流程
 
----
+### 当前能力
 
-## 当前状态
+当前仓库已经不是“只有设计文档”的状态，而是进入了**可运行的早期预发布阶段**。已经具备的核心能力包括：
 
-当前仓库还处于 **设计与规格定义阶段**，尚未正式开始完整实现。
+- ClashForge 服务启动时自动生成运行时 Mihomo 配置，并拉起 Mihomo
+- 默认采用更安全的启动模型：**启动后不自动接管透明代理和 DNS**，由用户手动开启
+- 支持订阅管理、YAML 覆盖、配置保存与运行时重生成
+- 提供健康检查接口与概览页
+- 概览页支持：
+  - 出口 IP 显示
+  - 访问检查
+  - ClashForge / Mihomo CPU、内存、磁盘占用
+  - 透明代理、NFT、防火墙、DNS 等模块的“当前由谁接管”展示
+  - 冲突服务检测
+  - 直接从概览页触发接管操作
+- 提供 OpenWrt 安装包构建流程，并自动打包内置 `mihomo-clashforge`
 
-现阶段最重要的产物是这份实施落地文档：
+### 快速开始
+
+#### 1. 从 Releases 安装 OpenWrt 包
+
+仓库的 tag push 会自动构建并发布：
+
+- `clashforge_*_x86_64.ipk`
+- `clashforge_*_aarch64_generic.ipk`
+- `clashforge_*_aarch64_cortex-a53.ipk`
+
+在路由器上安装后：
+
+```sh
+opkg install clashforge_*.ipk
+```
+
+#### 2. 启动服务
+
+```sh
+/etc/init.d/clashforge enable
+/etc/init.d/clashforge start
+```
+
+默认 Web UI 地址：
+
+```text
+http://<router-ip>:7777
+```
+
+#### 3. 添加代理源
+
+进入 Web UI 后，可以通过两种方式准备代理配置：
+
+- 添加订阅链接
+- 上传 / 粘贴 YAML
+
+#### 4. 按需开启接管
+
+为了降低首次启动风险，ClashForge 当前默认：
+
+- 不在启动时自动接管透明代理
+- 不在启动时自动接管 DNS
+
+确认节点和核心运行正常后，再从设置页或概览页手动开启这些能力。
+
+### 本地开发
+
+#### 构建前端
+
+```sh
+cd ui
+npm ci
+npm run build
+```
+
+#### 构建服务端
+
+```sh
+go build ./cmd/clashforge
+```
+
+#### 生成发布版本
+
+推送符合 `v*` 格式的 tag 会自动触发 GitHub Actions，完成：
+
+- React UI 构建
+- Linux 二进制交叉编译
+- OpenWrt IPK 打包
+- GitHub Release 发布
+
+### 项目文档
+
+详细设计和架构文档仍然保留在：
 
 - [`docs/CLASH_REPLACEMENT_DESIGN.md`](./docs/CLASH_REPLACEMENT_DESIGN.md)
 
-这份文档是基于项目目标生成和整理出的 **工程规格文档**，用于指导后续编码实现。它覆盖了：
+这份文档仍然是理解整体架构和后续演进方向的重要参考。
 
-- 目录结构
-- Go 模块与依赖约束
-- 配置文件设计
-- HTTP API 规格
-- CoreManager 生命周期
-- 配置生成引擎
-- 订阅管理
-- nftables / iptables 透明代理规则
-- Web UI 结构
-- OpenWrt 集成
-- 错误处理与测试策略
-- Phase 开发计划
-
-也就是说，这份文档不是随手记的想法，而是：
-
-> **后续真正实现 ClashForge 的第一份工程蓝图。**
-
----
-
-## 项目边界
-
-ClashForge **不会**：
-
-- 自己实现代理协议栈
-- 替代 mihomo 的流量处理能力
-- 偏离 OpenWrt 路由器场景去做桌面端客户端
-
-ClashForge **会重点负责**：
-
-- mihomo 进程生命周期管理
-- mihomo 配置生成与热重载
-- 订阅拉取、过滤、缓存与合并
-- nftables / iptables 规则应用与回滚
-- Web UI 与 REST API
-- OpenWrt 包集成与部署体验
-
----
-
-## 为什么叫 ClashForge
-
-这个名字表达的是一个很直接的意图：
-
-- `Clash`：源于 Clash / Mihomo 生态背景
-- `Forge`：强调“锻造”、“重构”、“重新打磨工程实现”
-
-它不是简单包一层 UI，而是希望把 OpenWrt 路由器上的代理管理体验重新锻造一遍。
-
----
-
-## 近期计划
-
-当前的短期方向：
-
-1. 固化工程规格文档
-2. 初始化项目骨架
-3. 搭建最小可运行原型：
-   - 静态二进制入口
-   - CoreManager
-   - 基础 API
-   - 配置生成
-   - 简单 Web UI
-4. 逐步接入：
-   - 订阅管理
-   - 透明代理规则
-   - OpenWrt init / package 集成
-
----
-
-## 参考上游项目
+### 上游项目
 
 - [vernesong/openclash](https://github.com/vernesong/openclash)
 - [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)
 
-ClashForge 的方向建立在对这些优秀上游项目的学习和继承之上。
+ClashForge 建立在对这些优秀上游项目的学习与继承之上，但目标是给 OpenWrt 提供一套更现代、更工程化的管理体验。
+
+---
+
+## English
+
+### What ClashForge Is
+
+ClashForge is not another proxy core. It is a router-focused management and control plane for mihomo on OpenWrt.
+
+It is designed to make the OpenWrt experience cleaner and more maintainable by handling:
+
+- mihomo lifecycle management
+- config generation, persistence, and reload
+- subscription fetch / filter / merge workflows
+- nftables / iptables transparent proxy orchestration
+- DNS takeover and dnsmasq integration
+- Web UI, REST API, and SSE-based live status updates
+- OpenWrt init scripts and IPK packaging
+
+### Current Status
+
+The repository is no longer at a design-only stage. It is now in an **early runnable prerelease state** with a working backend, OpenWrt packaging pipeline, and a functional web UI.
+
+Available features currently include:
+
+- automatic runtime mihomo config generation on startup
+- managed mihomo startup through ClashForge
+- safer default startup behavior: **no transparent proxy or DNS takeover by default**
+- subscription management and YAML override support
+- health diagnostics and overview APIs
+- an overview dashboard with:
+  - egress IP checks
+  - access probes
+  - ClashForge / Mihomo CPU, memory, and disk usage
+  - ownership and conflict detection for transparent proxy, firewall, and DNS modules
+  - one-click takeover actions from the dashboard
+- automated OpenWrt IPK release packaging with bundled `mihomo-clashforge`
+
+### Quick Start
+
+#### 1. Install from Releases
+
+Each `v*` tag triggers release artifacts for:
+
+- `x86_64`
+- `aarch64_generic`
+- `aarch64_cortex-a53`
+
+Install on OpenWrt with:
+
+```sh
+opkg install clashforge_*.ipk
+```
+
+#### 2. Enable and start the service
+
+```sh
+/etc/init.d/clashforge enable
+/etc/init.d/clashforge start
+```
+
+Open the UI at:
+
+```text
+http://<router-ip>:7777
+```
+
+#### 3. Add your proxy source
+
+You can configure ClashForge by either:
+
+- adding a subscription URL
+- uploading or pasting a Clash-compatible YAML config
+
+#### 4. Enable takeover when ready
+
+To reduce startup risk on routers, ClashForge currently defaults to:
+
+- not enabling transparent proxy takeover at startup
+- not enabling DNS takeover at startup
+
+Once nodes and core status are healthy, you can enable takeover manually from the settings page or the overview dashboard.
+
+### Local Development
+
+Build the UI:
+
+```sh
+cd ui
+npm ci
+npm run build
+```
+
+Build the backend:
+
+```sh
+go build ./cmd/clashforge
+```
+
+Publishing a tag matching `v*` triggers the GitHub Actions release pipeline, which builds the UI, cross-compiles binaries, packages OpenWrt IPKs, and creates a GitHub Release.
+
+### Documentation
+
+The architecture and implementation design document is still available here:
+
+- [`docs/CLASH_REPLACEMENT_DESIGN.md`](./docs/CLASH_REPLACEMENT_DESIGN.md)
+
+It remains the best reference for the overall structure and intended evolution of the project.
+
+### Upstream Projects
+
+- [vernesong/openclash](https://github.com/vernesong/openclash)
+- [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)
+
+ClashForge builds on lessons from these upstream projects while aiming for a cleaner, more maintainable OpenWrt control plane.
 
 ---
 
 ## License
 
-暂未确定。
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).
