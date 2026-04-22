@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 
@@ -50,6 +49,7 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 		if newCfg.Security.APISecret == "***" && deps.Config.Security.APISecret != "" {
 			newCfg.Security.APISecret = deps.Config.Security.APISecret
 		}
+		adjustments := config.SelectCompatiblePorts(&newCfg, compatibilityPortSelectionOptions(deps))
 		if err := config.Save(deps.ConfigPath, &newCfg); err != nil {
 			Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
 			return
@@ -58,19 +58,27 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 		refreshNetfilterManager(deps)
 		generated, genErr := generateMihomoConfig(deps)
 		if genErr != nil {
-			JSON(w, http.StatusOK, map[string]interface{}{
+			response := map[string]interface{}{
 				"updated":          true,
 				"config_generated": false,
 				"needs_restart":    true,
 				"warning":          genErr.Error(),
-			})
+			}
+			if len(adjustments) > 0 {
+				response["port_adjustments"] = adjustments
+			}
+			JSON(w, http.StatusOK, response)
 			return
 		}
-		JSON(w, http.StatusOK, map[string]interface{}{
+		response := map[string]interface{}{
 			"updated":          true,
 			"config_generated": generated,
 			"needs_restart":    true,
-		})
+		}
+		if len(adjustments) > 0 {
+			response["port_adjustments"] = adjustments
+		}
+		JSON(w, http.StatusOK, response)
 	}
 }
 
@@ -124,21 +132,39 @@ func handleUpdateOverrides(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
 			return
 		}
+
+		portAdjustments := config.SelectCompatiblePorts(deps.Config, compatibilityPortSelectionOptions(deps))
+		if len(portAdjustments) > 0 {
+			if err := config.Save(deps.ConfigPath, deps.Config); err != nil {
+				Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
+				return
+			}
+			refreshNetfilterManager(deps)
+		}
+
 		// Auto-generate mihomo config after overrides update
 		generated, err := generateMihomoConfig(deps)
 		if err != nil {
 			// Non-fatal: config saved but generation failed
-			JSON(w, http.StatusOK, map[string]interface{}{
+			response := map[string]interface{}{
 				"updated":         true,
 				"config_generated": false,
 				"warning":         err.Error(),
-			})
+			}
+			if len(portAdjustments) > 0 {
+				response["port_adjustments"] = portAdjustments
+			}
+			JSON(w, http.StatusOK, response)
 			return
 		}
-		JSON(w, http.StatusOK, map[string]interface{}{
+		response := map[string]interface{}{
 			"updated":         true,
 			"config_generated": generated,
-		})
+		}
+		if len(portAdjustments) > 0 {
+			response["port_adjustments"] = portAdjustments
+		}
+		JSON(w, http.StatusOK, response)
 	}
 }
 
@@ -178,13 +204,7 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 		return false, err
 	}
 
-	// Always enforce ports from config.toml — do not allow overrides to steal ports
-	merged["port"] = deps.Config.Ports.HTTP
-	merged["socks-port"] = deps.Config.Ports.SOCKS
-	merged["mixed-port"] = deps.Config.Ports.Mixed
-	merged["redir-port"] = deps.Config.Ports.Redir
-	merged["tproxy-port"] = deps.Config.Ports.TProxy
-	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", deps.Config.Ports.MihomoAPI)
+	merged = config.ApplyManagedRuntimeSettings(deps.Config, merged)
 
 	data, err := config.MarshalYAML(merged)
 	if err != nil {
@@ -199,4 +219,22 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func compatibilityPortSelectionOptions(deps Dependencies) config.PortSelectionOptions {
+	options := config.PortSelectionOptions{PreferCommunityDefaults: true}
+	if !deps.Core.Status().Ready || deps.Config == nil {
+		return options
+	}
+
+	options.IgnoreOccupiedPorts = map[int]bool{
+		deps.Config.Ports.HTTP:      true,
+		deps.Config.Ports.SOCKS:     true,
+		deps.Config.Ports.Mixed:     true,
+		deps.Config.Ports.Redir:     true,
+		deps.Config.Ports.TProxy:    true,
+		deps.Config.Ports.DNS:       true,
+		deps.Config.Ports.MihomoAPI: true,
+	}
+	return options
 }

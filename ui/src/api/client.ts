@@ -97,6 +97,13 @@ export interface OverviewSummary {
   message: string
 }
 
+export interface OverviewCoreInfo {
+  state: string
+  pid: number
+  uptime: number
+  running: boolean
+}
+
 export interface OverviewSystemUsage {
   cpu_percent: number
   memory_total_mb: number
@@ -122,7 +129,15 @@ export interface OverviewAppStorage {
   runtime_mb: number
   data_mb: number
   binary_mb: number
+  rules_mb: number
   total_mb: number
+  rule_assets?: OverviewRuleAsset[]
+}
+
+export interface OverviewRuleAsset {
+  name: string
+  path: string
+  size_mb: number
 }
 
 export interface OverviewIPCheck {
@@ -210,12 +225,35 @@ export interface OverviewData {
   influences: OverviewInfluence[]
 }
 
+export interface OverviewCoreData {
+  checked_at: string
+  core: OverviewCoreInfo
+  summary: OverviewSummary
+  modules: OverviewModule[]
+  influences: OverviewInfluence[]
+}
+
+export interface OverviewProbeData {
+  checked_at: string
+  ip_checks: OverviewIPCheck[]
+  access_checks: OverviewAccessCheck[]
+}
+
+export interface OverviewResourceData {
+  checked_at: string
+  resources: {
+    system: OverviewSystemUsage
+    processes: OverviewProcessUsage[]
+    app: OverviewAppStorage
+  }
+}
+
 export interface OverviewTakeoverResponse {
   updated: boolean
   message: string
   stopped?: string[]
   needs_restart?: boolean
-  overview: OverviewData
+  overview: OverviewCoreData
 }
 
 export interface ProxyNode {
@@ -245,6 +283,9 @@ export interface LogEntry { type: string; payload: string; time?: string }
 // ---- API calls ----
 export const getStatus        = () => request<StatusData>('GET', '/status')
 export const getOverview      = () => request<OverviewData>('GET', '/overview')
+export const getOverviewCore  = () => request<OverviewCoreData>('GET', '/overview/core')
+export const getOverviewProbes = () => request<OverviewProbeData>('GET', '/overview/probes')
+export const getOverviewResources = () => request<OverviewResourceData>('GET', '/overview/resources')
 export const getHealthCheck   = (target?: string) => request<HealthCheckData>('GET', `/health/check${target ? `?target=${encodeURIComponent(target)}` : ''}`)
 export const takeoverOverviewModule = (payload: { module: string; mode?: string; stop_services?: string[] }) => request<OverviewTakeoverResponse>('POST', '/overview/takeover', payload)
 export const startCore        = () => request('POST', '/core/start')

@@ -48,7 +48,9 @@ func main() {
 		zerolog.SetGlobalLevel(level)
 	}
 
-	normalizeLegacyDefaultPorts(cfg)
+	for _, adjustment := range config.SelectCompatiblePorts(cfg, config.PortSelectionOptions{PreferCommunityDefaults: true}) {
+		log.Info().Str("port", adjustment.Name).Int("from", adjustment.From).Int("to", adjustment.To).Msg("adjusting port profile for compatibility")
+	}
 
 	for _, dir := range []string{cfg.Core.RuntimeDir, cfg.Core.DataDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -174,24 +176,6 @@ func main() {
 	log.Info().Msg("clashforge exited cleanly")
 }
 
-func normalizeLegacyDefaultPorts(cfg *config.MetaclashConfig) {
-	remapDefaultPort(&cfg.Ports.HTTP, 7890, 17890, "http")
-	remapDefaultPort(&cfg.Ports.SOCKS, 7891, 17891, "socks")
-	remapDefaultPort(&cfg.Ports.Mixed, 7893, 17893, "mixed")
-	remapDefaultPort(&cfg.Ports.Redir, 7892, 17892, "redir")
-	remapDefaultPort(&cfg.Ports.TProxy, 7895, 17895, "tproxy")
-	remapDefaultPort(&cfg.Ports.DNS, 7874, 17874, "dns")
-	remapDefaultPort(&cfg.Ports.MihomoAPI, 9090, 19090, "mihomo_api")
-}
-
-func remapDefaultPort(current *int, defaultPort, coexistPort int, name string) {
-	if *current != defaultPort {
-		return
-	}
-	*current = coexistPort
-	log.Info().Str("port", name).Int("value", coexistPort).Msg("switching to safe default port")
-}
-
 func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {
 	nodes := []subscription.ProxyNode{}
 	if subManager != nil {
@@ -210,12 +194,7 @@ func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscript
 		return err
 	}
 
-	merged["port"] = cfg.Ports.HTTP
-	merged["socks-port"] = cfg.Ports.SOCKS
-	merged["mixed-port"] = cfg.Ports.Mixed
-	merged["redir-port"] = cfg.Ports.Redir
-	merged["tproxy-port"] = cfg.Ports.TProxy
-	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
+	merged = config.ApplyManagedRuntimeSettings(cfg, merged)
 
 	data, err := config.MarshalYAML(merged)
 	if err != nil {

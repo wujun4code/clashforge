@@ -33,6 +33,32 @@ type overviewData struct {
 	Influences  []overviewInfluence      `json:"influences"`
 }
 
+type overviewCoreData struct {
+	CheckedAt  string           `json:"checked_at"`
+	Core       overviewCoreInfo `json:"core"`
+	Summary    overviewSummary  `json:"summary"`
+	Modules    []overviewModule `json:"modules"`
+	Influences []overviewInfluence `json:"influences"`
+}
+
+type overviewCoreInfo struct {
+	State   string `json:"state"`
+	PID     int    `json:"pid"`
+	Uptime  int64  `json:"uptime"`
+	Running bool   `json:"running"`
+}
+
+type overviewProbeData struct {
+	CheckedAt    string                `json:"checked_at"`
+	IPChecks     []overviewIPCheck     `json:"ip_checks"`
+	AccessChecks []overviewAccessCheck `json:"access_checks"`
+}
+
+type overviewResourceData struct {
+	CheckedAt string            `json:"checked_at"`
+	Resources overviewResources `json:"resources"`
+}
+
 type overviewSummary struct {
 	CoreRunning       bool   `json:"core_running"`
 	ClashforgeHealthy bool   `json:"clashforge_healthy"`
@@ -72,7 +98,15 @@ type overviewAppStorage struct {
 	RuntimeMB float64 `json:"runtime_mb"`
 	DataMB    float64 `json:"data_mb"`
 	BinaryMB  float64 `json:"binary_mb"`
+	RulesMB   float64 `json:"rules_mb"`
 	TotalMB   float64 `json:"total_mb"`
+	RuleAssets []overviewRuleAsset `json:"rule_assets,omitempty"`
+}
+
+type overviewRuleAsset struct {
+	Name   string  `json:"name"`
+	Path   string  `json:"path"`
+	SizeMB float64 `json:"size_mb"`
 }
 
 type overviewIPCheck struct {
@@ -153,11 +187,11 @@ type overviewTakeoverRequest struct {
 }
 
 type overviewTakeoverResponse struct {
-	Updated       bool         `json:"updated"`
-	Message       string       `json:"message"`
-	Stopped       []string     `json:"stopped,omitempty"`
-	NeedsRestart  bool         `json:"needs_restart,omitempty"`
-	Overview      overviewData `json:"overview"`
+	Updated      bool             `json:"updated"`
+	Message      string           `json:"message"`
+	Stopped      []string         `json:"stopped,omitempty"`
+	NeedsRestart bool             `json:"needs_restart,omitempty"`
+	Overview     overviewCoreData `json:"overview"`
 }
 
 type procMetricsSample struct {
@@ -269,6 +303,24 @@ func handleOverview(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+func handleOverviewCore(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		JSON(w, http.StatusOK, buildOverviewCoreData(deps))
+	}
+}
+
+func handleOverviewProbes(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		JSON(w, http.StatusOK, buildOverviewProbeData(deps))
+	}
+}
+
+func handleOverviewResources(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		JSON(w, http.StatusOK, buildOverviewResourceData(deps))
+	}
+}
+
 func handleTakeoverOverviewModule(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req overviewTakeoverRequest
@@ -295,6 +347,8 @@ func handleTakeoverOverviewModule(deps Dependencies) http.HandlerFunc {
 			message, needsRestart, err = takeoverTransparentProxy(deps, req.Mode)
 		case "dns_entry", "dns_resolver":
 			message, needsRestart, err = takeoverDNS(deps, req.Mode)
+		case "all":
+			message, needsRestart, err = takeoverAll(deps)
 		default:
 			Err(w, http.StatusBadRequest, "OVERVIEW_ACTION_UNSUPPORTED", fmt.Sprintf("module %s does not support takeover", req.Module))
 			return
@@ -309,7 +363,7 @@ func handleTakeoverOverviewModule(deps Dependencies) http.HandlerFunc {
 			Message:      message,
 			Stopped:      stopped,
 			NeedsRestart: needsRestart,
-			Overview:     buildOverviewData(deps),
+			Overview:     buildOverviewCoreData(deps),
 		})
 	}
 }
@@ -322,6 +376,56 @@ func buildOverviewData(deps Dependencies) overviewData {
 	modules := buildOverviewModules(deps, listeners, influences, coreStatus)
 	ipChecks := buildOverviewIPChecks(deps)
 	accessChecks := buildOverviewAccessChecks(deps)
+	summary := buildOverviewSummary(coreStatus, modules, influences)
+
+	return overviewData{
+		CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		Summary:     summary,
+		Resources:    resources,
+		IPChecks:     ipChecks,
+		AccessChecks: accessChecks,
+		Modules:      modules,
+		Influences:   influences,
+	}
+}
+
+func buildOverviewCoreData(deps Dependencies) overviewCoreData {
+	listeners := listListeningPorts()
+	coreStatus := deps.Core.Status()
+	influences := detectInfluences(listeners)
+	modules := filterCoreModules(buildOverviewModules(deps, listeners, influences, coreStatus))
+
+	return overviewCoreData{
+		CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		Core: overviewCoreInfo{
+			State:   string(coreStatus.State),
+			PID:     coreStatus.PID,
+			Uptime:  coreStatus.Uptime,
+			Running: coreStatus.Ready,
+		},
+		Summary:    buildOverviewSummary(coreStatus, modules, influences),
+		Modules:    modules,
+		Influences: influences,
+	}
+}
+
+func buildOverviewProbeData(deps Dependencies) overviewProbeData {
+	return overviewProbeData{
+		CheckedAt:    time.Now().UTC().Format(time.RFC3339),
+		IPChecks:     buildOverviewIPChecks(deps),
+		AccessChecks: buildOverviewAccessChecks(deps),
+	}
+}
+
+func buildOverviewResourceData(deps Dependencies) overviewResourceData {
+	coreStatus := deps.Core.Status()
+	return overviewResourceData{
+		CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		Resources: buildOverviewResources(deps, coreStatus),
+	}
+}
+
+func buildOverviewSummary(coreStatus core.Status, modules []overviewModule, influences []overviewInfluence) overviewSummary {
 	conflicts := 0
 	takeoverReady := 0
 	for _, module := range modules {
@@ -343,27 +447,35 @@ func buildOverviewData(deps Dependencies) overviewData {
 	} else if takeoverReady > 0 {
 		message = "发现仍可由 ClashForge 接管的模块，可直接在概览页处理"
 	}
-
-	return overviewData{
-		CheckedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary: overviewSummary{
-			CoreRunning:        coreStatus.Ready,
-			ClashforgeHealthy:  coreStatus.Ready,
-			ConflictCount:      conflicts,
-			TakeoverReady:      takeoverReady,
-			Message:            message,
-		},
-		Resources:    resources,
-		IPChecks:     ipChecks,
-		AccessChecks: accessChecks,
-		Modules:      modules,
-		Influences:   influences,
+	return overviewSummary{
+		CoreRunning:       coreStatus.Ready,
+		ClashforgeHealthy: coreStatus.Ready,
+		ConflictCount:     conflicts,
+		TakeoverReady:     takeoverReady,
+		Message:           message,
 	}
+}
+
+func filterCoreModules(modules []overviewModule) []overviewModule {
+	allowed := map[string]bool{
+		"proxy_core":        true,
+		"transparent_proxy": true,
+		"nft_firewall":      true,
+		"dns_entry":         true,
+		"dns_resolver":      true,
+	}
+	filtered := make([]overviewModule, 0, len(modules))
+	for _, module := range modules {
+		if allowed[module.ID] {
+			filtered = append(filtered, module)
+		}
+	}
+	return filtered
 }
 
 func buildOverviewModules(deps Dependencies, listeners []listeningPort, influences []overviewInfluence, coreStatus core.Status) []overviewModule {
 	nftTables := listNFTTables()
-	dnsPortOwners := selectPortOwners(listeners, 53, 17874)
+	dnsPortOwners := selectPortOwners(listeners, 53, deps.Config.Ports.DNS)
 	proxyPortOwners := selectPortOwners(listeners, 7890, 7891, 7892, 7893, 7895, deps.Config.Ports.HTTP, deps.Config.Ports.SOCKS, deps.Config.Ports.Redir, deps.Config.Ports.Mixed, deps.Config.Ports.TProxy, deps.Config.Ports.MihomoAPI)
 	clashforgeOwned := deps.Netfilter != nil && deps.Netfilter.IsApplied()
 	dnsManaged := deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none"
@@ -526,12 +638,33 @@ func buildAppStorage(deps Dependencies) overviewAppStorage {
 	runtimeSize := dirSize(deps.Config.Core.RuntimeDir)
 	dataSize := dirSize(deps.Config.Core.DataDir)
 	binarySize := fileOrDirSize("/usr/bin/clashforge") + fileOrDirSize(deps.Config.Core.Binary)
-	total := runtimeSize + dataSize + binarySize
+	ruleSources := []struct {
+		name string
+		path string
+	}{
+		{name: "GeoIP", path: deps.Config.Core.GeoIPPath},
+		{name: "Geosite", path: deps.Config.Core.GeositePath},
+		{name: "Rule Provider", path: filepath.Join(deps.Config.Core.DataDir, "rule_provider")},
+	}
+	ruleAssets := make([]overviewRuleAsset, 0, len(ruleSources))
+	rulesSize := uint64(0)
+	for _, source := range ruleSources {
+		size := fileOrDirSize(source.path)
+		if size == 0 {
+			continue
+		}
+		rulesSize += size
+		ruleAssets = append(ruleAssets, overviewRuleAsset{Name: source.name, Path: source.path, SizeMB: bytesToMB(size)})
+	}
+
+	total := runtimeSize + dataSize + binarySize + rulesSize
 	return overviewAppStorage{
 		RuntimeMB: bytesToMB(runtimeSize),
 		DataMB:    bytesToMB(dataSize),
 		BinaryMB:  bytesToMB(binarySize),
+		RulesMB:   bytesToMB(rulesSize),
 		TotalMB:   bytesToMB(total),
+		RuleAssets: ruleAssets,
 	}
 }
 
@@ -895,12 +1028,10 @@ func takeoverDNS(deps Dependencies, mode string) (string, bool, error) {
 			_ = dns.Restore(oldMode)
 		}
 		if deps.Config.DNS.Enable {
-			if err := deps.Core.Reload(deps.Core.Status().ConfigFile); err != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				if restartErr := deps.Core.Restart(ctx); restartErr != nil {
-					return "", false, restartErr
-				}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := deps.Core.Restart(ctx); err != nil {
+				return "", false, err
 			}
 		}
 		if err := dns.Setup(dns.DnsmasqMode(mode), deps.Config.Ports.DNS); err != nil {
@@ -909,6 +1040,57 @@ func takeoverDNS(deps Dependencies, mode string) (string, bool, error) {
 		return fmt.Sprintf("ClashForge 已开始以 %s 模式接管 DNS 入口", mode), false, nil
 	}
 	return fmt.Sprintf("已保存 DNS 接管配置，启动 Mihomo 核心后会以 %s 模式生效", mode), true, nil
+}
+
+func takeoverAll(deps Dependencies) (string, bool, error) {
+	networkMode := recommendedNetworkMode(deps.Config.Network.Mode)
+	dnsMode := recommendedDNSMode(deps.Config.DNS.DnsmasqMode)
+	oldDNSMode := dns.DnsmasqMode(deps.Config.DNS.DnsmasqMode)
+
+	deps.Config.Network.Mode = networkMode
+	deps.Config.Network.ApplyOnStart = true
+	if deps.Config.Network.FirewallBackend == "none" || strings.TrimSpace(deps.Config.Network.FirewallBackend) == "" {
+		deps.Config.Network.FirewallBackend = "auto"
+	}
+	deps.Config.DNS.Enable = true
+	deps.Config.DNS.ApplyOnStart = true
+	deps.Config.DNS.DnsmasqMode = dnsMode
+
+	if err := saveRuntimeConfig(deps); err != nil {
+		return "", false, err
+	}
+	if _, err := generateMihomoConfig(deps); err != nil {
+		return "", false, err
+	}
+
+	refreshNetfilterManager(deps)
+	coreWasRunning := deps.Core.Status().Ready
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if coreWasRunning {
+		if oldDNSMode != dns.ModeNone {
+			_ = dns.Restore(oldDNSMode)
+		}
+		if err := deps.Core.Restart(ctx); err != nil {
+			return "", false, err
+		}
+	} else if err := deps.Core.Start(ctx); err != nil {
+		if err != core.ErrAlreadyRunning {
+			return "", false, err
+		}
+	}
+
+	if err := dns.Setup(dns.DnsmasqMode(dnsMode), deps.Config.Ports.DNS); err != nil {
+		return "", false, err
+	}
+	if deps.Netfilter != nil {
+		if err := deps.Netfilter.Apply(); err != nil {
+			return "", false, err
+		}
+	}
+
+	return "核心已启动，并已尝试接管透明代理、NFT 防火墙与 DNS 子模块", false, nil
 }
 
 func saveRuntimeConfig(deps Dependencies) error {

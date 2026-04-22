@@ -129,6 +129,36 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	return out, nil
 }
 
+// ApplyManagedRuntimeSettings rewrites runtime-owned fields after overrides merge.
+// This keeps legacy overrides from stealing managed ports or re-enabling DNS with stale values.
+func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interface{}) map[string]interface{} {
+	if merged == nil {
+		merged = map[string]interface{}{}
+	}
+
+	merged["port"] = cfg.Ports.HTTP
+	merged["socks-port"] = cfg.Ports.SOCKS
+	merged["mixed-port"] = cfg.Ports.Mixed
+	merged["redir-port"] = cfg.Ports.Redir
+	merged["tproxy-port"] = cfg.Ports.TProxy
+	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
+
+	if !cfg.DNS.Enable {
+		delete(merged, "dns")
+		return merged
+	}
+
+	dnsMap, ok := merged["dns"].(map[string]interface{})
+	if !ok || dnsMap == nil {
+		dnsMap = map[string]interface{}{}
+	}
+	dnsMap["enable"] = true
+	dnsMap["listen"] = fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS)
+	merged["dns"] = dnsMap
+
+	return merged
+}
+
 // MarshalYAML 将配置 map 序列化为 YAML 字节
 func MarshalYAML(cfg map[string]interface{}) ([]byte, error) {
 	data, err := yaml.Marshal(cfg)
