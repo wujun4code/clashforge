@@ -1,5 +1,8 @@
 name: Build & Release
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     tags:
@@ -19,9 +22,9 @@ jobs:
     name: Build React UI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -34,7 +37,7 @@ jobs:
         run: cd ui && npm run build
 
       - name: Upload UI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: ui-dist
           path: ui/dist/
@@ -67,7 +70,7 @@ jobs:
             openwrt_arch: aarch64_generic
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v5
         with:
@@ -75,7 +78,7 @@ jobs:
           cache: true
 
       - name: Download UI dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           name: ui-dist
           path: internal/api/ui_dist/
@@ -111,7 +114,7 @@ jobs:
           ls -lh dist/clashforge-${{ matrix.suffix }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: clashforge-${{ matrix.suffix }}
           path: dist/clashforge-${{ matrix.suffix }}
@@ -139,7 +142,7 @@ jobs:
             pkg_arch: aarch64_generic
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set version
         id: version
@@ -159,7 +162,7 @@ jobs:
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           name: clashforge-${{ matrix.suffix }}
           path: dist/
@@ -259,7 +262,7 @@ jobs:
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: ipk-${{ matrix.name }}
           path: "*.ipk"
@@ -277,17 +280,17 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all IPK artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           pattern: ipk-*
           path: release-assets/
           merge-multiple: true
 
       - name: Download all binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           pattern: clashforge-linux-*
           path: release-assets/
