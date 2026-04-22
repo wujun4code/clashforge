@@ -94,8 +94,7 @@ start_service() {
     procd_set_param command "$PROG" -config "$CONFIG"
     procd_set_param pidfile "$PIDFILE"
     procd_set_param respawn 3600 10 3
-    procd_set_param stdout 1
-    procd_set_param stderr 1
+    # Don't pipe stdout/stderr to console — clashforge writes its own log
     procd_close_instance
     log "clashforge started"
 }

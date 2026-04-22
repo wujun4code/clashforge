@@ -38,7 +38,7 @@ api_secret = ""
 allow_lan = true
 
 [log]
-level = "info"
+level = "warn"
 file = ""
 max_size_mb = 10
 
