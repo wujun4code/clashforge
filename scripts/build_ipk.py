@@ -34,17 +34,22 @@ def make_tar_gz(out_path, base_dir, names):
                 info.mtime = 0
                 return info
 
-            tar.add(full, arcname=name, recursive=True, filter=_filt)
+            tar.add(full, arcname=name, recursive=False, filter=_filt)
     print(f"  wrote {out_path} ({os.path.getsize(out_path):,} bytes)")
 
 
 # ── data.tar.gz — package contents ────────────────────────────────────────
 data_names = []
 for root, dirs, files in os.walk('ipk'):
+    rel_root = os.path.relpath(root, 'ipk')
+    if rel_root.startswith('CONTROL'):
+        continue
+    # Add the directory entry itself (needed for opkg to create parent dirs)
+    if rel_root != '.':
+        data_names.append(rel_root)
     for f in files:
-        p = os.path.relpath(os.path.join(root, f), 'ipk')
-        if not p.startswith('CONTROL'):
-            data_names.append(p)
+        p = os.path.join(rel_root, f) if rel_root != '.' else f
+        data_names.append(p)
 
 make_tar_gz('data.tar.gz', 'ipk', data_names)
 
