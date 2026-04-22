@@ -15,6 +15,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/daemon"
+	"github.com/wujun4code/clashforge/internal/dns"
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/subscription"
@@ -77,6 +78,14 @@ func main() {
 		}
 	}
 
+	// DNS / dnsmasq coexistence
+	dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
+	if cfg.DNS.Enable && dnsMode != dns.ModeNone {
+		if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
+			log.Warn().Err(err).Msg("dns setup failed (continuing)")
+		}
+	}
+
 	// SSE broker
 	sseBroker := api.NewSSEBroker()
 
@@ -121,6 +130,11 @@ func main() {
 
 	if err := coreManager.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
 		log.Error().Err(err).Msg("stop core")
+	}
+	if cfg.DNS.Enable && dnsMode != dns.ModeNone {
+		if err := dns.Restore(dnsMode); err != nil {
+			log.Error().Err(err).Msg("dns restore failed")
+		}
 	}
 	if err := nfManager.Cleanup(); err != nil {
 		log.Error().Err(err).Msg("cleanup netfilter")
