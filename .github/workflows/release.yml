@@ -41,7 +41,7 @@ jobs:
         with:
           name: ui-dist
           path: ui/dist/
-          retention-days: 1
+          retention-days: 1  # temp artifact, only needed between jobs
 
   # ────────────────────────────────────────────────────────────
   # Stage 2: Build Go binaries for each target platform
@@ -289,13 +289,6 @@ jobs:
           path: release-assets/
           merge-multiple: true
 
-      - name: Download all binaries
-        uses: actions/download-artifact@v8
-        with:
-          pattern: clashforge-linux-*
-          path: release-assets/
-          merge-multiple: true
-
       - name: List release assets
         run: ls -lh release-assets/
 
@@ -347,5 +340,4 @@ jobs:
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           files: |
             release-assets/*.ipk
-            release-assets/clashforge-linux-*
             release-assets/SHA256SUMS.txt
