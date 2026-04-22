@@ -1,15 +1,16 @@
-#!/usr/bin/env bash
-# Entrypoint for API test container
-# Starts clashforge with a minimal config, then runs api_test.sh
-set -euo pipefail
+#!/bin/sh
+# Entrypoint for API test container (sh-compatible)
+set -eu
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
-echo -e "${BOLD}ClashForge API Integration Tests${RESET}"
-echo "=================================="
+printf "${BOLD}ClashForge API Integration Tests${RESET}\n"
+printf "==================================\n"
 
-# Write a minimal test config
 mkdir -p /etc/metaclash /var/run/metaclash
+rm -f /var/run/metaclash/metaclash.pid
+
+# Minimal test config — disable everything that needs root or external binaries
 cat > /etc/metaclash/config.toml << 'EOF'
 [core]
 binary = "/usr/bin/mihomo-notexist"
@@ -34,6 +35,7 @@ bypass_lan = true
 
 [dns]
 enable = false
+dnsmasq_mode = "none"
 
 [security]
 api_secret = ""
@@ -43,19 +45,17 @@ allow_lan = true
 level = "info"
 EOF
 
-echo -e "${CYAN}Starting clashforge...${RESET}"
+printf "${CYAN}Starting clashforge...${RESET}\n"
 clashforge -config /etc/metaclash/config.toml &
 CF_PID=$!
-echo "clashforge PID=$CF_PID"
+printf "clashforge PID=%d\n" "$CF_PID"
 
 cleanup(){
-    echo -e "${CYAN}Stopping clashforge (pid=$CF_PID)${RESET}"
-    kill $CF_PID 2>/dev/null || true
-    wait $CF_PID 2>/dev/null || true
+    printf "${CYAN}Stopping clashforge (pid=%d)${RESET}\n" "$CF_PID"
+    kill "$CF_PID" 2>/dev/null || true
+    wait "$CF_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# Run the API tests
-bash /api_test.sh
-EXIT_CODE=$?
-exit $EXIT_CODE
+sh /api_test.sh
+exit $?

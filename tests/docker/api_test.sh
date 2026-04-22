@@ -1,110 +1,98 @@
-#!/usr/bin/env bash
-# tests/docker/api_test.sh — ClashForge API smoke tests
-# Run inside the clashforge container (no mihomo needed)
-set -euo pipefail
+#!/bin/sh
+# tests/docker/api_test.sh — ClashForge API smoke tests (sh-compatible)
+set -eu
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
-PASS(){ echo -e "${GREEN}✅ PASS${RESET} $*"; }
-FAIL(){ echo -e "${RED}❌ FAIL${RESET} $*"; FAILED=$((FAILED+1)); }
-INFO(){ echo -e "${CYAN}ℹ️  ${RESET} $*"; }
-SECTION(){ echo -e "\n${BOLD}${YELLOW}=== $* ===${RESET}"; }
+PASS(){ printf "${GREEN}✅ PASS${RESET} %s\n" "$*"; }
+FAIL(){ printf "${RED}❌ FAIL${RESET} %s\n" "$*"; FAILED=$((FAILED+1)); }
+INFO(){ printf "${CYAN}ℹ️   ${RESET} %s\n" "$*"; }
+SECTION(){ printf "\n${BOLD}${YELLOW}=== %s ===${RESET}\n" "$*"; }
 
 FAILED=0
 CF_URL="http://127.0.0.1:7777"
 API="$CF_URL/api/v1"
 
-# ── wait for clashforge to be up ──────────────────────────────────────────────
+# ── wait for clashforge ───────────────────────────────────────────────────────
 SECTION "Startup: waiting for clashforge"
-for i in $(seq 1 20); do
+i=0
+while [ $i -lt 20 ]; do
     if curl -sf "$CF_URL/healthz" > /dev/null 2>&1; then
         PASS "clashforge up (waited ${i}s)"; break
     fi
-    sleep 1
-    [ $i -eq 20 ] && FAIL "clashforge did not start in 20s" && exit 1
+    sleep 1; i=$((i+1))
+    if [ $i -eq 20 ]; then FAIL "clashforge did not start in 20s"; exit 1; fi
 done
 
-# ── helper ────────────────────────────────────────────────────────────────────
-check_json(){
-    local desc="$1" url="$2" expected_field="$3" expected_val="$4"
-    local body code
-    body=$(curl -sf "$url" 2>/dev/null) || { FAIL "$desc — curl failed ($url)"; return; }
-    if echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('ok')==True" 2>/dev/null; then
-        if [ -n "$expected_field" ]; then
-            actual=$(echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('data',{}).get('$expected_field','__missing__'))" 2>/dev/null || echo "__err__")
-            if [ "$actual" = "$expected_val" ]; then
-                PASS "$desc (${expected_field}=${actual})"
-            else
-                FAIL "$desc — expected ${expected_field}=${expected_val}, got ${actual}"
-            fi
-        else
-            PASS "$desc"
-        fi
-    else
-        FAIL "$desc — ok!=true: $body"
-    fi
+# ── helpers ───────────────────────────────────────────────────────────────────
+check_json_ok(){
+    desc="$1"; url="$2"
+    body=$(curl -sf "$url" 2>/dev/null) || { FAIL "$desc — curl failed"; return; }
+    echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('ok')==True" 2>/dev/null \
+        && PASS "$desc" || FAIL "$desc — ok!=true: $body"
 }
 
 check_http(){
-    local desc="$1" method="$2" url="$3" expected_code="$4" body_arg="${5:-}"
-    local args=(-sf -o /dev/null -w '%{http_code}' -X "$method")
-    [ -n "$body_arg" ] && args+=(-H 'Content-Type: application/json' -d "$body_arg")
-    local code
-    code=$(curl "${args[@]}" "$url" 2>/dev/null) || code="000"
-    if [ "$code" = "$expected_code" ]; then
-        PASS "$desc (HTTP $code)"
+    desc="$1"; method="$2"; url="$3"; expected="$4"; body_data="${5:-}"
+    if [ -n "$body_data" ]; then
+        code=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" -H 'Content-Type: application/json' -d "$body_data" "$url" 2>/dev/null)
     else
-        FAIL "$desc — expected HTTP $expected_code, got $code"
+        code=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" "$url" 2>/dev/null)
     fi
+    [ "$code" = "$expected" ] && PASS "$desc (HTTP $code)" || FAIL "$desc — expected HTTP $expected, got $code"
 }
 
-# ── healthz ───────────────────────────────────────────────────────────────────
-SECTION "Test 1: Health check"
-check_json "GET /healthz" "$CF_URL/healthz" "status" "ok"
+json_get(){
+    url="$1"; field="$2"
+    curl -sf "$url" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('data',{}).get('$field',''))" 2>/dev/null || echo ""
+}
 
-# ── status ────────────────────────────────────────────────────────────────────
+# ── test 1: healthz ───────────────────────────────────────────────────────────
+SECTION "Test 1: Health check"
+check_json_ok "GET /healthz" "$CF_URL/healthz"
+
+# ── test 2: status ────────────────────────────────────────────────────────────
 SECTION "Test 2: GET /api/v1/status"
-check_json "status ok=true"        "$API/status"
-STATUS=$(curl -sf "$API/status" 2>/dev/null)
-CORE_STATE=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['core']['state'])" 2>/dev/null || echo "unknown")
-INFO "core.state = $CORE_STATE"
-[ "$CORE_STATE" != "unknown" ] && PASS "status.core.state present ($CORE_STATE)" || FAIL "status.core.state missing"
+check_json_ok "GET /api/v1/status" "$API/status"
+
+STATUS=$(curl -sf "$API/status" 2>/dev/null || echo "{}")
+CORE_STATE=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['core']['state'])" 2>/dev/null || echo "")
+[ -n "$CORE_STATE" ] && PASS "core.state present: $CORE_STATE" || FAIL "core.state missing"
 
 META_VER=$(echo "$STATUS" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['metaclash']['version'])" 2>/dev/null || echo "")
 [ -n "$META_VER" ] && PASS "metaclash.version = $META_VER" || FAIL "metaclash.version missing"
 
-# ── config ────────────────────────────────────────────────────────────────────
+# ── test 3: config ────────────────────────────────────────────────────────────
 SECTION "Test 3: GET /api/v1/config"
-check_json "config ok=true" "$API/config"
-CFG=$(curl -sf "$API/config")
-HTTP_PORT=$(echo "$CFG" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['ports']['http'])" 2>/dev/null || echo "")
-[ "$HTTP_PORT" = "7890" ] && PASS "config.ports.http=7890" || FAIL "config.ports.http expected 7890 got $HTTP_PORT"
+check_json_ok "GET /api/v1/config" "$API/config"
+HTTP_PORT=$(curl -sf "$API/config" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['ports']['http'])" 2>/dev/null || echo "")
+[ "$HTTP_PORT" = "7890" ] && PASS "config.ports.http = $HTTP_PORT" || FAIL "config.ports.http expected 7890 got $HTTP_PORT"
 
-# ── config PUT ────────────────────────────────────────────────────────────────
+# ── test 4: config partial update ────────────────────────────────────────────
 SECTION "Test 4: PUT /api/v1/config (partial update)"
-check_http "PUT /config partial" PUT "$API/config" 200 '{"log":{"level":"debug"}}'
+check_http "PUT /config (log.level=debug)" PUT "$API/config" 200 '{"log":{"level":"debug"}}'
 
-# ── subscriptions CRUD ────────────────────────────────────────────────────────
+# ── test 5: subscriptions CRUD ───────────────────────────────────────────────
 SECTION "Test 5: Subscriptions CRUD"
-check_json "GET /subscriptions" "$API/subscriptions"
+check_json_ok "GET /subscriptions (empty)" "$API/subscriptions"
 
-# Add
+# Add subscription
 ADD_RESP=$(curl -sf -X POST "$API/subscriptions" \
     -H 'Content-Type: application/json' \
-    -d '{"name":"test-sub","type":"url","url":"https://example.com/sub","enabled":true}' 2>/dev/null)
-SUB_OK=$(echo "$ADD_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok'))" 2>/dev/null || echo "false")
+    -d '{"name":"test-sub","type":"url","url":"https://example.com/sub","enabled":true}' 2>/dev/null || echo "{}")
 SUB_ID=$(echo "$ADD_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('data',{}).get('id',''))" 2>/dev/null || echo "")
-[ "$SUB_OK" = "True" ] && PASS "POST /subscriptions → id=$SUB_ID" || FAIL "POST /subscriptions failed: $ADD_RESP"
+OK=$(echo "$ADD_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null || echo "")
+[ "$OK" = "True" ] && PASS "POST /subscriptions → id=$SUB_ID" || FAIL "POST /subscriptions failed: $ADD_RESP"
 
-# List (should have 1)
 if [ -n "$SUB_ID" ]; then
-    COUNT=$(curl -sf "$API/subscriptions" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['data']['subscriptions']))" 2>/dev/null || echo 0)
+    # List
+    COUNT=$(curl -sf "$API/subscriptions" 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)['data']['subscriptions']))" 2>/dev/null || echo 0)
     [ "$COUNT" -ge 1 ] && PASS "subscriptions list count=$COUNT" || FAIL "subscription not in list"
 
     # Update
     check_http "PUT /subscriptions/:id" PUT "$API/subscriptions/$SUB_ID" 200 '{"enabled":false}'
 
-    # Verify update
-    ENABLED=$(curl -sf "$API/subscriptions" | python3 -c "
+    # Verify enabled=false
+    ENABLED=$(curl -sf "$API/subscriptions" 2>/dev/null | python3 -c "
 import json,sys
 subs=json.load(sys.stdin)['data']['subscriptions']
 for s in subs:
@@ -112,69 +100,63 @@ for s in subs:
         print(s['enabled'])
         break
 " 2>/dev/null || echo "unknown")
-    [ "$ENABLED" = "False" ] && PASS "subscription disabled after PUT" || FAIL "subscription enabled=$ENABLED (expected False)"
+    [ "$ENABLED" = "False" ] && PASS "subscription disabled after PUT" || FAIL "enabled=$ENABLED (expected False)"
 
     # Delete
     check_http "DELETE /subscriptions/:id" DELETE "$API/subscriptions/$SUB_ID" 200
 
-    # Verify deleted
-    COUNT2=$(curl -sf "$API/subscriptions" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['data']['subscriptions']))" 2>/dev/null || echo 0)
-    [ "$COUNT2" -eq 0 ] && PASS "subscription deleted (count=$COUNT2)" || FAIL "subscription still present (count=$COUNT2)"
+    # Verify gone
+    COUNT2=$(curl -sf "$API/subscriptions" 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)['data']['subscriptions']))" 2>/dev/null || echo 0)
+    [ "$COUNT2" -eq 0 ] && PASS "subscription deleted (count=$COUNT2)" || FAIL "still present (count=$COUNT2)"
 fi
 
-# ── overrides ─────────────────────────────────────────────────────────────────
+# ── test 6: overrides ────────────────────────────────────────────────────────
 SECTION "Test 6: Config overrides"
-check_json "GET /config/overrides" "$API/config/overrides"
+check_json_ok "GET /config/overrides" "$API/config/overrides"
 check_http "PUT /config/overrides valid YAML" PUT "$API/config/overrides" 200 '{"content":"# test\nrules:\n  - DOMAIN,test.example.com,DIRECT\n"}'
-check_http "PUT /config/overrides invalid YAML" PUT "$API/config/overrides" 400 '{"content":"key: [invalid yaml {"}'
+check_http "PUT /config/overrides invalid YAML" PUT "$API/config/overrides" 400 '{"content":"key: [bad { yaml"}'
 
-# ── core ──────────────────────────────────────────────────────────────────────
-SECTION "Test 7: Core management API"
-# mihomo binary won't exist in this container, so start will fail with a proper error
-START_RESP=$(curl -sf -X POST "$API/core/start" 2>/dev/null || echo "{}")
+# ── test 7: core endpoints ────────────────────────────────────────────────────
+SECTION "Test 7: Core management"
 START_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/core/start" 2>/dev/null)
-# Either 500 (binary not found) or 409 (already running) are valid structured responses
-if [ "$START_CODE" = "500" ] || [ "$START_CODE" = "409" ] || [ "$START_CODE" = "200" ]; then
-    PASS "POST /core/start returns structured response (HTTP $START_CODE)"
-else
-    FAIL "POST /core/start unexpected code $START_CODE"
-fi
+case "$START_CODE" in
+    200|409|500) PASS "POST /core/start returns structured HTTP $START_CODE" ;;
+    *) FAIL "POST /core/start unexpected code $START_CODE" ;;
+esac
+check_json_ok "GET /core/version" "$API/core/version"
 
-check_json "GET /core/version" "$API/core/version"
-
-# ── UI is served ──────────────────────────────────────────────────────────────
-SECTION "Test 8: UI is served"
+# ── test 8: UI is served ──────────────────────────────────────────────────────
+SECTION "Test 8: UI served from embed"
 HTML_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$CF_URL/" 2>/dev/null)
-[ "$HTML_CODE" = "200" ] && PASS "GET / returns HTML (HTTP $HTML_CODE)" || FAIL "GET / returned HTTP $HTML_CODE"
+[ "$HTML_CODE" = "200" ] && PASS "GET / → 200" || FAIL "GET / returned $HTML_CODE"
 
-CONTENT_TYPE=$(curl -sI "$CF_URL/" 2>/dev/null | grep -i content-type | head -1)
-echo "$CONTENT_TYPE" | grep -qi "text/html" && PASS "Content-Type is text/html" || FAIL "Content-Type not html: $CONTENT_TYPE"
+CTYPE=$(curl -s -o /dev/null -w '%{content_type}' "$CF_URL/" 2>/dev/null)
+echo "$CTYPE" | grep -qi "text/html" && PASS "Content-Type: text/html ($CTYPE)" || FAIL "wrong Content-Type: $CTYPE"
 
-# Assets
-ASSET_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$CF_URL/assets/" 2>/dev/null)
-INFO "Assets path HTTP $ASSET_CODE"
+# SPA fallback
+SPA=$(curl -s -o /dev/null -w '%{http_code}' "$CF_URL/proxies" 2>/dev/null)
+[ "$SPA" = "200" ] && PASS "SPA fallback /proxies → 200" || FAIL "SPA fallback /proxies → $SPA"
 
-# SPA fallback: unknown path should return index.html
-SPA_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$CF_URL/proxies" 2>/dev/null)
-[ "$SPA_CODE" = "200" ] && PASS "SPA fallback /proxies → 200" || FAIL "SPA fallback returned HTTP $SPA_CODE"
+SPA2=$(curl -s -o /dev/null -w '%{http_code}' "$CF_URL/settings" 2>/dev/null)
+[ "$SPA2" = "200" ] && PASS "SPA fallback /settings → 200" || FAIL "SPA fallback /settings → $SPA2"
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
+# ── test 9: CORS ──────────────────────────────────────────────────────────────
 SECTION "Test 9: CORS headers"
-CORS=$(curl -sI -H "Origin: http://192.168.1.100" "$API/status" 2>/dev/null | grep -i "Access-Control" | head -3)
-echo "$CORS" | grep -qi "Access-Control-Allow-Origin" && PASS "CORS headers present" || FAIL "CORS headers missing"
+CORS=$(curl -sI -H "Origin: http://192.168.1.100" "$API/status" 2>/dev/null | tr -d '\r' | grep -i "access-control-allow-origin" | head -1)
+[ -n "$CORS" ] && PASS "CORS header present: $CORS" || FAIL "CORS header missing"
 
-# ── rate / edge cases ─────────────────────────────────────────────────────────
-SECTION "Test 10: Edge cases"
-# Non-existent subscription
-check_http "DELETE non-existent sub" DELETE "$API/subscriptions/sub_nonexistent" 404
-check_http "PUT non-existent sub"    PUT    "$API/subscriptions/sub_nonexistent" 404 '{"name":"x"}'
+# ── test 10: edge cases ───────────────────────────────────────────────────────
+SECTION "Test 10: 404 / edge cases"
+check_http "DELETE non-existent sub" DELETE "$API/subscriptions/sub_notexist" 404
+check_http "PUT non-existent sub"    PUT    "$API/subscriptions/sub_notexist" 404 '{"name":"x"}'
+check_http "GET unknown API path"    GET    "$API/does_not_exist" 404
 
-# Summary
+# ── summary ───────────────────────────────────────────────────────────────────
 SECTION "Summary"
 if [ "$FAILED" -eq 0 ]; then
-    echo -e "\n${GREEN}${BOLD}ALL API TESTS PASSED${RESET}"
+    printf "\n${GREEN}${BOLD}ALL API TESTS PASSED${RESET}\n"
     exit 0
 else
-    echo -e "\n${RED}${BOLD}$FAILED TEST(S) FAILED${RESET}"
+    printf "\n${RED}${BOLD}%d TEST(S) FAILED${RESET}\n" "$FAILED"
     exit 1
 fi

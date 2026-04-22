@@ -82,12 +82,14 @@ func registerUI(r *chi.Mux) {
 
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 		path := strings.TrimPrefix(req.URL.Path, "/")
-		// Try to serve the static file
-		if _, err := uiFS.(fs.StatFS).Stat(path); err == nil {
+		// Try to open the file from the embed FS
+		f, err := uiFS.Open(path)
+		if err == nil {
+			f.Close()
 			fileServer.ServeHTTP(w, req)
 			return
 		}
-		// SPA fallback: serve index.html
+		// SPA fallback: rewrite to index.html
 		req.URL.Path = "/"
 		fileServer.ServeHTTP(w, req)
 	})

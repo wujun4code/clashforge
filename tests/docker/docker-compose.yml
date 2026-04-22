@@ -8,13 +8,12 @@ services:
     volumes:
       - ../../testdata/sample-clash-config.yaml:/testdata/sample-clash-config.yaml:ro
 
-  # ── API integration test (uses production image, no mihomo needed) ────────
+  # ── API integration test (production image + curl/python3 for testing) ───
   clashforge-api-test:
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: tests/docker/Dockerfile.apitest
     container_name: clashforge-api-test
-    entrypoint: ["/bin/sh", "/api_test_entrypoint.sh"]
     volumes:
       - ./api_test.sh:/api_test.sh:ro
       - ./api_test_entrypoint.sh:/api_test_entrypoint.sh:ro

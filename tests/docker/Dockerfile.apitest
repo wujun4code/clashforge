@@ -1,0 +1,6 @@
+## Dockerfile for API tests: production image + curl + python3
+FROM clashforge:latest
+
+RUN apk add --no-cache curl python3
+
+ENTRYPOINT ["/bin/sh", "/api_test_entrypoint.sh"]
