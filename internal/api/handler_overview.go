@@ -42,10 +42,11 @@ type overviewCoreData struct {
 }
 
 type overviewCoreInfo struct {
-	State   string `json:"state"`
-	PID     int    `json:"pid"`
-	Uptime  int64  `json:"uptime"`
-	Running bool   `json:"running"`
+	State             string `json:"state"`
+	PID               int    `json:"pid"`
+	Uptime            int64  `json:"uptime"`
+	Running           bool   `json:"running"`
+	ActiveConnections int    `json:"active_connections"`
 }
 
 type overviewProbeData struct {
@@ -394,19 +395,53 @@ func buildOverviewCoreData(deps Dependencies) overviewCoreData {
 	coreStatus := deps.Core.Status()
 	influences := detectInfluences(listeners)
 	modules := filterCoreModules(buildOverviewModules(deps, listeners, influences, coreStatus))
+	activeConnections := fetchMihomoConnectionCount(deps.Config.Ports.MihomoAPI)
 
 	return overviewCoreData{
 		CheckedAt: time.Now().UTC().Format(time.RFC3339),
 		Core: overviewCoreInfo{
-			State:   string(coreStatus.State),
-			PID:     coreStatus.PID,
-			Uptime:  coreStatus.Uptime,
-			Running: coreStatus.Ready,
+			State:             string(coreStatus.State),
+			PID:               coreStatus.PID,
+			Uptime:            coreStatus.Uptime,
+			Running:           coreStatus.Ready,
+			ActiveConnections: activeConnections,
 		},
 		Summary:    buildOverviewSummary(coreStatus, modules, influences),
 		Modules:    modules,
 		Influences: influences,
 	}
+}
+
+func fetchMihomoConnectionCount(port int) int {
+	if port <= 0 {
+		return 0
+	}
+
+	target := fmt.Sprintf("http://127.0.0.1:%d/connections", port)
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return 0
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return 0
+	}
+
+	var payload struct {
+		Connections []json.RawMessage `json:"connections"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return 0
+	}
+
+	return len(payload.Connections)
 }
 
 func buildOverviewProbeData(deps Dependencies) overviewProbeData {

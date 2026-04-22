@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Activity,
   CheckCircle2,
@@ -266,15 +266,18 @@ export function Dashboard() {
     onConnCount: (data) => setConnCount(data.total),
   })
 
-  const refreshCore = async (silent = false) => {
+  const refreshCore = useCallback(async (silent = false) => {
     if (!silent) setQueryingCore(true)
     const next = await getOverviewCore().catch(() => null)
     if (next) {
       setCoreData(next)
       setCoreState(next.core.state, next.core.pid)
+      if (typeof next.core.active_connections === 'number') {
+        setConnCount(next.core.active_connections)
+      }
     }
     if (!silent) setQueryingCore(false)
-  }
+  }, [setConnCount, setCoreState])
 
   const refreshProbes = async () => {
     setLoadingSection('probes')
@@ -291,10 +294,13 @@ export function Dashboard() {
   }
 
   useEffect(() => {
-    refreshCore(false)
-    const timer = setInterval(() => { refreshCore(true) }, 8000)
-    return () => clearInterval(timer)
-  }, [])
+    const bootstrap = setTimeout(() => { void refreshCore(false) }, 0)
+    const timer = setInterval(() => { void refreshCore(true) }, 8000)
+    return () => {
+      clearTimeout(bootstrap)
+      clearInterval(timer)
+    }
+  }, [refreshCore])
 
   const openSection = async (target: SectionKey) => {
     setSection(target)

@@ -102,6 +102,7 @@ export interface OverviewCoreInfo {
   pid: number
   uptime: number
   running: boolean
+  active_connections: number
 }
 
 export interface OverviewSystemUsage {
