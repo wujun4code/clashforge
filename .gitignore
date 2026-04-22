@@ -1,0 +1,14 @@
+# Binary and build outputs
+bin/
+clashforge
+
+# Private test data - NEVER commit these
+testdata/sample-clash-config.yaml
+testdata/*.yaml
+testdata/*.toml
+testdata/private/
+
+# Go toolchain
+*.test
+*.prof
+coverage.out
