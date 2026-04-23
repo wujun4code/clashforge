@@ -23,9 +23,9 @@ PURGE=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-log()  { printf '\033[0;36m[clashforge]\033[0m %s\n' "$*"; }
-ok()   { printf '\033[0;32m[clashforge]\033[0m %s\n' "$*"; }
-warn() { printf '\033[0;33m[clashforge]\033[0m WARN: %s\n' "$*"; }
+log()  { printf '\033[0;36m[clashforge]\033[0m %s\n' "$*" >&2; }
+ok()   { printf '\033[0;32m[clashforge]\033[0m %s\n' "$*" >&2; }
+warn() { printf '\033[0;33m[clashforge]\033[0m WARN: %s\n' "$*" >&2; }
 die()  { printf '\033[0;31m[clashforge]\033[0m ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
