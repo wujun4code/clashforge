@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -157,6 +158,27 @@ func handleSaveSource(deps Dependencies) http.HandlerFunc {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			Err(w, http.StatusInternalServerError, "MKDIR_FAILED", err.Error())
 			return
+		}
+
+		// Deduplicate: if a file with identical content already exists, reuse it.
+		incomingHash := sha256.Sum256([]byte(body.Content))
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			n := e.Name()
+			if !strings.HasSuffix(n, ".yaml") && !strings.HasSuffix(n, ".yml") {
+				continue
+			}
+			existing, err := os.ReadFile(filepath.Join(dir, n))
+			if err != nil {
+				continue
+			}
+			if sha256.Sum256(existing) == incomingHash {
+				JSON(w, http.StatusOK, map[string]string{"filename": n})
+				return
+			}
 		}
 
 		var filename string

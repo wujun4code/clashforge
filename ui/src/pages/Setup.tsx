@@ -10,7 +10,7 @@ import {
   updateOverrides, generateConfig, getMihomoConfig, getConfig, updateConfig,
   startCore, stopCore, takeoverOverviewModule, releaseOverviewTakeover,
   getOverviewCore, getOverviewProbes, getLogs,
-  addSubscription, syncSubUpdate, enableService,
+  addSubscription, getSubscriptions, syncSubUpdate, enableService,
   saveSource, setActiveSource, getSourceFile,
 } from '../api/client'
 import type { OverviewProbeData, OverviewModule, LogEntry } from '../api/client'
@@ -482,7 +482,9 @@ export function Setup() {
         try {
           const parsed = yaml.load(content) as ClashParsed
           if (parsed && typeof parsed === 'object') applyClashParsed(parsed)
-        } catch (_) {}
+        } catch {
+          // ignore YAML parse errors – backend validates
+        }
         await updateOverrides(content)
         await generateConfig().catch(() => null)
         await setActiveSource({ type: 'file', filename: activateFile.filename }).catch(() => null)
@@ -490,27 +492,31 @@ export function Setup() {
         await showPreview()
         return
       }
-      let yamlContent = pasteContent
       if (importMode === 'url') {
-        // Add as subscription and download synchronously
+        // Reuse existing subscription with same URL instead of creating a duplicate.
         if (!remoteUrl.trim()) { setImportError('请输入订阅链接'); return }
-        const { id } = await addSubscription({ name: (() => { try { return new URL(remoteUrl).hostname } catch { return '远程订阅' } })(), url: remoteUrl, type: 'clash', enabled: true })
-        await syncSubUpdate(id)
-        await generateConfig().catch(() => null)
         const subName = (() => { try { return new URL(remoteUrl).hostname } catch { return '远程订阅' } })()
-        await setActiveSource({ type: 'subscription', sub_id: id, sub_name: subName }).catch(() => null)
+        const existing = await getSubscriptions().catch(() => ({ subscriptions: [] }))
+        const matched = existing.subscriptions.find(s => s.url === remoteUrl.trim())
+        const subId = matched
+          ? matched.id
+          : (await addSubscription({ name: subName, url: remoteUrl, type: 'clash', enabled: true })).id
+        await syncSubUpdate(subId)
+        await generateConfig().catch(() => null)
+        await setActiveSource({ type: 'subscription', sub_id: subId, sub_name: subName }).catch(() => null)
         setClashParsed({})
         await showPreview()
         return
       }
+      const yamlContent = pasteContent
       if (!yamlContent.trim()) { setImportError('内容为空，请粘贴或上传配置文件'); return }
 
       // Parse client-side for form pre-fill
       try {
         const parsed = yaml.load(yamlContent) as ClashParsed
         if (parsed && typeof parsed === 'object') applyClashParsed(parsed)
-      } catch (_) {
-        // Ignore parse errors here – backend will validate
+      } catch {
+        // ignore YAML parse errors – backend validates
       }
 
       // Save source file (paste → auto date+ver; upload → original filename)
@@ -577,7 +583,8 @@ export function Setup() {
   // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
   useEffect(() => {
     if (step === 'launch' && (activateSub || activateFile) && !launching && !launchDone) {
-      void handleLaunch()
+      const t = setTimeout(() => { void handleLaunch() }, 0)
+      return () => clearTimeout(t)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, handleLaunch])

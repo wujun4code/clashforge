@@ -199,6 +199,9 @@ jobs:
           chmod +x /tmp/mihomo
           echo "mihomo version: $(/tmp/mihomo -v 2>&1 | head -1)"
 
+      - name: Copy install.sh
+        run: cp scripts/install.sh dist/install.sh
+
       - name: Build IPK
         run: |
           VERSION="${{ steps.version.outputs.pkg_version }}"
@@ -281,7 +284,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ipk-${{ matrix.name }}-${{ steps.version.outputs.version }}
-          path: "*.ipk"
+          path: |
+            *.ipk
+            dist/install.sh
           retention-days: 30
 
   # ────────────────────────────────────────────────────────────
@@ -323,7 +328,31 @@ jobs:
 
             Mihomo (Clash.Meta) proxy manager for OpenWrt — single static binary with embedded Web UI.
 
-            ### Installation on OpenWrt
+            ---
+
+            ### 一键安装 / One-liner install
+
+            SSH 进入路由器后执行（自动检测 CPU 架构，默认安装最新版）：
+
+            ```sh
+            curl -fsSL https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh
+            ```
+
+            **指定版本：**
+            ```sh
+            curl -fsSL https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh -s -- --version ${{ github.ref_name }}
+            ```
+
+            **全新安装（清除旧版所有残留）：**
+            ```sh
+            curl -fsSL https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh -s -- --purge
+            ```
+
+            > 如无法直连 GitHub，可先手动下载 `install.sh` 传至路由器后执行：`sh install.sh`
+
+            ---
+
+            ### IPK 手动安装
 
             #### x86_64
             ```sh
@@ -335,20 +364,18 @@ jobs:
             opkg install clashforge_*_aarch64_generic.ipk
             ```
 
-            ### After installation
+            ### 安装后
+
             ```sh
-            # Edit config
+            # 编辑配置（可选，安装后自动生成默认配置）
             vi /etc/metaclash/config.toml
 
-            # Start
+            # 手动启动
             /etc/init.d/clashforge start
 
-            # Access Web UI
-            http://<router-ip>:7777
+            # 访问 Web UI（浏览器打开）
+            http://<路由器IP>:7777
             ```
-
-            ### Manual binary install
-            Download `clashforge-linux-amd64` or `clashforge-linux-arm64`, copy to `/usr/bin/clashforge`, `chmod +x`.
 
             ### Checksums
             See `SHA256SUMS.txt`.
@@ -356,4 +383,5 @@ jobs:
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           files: |
             release-assets/*.ipk
+            release-assets/install.sh
             release-assets/SHA256SUMS.txt

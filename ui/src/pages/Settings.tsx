@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { getConfig, updateConfig, getOverrides, updateOverrides, generateConfig, getMihomoConfig } from '../api/client'
-import { Save, Upload, FileText, CheckCircle2, AlertCircle, ArrowRight, RefreshCw } from 'lucide-react'
+import { getConfig, updateConfig, getOverrides, updateOverrides, generateConfig, getMihomoConfig, stopService } from '../api/client'
+import { Save, Upload, FileText, CheckCircle2, AlertCircle, ArrowRight, RefreshCw, Square, Loader2, Terminal } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -57,6 +57,26 @@ export function Settings() {
   const [tab, setTab] = useState<'import' | 'general' | 'overrides' | 'running'>('import')
   const fileRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+
+  // ── stop-service confirm dialog state ──
+  type StopTarget = 'openclash' | 'clashforge-full'
+  const [stopConfirm, setStopConfirm] = useState<StopTarget | null>(null)
+  const [stopping, setStopping] = useState(false)
+  const [stopResult, setStopResult] = useState<{ ok: boolean; output: string } | null>(null)
+
+  const handleStopService = async (target: StopTarget) => {
+    setStopping(true)
+    setStopResult(null)
+    try {
+      const res = await stopService(target)
+      setStopResult({ ok: true, output: res.output })
+    } catch (e: unknown) {
+      setStopResult({ ok: false, output: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setStopping(false)
+      setStopConfirm(null)
+    }
+  }
 
   const loadRunningConfig = () => {
     setRunningConfigLoading(true)
@@ -335,6 +355,114 @@ export function Settings() {
                 spellCheck={false}
               />
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Danger zone ──────────────────────────────────────────────────────── */}
+      <div className="card px-5 py-5 space-y-4 border-danger/20">
+        <div className="flex items-center gap-2">
+          <Terminal size={15} className="text-danger" />
+          <h2 className="text-sm font-semibold text-danger">危险操作</h2>
+        </div>
+        <p className="text-xs text-muted leading-5">
+          以下操作会在路由器侧执行 shell 脚本，完全停止对应服务并清理相关的 nftables 规则、策略路由和 DNS 配置。
+          操作不可自动撤销，执行前请确认。
+        </p>
+
+        {stopResult && (
+          <div className={`rounded-xl border px-4 py-3 space-y-2 ${stopResult.ok ? 'bg-success/8 border-success/25' : 'bg-danger/8 border-danger/25'}`}>
+            <div className="flex items-center gap-2">
+              {stopResult.ok
+                ? <CheckCircle2 size={14} className="text-success flex-shrink-0" />
+                : <AlertCircle size={14} className="text-danger flex-shrink-0" />}
+              <p className={`text-xs font-semibold ${stopResult.ok ? 'text-success' : 'text-danger'}`}>
+                {stopResult.ok ? '操作已完成' : '操作失败'}
+              </p>
+              <button className="ml-auto text-xs text-muted hover:text-white" onClick={() => setStopResult(null)}>关闭</button>
+            </div>
+            {stopResult.output && (
+              <pre className="text-[11px] font-mono text-slate-400 whitespace-pre-wrap break-all max-h-48 overflow-y-auto leading-5">{stopResult.output}</pre>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Stop OpenClash */}
+          <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4 space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">停止 OpenClash</p>
+              <p className="text-xs text-muted mt-1 leading-5">
+                停止 OpenClash init.d 服务、watchdog、clash 内核，清理 fw4 中的 nftables 规则，重载 dnsmasq。
+              </p>
+            </div>
+            <button
+              className="w-full rounded-xl px-3 py-2 text-xs font-semibold border border-warning/30 bg-warning/10 text-warning hover:bg-warning/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              onClick={() => { setStopConfirm('openclash'); setStopResult(null) }}
+              disabled={stopping}
+            >
+              <Square size={12} /> 停止 OpenClash
+            </button>
+          </div>
+
+          {/* Stop ClashForge full */}
+          <div className="rounded-2xl border border-danger/15 bg-black/10 px-4 py-4 space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">完全停止 ClashForge</p>
+              <p className="text-xs text-muted mt-1 leading-5">
+                停止 ClashForge + mihomo-clashforge，删除 nftables metaclash 表，清理策略路由，恢复 dnsmasq DNS。
+                <span className="text-danger font-medium"> 执行后当前页面连接中断。</span>
+              </p>
+            </div>
+            <button
+              className="w-full rounded-xl px-3 py-2 text-xs font-semibold border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              onClick={() => { setStopConfirm('clashforge-full'); setStopResult(null) }}
+              disabled={stopping}
+            >
+              <Square size={12} /> 完全停止 ClashForge
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Confirm dialog ───────────────────────────────────────────────────── */}
+      {stopConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => !stopping && setStopConfirm(null)}>
+          <div className="bg-surface-1 rounded-2xl border border-white/10 w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${stopConfirm === 'clashforge-full' ? 'bg-danger/15' : 'bg-warning/15'}`}>
+                <Square size={16} className={stopConfirm === 'clashforge-full' ? 'text-danger' : 'text-warning'} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-white">
+                  {stopConfirm === 'openclash' ? '停止 OpenClash' : '完全停止 ClashForge'}
+                </h3>
+                <p className="text-sm text-muted mt-1.5 leading-6">
+                  {stopConfirm === 'openclash'
+                    ? '将停止 OpenClash 服务、watchdog 和 clash 内核，并清理所有 nftables 规则。路由器透明代理将失效，流量走正常路由。'
+                    : '将停止 ClashForge 和 mihomo-clashforge，清理 nftables metaclash 表和策略路由，恢复 dnsmasq。执行后当前 Web UI 连接将中断，需重新访问。'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button className="btn-ghost flex-1" onClick={() => setStopConfirm(null)} disabled={stopping}>
+                取消
+              </button>
+              <button
+                className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2 ${
+                  stopConfirm === 'clashforge-full'
+                    ? 'bg-danger/20 text-danger border border-danger/30 hover:bg-danger/30'
+                    : 'bg-warning/20 text-warning border border-warning/30 hover:bg-warning/30'
+                }`}
+                onClick={() => handleStopService(stopConfirm)}
+                disabled={stopping}
+              >
+                {stopping
+                  ? <><Loader2 size={13} className="animate-spin" />执行中…</>
+                  : <><Square size={13} />确认停止</>}
+              </button>
+            </div>
           </div>
         </div>
       )}

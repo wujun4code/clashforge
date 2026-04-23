@@ -303,6 +303,14 @@ export const stopCore         = () => request('POST', '/core/stop')
 export const restartCore      = () => request('POST', '/core/restart')
 export const reloadCore       = () => request('POST', '/core/reload')
 export const getCoreVersion   = () => request<{current:string;latest:string;has_update:boolean}>('GET', '/core/version')
+export interface ClashforgeVersionData {
+  current: string
+  latest: string
+  has_update: boolean
+  download_url: string
+  release_url: string
+}
+export const getClashforgeVersion = () => request<ClashforgeVersionData>('GET', '/clashforge/version')
 export const getProxies       = () => request<ProxiesData>('GET', '/proxies')
 export const selectProxy      = (group: string, name: string) => request('PUT', `/proxies/${encodeURIComponent(group)}/select`, { name })
 export const testLatency      = async (proxies: string[]): Promise<Record<string, number>> => {
@@ -336,6 +344,7 @@ export const generateConfig   = () => request<{generated: boolean; config_file: 
 export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/mihomo')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
 export const enableService    = () => request<{enabled: boolean}>('POST', '/service/enable')
+export const stopService      = (target: 'openclash' | 'clashforge-full') => request<{ok: boolean; target: string; output: string}>('POST', '/system/stop-service', { target })
 
 // ---- rule providers ----
 export interface RuleProvider {

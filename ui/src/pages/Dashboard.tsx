@@ -3,9 +3,11 @@ import {
   Activity,
   CheckCircle2,
   Cpu,
+  ExternalLink,
   HardDrive,
   Loader2,
   RefreshCw,
+  X,
   Zap,
 } from 'lucide-react'
 
@@ -13,11 +15,13 @@ import {
   getOverviewCore,
   getOverviewProbes,
   getOverviewResources,
+  getClashforgeVersion,
   restartCore,
   getProxies,
   selectProxy,
   testLatency,
 } from '../api/client'
+import type { ClashforgeVersionData } from '../api/client'
 import type {
   OverviewAccessCheck,
   OverviewCoreData,
@@ -552,6 +556,41 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
   )
 }
 
+const SKIP_VERSION_KEY = 'cf_skip_version'
+
+function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: () => void }) {
+  return (
+    <div className="rounded-2xl border border-warning/30 bg-warning/8 px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="text-warning text-lg">🎉</span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-warning">发现新版本 {data.latest}</p>
+          <p className="text-xs text-muted mt-0.5">当前版本 {data.current}，前往 GitHub Releases 下载安装包</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <a
+          href={data.release_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn-ghost flex items-center gap-1.5 text-warning border-warning/30 hover:bg-warning/10"
+        >
+          <ExternalLink size={13} />
+          查看发布页
+        </a>
+        <button
+          className="btn-ghost flex items-center gap-1.5 text-muted"
+          onClick={onSkip}
+          title="跳过此版本，不再提醒"
+        >
+          <X size={13} />
+          跳过
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { currentUp, currentDown, connCount, coreState, setCoreState, pushTraffic, setConnCount } = useStore()
 
@@ -565,6 +604,9 @@ export function Dashboard() {
   const [loadingSection, setLoadingSection] = useState<SectionKey | null>(null)
   const [loadingBrowserProbe, setLoadingBrowserProbe] = useState(false)
   const [loadingAction, setLoadingAction] = useState<string | null>(null)
+
+  const [versionData, setVersionData] = useState<ClashforgeVersionData | null>(null)
+  const [showBanner, setShowBanner] = useState(false)
 
   // proxy switcher state
   const [proxies, setProxies] = useState<ProxyMap>({})
@@ -629,8 +671,23 @@ export function Dashboard() {
 
   // Only fetch proxies when we know the core is running — avoids 502 spam when Mihomo is stopped
   useEffect(() => {
-    if (coreData?.core.state === 'running') void refreshProxies()
+    if (coreData?.core.state !== 'running') return
+    const t = setTimeout(() => { void refreshProxies() }, 0)
+    return () => clearTimeout(t)
   }, [coreData, refreshProxies])
+
+  // Version check once on mount
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      const data = await getClashforgeVersion().catch(() => null)
+      if (!data?.has_update) return
+      const skipped = localStorage.getItem(SKIP_VERSION_KEY)
+      if (skipped === data.latest) return
+      setVersionData(data)
+      setShowBanner(true)
+    }, 0)
+    return () => clearTimeout(t)
+  }, [])
 
   const openSection = async (target: SectionKey) => {
     setSection(target)
@@ -682,6 +739,17 @@ export function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
+
+      {/* ── Update banner ── */}
+      {showBanner && versionData && (
+        <UpdateBanner
+          data={versionData}
+          onSkip={() => {
+            localStorage.setItem(SKIP_VERSION_KEY, versionData.latest)
+            setShowBanner(false)
+          }}
+        />
+      )}
 
       {/* ── Core status + restart ── */}
       <div className="card px-6 py-5">
