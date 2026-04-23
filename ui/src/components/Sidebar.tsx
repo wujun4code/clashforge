@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, FolderCog, Activity, Sparkles
+  LayoutDashboard, FolderCog, Activity, Sparkles, Settings
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
 
@@ -10,6 +10,7 @@ const links = [
   { to: '/config',   icon: FolderCog,       label: '配置管理' },
   { to: '/activity', icon: Activity,        label: '活动' },
   { to: '/setup',    icon: Sparkles,        label: '配置向导' },
+  { to: '/settings', icon: Settings,        label: '设置' },
 ]
 
 function CoreStatusBadge() {

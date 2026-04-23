@@ -4,6 +4,7 @@ import { Dashboard } from './pages/Dashboard'
 import { ConfigManagement } from './pages/ConfigManagement'
 import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
+import { Settings } from './pages/Settings'
 
 export default function App() {
   return (
@@ -12,10 +13,11 @@ export default function App() {
         <Sidebar />
         <main className="flex-1 overflow-y-auto bg-surface-0">
           <Routes>
-            <Route path="/"        element={<Dashboard />} />
-            <Route path="/config"  element={<ConfigManagement />} />
+            <Route path="/"         element={<Dashboard />} />
+            <Route path="/config"   element={<ConfigManagement />} />
             <Route path="/activity" element={<ActivityLog />} />
-            <Route path="/setup"   element={<Setup />} />
+            <Route path="/setup"    element={<Setup />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>
