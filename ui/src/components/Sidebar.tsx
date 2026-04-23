@@ -52,7 +52,7 @@ export function Sidebar() {
     <aside className="w-56 flex-shrink-0 bg-surface-1 border-r border-white/5 flex flex-col">
       <div className="px-5 py-5 border-b border-white/5">
         <div className="flex items-center gap-2.5">
-          <span className="text-xl">⚡</span>
+          <img src="/favicon.svg" alt="ClashForge" className="w-6 h-6" />
           <span className="font-bold text-base tracking-wide text-white">ClashForge</span>
         </div>
       </div>
