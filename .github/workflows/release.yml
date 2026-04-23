@@ -21,17 +21,16 @@ jobs:
   build-ui:
     name: Build React UI
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
-
-      - name: Install dependencies
-        run: cd ui && npm ci
 
       - name: Compute version
         id: version
@@ -45,70 +44,55 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Install dependencies
+        run: cd ui && npm ci
+
       - name: Build UI
         env:
           VITE_APP_VERSION: ${{ steps.version.outputs.version }}
         run: cd ui && npm run build
 
       - name: Upload UI artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ui-dist
           path: ui/dist/
-          retention-days: 1  # temp artifact, only needed between jobs
+          retention-days: 1
 
   # ────────────────────────────────────────────────────────────
-  # Stage 2: Build Go binaries for each target platform
+  # Stage 2: Build Go binaries
+  # One binary per Go arch (amd64 + arm64); both aarch64 IPK
+  # variants share the same arm64 binary.
   # ────────────────────────────────────────────────────────────
   build-binaries:
-    name: Build ${{ matrix.name }}
+    name: Build binary (${{ matrix.suffix }})
     runs-on: ubuntu-latest
     needs: build-ui
 
     strategy:
       matrix:
         include:
-          # x86_64 (PC router / VM / x86 OpenWrt)
-          - name: x86_64
+          - suffix: linux-amd64
             goos: linux
             goarch: amd64
-            suffix: linux-amd64
-            openwrt_arch: x86_64
 
-          # ARMv8 / AArch64 — Cortex-A53/A55/A72 etc.
-          # Covers: Raspberry Pi 3/4, NanoPi R4S/R5S, Rockchip, MediaTek MT7986 ...
-          - name: aarch64
+          - suffix: linux-arm64
             goos: linux
             goarch: arm64
-            suffix: linux-arm64
-            openwrt_arch: aarch64_generic
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.24'
           cache: true
 
       - name: Download UI dist
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: ui-dist
           path: internal/api/ui_dist/
-
-      - name: Set version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "push" ] && echo "${{ github.ref }}" | grep -q "refs/tags/"; then
-            VERSION="${{ github.ref_name }}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="dev-$(git rev-parse --short HEAD)"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building version: $VERSION"
 
       - name: Build clashforge binary
         env:
@@ -118,7 +102,7 @@ jobs:
         run: |
           go build \
             -trimpath \
-            -ldflags="-s -w -X main.buildVersion=${{ steps.version.outputs.version }}" \
+            -ldflags="-s -w -X main.buildVersion=${{ needs.build-ui.outputs.version }}" \
             -o dist/clashforge-${{ matrix.suffix }} \
             ./cmd/clashforge
 
@@ -128,79 +112,63 @@ jobs:
           ls -lh dist/clashforge-${{ matrix.suffix }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: clashforge-${{ matrix.suffix }}
+          name: binary-${{ matrix.suffix }}
           path: dist/clashforge-${{ matrix.suffix }}
-          retention-days: 7
+          retention-days: 1
 
   # ────────────────────────────────────────────────────────────
   # Stage 3: Package OpenWrt IPK for each platform
   # ────────────────────────────────────────────────────────────
   package-ipk:
-    name: Package IPK ${{ matrix.name }}
+    name: Package IPK (${{ matrix.pkg_arch }})
     runs-on: ubuntu-latest
-    needs: build-binaries
+    needs: [build-ui, build-binaries]
 
     strategy:
       matrix:
         include:
-          - name: x86_64
-            suffix: linux-amd64
-            pkg_arch: x86_64
+          - pkg_arch: x86_64
+            binary_suffix: linux-amd64
             mihomo_asset: mihomo-linux-amd64-compatible
 
-          # Generic aarch64 (Cortex-A72, A73, A55 on some devices)
-          - name: aarch64_generic
-            suffix: linux-arm64
-            pkg_arch: aarch64_generic
+          - pkg_arch: aarch64_generic
+            binary_suffix: linux-arm64
             mihomo_asset: mihomo-linux-arm64
 
-          # Cortex-A53 — very common: Raspberry Pi 3, MT7622, MT7981, MT7986...
-          - name: aarch64_cortex-a53
-            suffix: linux-arm64
-            pkg_arch: aarch64_cortex-a53
+          - pkg_arch: aarch64_cortex-a53
+            binary_suffix: linux-arm64
             mihomo_asset: mihomo-linux-arm64
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Set version
+      - name: Compute pkg version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && echo "${{ github.ref }}" | grep -q "refs/tags/"; then
-            VERSION="${{ github.ref_name }}"
-            PKG_VERSION="${VERSION#v}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-            PKG_VERSION="${VERSION#v}"
-          else
-            SHORT=$(git rev-parse --short HEAD)
-            VERSION="dev-$SHORT"
-            PKG_VERSION="0.0.1+$SHORT"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          RAW="${{ needs.build-ui.outputs.version }}"
+          PKG_VERSION="${RAW#v}"
+          echo "tag=$RAW" >> "$GITHUB_OUTPUT"
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Download binary
-        uses: actions/download-artifact@v8
+      - name: Download clashforge binary
+        uses: actions/download-artifact@v4
         with:
-          name: clashforge-${{ matrix.suffix }}
+          name: binary-${{ matrix.binary_suffix }}
           path: dist/
 
       - name: Download bundled mihomo
         run: |
-          MIHOMO_VER=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+          MIHOMO_VER=$(curl -sf https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
             | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "Downloading mihomo $MIHOMO_VER for ${{ matrix.mihomo_asset }}"
-          curl -L -o /tmp/mihomo.gz \
+          echo "Downloading mihomo $MIHOMO_VER (${{ matrix.mihomo_asset }})"
+          curl -fsSL -o /tmp/mihomo.gz \
             "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${{ matrix.mihomo_asset }}-${MIHOMO_VER}.gz"
           gunzip /tmp/mihomo.gz
           chmod +x /tmp/mihomo
-          echo "mihomo version: $(/tmp/mihomo -v 2>&1 | head -1)"
-
-      - name: Copy install.sh
-        run: cp scripts/install.sh dist/install.sh
+          echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
+          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
 
       - name: Build IPK
         run: |
@@ -209,46 +177,41 @@ jobs:
           PKG_NAME="clashforge_${VERSION}_${ARCH}.ipk"
           export PKG_NAME
 
-          # Create IPK directory structure
+          # Staging tree
           mkdir -p ipk/CONTROL
           mkdir -p ipk/usr/bin
           mkdir -p ipk/etc/metaclash
           mkdir -p ipk/etc/init.d
           mkdir -p ipk/usr/share/metaclash
           mkdir -p ipk/usr/share/luci/menu.d
-          mkdir -p "ipk/www/luci-static/resources/view/clashforge"
+          mkdir -p ipk/www/luci-static/resources/view/clashforge
           mkdir -p ipk/usr/share/rpcd/acl.d
 
-          # Copy clashforge binary
-          cp dist/clashforge-${{ matrix.suffix }} ipk/usr/bin/clashforge
+          # Binaries
+          cp dist/clashforge-${{ matrix.binary_suffix }} ipk/usr/bin/clashforge
           chmod 755 ipk/usr/bin/clashforge
-
-          # Bundle mihomo as mihomo-clashforge (won't conflict with system mihomo)
           cp /tmp/mihomo ipk/usr/bin/mihomo-clashforge
           chmod 755 ipk/usr/bin/mihomo-clashforge
 
-          # Config example files (reference only, not used by postinst)
-          # mkdir -p ipk/etc/metaclash  # already created above
-
-          # LuCI navigation entry (adds ClashForge to Services menu)
+          # LuCI / rpcd files
           cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json \
              ipk/usr/share/luci/menu.d/luci-app-clashforge.json
           cp openwrt/files/www/luci-static/resources/view/clashforge/main.js \
-             "ipk/www/luci-static/resources/view/clashforge/main.js"
+             ipk/www/luci-static/resources/view/clashforge/main.js
           cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json \
              ipk/usr/share/rpcd/acl.d/luci-app-clashforge.json
 
-          # init.d script (smart mihomo detection)
+          # init.d
           cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge
           chmod 755 ipk/etc/init.d/clashforge
 
-          # one-click uninstall helper
+          # uninstall helper
           cp openwrt/files/etc/metaclash/uninstall-clashforge.sh ipk/usr/bin/uninstall-clashforge
           chmod 755 ipk/usr/bin/uninstall-clashforge
 
-          # control file
-          MIHOMO_VER=$(/tmp/mihomo -v 2>&1 | grep -o 'v[0-9][^ ]*' | head -1 || echo 'unknown')
-          cat > ipk/CONTROL/control << EOF
+          # CONTROL/control — no leading whitespace, opkg is strict
+          MIHOMO_VER_CLEAN="${MIHOMO_VER:-unknown}"
+          cat > ipk/CONTROL/control <<EOF
           Package: clashforge
           Version: ${VERSION}
           Architecture: ${ARCH}
@@ -258,57 +221,79 @@ jobs:
           Depends: ca-bundle, ip-full
           Source: https://github.com/wujun4code/clashforge
           Description: Mihomo (Clash.Meta) proxy manager for OpenWrt.
-           Includes bundled mihomo ${MIHOMO_VER}. Auto-detects system mihomo if present.
-           Web UI on port 7777. Zero configuration required after install.
+           Includes bundled mihomo ${MIHOMO_VER_CLEAN}. Web UI on port 7777.
           EOF
+          # Strip leading whitespace that heredoc may add
+          sed -i 's/^[[:space:]]*//' ipk/CONTROL/control
 
-          # conffiles — intentionally empty
-          # We manage config files manually in postinst to avoid opkg sha256 errors
           touch ipk/CONTROL/conffiles
 
           cp openwrt/files/etc/metaclash/postinst.sh ipk/CONTROL/postinst
           chmod 755 ipk/CONTROL/postinst
-
           cp openwrt/files/etc/metaclash/prerm.sh ipk/CONTROL/prerm
           chmod 755 ipk/CONTROL/prerm
-
           cp openwrt/files/etc/metaclash/postrm.sh ipk/CONTROL/postrm
           chmod 755 ipk/CONTROL/postrm
 
-          # Build the IPK using the dedicated packaging script
           python3 scripts/build_ipk.py
           ls -lh "$PKG_NAME"
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPK artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ matrix.name }}-${{ steps.version.outputs.version }}
-          path: |
-            *.ipk
-            dist/install.sh
-          retention-days: 30
+          name: ipk-${{ matrix.pkg_arch }}
+          path: "*.ipk"
+          retention-days: 7
 
   # ────────────────────────────────────────────────────────────
-  # Stage 4: Create GitHub Release (only on tag push)
+  # Stage 4: Collect install.sh (single upload, from checkout)
+  # ────────────────────────────────────────────────────────────
+  upload-installer:
+    name: Upload install.sh
+    runs-on: ubuntu-latest
+    needs: build-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: scripts/install.sh
+          retention-days: 7
+
+  # ────────────────────────────────────────────────────────────
+  # Stage 5: Create GitHub Release (tag pushes only)
   # ────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: package-ipk
+    needs: [build-ui, package-ipk, upload-installer]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Download all IPK artifacts
-        uses: actions/download-artifact@v8
+      - name: Compute pkg version
+        id: ver
+        run: |
+          TAG="${{ github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download IPK artifacts
+        uses: actions/download-artifact@v4
         with:
           pattern: ipk-*
           path: release-assets/
           merge-multiple: true
+
+      - name: Download install.sh
+        uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: release-assets/
 
       - name: List release assets
         run: ls -lh release-assets/
@@ -316,7 +301,7 @@ jobs:
       - name: Create checksums
         run: |
           cd release-assets
-          sha256sum * > SHA256SUMS.txt
+          sha256sum *.ipk install.sh > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create release
@@ -326,59 +311,82 @@ jobs:
           body: |
             ## ClashForge ${{ github.ref_name }}
 
-            Mihomo (Clash.Meta) proxy manager for OpenWrt — single static binary with embedded Web UI.
+            Mihomo (Clash.Meta) 透明代理管理器，适用于 OpenWrt — 单二进制文件，内嵌 Web UI。
 
             ---
 
             ### 一键安装 / One-liner install
 
-            SSH 进入路由器后执行（自动检测 CPU 架构，默认安装最新版）：
+            SSH 进入路由器后执行，**自动检测 CPU 架构**，下载对应 IPK 并通过 opkg 安装：
 
             ```sh
-            curl -fsSL https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh
+            wget -qO- https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/install.sh | sh
             ```
 
-            **指定版本：**
+            **安装指定版本（本版本）：**
             ```sh
-            curl -fsSL https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh -s -- --version ${{ github.ref_name }}
+            wget -qO- https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/install.sh | sh -s -- --version ${{ github.ref_name }}
             ```
 
-            **全新安装（清除旧版所有残留）：**
+            **全新安装（清除旧版所有残留后重装）：**
             ```sh
-            curl -fsSL https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh -s -- --purge
+            wget -qO- https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/install.sh | sh -s -- --purge
             ```
 
-            > 如无法直连 GitHub，可先手动下载 `install.sh` 传至路由器后执行：`sh install.sh`
+            > 💡 如无法直连 GitHub，可先手动下载 `install.sh` 上传到路由器，再执行 `sh install.sh`
 
             ---
 
-            ### IPK 手动安装
+            ### 手动安装 IPK
 
-            #### x86_64
+            先下载对应架构的 IPK，再通过 opkg 安装（`--nodeps` 跳过依赖检查，因 mihomo 已打包在内）：
+
+            #### x86_64（PC 路由 / x86 OpenWrt）
             ```sh
-            opkg install clashforge_*_x86_64.ipk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/clashforge_${{ steps.ver.outputs.pkg_version }}_x86_64.ipk
+            opkg install --nodeps clashforge_${{ steps.ver.outputs.pkg_version }}_x86_64.ipk
             ```
 
-            #### AArch64 (ARMv8, Cortex-A53/A55/A72)
+            #### AArch64 通用（Cortex-A72/A73/A55，NanoPi R4S/R5S 等）
             ```sh
-            opkg install clashforge_*_aarch64_generic.ipk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_generic.ipk
+            opkg install --nodeps clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_generic.ipk
             ```
 
-            ### 安装后
+            #### AArch64 Cortex-A53（Raspberry Pi 3, MT7981/MT7986/MT7622 等）
+            ```sh
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_cortex-a53.ipk
+            opkg install --nodeps clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_cortex-a53.ipk
+            ```
+
+            ---
+
+            ### 安装完成后
 
             ```sh
-            # 编辑配置（可选，安装后自动生成默认配置）
-            vi /etc/metaclash/config.toml
-
-            # 手动启动
-            /etc/init.d/clashforge start
-
-            # 访问 Web UI（浏览器打开）
+            # Web UI（浏览器打开）
             http://<路由器IP>:7777
+
+            # 查看运行状态
+            /etc/init.d/clashforge status
+
+            # 编辑配置（通常不需要手动编辑，通过 Web UI 操作即可）
+            vi /etc/metaclash/config.toml
             ```
 
-            ### Checksums
-            See `SHA256SUMS.txt`.
+            ### 卸载
+
+            ```sh
+            opkg remove clashforge
+            # 或完全清除（含配置和数据）：
+            uninstall-clashforge
+            ```
+
+            ---
+
+            ### SHA256 校验
+
+            见附件 `SHA256SUMS.txt`
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           files: |
