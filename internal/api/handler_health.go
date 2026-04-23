@@ -72,8 +72,8 @@ func handleHealthCheck(deps Dependencies) http.HandlerFunc {
 		coreStatus := deps.Core.Status()
 		mihomoAPIReady := testMihomoAPI(deps.Config.Ports.MihomoAPI)
 		ports := buildHealthPorts(deps)
-		httpTest := testHTTPProxyEndpoint("http", deps.Config.Ports.HTTP, targetURL)
-		mixedTest := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, targetURL)
+		httpTest := testHTTPProxyEndpoint("http", deps.Config.Ports.HTTP, targetURL, deps.Config.Core.RuntimeDir)
+		mixedTest := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, targetURL, deps.Config.Core.RuntimeDir)
 		socksTest := testSOCKS5Endpoint("socks", deps.Config.Ports.SOCKS, targetURL)
 		apiTest := testMihomoAPIEndpoint(deps.Config.Ports.MihomoAPI)
 
@@ -122,10 +122,10 @@ func handleHealthCheck(deps Dependencies) http.HandlerFunc {
 					Uptime:  coreStatus.Uptime,
 				},
 			},
-			"ports": ports,
+			"ports":             ports,
 			"transparent_proxy": buildTransparentProxyHealth(deps),
-			"nft":                buildNFTHealth(deps),
-			"dns":                buildDNSHealth(deps),
+			"nft":               buildNFTHealth(deps),
+			"dns":               buildDNSHealth(deps),
 			"proxy_tests": map[string]any{
 				"target_url": targetURL,
 				"http":       httpTest,
@@ -279,15 +279,14 @@ func testMihomoAPIEndpoint(port int) healthProxyTest {
 	return healthProxyTest{Name: "mihomo_api", Port: port, Listening: true, OK: resp.StatusCode >= 200 && resp.StatusCode < 500, StatusCode: resp.StatusCode, DurationMS: time.Since(start).Milliseconds()}
 }
 
-func testHTTPProxyEndpoint(name string, port int, targetURL string) healthProxyTest {
+func testHTTPProxyEndpoint(name string, port int, targetURL string, runtimeDir string) healthProxyTest {
 	listening := isTCPPortListening(port)
 	if !listening {
 		return healthProxyTest{Name: name, Port: port, Listening: false, OK: false, Error: "port is not listening"}
 	}
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	client := http.Client{
-		Timeout: 8 * time.Second,
-		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+		Timeout:   8 * time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyURL(mihomoProxyURL(port, runtimeDir))},
 	}
 	req, err := http.NewRequest(http.MethodHead, targetURL, nil)
 	if err != nil {

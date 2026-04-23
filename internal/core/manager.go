@@ -3,11 +3,14 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,6 +60,7 @@ type CoreManager struct {
 	cmd           *exec.Cmd
 	state         CoreState
 	pid           int
+	runID         uint64
 	startTime     time.Time
 	restartCount  int
 	restartTimes  []time.Time
@@ -82,6 +86,12 @@ func (m *CoreManager) Start(ctx context.Context) error {
 }
 
 func (m *CoreManager) startLocked(ctx context.Context) error {
+	if err := m.ensureSingleInstanceLocked(); err != nil {
+		m.lastError = err.Error()
+		m.setState(StateError, 0)
+		return err
+	}
+
 	m.setState(StateStarting, 0)
 	// The caller context only scopes readiness waiting, not mihomo's lifetime.
 	// Using CommandContext here would kill the long-running child as soon as an
@@ -97,11 +107,15 @@ func (m *CoreManager) startLocked(ctx context.Context) error {
 	m.cmd = cmd
 	m.pid = cmd.Process.Pid
 	m.startTime = time.Now()
-	m.deathCh = make(chan error, 1)
+	m.runID++
+	runID := m.runID
+	deathCh := make(chan error, 1)
+	m.deathCh = deathCh
+	startedPID := m.pid
 	go func() {
 		err := cmd.Wait()
-		m.deathCh <- err
-		m.handleDeath(err)
+		deathCh <- err
+		m.handleDeath(err, runID, startedPID)
 	}()
 	if err := m.waitAPIReady(ctx, 5*time.Second); err != nil {
 		log.Warn().Err(err).Msg("mihomo API not ready within timeout")
@@ -128,22 +142,27 @@ func (m *CoreManager) Stop() error {
 func (m *CoreManager) stopLocked() error {
 	m.setState(StateStopping, m.pid)
 	process := m.cmd.Process
+	deathCh := m.deathCh
 	if process == nil {
 		m.cmd = nil
 		m.pid = 0
+		m.deathCh = nil
 		m.setState(StateStopped, 0)
 		return nil
 	}
 	_ = process.Signal(syscall.SIGTERM)
 	select {
-	case <-m.deathCh:
+	case <-deathCh:
 	case <-time.After(5 * time.Second):
 		log.Warn().Int("pid", m.pid).Msg("mihomo did not stop gracefully, killing")
 		_ = process.Kill()
-		<-m.deathCh
+		if deathCh != nil {
+			<-deathCh
+		}
 	}
 	m.cmd = nil
 	m.pid = 0
+	m.deathCh = nil
 	m.setState(StateStopped, 0)
 	log.Info().Msg("mihomo stopped")
 	return nil
@@ -153,6 +172,10 @@ func (m *CoreManager) Restart(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state == StateRunning || m.state == StateStopping {
+		if m.stopCh != nil {
+			close(m.stopCh)
+			m.stopCh = nil
+		}
 		if err := m.stopLocked(); err != nil {
 			return err
 		}
@@ -212,10 +235,18 @@ func (m *CoreManager) CurrentVersion(ctx context.Context) string {
 	return strings.TrimSpace(string(out))
 }
 
-func (m *CoreManager) handleDeath(err error) {
+func (m *CoreManager) handleDeath(err error, runID uint64, deadPID int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if runID != m.runID {
+		log.Debug().Uint64("run_id", runID).Uint64("current_run_id", m.runID).Int("pid", deadPID).Msg("ignoring stale mihomo exit event")
+		return
+	}
 	if m.state == StateStopping || m.state == StateStopped {
+		return
+	}
+	if deadPID != 0 && m.pid != deadPID {
+		log.Debug().Int("dead_pid", deadPID).Int("current_pid", m.pid).Msg("ignoring mismatched mihomo exit event")
 		return
 	}
 	if err != nil {
@@ -224,6 +255,7 @@ func (m *CoreManager) handleDeath(err error) {
 	}
 	m.cmd = nil
 	m.pid = 0
+	m.deathCh = nil
 	m.setState(StateError, 0)
 	m.restartTimes = append(m.restartTimes, time.Now())
 	cutoff := time.Now().Add(-60 * time.Second)
@@ -248,6 +280,107 @@ func (m *CoreManager) handleDeath(err error) {
 			log.Error().Err(err).Msg("auto-restart failed")
 		}
 	}()
+}
+
+func (m *CoreManager) ensureSingleInstanceLocked() error {
+	pids, err := findMihomoPIDsByConfig(m.cfg.ConfigFile)
+	if err != nil {
+		// Best-effort on non-Linux environments where /proc scanning may be unavailable.
+		log.Warn().Err(err).Msg("skip stale mihomo scan")
+		return nil
+	}
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		log.Warn().Int("pid", pid).Msg("found stale mihomo process, stopping before start")
+		if err := terminatePID(pid, 5*time.Second); err != nil {
+			return fmt.Errorf("failed to stop stale mihomo process %d: %w", pid, err)
+		}
+	}
+	return nil
+}
+
+func findMihomoPIDsByConfig(configFile string) ([]int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	matched := make([]int, 0)
+	needle := strings.ToLower(configFile)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		cmdlinePath := filepath.Join("/proc", entry.Name(), "cmdline")
+		cmdline, err := os.ReadFile(cmdlinePath)
+		if err != nil || len(cmdline) == 0 {
+			continue
+		}
+		flat := strings.ToLower(strings.ReplaceAll(string(cmdline), "\x00", " "))
+		if !strings.Contains(flat, "mihomo") {
+			continue
+		}
+		if !strings.Contains(flat, needle) {
+			continue
+		}
+		matched = append(matched, pid)
+	}
+	return matched, nil
+}
+
+func terminatePID(pid int, timeout time.Duration) error {
+	if pid <= 0 {
+		return nil
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+
+	_ = proc.Signal(syscall.SIGTERM)
+	if waitPIDExit(pid, timeout) {
+		return nil
+	}
+
+	_ = proc.Kill()
+	if waitPIDExit(pid, 2*time.Second) {
+		return nil
+	}
+
+	return fmt.Errorf("process %d still alive after SIGKILL", pid)
+}
+
+func waitPIDExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !pidAlive(pid) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return !pidAlive(pid)
+}
+
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func (m *CoreManager) waitAPIReady(ctx context.Context, timeout time.Duration) error {

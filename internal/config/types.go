@@ -16,12 +16,13 @@ type MetaclashConfig struct {
 }
 
 type CoreConfig struct {
-	Binary      string `toml:"binary" json:"binary"`
-	RuntimeDir  string `toml:"runtime_dir" json:"runtime_dir"`
-	DataDir     string `toml:"data_dir" json:"data_dir"`
-	GeoIPPath   string `toml:"geoip_path" json:"geoip_path"`
-	GeositePath string `toml:"geosite_path" json:"geosite_path"`
-	MaxRestarts int    `toml:"max_restarts" json:"max_restarts"`
+	Binary        string `toml:"binary" json:"binary"`
+	RuntimeDir    string `toml:"runtime_dir" json:"runtime_dir"`
+	DataDir       string `toml:"data_dir" json:"data_dir"`
+	GeoIPPath     string `toml:"geoip_path" json:"geoip_path"`
+	GeositePath   string `toml:"geosite_path" json:"geosite_path"`
+	MaxRestarts   int    `toml:"max_restarts" json:"max_restarts"`
+	AutoStartCore bool   `toml:"auto_start_core" json:"auto_start_core"`
 }
 
 type PortsConfig struct {

@@ -1,16 +1,13 @@
 import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, Globe, BookMarked,
-  Activity, ScrollText, Settings
+  LayoutDashboard, FolderCog, Activity, Sparkles
 } from 'lucide-react'
 
 const links = [
-  { to: '/',             icon: LayoutDashboard, label: '概览' },
-  { to: '/proxies',      icon: Globe,           label: '节点' },
-  { to: '/subscriptions',icon: BookMarked,      label: '订阅' },
-  { to: '/connections',  icon: Activity,        label: '连接' },
-  { to: '/logs',         icon: ScrollText,      label: '日志' },
-  { to: '/settings',     icon: Settings,        label: '设置' },
+  { to: '/',         icon: LayoutDashboard, label: '概览' },
+  { to: '/config',   icon: FolderCog,       label: '配置管理' },
+  { to: '/activity', icon: Activity,        label: '活动' },
+  { to: '/setup',    icon: Sparkles,        label: '配置向导' },
 ]
 
 export function Sidebar() {

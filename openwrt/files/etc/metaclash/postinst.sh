@@ -32,7 +32,7 @@ dnsmasq_mode = "none"
 api_secret = ""
 allow_lan = true
 [log]
-level = "warn"
+level = "warning"
 file = ""
 max_size_mb = 10
 [update]

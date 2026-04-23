@@ -9,8 +9,9 @@ import (
 
 // IptablesBackend manages iptables TProxy rules.
 type IptablesBackend struct {
-	TProxyPort int
-	DNSPort    int
+	TProxyPort        int
+	DNSPort           int
+	EnableDNSRedirect bool
 }
 
 // Apply sets up iptables TProxy rules.
@@ -35,9 +36,13 @@ func (i *IptablesBackend) Apply() error {
 			"--tproxy-mark", fwMark, "--on-port", strconv.Itoa(i.TProxyPort)},
 		// Hook into PREROUTING
 		{"iptables", "-t", "mangle", "-A", "PREROUTING", "-j", "METACLASH"},
-		// DNS redirect
-		{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
-		{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+	}
+
+	if i.EnableDNSRedirect {
+		cmds = append(cmds,
+			[]string{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+			[]string{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+		)
 	}
 
 	for _, cmd := range cmds {
@@ -58,8 +63,12 @@ func (i *IptablesBackend) Cleanup() error {
 		{"iptables", "-t", "mangle", "-D", "PREROUTING", "-j", "METACLASH"},
 		{"iptables", "-t", "mangle", "-F", "METACLASH"},
 		{"iptables", "-t", "mangle", "-X", "METACLASH"},
-		{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
-		{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+	}
+	if i.EnableDNSRedirect {
+		cmds = append(cmds,
+			[]string{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+			[]string{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+		)
 	}
 	for _, cmd := range cmds {
 		_ = exec.Command(cmd[0], cmd[1:]...).Run()

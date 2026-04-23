@@ -17,27 +17,31 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
+
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/dns"
 	"github.com/wujun4code/clashforge/internal/netfilter"
+	"gopkg.in/yaml.v3"
 )
 
 type overviewData struct {
-	CheckedAt   string                    `json:"checked_at"`
-	Summary     overviewSummary          `json:"summary"`
-	Resources   overviewResources        `json:"resources"`
-	IPChecks    []overviewIPCheck        `json:"ip_checks"`
-	AccessChecks []overviewAccessCheck   `json:"access_checks"`
-	Modules     []overviewModule         `json:"modules"`
-	Influences  []overviewInfluence      `json:"influences"`
+	CheckedAt    string                `json:"checked_at"`
+	Summary      overviewSummary       `json:"summary"`
+	Resources    overviewResources     `json:"resources"`
+	IPChecks     []overviewIPCheck     `json:"ip_checks"`
+	AccessChecks []overviewAccessCheck `json:"access_checks"`
+	Modules      []overviewModule      `json:"modules"`
+	Influences   []overviewInfluence   `json:"influences"`
 }
 
 type overviewCoreData struct {
-	CheckedAt  string           `json:"checked_at"`
-	Core       overviewCoreInfo `json:"core"`
-	Summary    overviewSummary  `json:"summary"`
-	Modules    []overviewModule `json:"modules"`
+	CheckedAt  string              `json:"checked_at"`
+	Core       overviewCoreInfo    `json:"core"`
+	Summary    overviewSummary     `json:"summary"`
+	Modules    []overviewModule    `json:"modules"`
 	Influences []overviewInfluence `json:"influences"`
 }
 
@@ -75,13 +79,13 @@ type overviewResources struct {
 }
 
 type overviewSystemUsage struct {
-	CPUPercent      float64 `json:"cpu_percent"`
-	MemoryTotalMB   float64 `json:"memory_total_mb"`
-	MemoryUsedMB    float64 `json:"memory_used_mb"`
-	MemoryPercent   float64 `json:"memory_percent"`
-	DiskTotalGB     float64 `json:"disk_total_gb"`
-	DiskUsedGB      float64 `json:"disk_used_gb"`
-	DiskPercent     float64 `json:"disk_percent"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryTotalMB float64 `json:"memory_total_mb"`
+	MemoryUsedMB  float64 `json:"memory_used_mb"`
+	MemoryPercent float64 `json:"memory_percent"`
+	DiskTotalGB   float64 `json:"disk_total_gb"`
+	DiskUsedGB    float64 `json:"disk_used_gb"`
+	DiskPercent   float64 `json:"disk_percent"`
 }
 
 type overviewProcessUsage struct {
@@ -96,11 +100,11 @@ type overviewProcessUsage struct {
 }
 
 type overviewAppStorage struct {
-	RuntimeMB float64 `json:"runtime_mb"`
-	DataMB    float64 `json:"data_mb"`
-	BinaryMB  float64 `json:"binary_mb"`
-	RulesMB   float64 `json:"rules_mb"`
-	TotalMB   float64 `json:"total_mb"`
+	RuntimeMB  float64             `json:"runtime_mb"`
+	DataMB     float64             `json:"data_mb"`
+	BinaryMB   float64             `json:"binary_mb"`
+	RulesMB    float64             `json:"rules_mb"`
+	TotalMB    float64             `json:"total_mb"`
 	RuleAssets []overviewRuleAsset `json:"rule_assets,omitempty"`
 }
 
@@ -112,6 +116,7 @@ type overviewRuleAsset struct {
 
 type overviewIPCheck struct {
 	Provider string `json:"provider"`
+	Group    string `json:"group,omitempty"`
 	OK       bool   `json:"ok"`
 	IP       string `json:"ip,omitempty"`
 	Location string `json:"location,omitempty"`
@@ -119,14 +124,15 @@ type overviewIPCheck struct {
 }
 
 type overviewAccessCheck struct {
-	Name       string `json:"name"`
-	URL        string `json:"url"`
+	Name        string `json:"name"`
+	Group       string `json:"group,omitempty"`
+	URL         string `json:"url"`
 	Description string `json:"description"`
-	Via        string `json:"via"`
-	OK         bool   `json:"ok"`
-	StatusCode int    `json:"status_code,omitempty"`
-	LatencyMS  int64  `json:"latency_ms,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Via         string `json:"via"`
+	OK          bool   `json:"ok"`
+	StatusCode  int    `json:"status_code,omitempty"`
+	LatencyMS   int64  `json:"latency_ms,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type overviewProcessRef struct {
@@ -152,21 +158,21 @@ type overviewAction struct {
 }
 
 type overviewModule struct {
-	ID               string              `json:"id"`
-	Title            string              `json:"title"`
-	Category         string              `json:"category"`
-	Status           string              `json:"status"`
-	CurrentOwner     string              `json:"current_owner"`
-	ManagedByClashforge bool             `json:"managed_by_clashforge"`
-	Purpose          string              `json:"purpose"`
-	TakeoverEffect   string              `json:"takeover_effect"`
-	CurrentMode      string              `json:"current_mode,omitempty"`
-	RecommendedMode  string              `json:"recommended_mode,omitempty"`
-	TakeoverSupported bool               `json:"takeover_supported"`
-	Action           *overviewAction     `json:"action,omitempty"`
-	Processes        []overviewProcessRef `json:"processes,omitempty"`
-	Ports            []overviewPortOwner `json:"ports,omitempty"`
-	Notes            []string            `json:"notes,omitempty"`
+	ID                  string               `json:"id"`
+	Title               string               `json:"title"`
+	Category            string               `json:"category"`
+	Status              string               `json:"status"`
+	CurrentOwner        string               `json:"current_owner"`
+	ManagedByClashforge bool                 `json:"managed_by_clashforge"`
+	Purpose             string               `json:"purpose"`
+	TakeoverEffect      string               `json:"takeover_effect"`
+	CurrentMode         string               `json:"current_mode,omitempty"`
+	RecommendedMode     string               `json:"recommended_mode,omitempty"`
+	TakeoverSupported   bool                 `json:"takeover_supported"`
+	Action              *overviewAction      `json:"action,omitempty"`
+	Processes           []overviewProcessRef `json:"processes,omitempty"`
+	Ports               []overviewPortOwner  `json:"ports,omitempty"`
+	Notes               []string             `json:"notes,omitempty"`
 }
 
 type overviewInfluence struct {
@@ -195,13 +201,19 @@ type overviewTakeoverResponse struct {
 	Overview     overviewCoreData `json:"overview"`
 }
 
+type overviewReleaseResponse struct {
+	Updated  bool             `json:"updated"`
+	Message  string           `json:"message"`
+	Overview overviewCoreData `json:"overview"`
+}
+
 type procMetricsSample struct {
-	Ticks     uint64
+	Ticks      uint64
 	CPUPercent float64
-	RSSBytes  uint64
-	Uptime    int64
-	Command   string
-	Process   overviewProcessRef
+	RSSBytes   uint64
+	Uptime     int64
+	Command    string
+	Process    overviewProcessRef
 }
 
 type listeningPort struct {
@@ -335,6 +347,11 @@ func handleTakeoverOverviewModule(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
+		if err := ensureTakeoverAllowed(deps, req.Module); err != nil {
+			Err(w, http.StatusConflict, "OVERVIEW_ACTION_BLOCKED", err.Error())
+			return
+		}
+
 		stopped, err := stopAllowedServices(req.StopServices)
 		if err != nil {
 			Err(w, http.StatusInternalServerError, "OVERVIEW_ACTION_STOP_FAILED", err.Error())
@@ -369,6 +386,22 @@ func handleTakeoverOverviewModule(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+func handleReleaseOverviewTakeover(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		message, err := releaseAllTakeover(deps)
+		if err != nil {
+			Err(w, http.StatusInternalServerError, "OVERVIEW_RELEASE_FAILED", err.Error())
+			return
+		}
+
+		JSON(w, http.StatusOK, overviewReleaseResponse{
+			Updated:  true,
+			Message:  message,
+			Overview: buildOverviewCoreData(deps),
+		})
+	}
+}
+
 func buildOverviewData(deps Dependencies) overviewData {
 	listeners := listListeningPorts()
 	coreStatus := deps.Core.Status()
@@ -380,8 +413,8 @@ func buildOverviewData(deps Dependencies) overviewData {
 	summary := buildOverviewSummary(coreStatus, modules, influences)
 
 	return overviewData{
-		CheckedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary:     summary,
+		CheckedAt:    time.Now().UTC().Format(time.RFC3339),
+		Summary:      summary,
 		Resources:    resources,
 		IPChecks:     ipChecks,
 		AccessChecks: accessChecks,
@@ -512,7 +545,9 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 	nftTables := listNFTTables()
 	dnsPortOwners := selectPortOwners(listeners, 53, deps.Config.Ports.DNS)
 	proxyPortOwners := selectPortOwners(listeners, 7890, 7891, 7892, 7893, 7895, deps.Config.Ports.HTTP, deps.Config.Ports.SOCKS, deps.Config.Ports.Redir, deps.Config.Ports.Mixed, deps.Config.Ports.TProxy, deps.Config.Ports.MihomoAPI)
-	clashforgeOwned := deps.Netfilter != nil && deps.Netfilter.IsApplied()
+	// IsApplied() is in-memory only; also check the actual kernel table so status
+	// survives process restarts when rules were previously applied.
+	clashforgeOwned := deps.Netfilter != nil && (deps.Netfilter.IsApplied() || nftTablePresent())
 	dnsManaged := deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none"
 	dnsListenerReady := isDNSPortListening(deps.Config.Ports.DNS)
 	stopTargets := collectStopServices(influences, "transparent_proxy", "nft_firewall")
@@ -540,8 +575,8 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 			Purpose:             "Mihomo 是 ClashForge 的代理引擎，负责规则匹配、出站代理、延迟测试和 API 控制。",
 			TakeoverEffect:      "核心运行后，HTTP / SOCKS / Mixed / TProxy 等能力才能真正提供给局域网设备和控制面板。",
 			TakeoverSupported:   false,
-			Processes: []overviewProcessRef{{PID: coreStatus.PID, Name: "mihomo", Command: deps.Core.Status().Binary}},
-			Notes: []string{fmt.Sprintf("运行时长 %ds", coreStatus.Uptime)},
+			Processes:           []overviewProcessRef{{PID: coreStatus.PID, Name: "mihomo", Command: deps.Core.Status().Binary}},
+			Notes:               []string{fmt.Sprintf("运行时长 %ds", coreStatus.Uptime)},
 		},
 		{
 			ID:                  "transparent_proxy",
@@ -558,13 +593,13 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 			Action:              moduleAction("transparent_proxy", clashforgeOwned, recommendedNetworkMode(deps.Config.Network.Mode), stopTargets),
 			Ports:               proxyPortOwners,
 			Processes:           processRefsForModule(influences, "transparent_proxy"),
-			Notes: []string{fmt.Sprintf("当前启动接管=%t", deps.Config.Network.ApplyOnStart), "如果已有其他代理服务占用 789x 端口或安装了自己的 NFT 规则，接管前应先停掉它。"},
+			Notes:               []string{fmt.Sprintf("当前启动接管=%t", deps.Config.Network.ApplyOnStart), "如果已有其他代理服务占用 789x 端口或安装了自己的 NFT 规则，接管前应先停掉它。"},
 		},
 		{
 			ID:                  "nft_firewall",
 			Title:               "NFT / 防火墙",
 			Category:            "接管模块",
-			Status:              moduleStatus(clashforgeOwned && nftTablePresent(), len(nftTables) > 0),
+			Status:              moduleStatus(clashforgeOwned && nftTablePresent(), hasConflictingNFTTables(nftTables)),
 			CurrentOwner:        nftOwner,
 			ManagedByClashforge: clashforgeOwned && nftTablePresent(),
 			Purpose:             "NFT / iptables 是透明代理真正落地的内核规则层，负责把 53、TCP、UDP 流量重定向到 ClashForge。",
@@ -572,7 +607,7 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 			CurrentMode:         actualNetfilterBackend(deps),
 			RecommendedMode:     actualNetfilterBackend(deps),
 			TakeoverSupported:   true,
-			Action:              moduleAction("nft_firewall", clashforgeOwned && nftTablePresent(), recommendedNetworkMode(deps.Config.Network.Mode), stopTargets),
+			Action:              moduleAction("nft_firewall", clashforgeOwned && nftTablePresent(), actualNetfilterBackend(deps), stopTargets),
 			Processes:           processRefsForModule(influences, "nft_firewall"),
 			Notes:               append([]string{fmt.Sprintf("检测到的 nftables 表: %s", strings.Join(nftTables, ", "))}, firewallNotes(nftTables)...),
 		},
@@ -591,7 +626,7 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 			Action:              moduleAction("dns_entry", dnsManaged, recommendedDNSMode(deps.Config.DNS.DnsmasqMode), dnsStopTargets),
 			Ports:               dnsPortOwners,
 			Processes:           processRefsForModule(influences, "dns_entry"),
-			Notes: []string{fmt.Sprintf("当前启动接管=%t", deps.Config.DNS.ApplyOnStart), "replace 模式会让 Mihomo 直接接管 DNS；upstream 模式保留 dnsmasq，只把上游切到 ClashForge。"},
+			Notes:               []string{fmt.Sprintf("当前启动接管=%t", deps.Config.DNS.ApplyOnStart), "replace 模式会让 Mihomo 直接接管 DNS；upstream 模式保留 dnsmasq，只把上游切到 ClashForge。"},
 		},
 		{
 			ID:                  "dns_resolver",
@@ -694,36 +729,42 @@ func buildAppStorage(deps Dependencies) overviewAppStorage {
 
 	total := runtimeSize + dataSize + binarySize + rulesSize
 	return overviewAppStorage{
-		RuntimeMB: bytesToMB(runtimeSize),
-		DataMB:    bytesToMB(dataSize),
-		BinaryMB:  bytesToMB(binarySize),
-		RulesMB:   bytesToMB(rulesSize),
-		TotalMB:   bytesToMB(total),
+		RuntimeMB:  bytesToMB(runtimeSize),
+		DataMB:     bytesToMB(dataSize),
+		BinaryMB:   bytesToMB(binarySize),
+		RulesMB:    bytesToMB(rulesSize),
+		TotalMB:    bytesToMB(total),
 		RuleAssets: ruleAssets,
 	}
 }
 
 func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 	providers := []struct {
-		Name string
-		URL  string
+		Name  string
+		Group string
+		URL   string
+		GBK   bool
 	}{
-		{Name: "IP.SB", URL: "https://api.ip.sb/geoip"},
-		{Name: "IPIFY", URL: "https://api.ipify.org?format=json"},
-		{Name: "IPAPI", URL: "https://ipapi.co/json/"},
-		{Name: "IPInfo", URL: "https://ipinfo.io/json"},
+		{Name: "太平洋", Group: "国内", URL: "https://whois.pconline.com.cn/ipJson.jsp?json=true", GBK: true},
+		{Name: "UpaiYun", Group: "国内", URL: "https://pubstatic.b0.upaiyun.com/?_upnode"},
+		{Name: "IP.SB", Group: "国外", URL: "https://api.ip.sb/geoip"},
+		{Name: "IPInfo", Group: "国外", URL: "https://ipinfo.io/json"},
 	}
 	result := make([]overviewIPCheck, len(providers))
 	var wg sync.WaitGroup
 	for index, provider := range providers {
 		wg.Add(1)
-		go func(i int, spec struct{ Name, URL string }) {
+		go func(i int, spec struct {
+			Name, Group, URL string
+			GBK              bool
+		}) {
 			defer wg.Done()
-			check, err := fetchIPCheck(deps, spec.Name, spec.URL)
+			check, err := fetchIPCheck(deps, spec.Name, spec.URL, spec.GBK)
 			if err != nil {
-				result[i] = overviewIPCheck{Provider: spec.Name, OK: false, Error: err.Error()}
+				result[i] = overviewIPCheck{Provider: spec.Name, Group: spec.Group, OK: false, Error: err.Error()}
 				return
 			}
+			check.Group = spec.Group
 			result[i] = check
 		}(index, provider)
 	}
@@ -734,19 +775,24 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 	targets := []struct {
 		Name        string
+		Group       string
 		URL         string
 		Description string
 	}{
-		{Name: "百度搜索", URL: "https://www.baidu.com", Description: "用于观察国内直连站点是否可达。"},
-		{Name: "网易云音乐", URL: "https://music.163.com", Description: "用于观察常见国内内容站点延迟。"},
-		{Name: "GitHub", URL: "https://github.com", Description: "用于观察国际开发站点的代理访问效果。"},
-		{Name: "YouTube", URL: "https://www.youtube.com", Description: "用于观察常见国际流媒体站点是否已能通过 ClashForge 访问。"},
+		{Name: "淘宝", Group: "国内", URL: "https://www.taobao.com", Description: "用于验证国内主要电商平台的直连可达性。"},
+		{Name: "网易云音乐", Group: "国内", URL: "https://music.163.com", Description: "用于验证国内常见内容站点延迟。"},
+		{Name: "GitHub", Group: "国外", URL: "https://github.com", Description: "用于验证国际开发站点的代理访问效果。"},
+		{Name: "Google", Group: "国外", URL: "https://www.google.com", Description: "用于验证 Google 搜索是否可通过代理访问。"},
+		{Name: "OpenAI", Group: "AI", URL: "https://chat.openai.com", Description: "用于验证 ChatGPT / OpenAI 是否可通过代理访问。"},
+		{Name: "Claude", Group: "AI", URL: "https://claude.ai", Description: "用于验证 Claude AI 是否可通过代理访问。"},
+		{Name: "Gemini", Group: "AI", URL: "https://gemini.google.com", Description: "用于验证 Google Gemini 是否可通过代理访问。"},
 	}
 	checks := make([]overviewAccessCheck, 0, len(targets))
 	for _, target := range targets {
-		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL)
+		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
 		checks = append(checks, overviewAccessCheck{
 			Name:        target.Name,
+			Group:       target.Group,
 			URL:         target.URL,
 			Description: target.Description,
 			Via:         fmt.Sprintf("通过 ClashForge mixed 端口 %d 检查", deps.Config.Ports.Mixed),
@@ -759,8 +805,8 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 	return checks
 }
 
-func fetchIPCheck(deps Dependencies, provider, rawURL string) (overviewIPCheck, error) {
-	client := overviewProxyClient(deps.Config.Ports.Mixed, 6*time.Second)
+func fetchIPCheck(deps Dependencies, provider, rawURL string, gbk bool) (overviewIPCheck, error) {
+	client := overviewProxyClient(deps.Config.Ports.Mixed, deps.Config.Core.RuntimeDir, 6*time.Second)
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return overviewIPCheck{}, err
@@ -775,6 +821,13 @@ func fetchIPCheck(deps Dependencies, provider, rawURL string) (overviewIPCheck, 
 	if err != nil {
 		return overviewIPCheck{}, err
 	}
+	// Decode GBK to UTF-8 if needed (e.g. pconline)
+	if gbk {
+		decoded, _, decErr := transform.Bytes(simplifiedchinese.GBK.NewDecoder(), body)
+		if decErr == nil {
+			body = decoded
+		}
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err == nil {
 		ip, location := extractIPLocation(payload)
@@ -784,19 +837,46 @@ func fetchIPCheck(deps Dependencies, provider, rawURL string) (overviewIPCheck, 
 		return overviewIPCheck{Provider: provider, OK: true, IP: ip, Location: location}, nil
 	}
 
-	reader := bufio.NewReader(strings.NewReader(string(body)))
-	line, err := reader.ReadString('\n')
-	if err != nil && strings.TrimSpace(line) == "" {
-		return overviewIPCheck{}, err
+	// Plain-text fallback — handles IPIP.NET format:
+	// "当前 IP：1.2.3.4 来自于：中国 北京 ..."
+	text := strings.TrimSpace(string(body))
+	if strings.Contains(text, "当前 IP：") {
+		parts := strings.SplitN(text, "当前 IP：", 2)
+		if len(parts) == 2 {
+			rest := parts[1]
+			location := ""
+			if idx := strings.Index(rest, " 来自于："); idx != -1 {
+				location = strings.TrimSpace(rest[idx+len(" 来自于："):])
+				rest = strings.TrimSpace(rest[:idx])
+			}
+			if rest != "" {
+				return overviewIPCheck{Provider: provider, OK: true, IP: rest, Location: location}, nil
+			}
+		}
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
+	// Generic single-line plain IP
+	if text == "" {
 		return overviewIPCheck{}, fmt.Errorf("provider returned empty response")
 	}
-	return overviewIPCheck{Provider: provider, OK: true, IP: line}, nil
+	return overviewIPCheck{Provider: provider, OK: true, IP: text}, nil
 }
 
 func extractIPLocation(payload map[string]any) (string, string) {
+	// Handle UpaiYun format: {"remote_addr":"...","remote_addr_location":{"country":"中国","province":"北京","city":"北京","isp":"电信"}}
+	if ra, ok := payload["remote_addr"].(string); ok && strings.TrimSpace(ra) != "" {
+		location := ""
+		if loc, ok := payload["remote_addr_location"].(map[string]any); ok {
+			parts := make([]string, 0, 4)
+			for _, key := range []string{"country", "province", "city", "isp"} {
+				if v, ok := loc[key].(string); ok && strings.TrimSpace(v) != "" {
+					parts = append(parts, strings.TrimSpace(v))
+				}
+			}
+			location = strings.Join(parts, " · ")
+		}
+		return ra, location
+	}
+
 	stringValue := func(keys ...string) string {
 		for _, key := range keys {
 			if value, ok := payload[key]; ok {
@@ -807,8 +887,20 @@ func extractIPLocation(payload map[string]any) (string, string) {
 		}
 		return ""
 	}
+	// pconline: {"ip":"...","pro":"北京市","city":"北京市","addr":"北京市 联通","err":""}
+	// ip.sb:    {"ip":"...","country":"China","city":"Beijing","isp":"..."}
+	// ipinfo.io: {"ip":"...","city":"...","region":"...","org":"..."}
 	ip := stringValue("ip", "query")
-	parts := []string{stringValue("city"), stringValue("region", "region_name"), stringValue("country_name", "country"), stringValue("organization", "org")}
+	// pconline provides a pre-formatted "addr" field — use it directly
+	if addr := stringValue("addr"); addr != "" && stringValue("pro") != "" {
+		return ip, addr
+	}
+	parts := []string{
+		stringValue("city"),
+		stringValue("pro", "region", "regionName", "region_name"),
+		stringValue("country_name", "country"),
+		stringValue("isp", "organization", "org"),
+	}
 	filtered := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part != "" {
@@ -818,12 +910,52 @@ func extractIPLocation(payload map[string]any) (string, string) {
 	return ip, strings.Join(filtered, " · ")
 }
 
-func overviewProxyClient(port int, timeout time.Duration) *http.Client {
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+// readMihomoProxyCreds reads the first authentication entry from the generated
+// mihomo config (format "user:pass") so that internal probe clients can
+// authenticate against the mixed/http ports when authentication is configured.
+func readMihomoProxyCreds(runtimeDir string) (user, pass string) {
+	path := runtimeDir + "/mihomo-config.yaml"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var parsed struct {
+		Authentication []string `yaml:"authentication"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return
+	}
+	if len(parsed.Authentication) == 0 {
+		return
+	}
+	parts := strings.SplitN(parsed.Authentication[0], ":", 2)
+	if len(parts) == 2 {
+		user, pass = parts[0], parts[1]
+	}
+	return
+}
+
+// mihomoProxyURL builds http://[user:pass@]127.0.0.1:port — credentials are
+// injected only when the generated mihomo config has authentication set.
+func mihomoProxyURL(port int, runtimeDir string) *url.URL {
+	u := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("127.0.0.1:%d", port),
+	}
+	if runtimeDir != "" {
+		user, pass := readMihomoProxyCreds(runtimeDir)
+		if user != "" {
+			u.User = url.UserPassword(user, pass)
+		}
+	}
+	return u
+}
+
+func overviewProxyClient(port int, runtimeDir string, timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+			Proxy: http.ProxyURL(mihomoProxyURL(port, runtimeDir)),
 		},
 	}
 }
@@ -903,7 +1035,8 @@ func collectStopServices(influences []overviewInfluence, modules ...string) []st
 }
 
 func detectTransparentProxyOwner(deps Dependencies, nftTables []string, owners []overviewPortOwner, influences []overviewInfluence) string {
-	if deps.Netfilter != nil && deps.Netfilter.IsApplied() {
+	// Check in-memory flag first, then fall back to kernel table presence.
+	if deps.Netfilter != nil && (deps.Netfilter.IsApplied() || nftTablePresent()) {
 		return "ClashForge"
 	}
 	for _, influence := range influences {
@@ -911,17 +1044,24 @@ func detectTransparentProxyOwner(deps Dependencies, nftTables []string, owners [
 			return influence.Name
 		}
 	}
-	if len(owners) > 0 {
-		return owners[0].Owner
+	// Mihomo is ClashForge's own subprocess – listening on proxy ports is expected
+	// and should not be reported as a conflicting owner of transparent proxy.
+	for _, owner := range owners {
+		lower := strings.ToLower(owner.Owner)
+		if strings.Contains(lower, "mihomo") || strings.Contains(lower, "clashforg") {
+			continue
+		}
+		return owner.Owner
 	}
-	if len(nftTables) > 0 {
+	if hasConflictingNFTTables(nftTables) {
 		return "系统防火墙 / 其他 nft 规则"
 	}
 	return "无人接管"
 }
 
 func detectNFTFirewallOwner(deps Dependencies, nftTables []string) string {
-	if deps.Netfilter != nil && deps.Netfilter.IsApplied() && nftTablePresent() {
+	// Also check kernel table so ownership is detected after process restarts.
+	if nftTablePresent() {
 		return "ClashForge"
 	}
 	if len(nftTables) == 0 {
@@ -935,13 +1075,33 @@ func detectNFTFirewallOwner(deps Dependencies, nftTables []string) string {
 			owners = append(owners, "ClashForge")
 		case strings.Contains(lower, "openclash"):
 			owners = append(owners, "OpenClash")
-		case strings.Contains(lower, "fw4"):
-			owners = append(owners, "系统防火墙")
+		case strings.Contains(lower, "fw4"), strings.Contains(lower, "dnsmasq"):
+			// System-default OpenWrt tables – not a conflict with ClashForge.
+			continue
 		default:
 			owners = append(owners, table)
 		}
 	}
+	if len(owners) == 0 {
+		return "系统防火墙（正常）"
+	}
 	return strings.Join(dedupeStrings(owners), " / ")
+}
+
+// hasConflictingNFTTables returns true only if there are nftables tables that
+// would genuinely compete with ClashForge. System-default OpenWrt tables
+// (fw4, dnsmasq) and ClashForge's own metaclash table are excluded.
+func hasConflictingNFTTables(tables []string) bool {
+	for _, t := range tables {
+		lower := strings.ToLower(t)
+		if strings.Contains(lower, "fw4") ||
+			strings.Contains(lower, "dnsmasq") ||
+			strings.Contains(lower, "metaclash") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func detectDNSEntryOwner(deps Dependencies, owners []overviewPortOwner, influences []overviewInfluence) string {
@@ -1022,6 +1182,43 @@ func processRefsForModule(influences []overviewInfluence, module string) []overv
 	return dedupeProcessRefs(refs)
 }
 
+func ensureTakeoverAllowed(deps Dependencies, module string) error {
+	switch module {
+	case "transparent_proxy", "nft_firewall", "dns_entry", "dns_resolver", "all":
+	default:
+		return nil
+	}
+
+	if !deps.Core.Status().Ready {
+		return fmt.Errorf("核心尚未健康运行，无法接管系统服务；请先启动核心")
+	}
+
+	if (module == "dns_entry" || module == "dns_resolver") && !deps.Config.DNS.Enable {
+		return fmt.Errorf("当前 dns.enable=false，未启用 DNS 引擎；请先在配置中启用 DNS 再执行 DNS 接管")
+	}
+
+	return nil
+}
+
+func anyIPCheckOK(checks []overviewIPCheck) bool {
+	for _, check := range checks {
+		if check.OK {
+			return true
+		}
+	}
+	return false
+}
+
+func failedAccessCheckNames(checks []overviewAccessCheck) []string {
+	failed := make([]string, 0)
+	for _, check := range checks {
+		if !check.OK {
+			failed = append(failed, check.Name)
+		}
+	}
+	return failed
+}
+
 func takeoverTransparentProxy(deps Dependencies, mode string) (string, bool, error) {
 	if mode == "" {
 		mode = recommendedNetworkMode(deps.Config.Network.Mode)
@@ -1045,11 +1242,14 @@ func takeoverTransparentProxy(deps Dependencies, mode string) (string, bool, err
 }
 
 func takeoverDNS(deps Dependencies, mode string) (string, bool, error) {
+	if !deps.Config.DNS.Enable {
+		return "", false, fmt.Errorf("dns.enable=false，当前配置未启用 DNS；请先在配置中启用 DNS")
+	}
+
 	oldMode := dns.DnsmasqMode(deps.Config.DNS.DnsmasqMode)
 	if mode == "" {
 		mode = recommendedDNSMode(deps.Config.DNS.DnsmasqMode)
 	}
-	deps.Config.DNS.Enable = true
 	deps.Config.DNS.ApplyOnStart = true
 	deps.Config.DNS.DnsmasqMode = mode
 	if err := saveRuntimeConfig(deps); err != nil {
@@ -1081,15 +1281,17 @@ func takeoverAll(deps Dependencies) (string, bool, error) {
 	networkMode := recommendedNetworkMode(deps.Config.Network.Mode)
 	dnsMode := recommendedDNSMode(deps.Config.DNS.DnsmasqMode)
 	oldDNSMode := dns.DnsmasqMode(deps.Config.DNS.DnsmasqMode)
+	dnsEnabled := deps.Config.DNS.Enable
 
 	deps.Config.Network.Mode = networkMode
 	deps.Config.Network.ApplyOnStart = true
 	if deps.Config.Network.FirewallBackend == "none" || strings.TrimSpace(deps.Config.Network.FirewallBackend) == "" {
 		deps.Config.Network.FirewallBackend = "auto"
 	}
-	deps.Config.DNS.Enable = true
-	deps.Config.DNS.ApplyOnStart = true
-	deps.Config.DNS.DnsmasqMode = dnsMode
+	if dnsEnabled {
+		deps.Config.DNS.ApplyOnStart = true
+		deps.Config.DNS.DnsmasqMode = dnsMode
+	}
 
 	if err := saveRuntimeConfig(deps); err != nil {
 		return "", false, err
@@ -1104,7 +1306,7 @@ func takeoverAll(deps Dependencies) (string, bool, error) {
 	defer cancel()
 
 	if coreWasRunning {
-		if oldDNSMode != dns.ModeNone {
+		if dnsEnabled && oldDNSMode != dns.ModeNone {
 			_ = dns.Restore(oldDNSMode)
 		}
 		if err := deps.Core.Restart(ctx); err != nil {
@@ -1116,8 +1318,10 @@ func takeoverAll(deps Dependencies) (string, bool, error) {
 		}
 	}
 
-	if err := dns.Setup(dns.DnsmasqMode(dnsMode), deps.Config.Ports.DNS); err != nil {
-		return "", false, err
+	if dnsEnabled {
+		if err := dns.Setup(dns.DnsmasqMode(dnsMode), deps.Config.Ports.DNS); err != nil {
+			return "", false, err
+		}
 	}
 	if deps.Netfilter != nil {
 		if err := deps.Netfilter.Apply(); err != nil {
@@ -1125,7 +1329,46 @@ func takeoverAll(deps Dependencies) (string, bool, error) {
 		}
 	}
 
+	if !dnsEnabled {
+		return "核心已启动，并已尝试接管透明代理与 NFT 防火墙；当前 dns.enable=false，已跳过 DNS 接管", false, nil
+	}
+
 	return "核心已启动，并已尝试接管透明代理、NFT 防火墙与 DNS 子模块", false, nil
+}
+
+func releaseAllTakeover(deps Dependencies) (string, error) {
+	// Keep core running and only release system-level takeover modules.
+	if deps.Config != nil {
+		deps.Config.Network.ApplyOnStart = false
+		deps.Config.DNS.ApplyOnStart = false
+		if err := saveRuntimeConfig(deps); err != nil {
+			return "", err
+		}
+	}
+
+	if deps.Netfilter != nil {
+		_ = deps.Netfilter.Cleanup()
+	}
+
+	// Force cleanup even if manager state is out of sync.
+	_ = (&netfilter.NftablesBackend{}).Cleanup()
+	for _, dnsPort := range dedupeInts([]int{deps.Config.Ports.DNS, 17874, 7874}) {
+		if dnsPort <= 0 {
+			continue
+		}
+		_ = (&netfilter.IptablesBackend{DNSPort: dnsPort}).Cleanup()
+	}
+
+	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
+		if err := dns.Restore(mode); err != nil {
+			return "", err
+		}
+	}
+
+	if deps.Core.Status().Ready {
+		return "已停止 ClashForge 对系统模块的接管（DNS / NFT / 透明代理），核心保持运行", nil
+	}
+	return "已停止 ClashForge 对系统模块的接管，核心当前未运行", nil
 }
 
 func saveRuntimeConfig(deps Dependencies) error {
@@ -1140,12 +1383,36 @@ func refreshNetfilterManager(deps Dependencies) {
 		return
 	}
 	*deps.Netfilter = *netfilter.NewManager(netfilter.Config{
-		Mode:            deps.Config.Network.Mode,
-		FirewallBackend: deps.Config.Network.FirewallBackend,
-		TProxyPort:      deps.Config.Ports.TProxy,
-		DNSPort:         deps.Config.Ports.DNS,
-		BypassCIDR:      deps.Config.Network.BypassCIDR,
+		Mode:              deps.Config.Network.Mode,
+		FirewallBackend:   deps.Config.Network.FirewallBackend,
+		TProxyPort:        deps.Config.Ports.TProxy,
+		DNSPort:           deps.Config.Ports.DNS,
+		EnableDNSRedirect: shouldRedirectDNS(deps.Config),
+		BypassFakeIP:      shouldBypassFakeIP(deps.Config),
+		BypassCIDR:        deps.Config.Network.BypassCIDR,
 	})
+}
+
+func shouldRedirectDNS(cfg *config.MetaclashConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart {
+		return false
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.DNS.DnsmasqMode))
+	return mode != "none"
+}
+
+func shouldBypassFakeIP(cfg *config.MetaclashConfig) bool {
+	if cfg == nil {
+		return true
+	}
+	if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart {
+		return true
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.DNS.Mode))
+	return mode != "fake-ip"
 }
 
 func stopAllowedServices(requested []string) ([]string, error) {
@@ -1626,7 +1893,7 @@ func round1(value float64) float64 {
 
 func mathRound(value float64) float64 {
 	if value < 0 {
-		return float64(int64(value-0.5))
+		return float64(int64(value - 0.5))
 	}
 	return float64(int64(value + 0.5))
 }
@@ -1636,4 +1903,17 @@ func maxInt64(value int64, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+func dedupeInts(items []int) []int {
+	seen := make(map[int]bool)
+	result := make([]int, 0, len(items))
+	for _, item := range items {
+		if seen[item] {
+			continue
+		}
+		seen[item] = true
+		result = append(result, item)
+	}
+	return result
 }

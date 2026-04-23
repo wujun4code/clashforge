@@ -13,3 +13,13 @@ testdata/private/
 *.prof
 coverage.out
 internal/api/ui_dist/
+
+# Local packaging artifacts
+/*.ipk
+/data.tar.gz
+/control.tar.gz
+/debian-binary
+/ipk/
+/control
+/control.extracted
+/dist/

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"gopkg.in/yaml.v3"
@@ -21,7 +22,7 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	out["allow-lan"] = cfg.Security.AllowLAN
 	out["bind-address"] = "*"
 	out["mode"] = "rule"
-	out["log-level"] = cfg.Log.Level
+	out["log-level"] = normalizeMihomoLogLevel(cfg.Log.Level)
 	out["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
 	out["unified-delay"] = true
 	out["tcp-concurrent"] = true
@@ -88,9 +89,9 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 
 	out["proxy-groups"] = []map[string]interface{}{
 		{
-			"name":     "Proxy",
-			"type":     "select",
-			"proxies":  selectProxies,
+			"name":    "Proxy",
+			"type":    "select",
+			"proxies": selectProxies,
 		},
 		{
 			"name":      "Auto",
@@ -129,6 +130,18 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	return out, nil
 }
 
+func normalizeMihomoLogLevel(level string) string {
+	level = strings.ToLower(strings.TrimSpace(level))
+	switch level {
+	case "debug", "info", "warning", "error", "silent":
+		return level
+	case "warn":
+		return "warning"
+	default:
+		return "info"
+	}
+}
+
 // ApplyManagedRuntimeSettings rewrites runtime-owned fields after overrides merge.
 // This keeps legacy overrides from stealing managed ports or re-enabling DNS with stale values.
 func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interface{}) map[string]interface{} {
@@ -136,12 +149,21 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 		merged = map[string]interface{}{}
 	}
 
+	// Prevent legacy/OpenClash UI overrides from injecting unsafe local paths
+	// (for example /usr/share/openclash/ui) that violate Mihomo SAFE_PATHS.
+	delete(merged, "external-ui")
+	delete(merged, "external-ui-name")
+	delete(merged, "external-ui-url")
+
 	merged["port"] = cfg.Ports.HTTP
 	merged["socks-port"] = cfg.Ports.SOCKS
 	merged["mixed-port"] = cfg.Ports.Mixed
 	merged["redir-port"] = cfg.Ports.Redir
 	merged["tproxy-port"] = cfg.Ports.TProxy
 	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
+	// ClashForge owns the mihomo API endpoint (localhost-only); strip any secret
+	// the user may have imported so our proxy handler can always reach it unauthenticated.
+	delete(merged, "secret")
 
 	if !cfg.DNS.Enable {
 		delete(merged, "dns")

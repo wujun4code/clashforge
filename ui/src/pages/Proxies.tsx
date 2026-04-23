@@ -112,7 +112,7 @@ export function Proxies() {
   const [testing, setTesting] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  const refresh = () => getProxies().then(d => { setProxies(d.proxies); setLoading(false) }).catch(() => setLoading(false))
+  const refresh = () => getProxies().then(d => { setProxies(d.proxies ?? {}); setLoading(false) }).catch(() => setLoading(false))
   useEffect(() => { refresh() }, [])
 
   const groups = Object.entries(proxies)

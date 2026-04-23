@@ -29,8 +29,8 @@ func TestGenerate_BasicStructure(t *testing.T) {
 		}
 	}
 
-	if result["port"] != 7890 {
-		t.Errorf("expected port=7890, got %v", result["port"])
+	if result["port"] != cfg.Ports.HTTP {
+		t.Errorf("expected port=%d, got %v", cfg.Ports.HTTP, result["port"])
 	}
 	if result["mode"] != "rule" {
 		t.Errorf("expected mode=rule, got %v", result["mode"])
@@ -164,5 +164,33 @@ func TestGenerate_NoBypassChina(t *testing.T) {
 		if r == "GEOSITE,cn,DIRECT" {
 			t.Error("GEOSITE,cn,DIRECT should NOT be present when bypass_china=false")
 		}
+	}
+}
+
+func TestGenerate_LogLevelWarnAlias(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Log.Level = "warn"
+
+	result, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if result["log-level"] != "warning" {
+		t.Fatalf("expected log-level=warning, got %v", result["log-level"])
+	}
+}
+
+func TestGenerate_LogLevelFallback(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Log.Level = "nope"
+
+	result, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if result["log-level"] != "info" {
+		t.Fatalf("expected log-level=info, got %v", result["log-level"])
 	}
 }

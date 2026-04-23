@@ -143,6 +143,7 @@ export interface OverviewRuleAsset {
 
 export interface OverviewIPCheck {
   provider: string
+  group?: string
   ok: boolean
   ip?: string
   location?: string
@@ -151,6 +152,7 @@ export interface OverviewIPCheck {
 
 export interface OverviewAccessCheck {
   name: string
+  group?: string
   url: string
   description: string
   via: string
@@ -257,6 +259,12 @@ export interface OverviewTakeoverResponse {
   overview: OverviewCoreData
 }
 
+export interface OverviewReleaseResponse {
+  updated: boolean
+  message: string
+  overview: OverviewCoreData
+}
+
 export interface ProxyNode {
   name: string; type: string; server?: string; port?: number
   history?: { time: string; delay: number }[]
@@ -289,6 +297,7 @@ export const getOverviewProbes = () => request<OverviewProbeData>('GET', '/overv
 export const getOverviewResources = () => request<OverviewResourceData>('GET', '/overview/resources')
 export const getHealthCheck   = (target?: string) => request<HealthCheckData>('GET', `/health/check${target ? `?target=${encodeURIComponent(target)}` : ''}`)
 export const takeoverOverviewModule = (payload: { module: string; mode?: string; stop_services?: string[] }) => request<OverviewTakeoverResponse>('POST', '/overview/takeover', payload)
+export const releaseOverviewTakeover = () => request<OverviewReleaseResponse>('POST', '/overview/release')
 export const startCore        = () => request('POST', '/core/start')
 export const stopCore         = () => request('POST', '/core/stop')
 export const restartCore      = () => request('POST', '/core/restart')
@@ -323,6 +332,8 @@ export const updateConfig     = (p: Record<string,unknown>) => request('PUT', '/
 export const getOverrides     = () => request<{content:string}>('GET', '/config/overrides')
 export const updateOverrides  = (content: string) => request('PUT', '/config/overrides', { content })
 export const generateConfig   = () => request<{generated: boolean; config_file: string}>('POST', '/config/generate')
+export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/mihomo')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
+export const enableService    = () => request<{enabled: boolean}>('POST', '/service/enable')
 
 export interface LogEntry { level: string; msg: string; ts: number }

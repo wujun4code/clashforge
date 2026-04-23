@@ -225,6 +225,10 @@ jobs:
           cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge
           chmod 755 ipk/etc/init.d/clashforge
 
+          # one-click uninstall helper
+          cp openwrt/files/etc/metaclash/uninstall-clashforge.sh ipk/usr/bin/uninstall-clashforge
+          chmod 755 ipk/usr/bin/uninstall-clashforge
+
           # control file
           MIHOMO_VER=$(/tmp/mihomo -v 2>&1 | grep -o 'v[0-9][^ ]*' | head -1 || echo 'unknown')
           cat > ipk/CONTROL/control << EOF
@@ -250,6 +254,9 @@ jobs:
 
           cp openwrt/files/etc/metaclash/prerm.sh ipk/CONTROL/prerm
           chmod 755 ipk/CONTROL/prerm
+
+          cp openwrt/files/etc/metaclash/postrm.sh ipk/CONTROL/postrm
+          chmod 755 ipk/CONTROL/postrm
 
           # Build the IPK using the dedicated packaging script
           python3 scripts/build_ipk.py

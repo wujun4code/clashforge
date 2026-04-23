@@ -59,6 +59,18 @@ ClashForge 的目标不是再造一个代理内核，而是把 OpenWrt 上的 Mi
 opkg install clashforge_*.ipk
 ```
 
+可选：如需彻底删除 ClashForge，可使用一键卸载脚本：
+
+```sh
+uninstall-clashforge
+```
+
+如需保留配置与订阅数据：
+
+```sh
+uninstall-clashforge --keep-config
+```
+
 #### 2. 启动服务
 
 ```sh
@@ -179,6 +191,18 @@ Install on OpenWrt with:
 
 ```sh
 opkg install clashforge_*.ipk
+```
+
+Optional: use the one-click uninstall script for a full cleanup:
+
+```sh
+uninstall-clashforge
+```
+
+Keep config/subscription data if needed:
+
+```sh
+uninstall-clashforge --keep-config
 ```
 
 #### 2. Enable and start the service

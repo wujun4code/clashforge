@@ -13,6 +13,7 @@ Must be run from the directory containing the 'ipk/' staging tree.
 import os
 import sys
 import tarfile
+import io
 
 pkg_name = os.environ.get('PKG_NAME')
 if not pkg_name:
@@ -28,27 +29,65 @@ def make_tar_gz(out_path, base_dir, names):
             if not os.path.exists(full):
                 continue
 
-            def _filt(info):
+            normalized_name = name.replace('\\', '/').lstrip('./')
+
+            def _set_metadata(info):
                 info.uid = info.gid = 0
                 info.uname = info.gname = 'root'
                 info.mtime = 0
+
+                # Windows hosts don't preserve executable bits reliably; force modes.
+                if info.isdir():
+                    info.mode = 0o755
+                elif (
+                    normalized_name.startswith('usr/bin/')
+                    or normalized_name == 'etc/init.d/clashforge'
+                    or normalized_name in {'postinst', 'prerm', 'postrm'}
+                ):
+                    info.mode = 0o755
+                else:
+                    info.mode = 0o644
                 return info
 
-            tar.add(full, arcname=name, recursive=False, filter=_filt)
+            if os.path.isdir(full):
+                def _filt(info):
+                    return _set_metadata(info)
+
+                tar.add(full, arcname=name, recursive=False, filter=_filt)
+                continue
+
+            with open(full, 'rb') as fh:
+                payload = fh.read()
+
+            # Normalize line endings for shell/control metadata so OpenWrt parsing is stable.
+            if (
+                normalized_name in {'control', 'conffiles', 'postinst', 'prerm', 'postrm'}
+                or normalized_name.startswith('etc/init.d/')
+                or normalized_name == 'usr/bin/uninstall-clashforge'
+            ):
+                payload = payload.replace(b'\r\n', b'\n')
+                if payload and not payload.endswith(b'\n'):
+                    payload += b'\n'
+
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            info.type = tarfile.REGTYPE
+            _set_metadata(info)
+            tar.addfile(info, io.BytesIO(payload))
     print(f"  wrote {out_path} ({os.path.getsize(out_path):,} bytes)")
 
 
 # ── data.tar.gz — package contents ────────────────────────────────────────
 data_names = []
 for root, dirs, files in os.walk('ipk'):
-    rel_root = os.path.relpath(root, 'ipk')
+    rel_root = os.path.relpath(root, 'ipk').replace('\\', '/')
     if rel_root.startswith('CONTROL'):
         continue
     # Add the directory entry itself (needed for opkg to create parent dirs)
     if rel_root != '.':
         data_names.append(rel_root)
     for f in files:
-        p = os.path.join(rel_root, f) if rel_root != '.' else f
+        p = f if rel_root == '.' else f'{rel_root}/{f}'
         data_names.append(p)
 
 make_tar_gz('data.tar.gz', 'ipk', data_names)

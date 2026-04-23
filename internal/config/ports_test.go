@@ -60,6 +60,9 @@ func TestApplyManagedRuntimeSettingsOverridesLegacyPorts(t *testing.T) {
 		"redir-port":          7892,
 		"tproxy-port":         7895,
 		"external-controller": "0.0.0.0:9090",
+		"external-ui":         "/usr/share/openclash/ui",
+		"external-ui-name":    "metacubexd",
+		"external-ui-url":     "https://example.com/ui.zip",
 		"dns": map[string]interface{}{
 			"enable": true,
 			"listen": "0.0.0.0:7874",
@@ -72,6 +75,15 @@ func TestApplyManagedRuntimeSettingsOverridesLegacyPorts(t *testing.T) {
 	}
 	if result["external-controller"] != "127.0.0.1:19090" {
 		t.Fatalf("expected external-controller to be normalized, got %v", result["external-controller"])
+	}
+	if _, ok := result["external-ui"]; ok {
+		t.Fatalf("expected external-ui to be stripped")
+	}
+	if _, ok := result["external-ui-name"]; ok {
+		t.Fatalf("expected external-ui-name to be stripped")
+	}
+	if _, ok := result["external-ui-url"]; ok {
+		t.Fatalf("expected external-ui-url to be stripped")
 	}
 	dnsMap, ok := result["dns"].(map[string]interface{})
 	if !ok {

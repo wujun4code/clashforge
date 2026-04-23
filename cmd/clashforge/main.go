@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,6 +25,7 @@ import (
 )
 
 const version = "0.1.0-dev"
+
 var buildVersion = version // overridden by ldflags: -X main.buildVersion=v1.0.0
 
 func main() {
@@ -82,18 +84,25 @@ func main() {
 	}
 
 	// Netfilter
+	dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
 	nfManager := netfilter.NewManager(netfilter.Config{
-		Mode:            cfg.Network.Mode,
-		FirewallBackend: cfg.Network.FirewallBackend,
-		TProxyPort:      cfg.Ports.TProxy,
-		DNSPort:         cfg.Ports.DNS,
-		BypassCIDR:      cfg.Network.BypassCIDR,
+		Mode:              cfg.Network.Mode,
+		FirewallBackend:   cfg.Network.FirewallBackend,
+		TProxyPort:        cfg.Ports.TProxy,
+		DNSPort:           cfg.Ports.DNS,
+		EnableDNSRedirect: shouldRedirectDNSOnStartup(cfg, dnsMode),
+		BypassFakeIP:      shouldBypassFakeIPOnStartup(cfg),
+		BypassCIDR:        cfg.Network.BypassCIDR,
 	})
 	coreStarted := false
-	if err := coreManager.Start(context.Background()); err != nil {
-		log.Error().Err(err).Msg("start mihomo failed")
+	if cfg.Core.AutoStartCore {
+		if err := coreManager.Start(context.Background()); err != nil {
+			log.Error().Err(err).Msg("auto-start mihomo failed")
+		} else {
+			coreStarted = true
+		}
 	} else {
-		coreStarted = true
+		log.Info().Msg("mihomo auto-start disabled (auto_start_core = false); start via Setup Wizard or API")
 	}
 	if coreStarted && cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
 		if err := nfManager.Apply(); err != nil {
@@ -104,7 +113,6 @@ func main() {
 	}
 
 	// DNS / dnsmasq coexistence
-	dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
 	dnsManaged := false
 	if coreStarted && cfg.DNS.Enable && cfg.DNS.ApplyOnStart && dnsMode != dns.ModeNone {
 		if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
@@ -174,6 +182,26 @@ func main() {
 		log.Error().Err(err).Msg("http shutdown")
 	}
 	log.Info().Msg("clashforge exited cleanly")
+}
+
+func shouldRedirectDNSOnStartup(cfg *config.MetaclashConfig, dnsMode dns.DnsmasqMode) bool {
+	if cfg == nil {
+		return false
+	}
+	if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart {
+		return false
+	}
+	return dnsMode != dns.ModeNone
+}
+
+func shouldBypassFakeIPOnStartup(cfg *config.MetaclashConfig) bool {
+	if cfg == nil {
+		return true
+	}
+	if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(cfg.DNS.Mode)) != "fake-ip"
 }
 
 func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {

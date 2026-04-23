@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { getConfig, updateConfig, getOverrides, updateOverrides, generateConfig } from '../api/client'
-import { Save, Upload, FileText, CheckCircle2, AlertCircle, ArrowRight } from 'lucide-react'
+import { getConfig, updateConfig, getOverrides, updateOverrides, generateConfig, getMihomoConfig } from '../api/client'
+import { Save, Upload, FileText, CheckCircle2, AlertCircle, ArrowRight, RefreshCw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -48,13 +48,20 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 export function Settings() {
   const [cfg, setCfg] = useState<Record<string,unknown> | null>(null)
   const [overrides, setOverrides] = useState('')
+  const [runningConfig, setRunningConfig] = useState<string | null>(null)
+  const [runningConfigLoading, setRunningConfigLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [importDone, setImportDone] = useState(false)
-  const [tab, setTab] = useState<'import' | 'general' | 'overrides'>('import')
+  const [tab, setTab] = useState<'import' | 'general' | 'overrides' | 'running'>('import')
   const fileRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+
+  const loadRunningConfig = () => {
+    setRunningConfigLoading(true)
+    getMihomoConfig().then(d => setRunningConfig(d.content)).catch(() => setRunningConfig('')).finally(() => setRunningConfigLoading(false))
+  }
 
   useEffect(() => {
     getConfig().then(setCfg).catch(() => null)
@@ -137,10 +144,10 @@ export function Settings() {
         </div>
       </div>
 
-      <div className="flex gap-2">
-        {(['import','general','overrides'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`btn text-xs py-1.5 ${tab === t ? 'btn-primary' : 'btn-ghost'}`}>
-            {t === 'import' ? '📋 导入配置' : t === 'general' ? '常规设置' : 'Overrides YAML'}
+      <div className="flex gap-2 flex-wrap">
+        {(['import','general','overrides','running'] as const).map(t => (
+          <button key={t} onClick={() => { setTab(t); if (t === 'running' && runningConfig === null) loadRunningConfig() }} className={`btn text-xs py-1.5 ${tab === t ? 'btn-primary' : 'btn-ghost'}`}>
+            {t === 'import' ? '📋 导入配置' : t === 'general' ? '常规设置' : t === 'overrides' ? 'Overrides YAML' : '🔍 运行中配置'}
           </button>
         ))}
       </div>
@@ -298,6 +305,37 @@ export function Settings() {
           <button className="btn-primary flex items-center gap-2" onClick={saveOverrides} disabled={saving}>
             <Save size={14}/> {saving ? '保存中…' : '保存 Overrides'}
           </button>
+        </div>
+      )}
+
+      {tab === 'running' && (
+        <div className="space-y-4">
+          <div className="card px-5 py-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-200">当前运行的 mihomo 配置</p>
+                <p className="text-xs text-muted mt-0.5">由 ClashForge 实时生成并写入 /var/run/metaclash/mihomo-config.yaml</p>
+              </div>
+              <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5" onClick={loadRunningConfig} disabled={runningConfigLoading}>
+                <RefreshCw size={13} className={runningConfigLoading ? 'animate-spin' : ''}/> 刷新
+              </button>
+            </div>
+            {runningConfigLoading && (
+              <div className="py-8 text-center text-muted text-sm">加载中…</div>
+            )}
+            {!runningConfigLoading && runningConfig === '' && (
+              <div className="py-8 text-center text-muted text-sm">配置文件不存在（核心尚未启动或尚未生成配置）</div>
+            )}
+            {!runningConfigLoading && runningConfig !== null && runningConfig !== '' && (
+              <textarea
+                className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-3 text-sm text-slate-300 font-mono outline-none resize-none"
+                rows={28}
+                value={runningConfig}
+                readOnly
+                spellCheck={false}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

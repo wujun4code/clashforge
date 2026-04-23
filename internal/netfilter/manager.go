@@ -14,19 +14,21 @@ type Applier interface {
 
 // Manager coordinates netfilter rule management.
 type Manager struct {
-	backend  Applier
-	kind     Backend
-	applied  bool
-	cfg      Config
+	backend Applier
+	kind    Backend
+	applied bool
+	cfg     Config
 }
 
 // Config holds configuration for netfilter setup.
 type Config struct {
-	Mode            string   // tproxy | redir | none
-	FirewallBackend string   // auto | nftables | iptables | none
-	TProxyPort      int
-	DNSPort         int
-	BypassCIDR      []string
+	Mode              string // tproxy | redir | none
+	FirewallBackend   string // auto | nftables | iptables | none
+	TProxyPort        int
+	DNSPort           int
+	EnableDNSRedirect bool
+	BypassFakeIP      bool
+	BypassCIDR        []string
 }
 
 // NewManager creates a Manager and detects the appropriate backend.
@@ -35,9 +37,9 @@ func NewManager(cfg Config) *Manager {
 	var applier Applier
 	switch kind {
 	case BackendNftables:
-		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, BypassCIDR: cfg.BypassCIDR}
+		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR}
 	case BackendIptables:
-		applier = &IptablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort}
+		applier = &IptablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect}
 	default:
 		applier = &noopBackend{}
 	}
@@ -83,5 +85,6 @@ func (m *Manager) IsApplied() bool {
 }
 
 type noopBackend struct{}
+
 func (n *noopBackend) Apply() error   { return nil }
 func (n *noopBackend) Cleanup() error { return nil }

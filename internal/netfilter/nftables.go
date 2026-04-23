@@ -1,11 +1,14 @@
 package netfilter
 
 import (
+	"bytes"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"text/template"
-	"bytes"
+
+	"github.com/rs/zerolog/log"
 )
 
 const fwMark = "0x1a3"
@@ -13,9 +16,11 @@ const routeTable = "100"
 
 // NftablesBackend manages nftables TProxy rules.
 type NftablesBackend struct {
-	TProxyPort int
-	DNSPort    int
-	BypassCIDR []string
+	TProxyPort        int
+	DNSPort           int
+	EnableDNSRedirect bool
+	BypassFakeIP      bool
+	BypassCIDR        []string
 }
 
 var nftTableTemplate = template.Must(template.New("nft").Parse(`
@@ -24,23 +29,11 @@ table inet metaclash {
         type ipv4_addr
         flags interval
         elements = {
-            0.0.0.0/8,
-            10.0.0.0/8,
-            100.64.0.0/10,
-            127.0.0.0/8,
-            169.254.0.0/16,
-            172.16.0.0/12,
-            192.0.0.0/24,
-            192.168.0.0/16,
-            198.18.0.0/15,
-            198.51.100.0/24,
-            203.0.113.0/24,
-            224.0.0.0/4,
-			240.0.0.0/4{{ range .BypassCIDR }},
-            {{ . }}{{ end }}
+{{ .BypassIPv4Elements }}
         }
     }
 
+{{ if .EnableDNSRedirect }}
     chain dns_redirect {
         type nat hook prerouting priority dstnat; policy accept;
         meta mark {{ .FWMark }} return
@@ -49,6 +42,7 @@ table inet metaclash {
         udp dport 53 redirect to :{{ .DNSPort }}
         tcp dport 53 redirect to :{{ .DNSPort }}
     }
+{{ end }}
 
     chain tproxy_prerouting {
         type filter hook prerouting priority mangle; policy accept;
@@ -63,15 +57,17 @@ table inet metaclash {
 // Apply writes and applies the nftables ruleset.
 func (n *NftablesBackend) Apply() error {
 	vars := struct {
-		FWMark     string
-		TProxyPort int
-		DNSPort    int
-		BypassCIDR []string
+		FWMark             string
+		TProxyPort         int
+		DNSPort            int
+		EnableDNSRedirect  bool
+		BypassIPv4Elements string
 	}{
-		FWMark:     fwMark,
-		TProxyPort: n.TProxyPort,
-		DNSPort:    n.DNSPort,
-		BypassCIDR: n.BypassCIDR,
+		FWMark:             fwMark,
+		TProxyPort:         n.TProxyPort,
+		DNSPort:            n.DNSPort,
+		EnableDNSRedirect:  n.EnableDNSRedirect,
+		BypassIPv4Elements: buildBypassIPv4Elements(n.BypassFakeIP, n.BypassCIDR),
 	}
 	var buf bytes.Buffer
 	if err := nftTableTemplate.Execute(&buf, vars); err != nil {
@@ -107,4 +103,52 @@ func (n *NftablesBackend) Cleanup() error {
 	_ = exec.Command("ip", "rule", "del", "fwmark", fwMark, "table", routeTable).Run()
 	_ = exec.Command("ip", "route", "flush", "table", routeTable).Run()
 	return nil
+}
+
+func buildBypassIPv4Elements(bypassFakeIP bool, bypassCIDR []string) string {
+	elements := []string{
+		"0.0.0.0/8",
+		"10.0.0.0/8",
+		"100.64.0.0/10",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+		"172.16.0.0/12",
+		"192.0.0.0/24",
+		"192.168.0.0/16",
+	}
+
+	if bypassFakeIP {
+		elements = append(elements, "198.18.0.0/15")
+	}
+
+	elements = append(elements,
+		"198.51.100.0/24",
+		"203.0.113.0/24",
+		"224.0.0.0/4",
+		"240.0.0.0/4",
+	)
+
+	for _, raw := range bypassCIDR {
+		cidr := strings.TrimSpace(raw)
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			log.Warn().Str("cidr", cidr).Err(err).Msg("netfilter: skip invalid bypass_cidr entry")
+			continue
+		}
+		elements = append(elements, cidr)
+	}
+
+	var b strings.Builder
+	for i, cidr := range elements {
+		b.WriteString("            ")
+		b.WriteString(cidr)
+		if i < len(elements)-1 {
+			b.WriteString(",")
+			b.WriteString("\n")
+		}
+	}
+
+	return b.String()
 }
