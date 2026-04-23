@@ -94,9 +94,34 @@ func toSlice(v interface{}) ([]interface{}, bool) {
 	return nil, false
 }
 
-// DeepMergeAny is an alias for DeepMerge to satisfy handler_config.go imports.
+// DeepMergeAny merges src into dst for ClashForge TOML config patches.
+// Unlike DeepMerge (which appends certain slices for YAML config merging),
+// this always replaces slices so that config fields like "fallback" and
+// "nameservers" don't accumulate duplicates on every wizard save.
 func DeepMergeAny(dst, src map[string]interface{}) map[string]interface{} {
-	return DeepMerge(dst, src)
+	if dst == nil {
+		dst = map[string]interface{}{}
+	}
+	result := make(map[string]interface{}, len(dst))
+	for k, v := range dst {
+		result[k] = v
+	}
+	for k, srcVal := range src {
+		dstVal, exists := result[k]
+		if !exists {
+			result[k] = srcVal
+			continue
+		}
+		srcMap, srcIsMap := toStringMap(srcVal)
+		dstMap, dstIsMap := toStringMap(dstVal)
+		if srcIsMap && dstIsMap {
+			result[k] = DeepMergeAny(dstMap, srcMap)
+			continue
+		}
+		// For slices in config patches, always replace (never append).
+		result[k] = srcVal
+	}
+	return result
 }
 
 // MergeWithOverrides 将 overrides YAML 内容深度合并到 generated map

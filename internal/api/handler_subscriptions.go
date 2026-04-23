@@ -73,20 +73,25 @@ func handleTriggerSubscriptionUpdate(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusNotFound, "SUB_NOT_FOUND", err.Error())
 			return
 		}
-		// Regenerate config after update completes (async)
-		go func() {
-			generateMihomoConfig(deps) //nolint:errcheck
-		}()
 		JSON(w, http.StatusAccepted, map[string]string{"message": "update started"})
+	}
+}
+
+// handleSyncSubscriptionUpdate fetches and caches the subscription synchronously.
+func handleSyncSubscriptionUpdate(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if err := deps.SubManager.SyncUpdate(id); err != nil {
+			Err(w, http.StatusInternalServerError, "UPDATE_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 
 func handleTriggerUpdateAll(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_ = deps.SubManager.TriggerUpdateAll()
-		go func() {
-			generateMihomoConfig(deps) //nolint:errcheck
-		}()
 		JSON(w, http.StatusAccepted, map[string]string{"message": "update all started"})
 	}
 }

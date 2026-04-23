@@ -326,6 +326,7 @@ export const addSubscription  = (s: Partial<Subscription>) => request<{id:string
 export const updateSubscription = (id: string, p: Partial<Subscription>) => request('PUT', `/subscriptions/${id}`, p)
 export const deleteSubscription = (id: string) => request('DELETE', `/subscriptions/${id}`)
 export const triggerSubUpdate   = (id: string) => request('POST', `/subscriptions/${id}/update`)
+export const syncSubUpdate      = (id: string) => request('POST', `/subscriptions/${id}/sync-update`)
 export const triggerUpdateAll   = () => request('POST', '/subscriptions/update-all')
 export const getConfig        = () => request<Record<string,unknown>>('GET', '/config')
 export const updateConfig     = (p: Record<string,unknown>) => request('PUT', '/config', p)
@@ -335,5 +336,53 @@ export const generateConfig   = () => request<{generated: boolean; config_file: 
 export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/mihomo')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
 export const enableService    = () => request<{enabled: boolean}>('POST', '/service/enable')
+
+// ---- rule providers ----
+export interface RuleProvider {
+  name: string
+  type: string
+  vehicleType: string
+  behavior: string
+  format: string
+  ruleCount: number
+  updatedAt: string
+  file_path?: string
+  size_mb: number
+}
+export interface RuleSearchResult {
+  provider: string
+  behavior: string
+  matches: string[]
+  total: number
+}
+export const getRuleProviders   = () => request<{providers: RuleProvider[]}>('GET', '/rules/providers')
+export const syncRuleProvider   = (name: string) => request<{ok:boolean;name:string}>('POST', `/rules/providers/${encodeURIComponent(name)}/sync`)
+export const syncAllRuleProviders = () => request<{ok:boolean;results:{name:string;ok:boolean;error?:string}[]}>('POST', '/rules/providers/sync-all')
+export const searchRules        = (q: string, provider?: string) => {
+  const qs = provider ? `q=${encodeURIComponent(q)}&provider=${encodeURIComponent(provider)}` : `q=${encodeURIComponent(q)}`
+  return request<{query:string;results:RuleSearchResult[]}>('GET', `/rules/search?${qs}`)
+}
+
+// ---- config sources ----
+export interface SourceFile {
+  filename: string
+  created_at: string
+  size_bytes: number
+  active: boolean
+}
+
+export interface ActiveSource {
+  type: 'file' | 'subscription'
+  filename?: string
+  sub_id?: string
+  sub_name?: string
+}
+
+export const getSources       = () => request<{files: SourceFile[]; active_source: ActiveSource | null}>('GET', '/config/sources')
+export const saveSource       = (content: string, suggested_name?: string) => request<{filename: string}>('POST', '/config/sources', { content, suggested_name })
+export const getSourceFile    = (filename: string) => request<{filename: string; content: string}>('GET', `/config/sources/${encodeURIComponent(filename)}`)
+export const deleteSourceFile = (filename: string) => request('DELETE', `/config/sources/${encodeURIComponent(filename)}`)
+export const getActiveSource  = () => request<{active_source: ActiveSource | null}>('GET', '/config/active-source')
+export const setActiveSource  = (as: ActiveSource) => request<{updated: boolean}>('PUT', '/config/active-source', as)
 
 export interface LogEntry { level: string; msg: string; ts: number }

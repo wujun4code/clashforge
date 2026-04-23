@@ -38,7 +38,9 @@ if ($ctrl -match 'Version:\s*([\d\.\-a-z]+)') {
 if ($Skip -notmatch '\bui\b') {
     Step "Building React UI"
     Push-Location "$Root\ui"
+    $env:VITE_APP_VERSION = $new
     npm run build | Select-Object -Last 8
+    $env:VITE_APP_VERSION = ''
     if ($LASTEXITCODE -ne 0) { Pop-Location; Die "npm build failed" }
     Pop-Location
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,8 +134,9 @@ func (m *Manager) Delete(id string) error {
 	for i, s := range m.list.Subscriptions {
 		if s.ID == id {
 			m.list.Subscriptions = append(m.list.Subscriptions[:i], m.list.Subscriptions[i+1:]...)
-			// remove cache
+			// remove cache files
 			_ = os.Remove(filepath.Join(m.dataDir, "cache", id+".json"))
+			_ = os.Remove(filepath.Join(m.dataDir, "cache", id+".raw.yaml"))
 			return m.saveLocked()
 		}
 	}
@@ -152,6 +154,15 @@ func (m *Manager) TriggerUpdate(id string) error {
 		}
 	}()
 	return nil
+}
+
+// SyncUpdate fetches and caches the subscription synchronously, waiting for completion.
+func (m *Manager) SyncUpdate(id string) error {
+	sub, ok := m.GetByID(id)
+	if !ok {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	return m.doUpdate(sub)
 }
 
 func (m *Manager) TriggerUpdateAll() error {
@@ -232,6 +243,15 @@ func (m *Manager) doUpdate(sub Subscription) error {
 	if err := os.WriteFile(filepath.Join(cacheDir, sub.ID+".json"), data, 0o644); err != nil {
 		return err
 	}
+	// Save raw YAML content so the caller can extract rule-providers and other
+	// sections that are not captured by the node parser (e.g. rule-providers).
+	// We only save when the content looks like a YAML map (Clash full config).
+	rawPath := filepath.Join(cacheDir, sub.ID+".raw.yaml")
+	if isYAMLMap(content) {
+		_ = os.WriteFile(rawPath, content, 0o644)
+	} else {
+		_ = os.Remove(rawPath) // clean up stale file if format changed
+	}
 
 	m.mu.Lock()
 	for i, s := range m.list.Subscriptions {
@@ -254,4 +274,55 @@ func generateID() (string, error) {
 		return "", err
 	}
 	return "sub_" + hex.EncodeToString(b), nil
+}
+
+// GetRawYAMLForEnabled returns the saved raw YAML bytes for every enabled subscription
+// that was last fetched as a full Clash YAML (i.e. a .raw.yaml cache file exists).
+// This allows callers to extract extra sections (rule-providers, rules, etc.) that
+// the node parser does not capture.
+func (m *Manager) GetRawYAMLForEnabled() [][]byte {
+	subs := m.GetAll()
+	var result [][]byte
+	for _, s := range subs {
+		if !s.Enabled {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(m.dataDir, "cache", s.ID+".raw.yaml"))
+		if err != nil {
+			continue
+		}
+		result = append(result, raw)
+	}
+	return result
+}
+
+// isYAMLMap returns true when content looks like a YAML mapping (Clash full config).
+// It skips blank lines, comments, and YAML document markers (--- / ...),
+// then checks whether the first real content line is a map key vs. a sequence item.
+func isYAMLMap(content []byte) bool {
+	for _, line := range splitLines(content) {
+		s := strings.TrimSpace(line)
+		// Skip blank lines, comments, and YAML document/end markers
+		if s == "" || s == "---" || s == "..." || strings.HasPrefix(s, "#") {
+			continue
+		}
+		// First meaningful content: sequence item starts with "- ", map key does not
+		return !strings.HasPrefix(s, "- ")
+	}
+	return false
+}
+
+func splitLines(b []byte) []string {
+	var lines []string
+	start := 0
+	for i, c := range b {
+		if c == '\n' {
+			lines = append(lines, string(b[start:i]))
+			start = i + 1
+		}
+	}
+	if start < len(b) {
+		lines = append(lines, string(b[start:]))
+	}
+	return lines
 }

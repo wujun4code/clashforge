@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
@@ -7,10 +7,11 @@ import {
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
-  updateOverrides, generateConfig, getConfig, updateConfig,
+  updateOverrides, generateConfig, getMihomoConfig, getConfig, updateConfig,
   startCore, stopCore, takeoverOverviewModule, releaseOverviewTakeover,
   getOverviewCore, getOverviewProbes, getLogs,
-  addSubscription, triggerSubUpdate, enableService,
+  addSubscription, syncSubUpdate, enableService,
+  saveSource, setActiveSource, getSourceFile,
 } from '../api/client'
 import type { OverviewProbeData, OverviewModule, LogEntry } from '../api/client'
 
@@ -63,6 +64,108 @@ interface FormNetwork {
   bypass_lan: boolean
   bypass_china: boolean
   apply_on_start: boolean
+}
+
+// ── Config preview helpers ──────────────────────────────────────────────────
+
+type LineCat = 'dns' | 'geo' | 'port' | 'preserved'
+interface AnnotatedLine { text: string; cat: LineCat; label?: string }
+
+const BLOCK_INFO: Record<string, { cat: LineCat; label: string }> = {
+  'dns':       { cat: 'dns',  label: 'DNS 配置 — 根据向导选择重写' },
+  'geox-url':  { cat: 'geo',  label: 'GeoData 路径 — 使用 ClashForge 管理的本地文件' },
+}
+const PORT_INFO: Record<string, string> = {
+  'port':                'HTTP 代理端口（ClashForge 管理）',
+  'socks-port':          'SOCKS5 代理端口（ClashForge 管理）',
+  'mixed-port':          '混合代理端口（ClashForge 管理）',
+  'redir-port':          '透明代理（redir）端口（ClashForge 管理）',
+  'tproxy-port':         'TProxy 代理端口（ClashForge 管理）',
+  'external-controller': 'Mihomo API 地址（ClashForge 管理，仅本地访问）',
+  'geodata-mode':        'GeoData 模式（ClashForge 管理）',
+}
+
+function annotateLines(content: string): AnnotatedLine[] {
+  const lines = content.split('\n')
+  const result: AnnotatedLine[] = []
+  let blockCat: LineCat | '' = ''
+  for (const text of lines) {
+    const indent = text.search(/\S/)
+    // leaving a top-level block
+    if (blockCat && indent === 0 && text.trim() !== '') blockCat = ''
+    if (indent === 0 || indent === -1) {
+      const m = text.match(/^([a-z][a-z0-9-]*):/)
+      const key = m?.[1] ?? ''
+      if (BLOCK_INFO[key]) {
+        blockCat = BLOCK_INFO[key].cat
+        result.push({ text, cat: blockCat, label: BLOCK_INFO[key].label })
+        continue
+      }
+      if (PORT_INFO[key]) {
+        result.push({ text, cat: 'port', label: PORT_INFO[key] })
+        continue
+      }
+      result.push({ text, cat: 'preserved' })
+    } else {
+      result.push({ text, cat: blockCat || 'preserved' })
+    }
+  }
+  return result
+}
+
+const CAT_ROW: Record<LineCat, string> = {
+  dns:       'bg-blue-500/10 border-l-2 border-blue-400/50',
+  geo:       'bg-violet-500/10 border-l-2 border-violet-400/50',
+  port:      'bg-amber-500/10 border-l-2 border-amber-400/50',
+  preserved: '',
+}
+const CAT_LABEL: Record<LineCat, string> = {
+  dns:       'text-blue-300/70',
+  geo:       'text-violet-300/70',
+  port:      'text-amber-300/70',
+  preserved: '',
+}
+
+function ConfigPreview({ content, onContinue }: { content: string; onContinue: () => void }) {
+  const lines = annotateLines(content)
+  const legend = [
+    { style: 'bg-blue-500/25 text-blue-200',   label: 'DNS 配置（已根据您的选择重写）' },
+    { style: 'bg-amber-500/25 text-amber-200', label: '端口 / API 地址（ClashForge 统一管理）' },
+    { style: 'bg-violet-500/25 text-violet-200', label: 'GeoData 设置（使用本地文件）' },
+  ]
+  return (
+    <div className="space-y-4">
+      <div className="card px-5 py-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText size={15} className="text-brand" />
+            <h2 className="text-sm font-semibold text-slate-200">生成配置预览</h2>
+          </div>
+          <span className="text-xs text-muted">{lines.length} 行</span>
+        </div>
+        <div className="flex flex-wrap gap-2 items-center">
+          {legend.map(l => (
+            <span key={l.label} className={`inline-flex text-xs px-2 py-0.5 rounded-md ${l.style}`}>{l.label}</span>
+          ))}
+          <span className="text-xs text-muted">无底色 = 原样保留</span>
+        </div>
+        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-96 text-xs font-mono select-text">
+          {lines.map((ln, i) => (
+            <div key={i} className={`flex items-start gap-2 px-2 py-px leading-5 ${CAT_ROW[ln.cat]}`}>
+              <span className="select-none text-white/20 w-7 flex-shrink-0 text-right tabular-nums">{i + 1}</span>
+              <span className="flex-1 text-slate-200 whitespace-pre">{ln.text || ' '}</span>
+              {ln.label && (
+                <span className={`flex-shrink-0 text-[10px] pl-3 self-center ${CAT_LABEL[ln.cat]}`}>← {ln.label}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={onContinue}>
+        <ArrowRight size={14} />确认，继续 DNS 设置
+      </button>
+    </div>
+  )
 }
 
 // ── Small UI helpers ─────────────────────────────────────────────────────────
@@ -180,7 +283,7 @@ async function runBrowserProbe(): Promise<BrowserProbeResult> {
     { name: 'Google',    group: '国外', url: 'https://www.google.com' },
     { name: 'GitHub',    group: '国外', url: 'https://github.com' },
     { name: 'OpenAI',    group: 'AI',   url: 'https://chat.openai.com' },
-    { name: 'Claude',    group: 'AI',   url: 'https://claude.ai' },
+    { name: 'Claude',    group: 'AI',   url: 'https://api.anthropic.com' },
     { name: 'Gemini',    group: 'AI',   url: 'https://gemini.google.com' },
   ]
   const accessChecks = await Promise.all(targets.map(async t => {
@@ -199,6 +302,9 @@ async function runBrowserProbe(): Promise<BrowserProbeResult> {
 
 export function Setup() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const activateSub = (location.state as { activateSub?: { id: string; name: string; url?: string }; activateFile?: { filename: string } } | null)?.activateSub
+  const activateFile = (location.state as { activateSub?: { id: string; name: string; url?: string }; activateFile?: { filename: string } } | null)?.activateFile
   const fileRef = useRef<HTMLInputElement>(null)
 
   // ── init guard: check if core is already running ──
@@ -208,15 +314,30 @@ export function Setup() {
   const [runningModules, setRunningModules] = useState<OverviewModule[]>([])
 
   useEffect(() => {
-    getOverviewCore().then(data => {
+    getOverviewCore().then(async data => {
       if (data.core.state === 'running') {
         setRunningModules(data.modules ?? [])
-        setInitStatus('running')
+        if (activateSub || activateFile) {
+          // Auto-stop when switching config via activate
+          setStopping(true)
+          try {
+            await stopCore()
+            await releaseOverviewTakeover().catch(() => null)
+            setInitStatus('ready')
+          } catch (e) {
+            setStopError(e instanceof Error ? e.message : '停止失败')
+            setInitStatus('running')
+          } finally {
+            setStopping(false)
+          }
+        } else {
+          setInitStatus('running')
+        }
       } else {
         setInitStatus('ready')
       }
     }).catch(() => setInitStatus('ready'))
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStopAll = async () => {
     setStopping(true); setStopError('')
@@ -233,8 +354,15 @@ export function Setup() {
   const [step, setStep] = useState<Step>('import')
 
   // ── import step ──
-  const [importMode, setImportMode] = useState<'file' | 'paste' | 'url'>('paste')
+  type ImportMode = 'file' | 'paste' | 'url' | 'existing' | 'existing_file'
+  const initMode = (): ImportMode => {
+    if (activateSub) return 'existing'
+    if (activateFile) return 'existing_file'
+    return 'paste'
+  }
+  const [importMode, setImportMode] = useState<ImportMode>(initMode)
   const [pasteContent, setPasteContent] = useState('')
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [remoteUrl, setRemoteUrl] = useState('')
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState('')
@@ -251,6 +379,9 @@ export function Setup() {
     mode: 'tproxy', firewall_backend: 'auto',
     bypass_lan: true, bypass_china: true, apply_on_start: true,
   })
+
+  // ── import preview ──
+  const [previewContent, setPreviewContent] = useState('')
 
   // ── launch step ──
   const [launching, setLaunching] = useState(false)
@@ -321,7 +452,8 @@ export function Setup() {
     reader.onload = ev => {
       const content = (ev.target?.result as string) || ''
       setPasteContent(content)
-      setImportMode('paste')
+      setUploadedFileName(file.name)
+      setImportMode('file')
     }
     reader.readAsText(file)
   }, [])
@@ -330,16 +462,45 @@ export function Setup() {
   const handleImport = useCallback(async () => {
     setImporting(true); setImportError('')
     try {
+      const showPreview = async () => {
+        const { content } = await getMihomoConfig().catch(() => ({ content: '' }))
+        setPreviewContent(content)
+      }
+
+      // Existing subscription mode: download (sync) + generate
+      if (importMode === 'existing' && activateSub) {
+        await syncSubUpdate(activateSub.id)
+        await generateConfig().catch(() => null)
+        await setActiveSource({ type: 'subscription', sub_id: activateSub.id, sub_name: activateSub.name }).catch(() => null)
+        setClashParsed({})
+        await showPreview()
+        return
+      }
+      // Existing source file mode: load content from disk
+      if (importMode === 'existing_file' && activateFile) {
+        const { content } = await getSourceFile(activateFile.filename)
+        try {
+          const parsed = yaml.load(content) as ClashParsed
+          if (parsed && typeof parsed === 'object') applyClashParsed(parsed)
+        } catch (_) {}
+        await updateOverrides(content)
+        await generateConfig().catch(() => null)
+        await setActiveSource({ type: 'file', filename: activateFile.filename }).catch(() => null)
+        setClashParsed({})
+        await showPreview()
+        return
+      }
       let yamlContent = pasteContent
       if (importMode === 'url') {
-        // Add as subscription and trigger update
+        // Add as subscription and download synchronously
         if (!remoteUrl.trim()) { setImportError('请输入订阅链接'); return }
-        const { id } = await addSubscription({ name: '向导导入', url: remoteUrl, type: 'clash', enabled: true })
-        await triggerSubUpdate(id)
+        const { id } = await addSubscription({ name: (() => { try { return new URL(remoteUrl).hostname } catch { return '远程订阅' } })(), url: remoteUrl, type: 'clash', enabled: true })
+        await syncSubUpdate(id)
         await generateConfig().catch(() => null)
-        // No YAML to pre-parse, just move forward
+        const subName = (() => { try { return new URL(remoteUrl).hostname } catch { return '远程订阅' } })()
+        await setActiveSource({ type: 'subscription', sub_id: id, sub_name: subName }).catch(() => null)
         setClashParsed({})
-        setStep('dns')
+        await showPreview()
         return
       }
       if (!yamlContent.trim()) { setImportError('内容为空，请粘贴或上传配置文件'); return }
@@ -352,14 +513,21 @@ export function Setup() {
         // Ignore parse errors here – backend will validate
       }
 
+      // Save source file (paste → auto date+ver; upload → original filename)
+      const suggestedName = (importMode === 'file' && uploadedFileName) ? uploadedFileName : undefined
+      const { filename } = await saveSource(yamlContent, suggestedName).catch(() => ({ filename: '' }))
+      if (filename) {
+        await setActiveSource({ type: 'file', filename }).catch(() => null)
+      }
+
       // Save as overrides and generate
       await updateOverrides(yamlContent)
       await generateConfig().catch(() => null)
-      setStep('dns')
+      await showPreview()
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : String(e))
     } finally { setImporting(false) }
-  }, [importMode, pasteContent, remoteUrl, applyClashParsed])
+  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed])
 
   // ── launch ──
   const handleLaunch = useCallback(async () => {
@@ -405,6 +573,14 @@ export function Setup() {
       setLaunchError(e instanceof Error ? e.message : String(e))
     } finally { setLaunching(false) }
   }, [dns, net])
+
+  // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
+  useEffect(() => {
+    if (step === 'launch' && (activateSub || activateFile) && !launching && !launchDone) {
+      void handleLaunch()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, handleLaunch])
 
   // ── complete (save autostart + navigate) ──
   const handleComplete = useCallback(async () => {
@@ -549,7 +725,13 @@ export function Setup() {
         </div>
 
         {/* ─── Step 1: Import ─────────────────────────────────────────────── */}
-        {step === 'import' && (
+        {step === 'import' && previewContent && (
+          <ConfigPreview
+            content={previewContent}
+            onContinue={() => { setPreviewContent(''); setStep('dns') }}
+          />
+        )}
+        {step === 'import' && !previewContent && (
           <div className="space-y-4">
             {/* Mode tabs */}
             <div className="card px-5 py-5 space-y-4">
@@ -557,21 +739,55 @@ export function Setup() {
                 <FileText size={16} className="text-brand" />
                 <h2 className="text-sm font-semibold text-slate-200">选择导入方式</h2>
               </div>
-              <div className="flex gap-2">
-                {([
-                  { id: 'paste', icon: <FileText size={13} />, label: '粘贴 YAML' },
-                  { id: 'file',  icon: <Upload size={13} />,    label: '上传文件' },
-                  { id: 'url',   icon: <Link2 size={13} />,     label: '订阅链接' },
-                ] as const).map(m => (
+              {importMode !== 'existing' && (
+                <div className="flex gap-2">
+                  {([
+                    { id: 'paste', icon: <FileText size={13} />, label: '粘贴 YAML' },
+                    { id: 'file',  icon: <Upload size={13} />,    label: '上传文件' },
+                    { id: 'url',   icon: <Link2 size={13} />,     label: '订阅链接' },
+                  ] as const).map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => setImportMode(m.id)}
+                      className={`btn text-xs py-1.5 flex items-center gap-1.5 ${importMode === m.id ? 'btn-primary' : 'btn-ghost'}`}
+                    >
+                      {m.icon}{m.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {importMode === 'existing' && activateSub && (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted leading-5">将拉取以下订阅的最新节点并重新生成配置。</p>
+                  <div className="rounded-xl bg-brand/10 border border-brand/30 px-4 py-3 space-y-1">
+                    <p className="text-sm font-semibold text-white">{activateSub.name}</p>
+                    {activateSub.url && <p className="text-xs text-muted truncate">{activateSub.url}</p>}
+                  </div>
                   <button
-                    key={m.id}
-                    onClick={() => setImportMode(m.id)}
-                    className={`btn text-xs py-1.5 flex items-center gap-1.5 ${importMode === m.id ? 'btn-primary' : 'btn-ghost'}`}
+                    className="text-xs text-muted hover:text-white underline underline-offset-2 transition-colors"
+                    onClick={() => setImportMode('paste')}
                   >
-                    {m.icon}{m.label}
+                    切换到手动导入
                   </button>
-                ))}
-              </div>
+                </div>
+              )}
+
+              {importMode === 'existing_file' && activateFile && (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted leading-5">将加载以下保存的配置文件并重新生成配置。</p>
+                  <div className="rounded-xl bg-brand/10 border border-brand/30 px-4 py-3 space-y-1">
+                    <p className="text-sm font-semibold text-white font-mono">{activateFile.filename}</p>
+                    <p className="text-xs text-muted">来自配置文件列表</p>
+                  </div>
+                  <button
+                    className="text-xs text-muted hover:text-white underline underline-offset-2 transition-colors"
+                    onClick={() => setImportMode('paste')}
+                  >
+                    切换到手动导入
+                  </button>
+                </div>
+              )}
 
               {importMode === 'paste' && (
                 <div className="space-y-3">
@@ -636,7 +852,12 @@ export function Setup() {
               <button
                 className="btn-primary w-full flex items-center justify-center gap-2"
                 onClick={handleImport}
-                disabled={importing || (importMode !== 'url' && !pasteContent.trim()) || (importMode === 'url' && !remoteUrl.trim())}
+                disabled={
+                  importing ||
+                  (importMode === 'url' && !remoteUrl.trim()) ||
+                  (importMode === 'paste' && !pasteContent.trim()) ||
+                  (importMode === 'file' && !pasteContent.trim())
+                }
               >
                 {importing
                   ? <><Loader2 size={14} className="animate-spin" />解析中…</>

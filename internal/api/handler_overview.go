@@ -714,7 +714,7 @@ func buildAppStorage(deps Dependencies) overviewAppStorage {
 	}{
 		{name: "GeoIP", path: deps.Config.Core.GeoIPPath},
 		{name: "Geosite", path: deps.Config.Core.GeositePath},
-		{name: "Rule Provider", path: filepath.Join(deps.Config.Core.DataDir, "rule_provider")},
+		{name: "Rule Provider", path: filepath.Join(deps.Config.Core.RuntimeDir, "rule_provider")},
 	}
 	ruleAssets := make([]overviewRuleAsset, 0, len(ruleSources))
 	rulesSize := uint64(0)
@@ -784,7 +784,7 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 		{Name: "GitHub", Group: "国外", URL: "https://github.com", Description: "用于验证国际开发站点的代理访问效果。"},
 		{Name: "Google", Group: "国外", URL: "https://www.google.com", Description: "用于验证 Google 搜索是否可通过代理访问。"},
 		{Name: "OpenAI", Group: "AI", URL: "https://chat.openai.com", Description: "用于验证 ChatGPT / OpenAI 是否可通过代理访问。"},
-		{Name: "Claude", Group: "AI", URL: "https://claude.ai", Description: "用于验证 Claude AI 是否可通过代理访问。"},
+		{Name: "Claude", Group: "AI", URL: "https://api.anthropic.com", Description: "用于验证 Claude AI 是否可通过代理访问。"},
 		{Name: "Gemini", Group: "AI", URL: "https://gemini.google.com", Description: "用于验证 Google Gemini 是否可通过代理访问。"},
 	}
 	checks := make([]overviewAccessCheck, 0, len(targets))

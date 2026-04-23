@@ -113,18 +113,6 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
 async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<BrowserProbeData> {
   const ipProviders: { provider: string; group: string; fetch: () => Promise<{ ip: string; location: string }> }[] = [
     {
-      provider: 'ip-api.com',
-      group: '国内',
-      fetch: async () => {
-        const res = await fetchWithTimeout('http://ip-api.com/json?lang=zh-CN', { cache: 'no-store' }, 7000)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const payload = await res.json() as { query?: string; city?: string; regionName?: string; country?: string; isp?: string; status?: string }
-        if (!payload.query || payload.status === 'fail') throw new Error('empty')
-        const location = [payload.city, payload.regionName, payload.country, payload.isp].filter(Boolean).join(' · ')
-        return { ip: payload.query, location }
-      },
-    },
-    {
       provider: 'UpaiYun',
       group: '国内',
       fetch: async () => {
@@ -639,7 +627,10 @@ export function Dashboard() {
     return () => { clearTimeout(bootstrap); clearInterval(timer) }
   }, [refreshCore])
 
-  useEffect(() => { void refreshProxies() }, [refreshProxies])
+  // Only fetch proxies when we know the core is running — avoids 502 spam when Mihomo is stopped
+  useEffect(() => {
+    if (coreData?.core.state === 'running') void refreshProxies()
+  }, [coreData, refreshProxies])
 
   const openSection = async (target: SectionKey) => {
     setSection(target)

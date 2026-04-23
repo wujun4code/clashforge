@@ -33,7 +33,21 @@ jobs:
       - name: Install dependencies
         run: cd ui && npm ci
 
+      - name: Compute version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && echo "${{ github.ref }}" | grep -q "refs/tags/"; then
+            VERSION="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.version }}" != "dev" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build UI
+        env:
+          VITE_APP_VERSION: ${{ steps.version.outputs.version }}
         run: cd ui && npm run build
 
       - name: Upload UI artifact

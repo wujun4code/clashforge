@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, FolderCog, Activity, Sparkles
 } from 'lucide-react'
+import { getOverviewCore } from '../api/client'
 
 const links = [
   { to: '/',         icon: LayoutDashboard, label: '概览' },
@@ -9,6 +11,41 @@ const links = [
   { to: '/activity', icon: Activity,        label: '活动' },
   { to: '/setup',    icon: Sparkles,        label: '配置向导' },
 ]
+
+function CoreStatusBadge() {
+  const [state, setState] = useState<'running' | 'stopped' | 'checking'>('checking')
+
+  useEffect(() => {
+    const check = () => {
+      getOverviewCore()
+        .then(d => setState(d.core.state === 'running' ? 'running' : 'stopped'))
+        .catch(() => setState('stopped'))
+    }
+    check()
+    const id = setInterval(check, 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div className="mx-3 mb-3 flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.07]">
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 transition-colors ${
+        state === 'running' ? 'bg-success animate-pulse' :
+        state === 'stopped' ? 'bg-white/20' :
+        'bg-warning/60'
+      }`} />
+      <div className="min-w-0">
+        <p className="text-[10px] text-muted leading-none">内核状态</p>
+        <p className={`text-xs font-semibold leading-none mt-1 ${
+          state === 'running' ? 'text-success' :
+          state === 'stopped' ? 'text-slate-400' :
+          'text-warning'
+        }`}>
+          {state === 'running' ? '运行中' : state === 'stopped' ? '未启动' : '检测中…'}
+        </p>
+      </div>
+    </div>
+  )
+}
 
 export function Sidebar() {
   return (
@@ -38,8 +75,9 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
+      <CoreStatusBadge />
       <div className="px-5 py-4 border-t border-white/5">
-        <p className="text-xs text-surface-3 font-mono">v0.1.0-dev</p>
+        <p className="text-xs text-surface-3 font-mono">{__APP_VERSION__}</p>
       </div>
     </aside>
   )

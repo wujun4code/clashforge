@@ -56,6 +56,12 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/config/overrides", handleGetOverrides(deps))
 		api.Put("/config/overrides", handleUpdateOverrides(deps))
 		api.Post("/config/generate", handleGenerateConfig(deps))
+		api.Get("/config/sources", handleGetSources(deps))
+		api.Post("/config/sources", handleSaveSource(deps))
+		api.Get("/config/sources/{filename}", handleGetSourceFile(deps))
+		api.Delete("/config/sources/{filename}", handleDeleteSourceFile(deps))
+		api.Get("/config/active-source", handleGetActiveSource(deps))
+		api.Put("/config/active-source", handleSetActiveSource(deps))
 		api.Post("/core/start", handleCoreStart(deps))
 		api.Post("/core/stop", handleCoreStop(deps))
 		api.Post("/core/restart", handleCoreRestart(deps))
@@ -68,6 +74,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Put("/subscriptions/{id}", handleUpdateSubscription(deps))
 		api.Delete("/subscriptions/{id}", handleDeleteSubscription(deps))
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
+		api.Post("/subscriptions/{id}/sync-update", handleSyncSubscriptionUpdate(deps))
 		api.Get("/logs", handleGetLogs(deps))
 		// Proxy pass-through to mihomo API
 		api.Get("/proxies", proxyToMihomo(deps, "/proxies"))
@@ -75,6 +82,11 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/proxies/{name}/delay", proxyMihomoWithParam(deps, "/proxies/", "/delay", "name"))
 		api.Get("/connections", proxyToMihomo(deps, "/connections"))
 		api.Delete("/connections", proxyToMihomo(deps, "/connections"))
+		// Rule providers
+		api.Get("/rules/providers", handleGetRuleProviders(deps))
+		api.Post("/rules/providers/sync-all", handleSyncAllRuleProviders(deps))
+		api.Post("/rules/providers/{name}/sync", handleSyncRuleProvider(deps))
+		api.Get("/rules/search", handleSearchRules(deps))
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}

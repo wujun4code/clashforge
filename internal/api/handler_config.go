@@ -147,9 +147,9 @@ func handleUpdateOverrides(deps Dependencies) http.HandlerFunc {
 		if err != nil {
 			// Non-fatal: config saved but generation failed
 			response := map[string]interface{}{
-				"updated":         true,
+				"updated":          true,
 				"config_generated": false,
-				"warning":         err.Error(),
+				"warning":          err.Error(),
 			}
 			if len(portAdjustments) > 0 {
 				response["port_adjustments"] = portAdjustments
@@ -158,7 +158,7 @@ func handleUpdateOverrides(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		response := map[string]interface{}{
-			"updated":         true,
+			"updated":          true,
 			"config_generated": generated,
 		}
 		if len(portAdjustments) > 0 {
@@ -189,24 +189,47 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 		return false, nil
 	}
 	nodes := deps.SubManager.GetAllCachedNodes()
+	rawYAMLs := deps.SubManager.GetRawYAMLForEnabled()
 
-	generated, err := config.Generate(deps.Config, nodes)
-	if err != nil {
-		return false, err
-	}
-
-	// Load overrides
 	overridesPath := deps.Config.Core.DataDir + "/overrides.yaml"
 	overridesData, _ := os.ReadFile(overridesPath)
 
-	merged, err := config.MergeWithOverrides(generated, overridesData)
-	if err != nil {
-		return false, err
+	var generated map[string]interface{}
+	var err error
+
+	if len(rawYAMLs) > 0 {
+		// Subscription with full YAML: use as base, preserving rules / proxy-groups /
+		// rule-providers and everything else.  ClashForge only rewrites DNS and geodata.
+		generated, err = config.GenerateFromBase(deps.Config, rawYAMLs[0], nodes)
+		if err != nil {
+			return false, err
+		}
+		// Allow user tweaks in overrides.yaml to win (e.g. custom rules prepended).
+		if len(overridesData) > 0 {
+			generated, err = config.MergeWithOverrides(generated, overridesData)
+			if err != nil {
+				return false, err
+			}
+		}
+	} else if len(overridesData) > 0 {
+		// No subscription YAML (paste / file import mode): the overrides IS the full
+		// user config.  Use it as the base so rules and proxy-groups are preserved
+		// exactly; ClashForge only injects DNS settings and managed ports.
+		generated, err = config.GenerateFromBase(deps.Config, overridesData, nodes)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		// No user config at all: generate a minimal fallback from available nodes.
+		generated, err = config.Generate(deps.Config, nodes)
+		if err != nil {
+			return false, err
+		}
 	}
 
-	merged = config.ApplyManagedRuntimeSettings(deps.Config, merged)
+	generated = config.ApplyManagedRuntimeSettings(deps.Config, generated)
 
-	data, err := config.MarshalYAML(merged)
+	data, err := config.MarshalYAML(generated)
 	if err != nil {
 		return false, err
 	}
