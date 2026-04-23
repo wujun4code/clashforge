@@ -23,10 +23,10 @@ PURGE=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-log()  { printf '\033[0;36m[clashforge]\033[0m %s\n' "$*" >&2; }
-ok()   { printf '\033[0;32m[clashforge]\033[0m %s\n' "$*" >&2; }
-warn() { printf '\033[0;33m[clashforge]\033[0m WARN: %s\n' "$*" >&2; }
-die()  { printf '\033[0;31m[clashforge]\033[0m ERROR: %s\n' "$*" >&2; exit 1; }
+log()  { echo "[clashforge] $*" 1>&2; }
+ok()   { echo "[clashforge] $*" 1>&2; }
+warn() { echo "[clashforge] WARN: $*" 1>&2; }
+die()  { echo "[clashforge] ERROR: $*" 1>&2; exit 1; }
 
 usage() {
   cat <<'EOF'
@@ -89,23 +89,18 @@ log "Detected architecture: $IPK_ARCH"
 # Release tag:  v1.2.3
 # IPK version:  1.2.3  (no leading 'v')
 
-resolve_version() {
-  if [ "$INSTALL_VERSION" != "latest" ]; then
-    echo "$INSTALL_VERSION"
-    return
-  fi
-  # Only reached when running from a non-release copy of install.sh.
-  # Use /releases (not /releases/latest) so pre-releases are included.
+# ── resolve version (called once, stored in TAG) ──────────────────────────────
+
+if [ "$INSTALL_VERSION" != "latest" ]; then
+  TAG="$INSTALL_VERSION"
+else
   log "Resolving latest release from GitHub API..."
-  tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases" 2>/dev/null \
+  TAG=$(wget -qO- "https://api.github.com/repos/${REPO}/releases" 2>/dev/null \
         | grep '"tag_name"' | head -1 \
         | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  [ -n "$tag" ] || die "Could not resolve latest version.\nHint: specify a version explicitly:\n  sh install.sh --version v0.1.0-alpha.48"
-  echo "$tag"
-}
+  [ -n "$TAG" ] || die "Could not resolve latest version. Specify explicitly: sh install.sh --version v0.1.0-alpha.50"
+fi
 
-TAG=$(resolve_version)
-# Strip leading 'v' for the IPK filename (e.g. v1.2.3 → 1.2.3)
 PKG_VER="${TAG#v}"
 IPK_NAME="clashforge_${PKG_VER}_${IPK_ARCH}.ipk"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${IPK_NAME}"
