@@ -94,11 +94,12 @@ resolve_version() {
     return
   fi
   # Only reached when running from a non-release copy of install.sh.
+  # Use /releases (not /releases/latest) so pre-releases are included.
   log "Resolving latest release from GitHub API..."
-  tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+  tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases" 2>/dev/null \
         | grep '"tag_name"' | head -1 \
         | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  [ -n "$tag" ] || die "Could not resolve latest version.\nHint: specify a version explicitly:\n  sh install.sh --version v0.1.0-alpha.47"
+  [ -n "$tag" ] || die "Could not resolve latest version.\nHint: specify a version explicitly:\n  sh install.sh --version v0.1.0-alpha.48"
   echo "$tag"
 }
 
