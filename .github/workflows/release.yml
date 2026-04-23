@@ -255,10 +255,18 @@ jobs:
     needs: build-ui
     steps:
       - uses: actions/checkout@v4
+
+      - name: Bake version into install.sh
+        run: |
+          VERSION="${{ needs.build-ui.outputs.version }}"
+          sed "s/BAKED_VERSION=\"latest\"/BAKED_VERSION=\"${VERSION}\"/" \
+            scripts/install.sh > /tmp/install.sh
+          chmod +x /tmp/install.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: installer
-          path: scripts/install.sh
+          path: /tmp/install.sh
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────

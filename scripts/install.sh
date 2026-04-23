@@ -14,7 +14,10 @@
 set -e
 
 REPO="wujun4code/clashforge"
-INSTALL_VERSION="latest"
+# BAKED_VERSION is substituted by CI at release time (e.g. v1.2.3).
+# The literal string "latest" means this is a dev/local copy — fall back to GitHub API.
+BAKED_VERSION="latest"
+INSTALL_VERSION="$BAKED_VERSION"
 PURGE=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -86,16 +89,17 @@ log "Detected architecture: $IPK_ARCH"
 # IPK version:  1.2.3  (no leading 'v')
 
 resolve_version() {
-  if [ "$INSTALL_VERSION" = "latest" ]; then
-    log "Resolving latest release from GitHub..."
-    tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-          | grep '"tag_name"' | head -1 \
-          | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-    [ -n "$tag" ] || die "Could not resolve latest version — check your internet connection."
-    echo "$tag"
-  else
+  if [ "$INSTALL_VERSION" != "latest" ]; then
     echo "$INSTALL_VERSION"
+    return
   fi
+  # Only reached when running from a non-release copy of install.sh.
+  log "Resolving latest release from GitHub API..."
+  tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | grep '"tag_name"' | head -1 \
+        | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+  [ -n "$tag" ] || die "Could not resolve latest version.\nHint: specify a version explicitly:\n  sh install.sh --version v0.1.0-alpha.47"
+  echo "$tag"
 }
 
 TAG=$(resolve_version)
