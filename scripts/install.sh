@@ -1,23 +1,24 @@
 #!/bin/sh
 # install.sh — One-shot ClashForge installer / upgrader for OpenWrt
 #
-# Usage (SSH into router first):
-#   wget -qO- https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh
-#   wget -qO- https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh -s -- --version v1.2.0
-#   wget -qO- https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh -s -- --purge
+# Fixed URL (always installs the latest release, including pre-releases):
+#   wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
+#
+# Install a specific version:
+#   wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --version v0.1.0-alpha.48
+#
+# Full clean install (wipe old config and data first):
+#   wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --purge
 #
 # Options:
-#   --version <tag>   Install a specific release tag, e.g. v1.2.0 (default: latest)
-#   --purge           Uninstall old version and wipe all config before installing
+#   --version <tag>   Install a specific release tag (default: latest, including pre-releases)
+#   --purge           Uninstall old version and wipe all config/data before installing
 #   --help            Show this help
 
 set -e
 
 REPO="wujun4code/clashforge"
-# BAKED_VERSION is substituted by CI at release time (e.g. v1.2.3).
-# The literal string "latest" means this is a dev/local copy — fall back to GitHub API.
-BAKED_VERSION="latest"
-INSTALL_VERSION="$BAKED_VERSION"
+INSTALL_VERSION="latest"
 PURGE=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────

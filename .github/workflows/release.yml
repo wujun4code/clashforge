@@ -255,18 +255,10 @@ jobs:
     needs: build-ui
     steps:
       - uses: actions/checkout@v4
-
-      - name: Bake version into install.sh
-        run: |
-          VERSION="${{ needs.build-ui.outputs.version }}"
-          sed "s/BAKED_VERSION=\"latest\"/BAKED_VERSION=\"${VERSION}\"/" \
-            scripts/install.sh > /tmp/install.sh
-          chmod +x /tmp/install.sh
-
       - uses: actions/upload-artifact@v4
         with:
           name: installer
-          path: /tmp/install.sh
+          path: scripts/install.sh
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
@@ -325,23 +317,23 @@ jobs:
 
             ### 一键安装 / One-liner install
 
-            SSH 进入路由器后执行，**自动检测 CPU 架构**，下载对应 IPK 并通过 opkg 安装：
+            SSH 进入路由器后执行，**自动检测 CPU 架构**，自动下载并安装最新版（含 pre-release）：
 
             ```sh
-            wget -qO- https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/install.sh | sh
+            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
             ```
 
-            **安装指定版本（本版本）：**
+            **安装本版本（${{ github.ref_name }}）：**
             ```sh
-            wget -qO- https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/install.sh | sh -s -- --version ${{ github.ref_name }}
+            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --version ${{ github.ref_name }}
             ```
 
             **全新安装（清除旧版所有残留后重装）：**
             ```sh
-            wget -qO- https://github.com/wujun4code/clashforge/releases/download/${{ github.ref_name }}/install.sh | sh -s -- --purge
+            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --purge
             ```
 
-            > 💡 如无法直连 GitHub，可先手动下载 `install.sh` 上传到路由器，再执行 `sh install.sh`
+            > 💡 安装脚本地址固定，无需随版本更新
 
             ---
 
