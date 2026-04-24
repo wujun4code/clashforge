@@ -13,7 +13,7 @@ import { getOverviewCore } from '../api/client'
 const setupLink = {
   to: '/setup',
   icon: Rocket,
-  label: '快速上线',
+  label: '代理服务',
 }
 
 const navLinks = [
@@ -121,7 +121,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
-        {/* Setup Wizard — primary CTA, visually distinct */}
+        {/* Proxy Service — primary entry, always visually prominent */}
         <NavLink to={setupLink.to} className="group block">
           {({ isActive }) => {
             const Icon = setupLink.icon
@@ -130,38 +130,37 @@ export function Sidebar() {
                 className={[
                   'relative rounded-[22px] p-[1.5px] transition-all duration-200',
                   isActive
-                    ? 'bg-gradient-to-br from-violet-400/80 via-purple-500/60 to-indigo-500/70 shadow-[0_0_24px_rgba(139,92,246,0.35)]'
-                    : 'bg-gradient-to-br from-violet-500/50 via-purple-500/35 to-indigo-500/40 shadow-[0_0_14px_rgba(139,92,246,0.18)] group-hover:from-violet-400/70 group-hover:to-indigo-500/55 group-hover:shadow-[0_0_22px_rgba(139,92,246,0.30)]',
+                    ? 'bg-gradient-to-br from-white/90 via-violet-200/80 to-purple-300/70 shadow-[0_0_28px_rgba(167,139,250,0.45)]'
+                    : 'bg-gradient-to-br from-violet-500/40 via-purple-500/25 to-indigo-500/30 shadow-[0_0_10px_rgba(139,92,246,0.12)] group-hover:from-violet-400/60 group-hover:to-indigo-500/45 group-hover:shadow-[0_0_20px_rgba(139,92,246,0.25)]',
                 ].join(' ')}
               >
                 <div
                   className={[
                     'flex items-center gap-4 rounded-[21px] px-4 py-4 transition-all duration-200',
                     isActive
-                      ? 'bg-[linear-gradient(135deg,rgba(109,40,217,0.30),rgba(79,70,229,0.22))]'
-                      : 'bg-[linear-gradient(135deg,rgba(109,40,217,0.14),rgba(79,70,229,0.09))] group-hover:bg-[linear-gradient(135deg,rgba(109,40,217,0.20),rgba(79,70,229,0.15))]',
+                      ? 'bg-[linear-gradient(135deg,rgba(139,92,246,0.55),rgba(99,102,241,0.40))]'
+                      : 'bg-[linear-gradient(135deg,rgba(109,40,217,0.10),rgba(79,70,229,0.06))] group-hover:bg-[linear-gradient(135deg,rgba(109,40,217,0.18),rgba(79,70,229,0.13))]',
                   ].join(' ')}
                 >
                   <div
                     className={[
                       'relative flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-2xl border transition-all duration-200',
                       isActive
-                        ? 'border-violet-400/40 bg-[linear-gradient(135deg,rgba(139,92,246,0.45),rgba(99,102,241,0.35))] text-white shadow-[0_0_18px_rgba(139,92,246,0.45)]'
-                        : 'border-violet-500/30 bg-[linear-gradient(135deg,rgba(139,92,246,0.22),rgba(99,102,241,0.16))] text-violet-300 group-hover:border-violet-400/45 group-hover:text-white',
+                        ? 'border-white/40 bg-white/20 text-white shadow-[0_0_20px_rgba(255,255,255,0.25)]'
+                        : 'border-violet-500/25 bg-[linear-gradient(135deg,rgba(139,92,246,0.16),rgba(99,102,241,0.10))] text-violet-400/70 group-hover:border-violet-400/40 group-hover:text-violet-200',
                     ].join(' ')}
                   >
                     <Icon size={26} className="relative z-10" />
-                    <span className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,rgba(167,139,250,0.30),transparent_65%)]" />
+                    {isActive && <span className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,rgba(255,255,255,0.20),transparent_65%)]" />}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <span className="text-base font-bold text-white">{setupLink.label}</span>
-                    <span className="ml-2 rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-400/30">
-                      Start
+                    <span className={['text-base font-bold', isActive ? 'text-white' : 'text-violet-300/70 group-hover:text-violet-100'].join(' ')}>
+                      {setupLink.label}
                     </span>
                   </div>
                   <ChevronRight
                     size={15}
-                    className={isActive ? 'text-violet-300' : 'text-violet-400/50 group-hover:text-violet-300/80'}
+                    className={isActive ? 'text-white/70' : 'text-violet-500/40 group-hover:text-violet-300/70'}
                   />
                 </div>
               </div>
