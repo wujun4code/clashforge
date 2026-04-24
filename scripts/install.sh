@@ -195,21 +195,24 @@ print_success() {
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+# Check service state BEFORE any purge/stop, so we can restore it after install.
+# --purge is a fresh install: always keep the service running afterwards.
 if [ "$PURGE" = "1" ]; then
-  do_purge
+  SERVICE_WAS_RUNNING=1
+elif /etc/init.d/clashforge running 2>/dev/null; then
+  SERVICE_WAS_RUNNING=1
+else
+  SERVICE_WAS_RUNNING=0
 fi
 
-# Remember whether the service was running before installing.
-# postinst always calls /etc/init.d/clashforge start; we'll undo that
-# if the user had intentionally stopped the service.
-SERVICE_WAS_RUNNING=0
-if /etc/init.d/clashforge running 2>/dev/null; then
-  SERVICE_WAS_RUNNING=1
+if [ "$PURGE" = "1" ]; then
+  do_purge
 fi
 
 IPK_PATH=$(download_ipk)
 install_ipk "$IPK_PATH"
 
+# postinst unconditionally starts the service; stop it again if it was stopped before.
 if [ "$SERVICE_WAS_RUNNING" = "0" ]; then
   /etc/init.d/clashforge stop 2>/dev/null || true
   log "Service was stopped before upgrade — kept stopped after install."
