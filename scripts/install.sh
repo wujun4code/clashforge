@@ -175,7 +175,7 @@ install_ipk() {
   ipk_path="$1"
   log "Installing via opkg..."
   # --nodeps: mihomo is bundled inside the IPK, skip dependency resolution
-  opkg install --nodeps "$ipk_path" || die "opkg install failed"
+  opkg install --nodeps --force-downgrade "$ipk_path" || die "opkg install failed"
   rm -f "$ipk_path"
   ok "opkg install complete."
 }
