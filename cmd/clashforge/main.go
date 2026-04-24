@@ -39,7 +39,9 @@ func main() {
 	}
 
 	logBuf := api.NewLogBuffer(500)
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).Hook(api.NewZerologHook(logBuf))
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	log.Logger = zerolog.New(zerolog.MultiLevelWriter(consoleWriter, logBuf)).With().Timestamp().Logger()
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -124,6 +126,8 @@ func main() {
 		log.Info().Str("dnsmasq_mode", cfg.DNS.DnsmasqMode).Msg("dns takeover disabled on startup")
 	}
 
+	logStartupHealth(*cfgPath, cfg, coreManager, nfManager, dnsManaged, coreStarted, dnsMode)
+
 	// SSE broker
 	sseBroker := api.NewSSEBroker()
 
@@ -202,6 +206,111 @@ func shouldBypassFakeIPOnStartup(cfg *config.MetaclashConfig) bool {
 		return true
 	}
 	return strings.ToLower(strings.TrimSpace(cfg.DNS.Mode)) != "fake-ip"
+}
+
+func logStartupHealth(
+	cfgPath string,
+	cfg *config.MetaclashConfig,
+	coreManager *core.CoreManager,
+	nfManager *netfilter.Manager,
+	dnsManaged, coreStarted bool,
+	dnsMode dns.DnsmasqMode,
+) {
+	const side = "system"
+
+	// Phase 1: configuration loaded
+	log.Info().Str("side", side).Str("phase", "config").Str("status", "loaded").
+		Str("config_file", cfgPath).Str("binary", cfg.Core.Binary).
+		Str("data_dir", cfg.Core.DataDir).Str("runtime_dir", cfg.Core.RuntimeDir).
+		Msg("startup_health")
+
+	// Phase 2: proxy core (mihomo)
+	if coreStarted {
+		st := coreManager.Status()
+		log.Info().Str("side", side).Str("phase", "proxy_core").Str("status", "started").
+			Int("pid", st.PID).Str("binary", cfg.Core.Binary).
+			Int("api_port", cfg.Ports.MihomoAPI).
+			Msg("startup_health")
+	} else {
+		log.Info().Str("side", side).Str("phase", "proxy_core").Str("status", "skipped").
+			Bool("auto_start_core", cfg.Core.AutoStartCore).
+			Msg("startup_health")
+	}
+
+	// Phase 3: transparent proxy + firewall
+	switch {
+	case cfg.Network.Mode == "none":
+		log.Info().Str("side", side).Str("phase", "transparent_proxy").Str("status", "disabled").
+			Str("mode", "none").Msg("startup_health")
+	case !coreStarted:
+		log.Info().Str("side", side).Str("phase", "transparent_proxy").Str("status", "skipped").
+			Str("reason", "core_not_started").Msg("startup_health")
+	case !cfg.Network.ApplyOnStart:
+		log.Info().Str("side", side).Str("phase", "transparent_proxy").Str("status", "skipped").
+			Str("reason", "apply_on_start=false").Msg("startup_health")
+	default:
+		statusStr := "applied"
+		if !nfManager.IsApplied() {
+			statusStr = "failed"
+		}
+		log.Info().Str("side", side).Str("phase", "transparent_proxy").Str("status", statusStr).
+			Str("mode", cfg.Network.Mode).Str("firewall_backend", nfManager.BackendName()).
+			Int("tproxy_port", cfg.Ports.TProxy).Bool("bypass_lan", cfg.Network.BypassLAN).
+			Msg("startup_health")
+	}
+
+	// Phase 4: DNS redirect (dnsmasq coordination)
+	switch {
+	case !cfg.DNS.Enable:
+		log.Info().Str("side", side).Str("phase", "dns_redirect").Str("status", "disabled").
+			Str("reason", "dns.enable=false").Msg("startup_health")
+	case dnsMode == dns.ModeNone:
+		log.Info().Str("side", side).Str("phase", "dns_redirect").Str("status", "disabled").
+			Str("dnsmasq_mode", "none").Msg("startup_health")
+	case !coreStarted:
+		log.Info().Str("side", side).Str("phase", "dns_redirect").Str("status", "skipped").
+			Str("reason", "core_not_started").Msg("startup_health")
+	case !cfg.DNS.ApplyOnStart:
+		log.Info().Str("side", side).Str("phase", "dns_redirect").Str("status", "skipped").
+			Str("reason", "apply_on_start=false").Msg("startup_health")
+	default:
+		statusStr := "applied"
+		if !dnsManaged {
+			statusStr = "failed"
+		}
+		log.Info().Str("side", side).Str("phase", "dns_redirect").Str("status", statusStr).
+			Str("dnsmasq_mode", cfg.DNS.DnsmasqMode).Int("dns_port", cfg.Ports.DNS).
+			Msg("startup_health")
+	}
+
+	// Phase 5: DNS resolution engine (mihomo DNS)
+	if !coreStarted {
+		log.Info().Str("side", side).Str("phase", "dns_engine").Str("status", "skipped").
+			Str("reason", "core_not_started").Msg("startup_health")
+	} else if cfg.DNS.Enable {
+		log.Info().Str("side", side).Str("phase", "dns_engine").Str("status", "configured").
+			Str("mode", cfg.DNS.Mode).Int("port", cfg.Ports.DNS).
+			Msg("startup_health")
+	} else {
+		log.Info().Str("side", side).Str("phase", "dns_engine").Str("status", "disabled").
+			Msg("startup_health")
+	}
+
+	// Phase 6: ports summary
+	log.Info().Str("side", side).Str("phase", "ports").Str("status", "ok").
+		Int("mixed", cfg.Ports.Mixed).Int("tproxy", cfg.Ports.TProxy).
+		Int("dns", cfg.Ports.DNS).Int("mihomo_api", cfg.Ports.MihomoAPI).
+		Int("ui", cfg.Ports.UI).
+		Msg("startup_health")
+
+	// Summary
+	log.Info().Str("side", side).
+		Bool("core_running", coreStarted).
+		Bool("transparent_proxy", coreStarted && cfg.Network.ApplyOnStart &&
+			cfg.Network.Mode != "none" && nfManager.IsApplied()).
+		Bool("dns_redirect", dnsManaged).
+		Bool("dns_engine", coreStarted && cfg.DNS.Enable).
+		Msg("startup_summary")
 }
 
 func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {

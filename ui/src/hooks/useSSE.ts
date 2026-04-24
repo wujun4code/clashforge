@@ -4,7 +4,7 @@ type Handlers = {
   onTraffic?:    (d: { up: number; down: number; ts: number }) => void
   onCoreState?:  (d: { state: string; pid: number }) => void
   onSubUpdate?:  (d: { id: string; status: string; node_count?: number; error?: string }) => void
-  onLog?:        (d: { level: string; msg: string; ts: number }) => void
+  onLog?:        (d: { level: string; msg: string; ts: number; fields?: Record<string, unknown> }) => void
   onConnCount?:  (d: { total: number; active: number }) => void
 }
 

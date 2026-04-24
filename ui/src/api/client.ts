@@ -287,9 +287,7 @@ export interface Connection {
   metadata: { host: string; destinationPort: number; type: string; network: string; sourceIP: string }
 }
 
-export interface LogEntry { type: string; payload: string; time?: string }
-
-// ---- API calls ----
+export interface LogEntry { level: string; msg: string; ts: number; fields?: Record<string, unknown> }
 export const getStatus        = () => request<StatusData>('GET', '/status')
 export const getOverview      = () => request<OverviewData>('GET', '/overview')
 export const getOverviewCore  = () => request<OverviewCoreData>('GET', '/overview/core')
@@ -397,4 +395,3 @@ export const deleteSourceFile = (filename: string) => request('DELETE', `/config
 export const getActiveSource  = () => request<{active_source: ActiveSource | null}>('GET', '/config/active-source')
 export const setActiveSource  = (as: ActiveSource) => request<{updated: boolean}>('PUT', '/config/active-source', as)
 
-export interface LogEntry { level: string; msg: string; ts: number }

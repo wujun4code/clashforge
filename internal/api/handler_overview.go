@@ -771,8 +771,9 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 		{Name: "IP.SB", Group: "国外", URL: "https://api.ip.sb/geoip"},
 		{Name: "IPInfo", Group: "国外", URL: "https://ipinfo.io/json"},
 	}
+	batch := shortBatchID()
 	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
-	logDNSSnapshot(snap)
+	logDNSSnapshot(snap, batch, "router")
 	result := make([]overviewIPCheck, len(providers))
 	var wg sync.WaitGroup
 	for index, provider := range providers {
@@ -782,17 +783,17 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 			GBK              bool
 		}) {
 			defer wg.Done()
-			log.Info().Str("provider", spec.Name).Str("url", spec.URL).Msg("ip_check start")
-			logResolveResult(resolveForDebug(spec.URL))
+			log.Info().Str("batch", batch).Str("side", "router").Str("provider", spec.Name).Str("url", spec.URL).Msg("ip_check start")
+			logResolveResult(resolveForDebug(spec.URL), batch, "router")
 			start := time.Now()
 			check, err := fetchIPCheck(deps, spec.Name, spec.URL, spec.GBK)
 			latency := time.Since(start)
 			if err != nil {
-				log.Info().Str("provider", spec.Name).Str("url", spec.URL).Dur("latency", latency).Err(err).Msg("ip_check failed")
+				log.Info().Str("batch", batch).Str("side", "router").Str("provider", spec.Name).Str("url", spec.URL).Dur("latency", latency).Err(err).Msg("ip_check failed")
 				result[i] = overviewIPCheck{Provider: spec.Name, Group: spec.Group, OK: false, Error: err.Error()}
 				return
 			}
-			log.Info().Str("provider", spec.Name).Str("url", spec.URL).Str("ip", check.IP).Str("location", check.Location).Dur("latency", latency).Msg("ip_check ok")
+			log.Info().Str("batch", batch).Str("side", "router").Str("provider", spec.Name).Str("url", spec.URL).Str("ip", check.IP).Str("location", check.Location).Dur("latency", latency).Msg("ip_check ok")
 			check.Group = spec.Group
 			result[i] = check
 		}(index, provider)
@@ -816,19 +817,20 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 		{Name: "Claude", Group: "AI", URL: "https://api.anthropic.com", Description: "用于验证 Claude AI 是否可通过代理访问。"},
 		{Name: "Gemini", Group: "AI", URL: "https://gemini.google.com", Description: "用于验证 Google Gemini 是否可通过代理访问。"},
 	}
+	batch := shortBatchID()
 	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
-	logDNSSnapshot(snap)
+	logDNSSnapshot(snap, batch, "router")
 	checks := make([]overviewAccessCheck, 0, len(targets))
 	for _, target := range targets {
-		log.Info().Str("name", target.Name).Str("group", target.Group).Str("url", target.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
-		logResolveResult(resolveForDebug(target.URL))
+		log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("group", target.Group).Str("url", target.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
+		logResolveResult(resolveForDebug(target.URL), batch, "router")
 		start := time.Now()
 		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
 		latency := time.Since(start)
 		if probe.OK {
-			log.Info().Str("name", target.Name).Str("url", target.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Msg("access_check ok")
+			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Msg("access_check ok")
 		} else {
-			log.Info().Str("name", target.Name).Str("url", target.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Msg("access_check failed")
+			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Msg("access_check failed")
 		}
 		checks = append(checks, overviewAccessCheck{
 			Name:        target.Name,
@@ -1983,8 +1985,10 @@ func captureDNSSnapshot(mihomoPort int) dnsSnapshot {
 }
 
 // logDNSSnapshot emits a single structured log line for the current DNS state.
-func logDNSSnapshot(snap dnsSnapshot) {
+func logDNSSnapshot(snap dnsSnapshot, batch, side string) {
 	log.Info().
+		Str("batch", batch).
+		Str("side", side).
 		Bool("port53_udp", snap.Port53UDP).
 		Bool("port53_tcp", snap.Port53TCP).
 		Bool("mihomo_dns_listening", snap.MihomoListening).
@@ -2029,8 +2033,10 @@ func resolveForDebug(rawURL string) dnsResolveResult {
 }
 
 // logResolveResult emits a structured log line for one DNS resolution attempt.
-func logResolveResult(res dnsResolveResult) {
+func logResolveResult(res dnsResolveResult, batch, side string) {
 	e := log.Info().
+		Str("batch", batch).
+		Str("side", side).
 		Str("host", res.Host).
 		Strs("addrs", res.Addrs).
 		Bool("fake_ip", res.IsFakeIP).
@@ -2039,6 +2045,11 @@ func logResolveResult(res dnsResolveResult) {
 		e = e.Str("error", res.Err)
 	}
 	e.Msg("dns_resolve")
+}
+
+// shortBatchID returns a compact 6-char hex identifier for grouping probe log lines.
+func shortBatchID() string {
+	return fmt.Sprintf("%06x", time.Now().UnixNano()&0xFFFFFF)
 }
 
 // isMihomoFakeIP reports whether addr falls in the default mihomo fake-IP
