@@ -1,37 +1,78 @@
-name: Auto Tag on PR Merge
+name: CI Pass → Merge, Tag, Release
 
-# Triggers on every push to main. When auto-merge.yml (GITHUB_TOKEN) squash-merges
-# a PR, GitHub suppresses pull_request:closed for other workflows (security policy),
-# but the push event to main IS still delivered.
+# This single workflow replaces auto-merge.yml + auto-tag.yml.
 #
-# We only create a tag when the actor is github-actions[bot] (i.e. the squash merge
-# came from auto-merge.yml). Direct human pushes to main are intentionally skipped.
+# Root cause of the old approach failing:
+#   GITHUB_TOKEN-triggered events (merges, pushes) do NOT cascade to other
+#   workflows — GitHub security policy. So auto-merge.yml (GITHUB_TOKEN merge)
+#   could never trigger auto-tag.yml, regardless of the event type.
 #
-# 1. Reads the latest v* tag, increments the trailing number
-# 2. Pushes the new tag with GITHUB_TOKEN
-# 3. Triggers release.yml via workflow_dispatch
+# Solution: do merge + tag + release dispatch all inside ONE workflow_run job.
+#   workflow_run fires when CI completes. Since this is a native GitHub event
+#   (not a GITHUB_TOKEN cascade), it is always delivered.
+#
+# Flow:
+#   CI passes on PR branch
+#     → workflow_run fires (this workflow)
+#       → squash-merge the PR
+#       → compute + push next version tag
+#       → gh workflow run release.yml --ref <tag>   ← explicit dispatch, always works
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 jobs:
-  auto-tag:
-    name: Bump version tag
-    if: github.actor == 'github-actions[bot]'
+  merge-tag-release:
+    name: Merge PR, bump tag, trigger release
+    # Only run when CI passed and was triggered by a pull_request event
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write   # needed for gh workflow run
+      pull-requests: write
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Resolve PR number
+        id: pr
+        run: |
+          PR_NUMBER=$(echo '${{ toJson(github.event.workflow_run.pull_requests) }}' \
+            | jq -r '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR associated with this workflow run — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Squash-merge PR
+        if: steps.pr.outputs.skip != 'true'
+        run: |
+          gh pr merge "${{ steps.pr.outputs.number }}" \
+            --squash \
+            --delete-branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch merged main
+        if: steps.pr.outputs.skip != 'true'
+        run: |
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
       - name: Compute next tag
         id: next
+        if: steps.pr.outputs.skip != 'true'
         run: |
           LATEST=$(git tag --list 'v*' --sort=-version:refname | head -1)
           echo "Latest tag: $LATEST"
@@ -55,16 +96,18 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Push tag
+        if: steps.pr.outputs.skip != 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "${{ steps.next.outputs.tag }}" \
-            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ github.event.pull_request.number }})"
+            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ steps.pr.outputs.number }})"
           git push origin "${{ steps.next.outputs.tag }}"
 
-      # GITHUB_TOKEN tag pushes don't re-trigger on:push:tags in other workflows.
-      # Instead, trigger release.yml directly via workflow_dispatch.
-      - name: Trigger release.yml
+      # Tag push via GITHUB_TOKEN does NOT trigger release.yml's on:push:tags.
+      # Use explicit workflow_dispatch — this always works.
+      - name: Trigger release build
+        if: steps.pr.outputs.skip != 'true'
         run: |
           gh workflow run release.yml \
             --ref "${{ steps.next.outputs.tag }}" \
