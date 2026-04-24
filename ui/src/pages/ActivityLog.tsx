@@ -352,9 +352,9 @@ export function ActivityLog() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Activity"
-        title="活动与日志中心"
-        description="把活跃连接、代理链路与实时日志放进同一个观察面板，便于快速定位拥塞、异常与回源行为。"
+        eyebrow="Traffic Detective"
+        title="流量侦查猫窝"
+        description="把活跃连接、代理链路与实时日志收进同一个观察面板，让你像一只敏锐的猫一样快速捕捉拥塞、异常与回源行为。"
         metrics={[
           { label: '视图', value: tab === 'connections' ? '连接面板' : '日志面板' },
           { label: '刷新', value: tab === 'connections' ? '2 秒轮询' : '3 秒 + SSE' },

@@ -11,15 +11,16 @@ export default function App() {
     <BrowserRouter>
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-xl focus:bg-brand focus:px-4 focus:py-2 focus:text-white"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-2xl focus:bg-violet-600 focus:px-4 focus:py-2 focus:text-white"
       >
         跳转到主要内容
       </a>
-      <div className="relative flex h-screen overflow-hidden bg-surface-0 text-[#F0EFF8]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(124,58,237,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.14),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_40%)]" />
+      <div className="cat-app-shell relative flex h-screen overflow-hidden bg-[#070b17] text-slate-100">
+        <div className="cat-app-aurora pointer-events-none absolute inset-0" />
+        <div className="cat-app-stars pointer-events-none absolute inset-0 opacity-70" />
         <Sidebar />
         <main id="main-content" className="relative z-10 flex-1 overflow-y-auto">
-          <div className="mx-auto min-h-full w-full max-w-[1680px] px-4 py-4 md:px-6 md:py-6">
+          <div className="mx-auto min-h-full w-full max-w-[1720px] px-4 py-4 md:px-6 md:py-6 xl:px-8">
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/config" element={<ConfigManagement />} />

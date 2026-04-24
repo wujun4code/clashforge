@@ -101,9 +101,9 @@ export function Settings() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Settings"
-        title="高级管理与系统行为"
-        description="调整 ClashForge 的核心路径、日志策略与系统级动作。所有改动只作用于管理体验与展示层，不改变业务流程。"
+        eyebrow="System Cat Box"
+        title="高级管理与系统猫箱"
+        description="调整 ClashForge 的核心路径、日志策略与系统级动作。保留工程师掌控感，同时让危险操作与系统反馈拥有更清晰、更友好的猫系表达。"
         actions={
           <button className="btn-primary flex items-center gap-2" onClick={saveGeneral} disabled={saving}>
             <Save size={14} /> {saving ? '保存中…' : '保存配置'}

@@ -775,9 +775,9 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Dashboard"
-        title="ClashForge 控制总台"
-        description="在一个更现代、更亮眼的控制面板里统一查看核心状态、模块健康、代理选择与连通性诊断。"
+        eyebrow="Cat Command Center"
+        title="ClashForge 猫猫控制台"
+        description="把工程师需要的核心状态、模块健康、节点切换与出口诊断，放进一个更可爱也更锋利的猫系操作台。"
         actions={
           <div className="flex items-center gap-2">
             <button
