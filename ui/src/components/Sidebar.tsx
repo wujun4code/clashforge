@@ -12,6 +12,8 @@ import {
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
 import { CatMascot } from './CatMascot'
+import { ThemeToggle } from './ThemeToggle'
+import { useTheme } from '../contexts/ThemeContext'
 
 type CoreState = 'running' | 'stopped' | 'checking'
 
@@ -74,6 +76,7 @@ const statusConfig: Record<CoreState, {
 
 export function Sidebar() {
   const [coreState, setCoreState] = useState<CoreState>('checking')
+  const { theme } = useTheme()
 
   useEffect(() => {
     const check = () => {
@@ -95,7 +98,17 @@ export function Sidebar() {
         {/* Logo row */}
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex h-11 w-11 items-center justify-center flex-shrink-0 rounded-2xl bg-gradient-to-br from-brand/25 via-accent-violet/15 to-paw/20 shadow-soft">
-            <CatMascot size={28} />
+            {theme === 'cyberpunk' ? (
+              <span
+                aria-hidden
+                className="font-display text-xl font-black text-brand"
+                style={{ textShadow: '0 0 10px rgba(0,245,255,0.6)' }}
+              >
+                ▲
+              </span>
+            ) : (
+              <CatMascot size={28} />
+            )}
           </div>
           <div className="min-w-0">
             <p className="font-display text-lg font-extrabold tracking-tight text-display-gradient leading-none">
@@ -195,7 +208,13 @@ export function Sidebar() {
       </nav>
 
       {/* ── Footer ───────────────────────────────────── */}
-      <div className="px-4 py-3 border-t border-white/5">
+      <div className="px-4 py-3 border-t border-white/5 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-muted)] font-semibold">
+            皮肤
+          </span>
+          <ThemeToggle />
+        </div>
         <div className="flex items-center justify-between px-3 py-2 rounded-lg border border-white/5 bg-surface-1/50">
           <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">build</span>
           <span className="font-mono text-[11px] text-brand/80">

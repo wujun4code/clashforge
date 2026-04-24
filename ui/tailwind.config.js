@@ -1,74 +1,62 @@
 /** @type {import('tailwindcss').Config} */
 /*
- * ClashForge "Cat Mascot + Geek" palette.
+ * ClashForge — dual-theme Tailwind config.
  *
- * NOTE: The old Tailwind token names (neon.*, surface.*, shadow.neon-*) are
- * kept intentionally so existing pages keep compiling. Their values have been
- * remapped from cyberpunk neon to a soft, warm, Clash-cat-inspired theme.
+ * Colors reference CSS custom properties defined in index.css. The actual
+ * values depend on the active theme (`data-theme="neko"` or
+ * `data-theme="cyberpunk"`) so the whole palette swaps at runtime without
+ * a rebuild.
  *
- *   surface.*    warm ink / night-sky background (soft dark)
- *   neon.cyan    cat blue (primary)
- *   neon.magenta paw-pad pink
- *   neon.yellow  pumpkin / honey (warning accent)
- *   neon.green   catnip green (success)
- *   neon.red     strawberry red (danger)
- *   neon.blue    deeper cat blue
- *   neon.violet  soft lavender
- *   neon.amber   tangerine
+ * Each color var is stored as a space-separated "R G B" triplet so Tailwind's
+ * `<alpha-value>` modifier keeps working (e.g. `bg-brand/20`).
  */
+const rgb = (name) => `rgb(var(--color-${name}) / <alpha-value>)`
+
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        // Soft warm-dark background stack. Still developer-friendly, but cozy
-        // rather than near-black. Accepts Tailwind alpha modifiers.
         surface: {
-          0: 'rgb(26 31 46 / <alpha-value>)',   // night sky
-          1: 'rgb(34 41 56 / <alpha-value>)',
-          2: 'rgb(43 51 70 / <alpha-value>)',
-          3: 'rgb(53 64 85 / <alpha-value>)',
-          4: 'rgb(65 77 102 / <alpha-value>)',
+          0: rgb('surface-0'),
+          1: rgb('surface-1'),
+          2: rgb('surface-2'),
+          3: rgb('surface-3'),
+          4: rgb('surface-4'),
         },
-        // Kept for backwards compat but remapped to soft cat colors
         neon: {
-          cyan:    '#6AA8E0',   // cat blue
-          magenta: '#F4A6B5',   // paw pad pink
-          yellow:  '#F5B86B',   // pumpkin / honey
-          green:   '#8FD4A8',   // catnip green
-          red:     '#E87E7E',   // strawberry red
-          blue:    '#4A86C5',   // deeper cat blue
-          violet:  '#C8B5E8',   // soft lavender
-          amber:   '#F5B066',   // tangerine
+          cyan:    rgb('neon-cyan'),
+          magenta: rgb('neon-magenta'),
+          yellow:  rgb('neon-yellow'),
+          green:   rgb('neon-green'),
+          red:     rgb('neon-red'),
+          blue:    rgb('neon-blue'),
+          violet:  rgb('neon-violet'),
+          amber:   rgb('neon-amber'),
         },
         accent: {
-          violet:       '#C8B5E8',
-          'violet-soft':'#DCCBF0',
-          amber:        '#F5B066',
-          'amber-soft': '#FACF9B',
+          violet:       rgb('accent-violet'),
+          'violet-soft':rgb('accent-violet-soft'),
+          amber:        rgb('accent-amber'),
+          'amber-soft': rgb('accent-amber-soft'),
         },
-        // Semantic – lean on the soft cat palette
-        brand:          '#6AA8E0',
-        'brand-light':  '#8FC1EC',
-        'brand-subtle': 'rgba(106, 168, 224, 0.10)',
-        cta:            '#F4A6B5',
-        'cta-subtle':   'rgba(244, 166, 181, 0.12)',
-        success:        '#8FD4A8',
-        'success-subtle':'rgba(143, 212, 168, 0.12)',
-        warning:        '#F5B86B',
-        'warning-subtle':'rgba(245, 184, 107, 0.12)',
-        danger:         '#E87E7E',
-        'danger-subtle':'rgba(232, 126, 126, 0.12)',
-        muted:          '#8EA0B8',
-        // Cat-specific tokens
-        cream:          '#F3E8D5',
-        'cream-soft':   '#FAF4E7',
-        paw:            '#F4A6B5',
+        brand:          rgb('brand'),
+        'brand-light':  rgb('brand-light'),
+        'brand-subtle': 'rgb(var(--color-brand) / 0.10)',
+        cta:            rgb('cta'),
+        'cta-subtle':   'rgb(var(--color-cta) / 0.12)',
+        success:        rgb('success'),
+        'success-subtle':'rgb(var(--color-success) / 0.12)',
+        warning:        rgb('warning'),
+        'warning-subtle':'rgb(var(--color-warning) / 0.12)',
+        danger:         rgb('danger'),
+        'danger-subtle':'rgb(var(--color-danger) / 0.12)',
+        muted:          rgb('muted'),
+        cream:          rgb('cream'),
+        'cream-soft':   rgb('cream-soft'),
+        paw:            rgb('paw'),
       },
       fontFamily: {
-        // Headings: friendly rounded sans (Nunito / Quicksand)
-        // Body: Inter + Noto Sans SC for zh
-        // Mono: JetBrains Mono / Fira Code – preserves the geek feel
         sans:    ['Inter', '"Noto Sans SC"', 'system-ui', 'sans-serif'],
         body:    ['Inter', '"Noto Sans SC"', 'system-ui', 'sans-serif'],
         mono:    ['"JetBrains Mono"', '"Fira Code"', 'ui-monospace', 'monospace'],
@@ -78,19 +66,18 @@ export default {
       opacity: { 96: '0.96' },
       backdropBlur: { xs: '2px' },
       boxShadow: {
-        // Soft, diffuse shadows – no glow. Names kept for back-compat.
-        'neon-cyan':    '0 4px 16px rgba(106,168,224,0.18), 0 2px 4px rgba(106,168,224,0.10)',
-        'neon-magenta': '0 4px 16px rgba(244,166,181,0.20), 0 2px 4px rgba(244,166,181,0.10)',
-        'neon-green':   '0 4px 16px rgba(143,212,168,0.20), 0 2px 4px rgba(143,212,168,0.10)',
-        'neon-yellow':  '0 4px 16px rgba(245,184,107,0.20), 0 2px 4px rgba(245,184,107,0.10)',
-        'neon-red':     '0 4px 16px rgba(232,126,126,0.22), 0 2px 4px rgba(232,126,126,0.10)',
-        'neon-violet':  '0 4px 16px rgba(200,181,232,0.22), 0 2px 4px rgba(200,181,232,0.10)',
-        'neon-amber':   '0 4px 16px rgba(245,176,102,0.22), 0 2px 4px rgba(245,176,102,0.10)',
+        'neon-cyan':    'var(--shadow-neon-cyan)',
+        'neon-magenta': 'var(--shadow-neon-magenta)',
+        'neon-green':   'var(--shadow-neon-green)',
+        'neon-yellow':  'var(--shadow-neon-yellow)',
+        'neon-red':     'var(--shadow-neon-red)',
+        'neon-violet':  'var(--shadow-neon-violet)',
+        'neon-amber':   'var(--shadow-neon-amber)',
         glass:    '0 4px 20px rgba(12, 18, 32, 0.35), 0 1px 2px rgba(12,18,32,0.20)',
         'glass-lg':'0 10px 32px rgba(12, 18, 32, 0.40), 0 2px 6px rgba(12,18,32,0.25)',
         hud:      '0 2px 8px rgba(12, 18, 32, 0.25), inset 0 1px 0 rgba(255,255,255,0.04)',
-        glow:     '0 4px 20px rgba(106,168,224,0.25)', // soft brand halo
-        paw:      '0 2px 6px rgba(244,166,181,0.30)',  // pink paw-print accent
+        glow:     'var(--shadow-glow)',
+        paw:      'var(--shadow-paw)',
         soft:     '0 1px 2px rgba(12,18,32,0.25), 0 4px 12px rgba(12,18,32,0.20)',
       },
       animation: {
@@ -100,8 +87,6 @@ export default {
         'scale-in':    'scaleIn 0.2s ease-out',
         'pulse-soft':  'pulseSoft 2s ease-in-out infinite',
         'shimmer':     'shimmer 2.5s linear infinite',
-        // Legacy names kept as gentle fallbacks so any stray `animate-glitch`
-        // etc. on pages no longer causes harsh motion.
         'glow-pulse':  'pulseSoft 2.4s ease-in-out infinite',
         'glitch':      'pulseSoft 3s ease-in-out infinite',
         'scanline':    'pulseSoft 4s ease-in-out infinite',
@@ -133,7 +118,6 @@ export default {
           '50%':      { transform: 'rotate(6deg)' },
         },
       },
-      // Generous, friendly radii
       borderRadius: {
         sm: '6px',
         DEFAULT: '10px',

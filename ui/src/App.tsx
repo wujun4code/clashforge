@@ -5,10 +5,12 @@ import { ConfigManagement } from './pages/ConfigManagement'
 import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
 import { Settings } from './pages/Settings'
+import { ThemeProvider } from './contexts/ThemeContext'
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-xl focus:bg-brand focus:px-4 focus:py-2 focus:text-white"
@@ -50,6 +52,7 @@ export default function App() {
           </div>
         </main>
       </div>
-    </BrowserRouter>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }
