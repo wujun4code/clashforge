@@ -15,25 +15,25 @@ export default function App() {
       >
         跳转到主要内容
       </a>
-      <div className="relative flex h-screen overflow-hidden bg-surface-0 text-[#F0EFF8]">
-        {/* Ambient cyber-glow background — cyan → violet → amber wash */}
-        <div className="pointer-events-none absolute inset-0 opacity-80">
+      <div className="relative flex h-screen overflow-hidden bg-surface-0 text-[color:var(--text-primary)]">
+        {/* Cozy ambient wash — soft cat-blue + paw-pink halos, no neon */}
+        <div className="pointer-events-none absolute inset-0">
           <div
-            className="absolute inset-0"
+            className="absolute inset-0 opacity-90"
             style={{
               background:
-                'radial-gradient(circle at 12% 8%, rgba(0,245,255,0.14), transparent 42%),' +
-                'radial-gradient(circle at 88% 18%, rgba(167,139,250,0.14), transparent 45%),' +
-                'radial-gradient(circle at 82% 96%, rgba(249,115,22,0.12), transparent 40%),' +
-                'radial-gradient(circle at 18% 92%, rgba(255,0,170,0.08), transparent 38%)',
+                'radial-gradient(circle at 15% 12%, rgba(106,168,224,0.18), transparent 45%),' +
+                'radial-gradient(circle at 85% 18%, rgba(200,181,232,0.14), transparent 45%),' +
+                'radial-gradient(circle at 82% 88%, rgba(244,166,181,0.13), transparent 42%),' +
+                'radial-gradient(circle at 18% 92%, rgba(143,212,168,0.10), transparent 40%)',
             }}
           />
-          {/* vignette */}
+          {/* Soft vignette for depth */}
           <div
             className="absolute inset-0"
             style={{
               background:
-                'radial-gradient(ellipse at center, transparent 40%, rgba(2,4,8,0.55) 100%)',
+                'radial-gradient(ellipse at center, transparent 55%, rgba(12,18,32,0.35) 100%)',
             }}
           />
         </div>

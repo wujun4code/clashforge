@@ -19,46 +19,31 @@ export function PageHeader({
   actions?: ReactNode
   metrics?: Array<{ label: string; value: string; color?: 'cyan' | 'green' | 'yellow' | 'magenta' | 'red' }>
 }) {
-  const metricGlow: Record<string, string> = {
-    cyan:    '0 0 8px rgba(0,245,255,0.5)',
-    green:   '0 0 8px rgba(0,255,136,0.5)',
-    yellow:  '0 0 8px rgba(255,230,0,0.5)',
-    magenta: '0 0 8px rgba(255,0,170,0.5)',
-    red:     '0 0 8px rgba(255,34,85,0.5)',
-  }
+  // token names kept for backwards compat, but now map to the soft cat palette
   const metricColor: Record<string, string> = {
-    cyan:    '#00F5FF',
-    green:   '#00FF88',
-    yellow:  '#FFE600',
-    magenta: '#FF00AA',
-    red:     '#FF2255',
+    cyan:    '#6AA8E0',
+    green:   '#8FD4A8',
+    yellow:  '#F5B86B',
+    magenta: '#F4A6B5',
+    red:     '#E87E7E',
   }
 
   return (
-    <section className="hero-panel relative overflow-hidden animate-fade-in">
-      {/* Ambient gradient */}
-      <div className="pointer-events-none absolute inset-0"
-        style={{ background: 'radial-gradient(circle at top right, rgba(0,245,255,0.08) 0%, transparent 40%), radial-gradient(circle at bottom left, rgba(255,0,170,0.06) 0%, transparent 40%)' }} />
-
+    <section className="hero-panel animate-fade-in">
       <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-3xl space-y-3">
           {/* Eyebrow tag */}
-          <div
-            className="inline-flex items-center gap-2 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.3em] text-neon-cyan"
-            style={{ border: '1px solid rgba(0,245,255,0.25)', background: 'rgba(0,245,255,0.06)' }}
-          >
-            <Terminal size={10} />
+          <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide text-brand border border-brand/30 bg-brand/10">
+            <Terminal size={11} />
             {eyebrow}
           </div>
 
           <div className="space-y-2">
-            <h1
-              className="font-mono text-2xl font-bold tracking-[0.04em] text-display-gradient md:text-3xl"
-            >
+            <h1 className="font-display text-2xl font-extrabold tracking-tight text-display-gradient md:text-3xl">
               {title}
             </h1>
             {description ? (
-              <p className="font-mono max-w-2xl text-xs leading-6 text-muted md:text-sm">
+              <p className="max-w-2xl text-sm leading-7 text-[color:var(--text-secondary)]">
                 {description}
               </p>
             ) : null}
@@ -77,16 +62,12 @@ export function PageHeader({
                 return (
                   <div
                     key={m.label}
-                    className="px-3 py-2.5 backdrop-blur-xl"
-                    style={{
-                      border: '1px solid rgba(0,245,255,0.12)',
-                      background: 'rgba(0,245,255,0.03)',
-                    }}
+                    className="rounded-xl border border-white/10 bg-surface-2/50 px-3 py-2.5 backdrop-blur-xl transition-colors hover:border-brand/30"
                   >
-                    <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">{m.label}</p>
+                    <p className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">{m.label}</p>
                     <p
-                      className="font-mono mt-1.5 text-sm font-bold"
-                      style={{ color: metricColor[c], textShadow: metricGlow[c] }}
+                      className="font-mono mt-1.5 text-sm font-bold tabular-nums"
+                      style={{ color: metricColor[c] }}
                     >
                       {m.value}
                     </p>
@@ -108,7 +89,6 @@ export function SectionCard({
   actions,
   children,
   className,
-  accent = 'cyan',
 }: {
   title?: string
   description?: string
@@ -117,29 +97,18 @@ export function SectionCard({
   className?: string
   accent?: 'cyan' | 'magenta' | 'yellow' | 'green' | 'red'
 }) {
-  const accentColor: Record<string, string> = {
-    cyan:    'rgba(0,245,255,0.25)',
-    magenta: 'rgba(255,0,170,0.25)',
-    yellow:  'rgba(255,230,0,0.25)',
-    green:   'rgba(0,255,136,0.25)',
-    red:     'rgba(255,34,85,0.25)',
-  }
-
   return (
     <section className={cn('glass-card glass-section', className)}>
       {title || description || actions ? (
         <div className="panel-header">
           <div>
             {title ? (
-              <h2
-                className="font-mono text-sm font-semibold uppercase tracking-[0.1em] text-white"
-                style={{ textShadow: `0 0 8px ${accentColor[accent]}` }}
-              >
-                <span className="text-neon-cyan/50 mr-1">{'>'}</span>{title}
+              <h2 className="font-display text-base font-bold tracking-tight text-[color:var(--text-primary)]">
+                {title}
               </h2>
             ) : null}
             {description ? (
-              <p className="font-mono mt-1 text-xs leading-6 text-muted">{description}</p>
+              <p className="mt-1 text-xs leading-6 text-[color:var(--text-muted)]">{description}</p>
             ) : null}
           </div>
           {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
@@ -200,11 +169,11 @@ export function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <div className="empty-state-icon">{icon ?? <Terminal size={18} />}</div>
+      <div className="empty-state-icon">{icon ?? <Terminal size={20} />}</div>
       <div className="space-y-1.5">
-        <p className="font-mono text-sm font-semibold uppercase tracking-[0.08em] text-white">{title}</p>
+        <p className="font-display text-base font-bold text-[color:var(--text-primary)]">{title}</p>
         {description ? (
-          <p className="font-mono mx-auto max-w-xl text-xs leading-6 text-muted">{description}</p>
+          <p className="mx-auto max-w-xl text-sm leading-6 text-[color:var(--text-muted)]">{description}</p>
         ) : null}
       </div>
       {action ? <div className="pt-1">{action}</div> : null}
@@ -231,23 +200,16 @@ export function InlineNotice({
     danger:  'notice-danger',
   }[tone]
 
-  const prefix = {
-    info:    '[INFO]',
-    success: '[OK]',
-    warning: '[WARN]',
-    danger:  '[ERR]',
-  }[tone]
-
   return (
     <div className={toneClass}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           {title ? (
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] opacity-90">
-              {prefix} {title}
+            <p className="font-display text-xs font-bold tracking-wide uppercase opacity-90">
+              {title}
             </p>
           ) : null}
-          <div className="font-mono mt-1 text-xs leading-6">{children}</div>
+          <div className="mt-1 text-sm leading-6">{children}</div>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -278,66 +240,39 @@ export function ModalShell({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md"
-      style={{ background: 'rgba(2,4,8,0.85)' }}
+      style={{ background: 'rgba(12,18,32,0.72)' }}
       onClick={dismissible ? onClose : undefined}
     >
-      {/* Scanline overlay on backdrop */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,245,255,0.02) 2px, rgba(0,245,255,0.02) 4px)',
-        }}
-      />
-
       <div
         className={cn('glass-modal w-full overflow-hidden animate-scale-in', maxWidth)}
-        style={{
-          clipPath: 'polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px))',
-          boxShadow: '0 0 40px rgba(0,245,255,0.1), 0 0 80px rgba(0,245,255,0.05)',
-        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal header */}
-        <div
-          className="flex items-start gap-3 px-5 py-4 md:px-6"
-          style={{ borderBottom: '1px solid rgba(0,245,255,0.10)' }}
-        >
+        <div className="flex items-start gap-3 px-5 py-4 md:px-6 border-b border-white/8">
           {icon ? (
-            <div
-              className="mt-0.5 flex-shrink-0 p-2 text-neon-cyan"
-              style={{ border: '1px solid rgba(0,245,255,0.25)', background: 'rgba(0,245,255,0.06)' }}
-            >
+            <div className="mt-0.5 flex-shrink-0 p-2 text-brand rounded-xl border border-brand/25 bg-brand/10">
               {icon}
             </div>
           ) : null}
           <div className="min-w-0 flex-1">
-            <h3
-              className="font-mono text-base font-bold uppercase tracking-[0.08em] text-white"
-              style={{ textShadow: '0 0 10px rgba(0,245,255,0.4)' }}
-            >
+            <h3 className="font-display text-lg font-bold text-[color:var(--text-primary)]">
               {title}
             </h3>
             {description ? (
-              <p className="font-mono mt-1 text-xs leading-5 text-muted">{description}</p>
+              <p className="mt-1 text-xs leading-5 text-[color:var(--text-muted)]">{description}</p>
             ) : null}
           </div>
           {dismissible && onClose ? (
             <button
               type="button"
               onClick={onClose}
-              className="flex-shrink-0 p-1.5 text-muted hover:text-neon-cyan transition-colors cursor-pointer"
+              className="flex-shrink-0 rounded-lg p-1.5 text-[color:var(--text-muted)] hover:bg-surface-2/60 hover:text-[color:var(--text-primary)] transition-colors cursor-pointer"
               aria-label="关闭"
             >
-              <X size={14} />
+              <X size={16} />
             </button>
           ) : null}
         </div>
-
-        {/* Top-right corner accent */}
-        <div
-          className="pointer-events-none absolute top-0 right-0"
-          style={{ width: 14, height: 14, background: 'linear-gradient(225deg, rgba(0,245,255,0.5) 0%, transparent 60%)' }}
-        />
 
         <div className="px-5 py-5 md:px-6">{children}</div>
       </div>

@@ -202,10 +202,10 @@ async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<Brow
 
 function Pill({ tone, label }: { tone: 'success' | 'warning' | 'danger' | 'muted'; label: string }) {
   const styles: Record<string, { border: string; bg: string; color: string; glow: string }> = {
-    success: { border: 'rgba(0,255,136,0.35)', bg: 'rgba(0,255,136,0.08)', color: '#00FF88', glow: '0 0 6px rgba(0,255,136,0.5)' },
-    warning: { border: 'rgba(255,230,0,0.35)', bg: 'rgba(255,230,0,0.08)', color: '#FFE600', glow: '0 0 6px rgba(255,230,0,0.5)' },
-    danger:  { border: 'rgba(255,34,85,0.35)',  bg: 'rgba(255,34,85,0.08)',  color: '#FF2255', glow: '0 0 6px rgba(255,34,85,0.5)' },
-    muted:   { border: 'rgba(255,255,255,0.10)', bg: 'rgba(255,255,255,0.04)', color: '#4A6080', glow: 'none' },
+    success: { border: 'rgba(143,212,168,0.35)', bg: 'rgba(143,212,168,0.08)', color: '#8FD4A8', glow: '0 0 6px rgba(143,212,168,0.5)' },
+    warning: { border: 'rgba(245,184,107,0.35)', bg: 'rgba(245,184,107,0.08)', color: '#F5B86B', glow: '0 0 6px rgba(245,184,107,0.5)' },
+    danger:  { border: 'rgba(232,126,126,0.35)',  bg: 'rgba(232,126,126,0.08)',  color: '#E87E7E', glow: '0 0 6px rgba(232,126,126,0.5)' },
+    muted:   { border: 'rgba(255,255,255,0.10)', bg: 'rgba(255,255,255,0.04)', color: '#8EA0B8', glow: 'none' },
   }
   const s = styles[tone]
   return (
@@ -226,16 +226,16 @@ function ModuleRow({ module }: { module: OverviewModule }) {
     : module.status === 'inactive' ? 'danger'
     : 'muted'
   const statusLabel = managed ? 'MANAGED' : module.status === 'conflict' ? 'CONFLICT' : module.status === 'inactive' ? 'INACTIVE' : 'STANDBY'
-  const accentColor = { success: 'rgba(0,255,136,0.2)', warning: 'rgba(255,230,0,0.2)', danger: 'rgba(255,34,85,0.2)', muted: 'rgba(74,96,128,0.2)' }[tone]
+  const accentColor = { success: 'rgba(143,212,168,0.2)', warning: 'rgba(245,184,107,0.2)', danger: 'rgba(232,126,126,0.2)', muted: 'rgba(74,96,128,0.2)' }[tone]
 
   return (
     <div
       className="px-4 py-3 transition-all duration-200"
-      style={{ border: '1px solid rgba(0,245,255,0.08)', background: `linear-gradient(135deg, rgba(6,12,18,0.8), ${accentColor})` }}
+      style={{ border: '1px solid rgba(106,168,224,0.08)', background: `linear-gradient(135deg, rgba(6,12,18,0.8), ${accentColor})` }}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#C8E8F0] truncate">{module.title}</p>
+          <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#EDE6D7] truncate">{module.title}</p>
           <p className="font-mono text-[10px] text-muted mt-0.5 truncate">{module.current_owner}</p>
         </div>
         <Pill tone={tone} label={statusLabel} />
@@ -248,11 +248,11 @@ function ModuleRow({ module }: { module: OverviewModule }) {
 
 function LatencyBar({ ms }: { ms: number }) {
   if (!ms || ms <= 0) return <span className="font-mono text-[10px] text-muted">—</span>
-  const color = ms < 100 ? '#00FF88' : ms < 300 ? '#FFE600' : '#FF2255'
+  const color = ms < 100 ? '#8FD4A8' : ms < 300 ? '#F5B86B' : '#E87E7E'
   const width = ms < 100 ? '90%' : ms < 300 ? '55%' : '25%'
   return (
     <div className="flex items-center gap-2">
-      <div className="w-10 h-0.5 overflow-hidden" style={{ background: 'rgba(0,245,255,0.1)' }}>
+      <div className="w-10 h-0.5 overflow-hidden" style={{ background: 'rgba(106,168,224,0.1)' }}>
         <div className="h-full transition-all duration-500" style={{ width, background: color, boxShadow: `0 0 4px ${color}` }} />
       </div>
       <span className="font-mono text-[10px] tabular-nums" style={{ color, textShadow: `0 0 6px ${color}` }}>{ms}ms</span>
@@ -268,30 +268,30 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
   const members = (group.all ?? []).filter(n => !IGNORED.includes(n))
 
   return (
-    <div style={{ border: '1px solid rgba(0,245,255,0.10)', overflow: 'hidden' }}>
+    <div style={{ border: '1px solid rgba(106,168,224,0.10)', overflow: 'hidden' }}>
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center justify-between px-4 py-3 cursor-pointer transition-all duration-200"
-        style={{ background: open ? 'rgba(0,245,255,0.04)' : 'transparent' }}
-        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,245,255,0.06)' }}
-        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = open ? 'rgba(0,245,255,0.04)' : 'transparent' }}
+        style={{ background: open ? 'rgba(106,168,224,0.04)' : 'transparent' }}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(106,168,224,0.06)' }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = open ? 'rgba(106,168,224,0.04)' : 'transparent' }}
       >
         <div className="flex items-center gap-3">
           <span
             className="font-mono text-xs font-bold uppercase tracking-[0.08em]"
-            style={{ color: '#00F5FF', textShadow: '0 0 8px rgba(0,245,255,0.5)' }}
+            style={{ color: '#6AA8E0', textShadow: '0 0 8px rgba(106,168,224,0.5)' }}
           >
             {name}
           </span>
           <span
             className="font-mono text-[9px] px-1.5 py-0.5 uppercase tracking-[0.1em] text-muted"
-            style={{ border: '1px solid rgba(0,245,255,0.15)' }}
+            style={{ border: '1px solid rgba(106,168,224,0.15)' }}
           >
             {group.type}
           </span>
           {group.now && (
             <span className="font-mono text-[10px] text-muted">
-              {'→ '}<span style={{ color: '#C8E8F0' }}>{group.now}</span>
+              {'→ '}<span style={{ color: '#EDE6D7' }}>{group.now}</span>
             </span>
           )}
         </div>
@@ -301,7 +301,7 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
       {open && (
         <div
           className="px-2 pb-2 space-y-0.5 max-h-64 overflow-y-auto"
-          style={{ borderTop: '1px solid rgba(0,245,255,0.06)' }}
+          style={{ borderTop: '1px solid rgba(106,168,224,0.06)' }}
         >
           {members.map(m => {
             const node = allProxies[m]
@@ -316,23 +316,23 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
                 onClick={() => { if (group.type === 'Selector') onSelect(name, m) }}
                 className="w-full flex items-center gap-3 px-3 py-2 transition-all duration-200 text-left cursor-pointer"
                 style={{
-                  background: isSelected ? 'rgba(0,245,255,0.08)' : 'transparent',
-                  borderLeft: isSelected ? '2px solid #00F5FF' : '2px solid transparent',
+                  background: isSelected ? 'rgba(106,168,224,0.08)' : 'transparent',
+                  borderLeft: isSelected ? '2px solid #6AA8E0' : '2px solid transparent',
                 }}
-                onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(0,245,255,0.04)' }}
+                onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(106,168,224,0.04)' }}
                 onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
               >
                 <div
                   className="w-1.5 h-1.5 flex-shrink-0"
                   style={{
-                    background: isSelected ? '#00F5FF' : 'rgba(74,96,128,0.5)',
-                    boxShadow: isSelected ? '0 0 6px #00F5FF' : 'none',
+                    background: isSelected ? '#6AA8E0' : 'rgba(74,96,128,0.5)',
+                    boxShadow: isSelected ? '0 0 6px #6AA8E0' : 'none',
                   }}
                 />
                 <div className="flex-1 min-w-0">
                   <p
                     className="font-mono text-xs truncate"
-                    style={{ color: isSelected ? '#00F5FF' : '#C8E8F0', textShadow: isSelected ? '0 0 6px rgba(0,245,255,0.5)' : 'none' }}
+                    style={{ color: isSelected ? '#6AA8E0' : '#EDE6D7', textShadow: isSelected ? '0 0 6px rgba(106,168,224,0.5)' : 'none' }}
                   >
                     {node.name}
                   </p>
@@ -350,12 +350,12 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
                 onClick={() => onSelect(name, n)}
                 className="w-full flex items-center gap-3 px-3 py-2 transition-all duration-200 text-left cursor-pointer"
                 style={{
-                  background: isSelected ? 'rgba(0,245,255,0.08)' : 'transparent',
-                  borderLeft: isSelected ? '2px solid #00F5FF' : '2px solid transparent',
+                  background: isSelected ? 'rgba(106,168,224,0.08)' : 'transparent',
+                  borderLeft: isSelected ? '2px solid #6AA8E0' : '2px solid transparent',
                 }}
               >
-                <div className="w-1.5 h-1.5 flex-shrink-0" style={{ background: isSelected ? '#00F5FF' : 'rgba(74,96,128,0.5)' }} />
-                <span className="font-mono text-xs" style={{ color: isSelected ? '#00F5FF' : '#C8E8F0' }}>{n}</span>
+                <div className="w-1.5 h-1.5 flex-shrink-0" style={{ background: isSelected ? '#6AA8E0' : 'rgba(74,96,128,0.5)' }} />
+                <span className="font-mono text-xs" style={{ color: isSelected ? '#6AA8E0' : '#EDE6D7' }}>{n}</span>
               </button>
             )
           })}
@@ -368,11 +368,11 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
 function MetricTile({ icon, label, value, hint, color = 'cyan' }: {
   icon: ReactNode; label: string; value: string; hint?: string; color?: 'cyan' | 'green' | 'magenta' | 'yellow'
 }) {
-  const c = { cyan: '#00F5FF', green: '#00FF88', magenta: '#FF00AA', yellow: '#FFE600' }[color]
+  const c = { cyan: '#6AA8E0', green: '#8FD4A8', magenta: '#F4A6B5', yellow: '#F5B86B' }[color]
   return (
     <div
       className="px-4 py-3 transition-all duration-200 hud-bracket"
-      style={{ border: '1px solid rgba(0,245,255,0.10)', background: 'rgba(6,12,18,0.7)' }}
+      style={{ border: '1px solid rgba(106,168,224,0.10)', background: 'rgba(6,12,18,0.7)' }}
     >
       <div className="flex items-center gap-1.5" style={{ color: 'rgba(74,96,128,0.8)' }}>
         {icon}
@@ -395,8 +395,8 @@ function StatusDot({ online }: { online: boolean }) {
       className="inline-flex h-1.5 w-1.5 flex-shrink-0"
       aria-hidden
       style={{
-        background: online ? '#00FF88' : '#FF2255',
-        boxShadow: online ? '0 0 6px #00FF88, 0 0 12px rgba(0,255,136,0.4)' : '0 0 6px #FF2255',
+        background: online ? '#8FD4A8' : '#E87E7E',
+        boxShadow: online ? '0 0 6px #8FD4A8, 0 0 12px rgba(143,212,168,0.4)' : '0 0 6px #E87E7E',
         animation: online ? 'pulseSoft 2s ease-in-out infinite' : 'none',
       }}
     />
@@ -415,12 +415,12 @@ function groupBy<T extends { group?: string }>(items: T[]): [string, T[]][] {
 
 function GroupTag({ label }: { label: string }) {
   const s = label === '国内'
-    ? { color: '#00F5FF', border: 'rgba(0,245,255,0.3)', bg: 'rgba(0,245,255,0.06)' }
+    ? { color: '#6AA8E0', border: 'rgba(106,168,224,0.3)', bg: 'rgba(106,168,224,0.06)' }
     : label === '国外'
-      ? { color: '#FF00AA', border: 'rgba(255,0,170,0.3)', bg: 'rgba(255,0,170,0.06)' }
+      ? { color: '#F4A6B5', border: 'rgba(244,166,181,0.3)', bg: 'rgba(244,166,181,0.06)' }
       : label === 'AI'
-        ? { color: '#FFE600', border: 'rgba(255,230,0,0.3)', bg: 'rgba(255,230,0,0.06)' }
-        : { color: '#4A6080', border: 'rgba(74,96,128,0.3)', bg: 'rgba(74,96,128,0.06)' }
+        ? { color: '#F5B86B', border: 'rgba(245,184,107,0.3)', bg: 'rgba(245,184,107,0.06)' }
+        : { color: '#8EA0B8', border: 'rgba(74,96,128,0.3)', bg: 'rgba(74,96,128,0.06)' }
   return (
     <span
       className="inline-flex items-center px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.15em]"
@@ -433,20 +433,20 @@ function GroupTag({ label }: { label: string }) {
 
 function IPCard({ item }: { item: OverviewIPCheck }) {
   return (
-    <div className="px-4 py-3 transition-all duration-200" style={{ border: '1px solid rgba(0,245,255,0.08)', background: 'rgba(6,12,18,0.6)' }}>
+    <div className="px-4 py-3 transition-all duration-200" style={{ border: '1px solid rgba(106,168,224,0.08)', background: 'rgba(6,12,18,0.6)' }}>
       <div className="flex items-center justify-between gap-3">
-        <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#C8E8F0]">{item.provider}</p>
+        <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#EDE6D7]">{item.provider}</p>
         <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? 'RESOLVED' : 'FAILED'} />
       </div>
       {item.ok ? (
         <>
-          <p className="font-mono text-base font-bold mt-2 tabular-nums" style={{ color: '#00F5FF', textShadow: '0 0 8px rgba(0,245,255,0.5)' }}>
+          <p className="font-mono text-base font-bold mt-2 tabular-nums" style={{ color: '#6AA8E0', textShadow: '0 0 8px rgba(106,168,224,0.5)' }}>
             {item.ip || '--'}
           </p>
           <p className="font-mono text-[10px] text-muted mt-1 leading-5">{item.location || 'NO_LOCATION'}</p>
         </>
       ) : (
-        <p className="font-mono text-[10px] mt-2 leading-5" style={{ color: '#FF2255' }}>{item.error || 'FETCH_FAILED'}</p>
+        <p className="font-mono text-[10px] mt-2 leading-5" style={{ color: '#E87E7E' }}>{item.error || 'FETCH_FAILED'}</p>
       )}
     </div>
   )
@@ -454,15 +454,15 @@ function IPCard({ item }: { item: OverviewIPCheck }) {
 
 function AccessCard({ item }: { item: OverviewAccessCheck }) {
   return (
-    <div className="px-4 py-3" style={{ border: '1px solid rgba(0,245,255,0.08)', background: 'rgba(6,12,18,0.6)' }}>
+    <div className="px-4 py-3" style={{ border: '1px solid rgba(106,168,224,0.08)', background: 'rgba(6,12,18,0.6)' }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#C8E8F0] truncate">{item.name}</p>
+          <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#EDE6D7] truncate">{item.name}</p>
           <p className="font-mono text-[10px] text-muted mt-0.5">{item.description}</p>
         </div>
         <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? 'OK' : 'ERR'} />
       </div>
-      <p className="font-mono text-xs mt-2" style={{ color: item.ok ? '#00FF88' : '#FF2255' }}>
+      <p className="font-mono text-xs mt-2" style={{ color: item.ok ? '#8FD4A8' : '#E87E7E' }}>
         {item.ok ? `${item.latency_ms ?? 0}ms` : (item.error || 'REQUEST_FAILED')}
       </p>
       <p className="font-mono text-[9px] text-muted mt-1 break-all">{item.url}</p>
@@ -474,20 +474,20 @@ function ProcessCard({ name, pid, cpu, memory, uptime, running, command }: {
   name: string; pid: number; cpu: number; memory: number; uptime: number; running: boolean; command?: string
 }) {
   return (
-    <div className="px-4 py-3" style={{ border: '1px solid rgba(0,245,255,0.10)', background: 'rgba(6,12,18,0.7)' }}>
+    <div className="px-4 py-3" style={{ border: '1px solid rgba(106,168,224,0.10)', background: 'rgba(6,12,18,0.7)' }}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <StatusDot online={running} />
-          <p className="font-mono text-xs font-bold uppercase tracking-[0.08em]" style={{ color: '#C8E8F0' }}>{name}</p>
+          <p className="font-mono text-xs font-bold uppercase tracking-[0.08em]" style={{ color: '#EDE6D7' }}>{name}</p>
         </div>
         <span className="font-mono text-[10px] text-muted">PID_{pid || '--'}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 mt-3">
         {[
-          { label: 'CPU', val: formatPercent(cpu), color: cpu > 80 ? '#FF2255' : cpu > 50 ? '#FFE600' : '#00FF88' },
-          { label: 'MEM', val: formatMB(memory), color: '#00F5FF' },
-          { label: 'UPTIME', val: formatUptime(uptime), color: '#FF00AA' },
-          { label: 'STATUS', val: running ? 'ONLINE' : 'OFFLINE', color: running ? '#00FF88' : '#FF2255' },
+          { label: 'CPU', val: formatPercent(cpu), color: cpu > 80 ? '#E87E7E' : cpu > 50 ? '#F5B86B' : '#8FD4A8' },
+          { label: 'MEM', val: formatMB(memory), color: '#6AA8E0' },
+          { label: 'UPTIME', val: formatUptime(uptime), color: '#F4A6B5' },
+          { label: 'STATUS', val: running ? 'ONLINE' : 'OFFLINE', color: running ? '#8FD4A8' : '#E87E7E' },
         ].map(({ label, val, color }) => (
           <div key={label}>
             <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">{label}</p>
@@ -513,10 +513,10 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
   const accessGroups = groupBy(accessChecks)
   const hasContent = ipChecks.length > 0 || accessChecks.length > 0
   return (
-    <div style={{ border: '1px solid rgba(0,245,255,0.10)', overflow: 'hidden', background: 'rgba(2,4,8,0.6)' }}>
+    <div style={{ border: '1px solid rgba(106,168,224,0.10)', overflow: 'hidden', background: 'rgba(2,4,8,0.6)' }}>
       <div
         className="flex items-center justify-between gap-3 px-4 py-3"
-        style={{ borderBottom: '1px solid rgba(0,245,255,0.08)', background: 'rgba(0,245,255,0.03)' }}
+        style={{ borderBottom: '1px solid rgba(106,168,224,0.08)', background: 'rgba(106,168,224,0.03)' }}
       >
         <div>
           <div className="flex items-center gap-2">
@@ -539,7 +539,7 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-muted whitespace-nowrap">EGRESS_IP</span>
-                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(0,245,255,0.15), transparent)' }} />
+                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(106,168,224,0.15), transparent)' }} />
                 </div>
                 {ipGroups.map(([group, items]) => (
                   <div key={group} className="space-y-1.5">
@@ -555,7 +555,7 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-muted whitespace-nowrap">ACCESS_CHECK</span>
-                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(0,245,255,0.15), transparent)' }} />
+                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(106,168,224,0.15), transparent)' }} />
                 </div>
                 {accessGroups.map(([group, items]) => (
                   <div key={group} className="space-y-1.5">
@@ -581,22 +581,22 @@ function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: (
     <div
       className="relative overflow-hidden px-5 py-4 animate-slide-up"
       style={{
-        border: '1px solid rgba(255,230,0,0.3)',
-        background: 'linear-gradient(135deg, rgba(255,230,0,0.06), rgba(2,4,8,0.8))',
+        border: '1px solid rgba(245,184,107,0.3)',
+        background: 'linear-gradient(135deg, rgba(245,184,107,0.06), rgba(2,4,8,0.8))',
         clipPath: 'polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))',
       }}
     >
       {/* Corner accent */}
-      <div className="pointer-events-none absolute top-0 right-0" style={{ width: 12, height: 12, background: 'linear-gradient(225deg, rgba(255,230,0,0.6) 0%, transparent 60%)' }} />
+      <div className="pointer-events-none absolute top-0 right-0" style={{ width: 12, height: 12, background: 'linear-gradient(225deg, rgba(245,184,107,0.6) 0%, transparent 60%)' }} />
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="min-w-0">
           <div
             className="inline-flex items-center gap-1.5 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em]"
-            style={{ border: '1px solid rgba(255,230,0,0.4)', background: 'rgba(255,230,0,0.08)', color: '#FFE600', textShadow: '0 0 8px rgba(255,230,0,0.8)' }}
+            style={{ border: '1px solid rgba(245,184,107,0.4)', background: 'rgba(245,184,107,0.08)', color: '#F5B86B', textShadow: '0 0 8px rgba(245,184,107,0.8)' }}
           >
             <Zap size={10} /> UPDATE_AVAILABLE
           </div>
-          <p className="font-mono text-sm font-bold mt-2" style={{ color: '#FFE600', textShadow: '0 0 10px rgba(255,230,0,0.5)' }}>
+          <p className="font-mono text-sm font-bold mt-2" style={{ color: '#F5B86B', textShadow: '0 0 10px rgba(245,184,107,0.5)' }}>
             v{data.latest} detected
           </p>
           <p className="font-mono text-[10px] text-muted mt-1">current: v{data.current} — upgrade via GitHub Releases</p>
@@ -607,7 +607,7 @@ function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: (
             target="_blank"
             rel="noopener noreferrer"
             className="btn-sm inline-flex items-center gap-1.5 cursor-pointer"
-            style={{ border: '1px solid rgba(255,230,0,0.4)', color: '#FFE600', background: 'rgba(255,230,0,0.08)' }}
+            style={{ border: '1px solid rgba(245,184,107,0.4)', color: '#F5B86B', background: 'rgba(245,184,107,0.08)' }}
           >
             <ExternalLink size={11} />
             RELEASES
