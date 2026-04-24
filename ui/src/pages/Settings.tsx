@@ -179,6 +179,25 @@ export function Settings() {
               ]}
             />
           </Field>
+          <Field label="IPv6 透明代理" hint="同时拦截 IPv6 流量，防止浏览器优先走 IPv6 绕过代理">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!!get(['network', 'ipv6'])}
+              onClick={() => set(['network', 'ipv6'], !get(['network', 'ipv6']))}
+              className={[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200',
+                get(['network', 'ipv6']) ? 'bg-brand' : 'bg-white/10',
+              ].join(' ')}
+            >
+              <span
+                className={[
+                  'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200',
+                  get(['network', 'ipv6']) ? 'translate-x-5' : 'translate-x-0',
+                ].join(' ')}
+              />
+            </button>
+          </Field>
         </div>
       </SectionCard>
 

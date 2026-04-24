@@ -21,6 +21,7 @@ type NftablesBackend struct {
 	EnableDNSRedirect bool
 	BypassFakeIP      bool
 	BypassCIDR        []string
+	EnableIPv6        bool
 }
 
 var nftTableTemplate = template.Must(template.New("nft").Parse(`
@@ -32,7 +33,19 @@ table inet metaclash {
 {{ .BypassIPv4Elements }}
         }
     }
-
+{{ if .EnableIPv6 }}
+    set bypass_ipv6 {
+        type ipv6_addr
+        flags interval
+        elements = {
+            ::1/128,
+            fc00::/7,
+            fe80::/10,
+            ff00::/8,
+            100::/64
+        }
+    }
+{{ end }}
 {{ if .EnableDNSRedirect }}
     chain dns_redirect {
         type nat hook prerouting priority dstnat; policy accept;
@@ -50,6 +63,10 @@ table inet metaclash {
         fib saddr type local return
         ip daddr @bypass_ipv4 return
         meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:{{ .TProxyPort }} meta mark set {{ .FWMark }}
+{{ if .EnableIPv6 }}
+        ip6 daddr @bypass_ipv6 return
+        meta l4proto { tcp, udp } tproxy ip6 to [::1]:{{ .TProxyPort }} meta mark set {{ .FWMark }}
+{{ end }}
     }
 }
 `))
@@ -61,12 +78,14 @@ func (n *NftablesBackend) Apply() error {
 		TProxyPort         int
 		DNSPort            int
 		EnableDNSRedirect  bool
+		EnableIPv6         bool
 		BypassIPv4Elements string
 	}{
 		FWMark:             fwMark,
 		TProxyPort:         n.TProxyPort,
 		DNSPort:            n.DNSPort,
 		EnableDNSRedirect:  n.EnableDNSRedirect,
+		EnableIPv6:         n.EnableIPv6,
 		BypassIPv4Elements: buildBypassIPv4Elements(n.BypassFakeIP, n.BypassCIDR),
 	}
 	var buf bytes.Buffer
@@ -84,9 +103,15 @@ func (n *NftablesBackend) Apply() error {
 		return fmt.Errorf("nft apply: %w: %s", err, string(out))
 	}
 
-	// Setup policy routing
+	// Setup policy routing (IPv4)
 	_ = exec.Command("ip", "rule", "add", "fwmark", fwMark, "table", routeTable).Run()
 	_ = exec.Command("ip", "route", "add", "local", "default", "dev", "lo", "table", routeTable).Run()
+
+	// Setup policy routing (IPv6) — only when IPv6 tproxy is enabled
+	if n.EnableIPv6 {
+		_ = exec.Command("ip", "-6", "rule", "add", "fwmark", fwMark, "table", routeTable).Run()
+		_ = exec.Command("ip", "-6", "route", "add", "local", "default", "dev", "lo", "table", routeTable).Run()
+	}
 	return nil
 }
 
@@ -102,6 +127,8 @@ func (n *NftablesBackend) Cleanup() error {
 	}
 	_ = exec.Command("ip", "rule", "del", "fwmark", fwMark, "table", routeTable).Run()
 	_ = exec.Command("ip", "route", "flush", "table", routeTable).Run()
+	_ = exec.Command("ip", "-6", "rule", "del", "fwmark", fwMark, "table", routeTable).Run()
+	_ = exec.Command("ip", "-6", "route", "flush", "table", routeTable).Run()
 	return nil
 }
 
