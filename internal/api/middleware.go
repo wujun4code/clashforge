@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -24,14 +23,7 @@ func recoverMiddleware(next http.Handler) http.Handler {
 
 func loggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
 		next.ServeHTTP(w, r)
-		// Skip logging for high-frequency polling endpoints to avoid log noise
-		path := r.URL.Path
-		if path == "/api/v1/logs" || path == "/api/v1/status" || path == "/api/v1/events" || path == "/healthz" {
-			return
-		}
-		log.Info().Str("method", r.Method).Str("path", path).Dur("duration", time.Since(start)).Msg("http request")
 	})
 }
 
