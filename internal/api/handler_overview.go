@@ -1432,6 +1432,7 @@ func refreshNetfilterManager(deps Dependencies) {
 		EnableDNSRedirect: shouldRedirectDNS(deps.Config),
 		BypassFakeIP:      shouldBypassFakeIP(deps.Config),
 		BypassCIDR:        deps.Config.Network.BypassCIDR,
+		EnableIPv6:        deps.Config.Network.IPv6,
 	})
 }
 

@@ -29,6 +29,7 @@ type Config struct {
 	EnableDNSRedirect bool
 	BypassFakeIP      bool
 	BypassCIDR        []string
+	EnableIPv6        bool // intercept IPv6 traffic via tproxy as well
 }
 
 // NewManager creates a Manager and detects the appropriate backend.
@@ -37,7 +38,7 @@ func NewManager(cfg Config) *Manager {
 	var applier Applier
 	switch kind {
 	case BackendNftables:
-		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR}
+		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR, EnableIPv6: cfg.EnableIPv6}
 	case BackendIptables:
 		applier = &IptablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect}
 	default:
