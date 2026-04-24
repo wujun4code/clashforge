@@ -1,16 +1,9 @@
 name: Auto Tag on PR Merge
 
 # Triggers when a PR is merged into main.
-# Reads the latest v* tag, increments the trailing number,
-# pushes a new tag → triggers release.yml automatically.
-#
-# REQUIRED SECRET: GH_PAT — a Personal Access Token with `contents: write`
-# scope (classic) or a fine-grained PAT with "Contents: Read and write".
-# Without it, the tag push won't trigger release.yml (GitHub limitation).
-#
-# To create: GitHub → Settings → Developer settings → Personal access tokens
-# Add as repo secret: Settings → Secrets → Actions → New repository secret
-# Name: GH_PAT
+# 1. Reads the latest v* tag, increments the trailing number
+# 2. Pushes the new tag with GITHUB_TOKEN
+# 3. Triggers release.yml via workflow_dispatch (no PAT needed)
 
 on:
   pull_request:
@@ -21,45 +14,36 @@ on:
 jobs:
   auto-tag:
     name: Bump version tag
-    # Only run when the PR was actually merged (not just closed)
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write   # needed for gh workflow run
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use PAT so the pushed tag triggers release.yml.
-          # Falls back to GITHUB_TOKEN (tag push won't re-trigger workflows).
-          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Compute next tag
         id: next
         run: |
-          # Get the latest tag matching v* (sorted by version)
           LATEST=$(git tag --list 'v*' --sort=-version:refname | head -1)
           echo "Latest tag: $LATEST"
 
           if [ -z "$LATEST" ]; then
             NEXT="v0.1.0-alpha.1"
+          elif echo "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$'; then
+            BASE=$(echo "$LATEST" | sed 's/\.[0-9]*$//')
+            N=$(echo "$LATEST" | grep -oE '[0-9]+$')
+            NEXT="${BASE}.$((N + 1))"
+          elif echo "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
           else
-            # Handle v0.1.0-alpha.N  →  increment N
-            # Also handles plain vX.Y.Z  →  increment patch
-            if echo "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$'; then
-              BASE=$(echo "$LATEST" | sed 's/\.[0-9]*$//')     # v0.1.0-alpha
-              N=$(echo "$LATEST" | grep -oE '[0-9]+$')          # 53
-              NEXT="${BASE}.$((N + 1))"
-            elif echo "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-              MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
-              MINOR=$(echo "$LATEST" | cut -d. -f2)
-              PATCH=$(echo "$LATEST" | cut -d. -f3)
-              NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-            else
-              # Unknown format — append a build counter
-              NEXT="${LATEST}-1"
-            fi
+            NEXT="${LATEST}-1"
           fi
 
           echo "Next tag: $NEXT"
@@ -69,6 +53,16 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.next.outputs.tag }}" -m "Release ${{ steps.next.outputs.tag }} (auto-tagged from PR #${{ github.event.pull_request.number }})"
+          git tag "${{ steps.next.outputs.tag }}" \
+            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ github.event.pull_request.number }})"
           git push origin "${{ steps.next.outputs.tag }}"
-          echo "✅ Pushed ${{ steps.next.outputs.tag }} — release.yml will now start."
+
+      # GITHUB_TOKEN tag pushes don't re-trigger on:push:tags in other workflows.
+      # Instead, trigger release.yml directly via workflow_dispatch.
+      - name: Trigger release.yml
+        run: |
+          gh workflow run release.yml \
+            --ref "${{ steps.next.outputs.tag }}" \
+            --field version="${{ steps.next.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
