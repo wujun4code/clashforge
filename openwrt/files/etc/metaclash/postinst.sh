@@ -2,6 +2,11 @@
 set -e
 mkdir -p /etc/metaclash /var/run/metaclash
 
+# Restore config backed up by prerm (handles opkg removing the /etc/metaclash dir on upgrade)
+if [ -f /tmp/clashforge-config.bak ]; then
+  mv /tmp/clashforge-config.bak /etc/metaclash/config.toml
+fi
+
 if [ ! -f /etc/metaclash/config.toml ]; then
   cat > /etc/metaclash/config.toml << 'TOML'
 [core]
