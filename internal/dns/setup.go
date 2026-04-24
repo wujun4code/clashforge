@@ -58,8 +58,14 @@ func Restore(mode DnsmasqMode) error {
 	}
 }
 
-// setupReplace sets port=0 in dnsmasq to disable its DNS listener.
+// setupReplace disables dnsmasq's DNS listener so mihomo can bind to port 53.
+// On OpenWrt, uses UCI to set port=0 — writing port= to a conf-dir file would
+// cause "illegal repeated keyword" because UCI already sets port=53 in the
+// generated config. Falls back to a conf-dir file on non-OpenWrt systems.
 func setupReplace() error {
+	if _, err := exec.LookPath("uci"); err == nil {
+		return setupReplaceUCI()
+	}
 	content := "# clashforge: disable dnsmasq DNS port so mihomo can take over\nport=0\n"
 	if err := writeManagedDNSMasqConfig(content); err != nil {
 		return err
@@ -67,10 +73,34 @@ func setupReplace() error {
 	return reloadDnsmasq()
 }
 
+func setupReplaceUCI() error {
+	if out, err := exec.Command("uci", "set", "dhcp.@dnsmasq[0].port=0").CombinedOutput(); err != nil {
+		return fmt.Errorf("uci set dnsmasq port=0: %w: %s", err, out)
+	}
+	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
+		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
+	}
+	log.Info().Msg("dns: dnsmasq port=0 set via UCI (replace mode)")
+	return reloadDnsmasq()
+}
+
 func restoreReplace() error {
+	if _, err := exec.LookPath("uci"); err == nil {
+		return restoreReplaceUCI()
+	}
 	if err := removeManagedDNSMasqConfig(); err != nil {
 		return err
 	}
+	return reloadDnsmasq()
+}
+
+func restoreReplaceUCI() error {
+	// Remove the port override so dnsmasq returns to its default (53).
+	exec.Command("uci", "delete", "dhcp.@dnsmasq[0].port").Run() //nolint:errcheck
+	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
+		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
+	}
+	log.Info().Msg("dns: dnsmasq port restored via UCI (replace mode)")
 	return reloadDnsmasq()
 }
 
@@ -143,6 +173,12 @@ func dnsmasqManagedConfigPaths() []string {
 			scanner := bufio.NewScanner(f)
 			for scanner.Scan() {
 				if dir := parseDnsmasqConfDir(scanner.Text()); dir != "" {
+					// Skip transient OpenWrt working directories under /tmp —
+					// they are recreated on every dnsmasq restart and must not
+					// be written to directly (causes conf conflicts on reload).
+					if strings.HasPrefix(filepath.ToSlash(dir), "/tmp/") {
+						continue
+					}
 					dirs = append(dirs, dir)
 				}
 			}
