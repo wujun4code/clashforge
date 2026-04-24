@@ -62,15 +62,18 @@ function StopAndSwitchDialog({ target, onCancel, onStopped }: {
 
   return (
     <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
       onClick={!stopping ? onCancel : undefined}
     >
       <div
-        className="bg-surface-1 rounded-2xl border border-white/10 w-full max-w-sm p-6 space-y-4"
+        className="bg-surface-1 rounded-2xl border border-warning/20 w-full max-w-sm p-6 space-y-4 animate-slide-in"
+        style={{ boxShadow: '0 0 40px rgba(245,158,11,0.08)' }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-start gap-3">
-          <AlertCircle size={20} className="text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="w-10 h-10 rounded-xl bg-warning/15 border border-warning/20 flex items-center justify-center flex-shrink-0">
+            <AlertCircle size={18} className="text-warning" />
+          </div>
           <div className="flex-1">
             <h3 className="text-base font-semibold text-white">停止当前服务</h3>
             <p className="text-sm text-muted mt-1.5">
@@ -78,18 +81,18 @@ function StopAndSwitchDialog({ target, onCancel, onStopped }: {
             </p>
           </div>
           {!stopping && (
-            <button className="btn-ghost p-1" onClick={onCancel}>
+            <button className="btn-icon" onClick={onCancel}>
               <X size={14} />
             </button>
           )}
         </div>
         {error && (
-          <p className="text-xs text-danger bg-danger/10 rounded-lg px-3 py-2">{error}</p>
+          <p className="text-xs text-danger bg-danger/10 border border-danger/20 rounded-xl px-3 py-2">{error}</p>
         )}
         <div className="flex gap-3 pt-1">
           <button className="btn-ghost flex-1" onClick={onCancel} disabled={stopping}>取消</button>
           <button
-            className="flex-1 rounded-xl px-4 py-2 text-sm font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            className="btn-warning flex-1 flex items-center justify-center gap-2"
             onClick={handle}
             disabled={stopping}
           >
@@ -114,15 +117,18 @@ function DeleteConfirmDialog({ target, onCancel, onConfirm, deleting }: {
 }) {
   return (
     <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
       onClick={!deleting ? onCancel : undefined}
     >
       <div
-        className="bg-surface-1 rounded-2xl border border-white/10 w-full max-w-sm p-6 space-y-4"
+        className="bg-surface-1 rounded-2xl border border-danger/20 w-full max-w-sm p-6 space-y-4 animate-slide-in"
+        style={{ boxShadow: '0 0 40px rgba(244,63,94,0.08)' }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-start gap-3">
-          <Trash2 size={18} className="text-danger flex-shrink-0 mt-0.5" />
+          <div className="w-10 h-10 rounded-xl bg-danger/15 border border-danger/20 flex items-center justify-center flex-shrink-0">
+            <Trash2 size={16} className="text-danger" />
+          </div>
           <div>
             <h3 className="text-base font-semibold text-white">删除配置</h3>
             <p className="text-sm text-muted mt-1.5">
@@ -132,11 +138,7 @@ function DeleteConfirmDialog({ target, onCancel, onConfirm, deleting }: {
         </div>
         <div className="flex gap-3 pt-1">
           <button className="btn-ghost flex-1" onClick={onCancel} disabled={deleting}>取消</button>
-          <button
-            className="flex-1 rounded-xl px-4 py-2 text-sm font-medium bg-danger/20 text-danger border border-danger/30 hover:bg-danger/30 transition-all disabled:opacity-50"
-            onClick={onConfirm}
-            disabled={deleting}
-          >
+          <button className="btn-danger flex-1" onClick={onConfirm} disabled={deleting}>
             {deleting ? '删除中…' : '确认删除'}
           </button>
         </div>
@@ -222,65 +224,70 @@ function SourceFilesPanel({ coreRunning }: { coreRunning: boolean }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-sm text-muted">
+        <p className="text-xs text-muted leading-5">
           所有导入的配置来源。点击「启动」通过配置向导重新应用该配置。
           {coreRunning && activeSource && (
-            <span className="ml-1 text-success">
+            <span className="ml-1 text-success font-medium">
               当前运行: {activeSource.type === 'file' ? activeSource.filename : activeSource.sub_name || activeSource.sub_id}
             </span>
           )}
         </p>
-        <button className="btn-ghost flex items-center gap-2" onClick={refresh} disabled={loading}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> 刷新
+        <button className="btn-ghost flex items-center gap-2 text-xs" onClick={refresh} disabled={loading}>
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> 刷新
         </button>
       </div>
 
-      {loading && <div className="card px-5 py-8 text-center text-muted text-sm">加载中…</div>}
+      {loading && (
+        <div className="card px-5 py-10 text-center text-muted text-sm flex items-center justify-center gap-2">
+          <RefreshCw size={14} className="animate-spin" /> 加载中…
+        </div>
+      )}
 
       {isEmpty && (
-        <div className="card px-5 py-8 text-center text-muted text-sm space-y-2">
-          <p>暂无配置文件记录</p>
-          <p className="text-xs">通过「配置向导」导入配置后，记录将显示在这里。</p>
+        <div className="card px-5 py-10 text-center space-y-2">
+          <p className="text-muted text-sm">暂无配置文件记录</p>
+          <p className="text-xs text-muted/60">通过「配置向导」导入配置后，记录将显示在这里。</p>
         </div>
       )}
 
       {files.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-muted uppercase tracking-wider px-1">保存的配置文件</p>
+          <p className="section-label px-1">保存的配置文件</p>
           {files.map(f => {
             const active = isFileActive(f.filename)
             const running = active && coreRunning
             return (
               <div
                 key={f.filename}
-                className={`card px-5 py-4 flex items-center gap-4 transition-all ${active ? 'border-brand/40 bg-brand/5' : ''}`}
+                className={`card px-5 py-4 flex items-center gap-4 transition-all ${
+                  active ? 'border-brand/25 bg-brand/[0.04]' : 'hover:border-white/10'
+                }`}
               >
-                <FileText size={16} className={active ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
+                <FileText size={15} className={active ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className={`font-mono text-sm font-semibold ${active ? 'text-brand' : 'text-white'}`}>{f.filename}</p>
-                    <span className="badge badge-muted">{sourceTypeLabel(f.filename)}</span>
-                    {running && <span className="badge badge-success">运行中</span>}
-                    {active && !coreRunning && <span className="badge badge-muted">上次使用</span>}
+                    <span className="badge-muted">{sourceTypeLabel(f.filename)}</span>
+                    {running && <span className="badge-success">运行中</span>}
+                    {active && !coreRunning && <span className="badge-muted">上次使用</span>}
                   </div>
                   <p className="text-xs text-muted mt-0.5">
                     {new Date(f.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    {' · '}
-                    {(f.size_bytes / 1024).toFixed(1)} KB
+                    {' · '}{(f.size_bytes / 1024).toFixed(1)} KB
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {!running && (
                     <button
-                      className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3 text-brand hover:bg-brand/10"
+                      className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3 text-brand hover:bg-brand/10 border-brand/20"
                       onClick={() => handleActivate({ kind: 'file', filename: f.filename, displayName: f.filename })}
                     >
                       <Play size={12} /> 启动
                     </button>
                   )}
                   <button
-                    className={`btn-ghost p-1.5 ${running ? 'opacity-30 cursor-not-allowed' : 'text-danger hover:bg-danger/10'}`}
-                    title={running ? '正在运行中，无法删除。请先在配置向导中停止服务。' : '删除'}
+                    className={`btn-icon ${running ? 'opacity-30 cursor-not-allowed' : 'hover:text-danger hover:bg-danger/10'}`}
+                    title={running ? '正在运行中，无法删除' : '删除'}
                     disabled={running}
                     onClick={() => !running && setConfirmDelete({ kind: 'file', id: f.filename, name: f.filename })}
                   >
@@ -295,7 +302,7 @@ function SourceFilesPanel({ coreRunning }: { coreRunning: boolean }) {
 
       {subs.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-muted uppercase tracking-wider px-1">订阅配置</p>
+          <p className="section-label px-1">订阅配置</p>
           {subs.map(sub => {
             const active = isSubActive(sub.id)
             const running = active && coreRunning
@@ -305,15 +312,17 @@ function SourceFilesPanel({ coreRunning }: { coreRunning: boolean }) {
             return (
               <div
                 key={sub.id}
-                className={`card px-5 py-4 flex items-center gap-4 transition-all ${active ? 'border-brand/40 bg-brand/5' : ''}`}
+                className={`card px-5 py-4 flex items-center gap-4 transition-all ${
+                  active ? 'border-brand/25 bg-brand/[0.04]' : 'hover:border-white/10'
+                }`}
               >
-                <Radio size={16} className={active ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
+                <Radio size={15} className={active ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className={`text-sm font-semibold ${active ? 'text-brand' : 'text-white'}`}>{sub.name}</p>
-                    <span className="badge badge-muted">订阅</span>
-                    {running && <span className="badge badge-success">运行中</span>}
-                    {active && !coreRunning && <span className="badge badge-muted">上次使用</span>}
+                    <span className="badge-muted">订阅</span>
+                    {running && <span className="badge-success">运行中</span>}
+                    {active && !coreRunning && <span className="badge-muted">上次使用</span>}
                   </div>
                   <p className="text-xs text-muted mt-0.5">
                     {sub.node_count ? `${sub.node_count} 节点` : '—'}{' · 上次更新: '}{lastUpdated}
@@ -326,20 +335,19 @@ function SourceFilesPanel({ coreRunning }: { coreRunning: boolean }) {
                     onClick={() => handleUpdateSub(sub.id)}
                     disabled={updatingSub === sub.id}
                   >
-                    <RefreshCw size={12} className={updatingSub === sub.id ? 'animate-spin' : ''} />
-                    更新
+                    <RefreshCw size={12} className={updatingSub === sub.id ? 'animate-spin' : ''} /> 更新
                   </button>
                   {!running && (
                     <button
-                      className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3 text-brand hover:bg-brand/10"
+                      className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3 text-brand hover:bg-brand/10 border-brand/20"
                       onClick={() => handleActivate({ kind: 'sub', id: sub.id, name: sub.name, url: sub.url })}
                     >
                       <Play size={12} /> 启动
                     </button>
                   )}
                   <button
-                    className={`btn-ghost p-1.5 ${running ? 'opacity-30 cursor-not-allowed' : 'text-danger hover:bg-danger/10'}`}
-                    title={running ? '正在运行中，无法删除。请先在配置向导中停止服务。' : '删除'}
+                    className={`btn-icon ${running ? 'opacity-30 cursor-not-allowed' : 'hover:text-danger hover:bg-danger/10'}`}
+                    title={running ? '正在运行中，无法删除' : '删除'}
                     disabled={running}
                     onClick={() => !running && setConfirmDelete({ kind: 'sub', id: sub.id, name: sub.name })}
                   >
@@ -387,14 +395,12 @@ function SubCard({ sub, isRunning, onDelete, onUpdate, onActivate }: {
     : '从未更新'
 
   return (
-    <div className={`card px-5 py-4 flex items-start gap-4 ${isRunning ? 'border-brand/40 bg-brand/5' : ''}`}>
-      <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${isRunning ? 'bg-success' : 'bg-surface-3'}`} />
+    <div className={`card px-5 py-4 flex items-start gap-4 transition-all ${isRunning ? 'border-brand/25 bg-brand/[0.04]' : 'hover:border-white/10'}`}>
+      <Radio size={15} className={`${isRunning ? 'text-brand' : 'text-muted'} flex-shrink-0 mt-0.5`} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <p className={`font-semibold text-sm ${isRunning ? 'text-brand' : 'text-white'}`}>{sub.name}</p>
-          {isRunning
-            ? <span className="badge badge-success">运行中</span>
-            : <span className="badge badge-muted">闲置</span>}
+          {isRunning ? <span className="badge-success">运行中</span> : <span className="badge-muted">闲置</span>}
         </div>
         <p className="text-xs text-muted mt-1">
           {sub.node_count ? `${sub.node_count} 节点` : '—'} · 上次更新: {lastUpdated}
@@ -402,26 +408,27 @@ function SubCard({ sub, isRunning, onDelete, onUpdate, onActivate }: {
         {sub.url && <p className="text-xs text-muted truncate mt-0.5">{sub.url}</p>}
       </div>
       <div className="relative flex-shrink-0">
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3" onClick={onUpdate}>
             <RefreshCw size={12} /> 更新
           </button>
-          <button className="btn-ghost p-1.5" onClick={() => setMenu(m => !m)}>
+          <button className="btn-icon" onClick={() => setMenu(m => !m)}>
             <MoreVertical size={15} />
           </button>
         </div>
         {menu && (
-          <div className="absolute right-0 top-9 z-10 bg-surface-2 border border-white/10 rounded-xl shadow-xl overflow-hidden w-44">
+          <div className="absolute right-0 top-10 z-10 bg-surface-2 border border-white/[0.08] rounded-2xl overflow-hidden w-44 animate-slide-in"
+            style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
             {!isRunning && (
               <button
-                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-brand hover:bg-white/5 transition-all"
+                className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-brand hover:bg-brand/10 transition-colors cursor-pointer"
                 onClick={() => { setMenu(false); onActivate() }}
               >
                 <Play size={13} /> 切换到此配置
               </button>
             )}
             <button
-              className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-all ${isRunning ? 'text-muted cursor-not-allowed opacity-50' : 'text-danger hover:bg-white/5'}`}
+              className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors cursor-pointer ${isRunning ? 'text-muted cursor-not-allowed opacity-40' : 'text-danger hover:bg-danger/10'}`}
               title={isRunning ? '正在运行中，无法删除' : undefined}
               disabled={isRunning}
               onClick={() => { if (!isRunning) { setMenu(false); onDelete() } }}
@@ -449,29 +456,40 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-surface-1 rounded-2xl border border-white/10 w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
-        <h2 className="text-base font-semibold text-white">添加订阅</h2>
-        {[
-          { key: 'name', label: '名称', placeholder: '我的机场' },
-          { key: 'url', label: '订阅 URL', placeholder: 'https://...' },
-          { key: 'user_agent', label: 'User-Agent', placeholder: 'clash-meta' },
-          { key: 'interval', label: '更新间隔', placeholder: '6h' },
-        ].map(({ key, label, placeholder }) => (
-          <div key={key}>
-            <label className="text-xs text-muted font-medium block mb-1.5">{label}</label>
-            <input
-              className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-brand transition-colors"
-              placeholder={placeholder}
-              value={(form as unknown as Record<string, string>)[key] ?? ''}
-              onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-            />
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={onClose}>
+      <div
+        className="bg-surface-1 rounded-2xl border border-white/[0.08] w-full max-w-md p-6 space-y-4 animate-slide-in"
+        style={{ boxShadow: '0 0 40px rgba(6,182,212,0.06)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-brand/15 border border-brand/20 flex items-center justify-center flex-shrink-0">
+            <Plus size={16} className="text-brand" />
           </div>
-        ))}
+          <h2 className="text-base font-semibold text-white">添加订阅</h2>
+        </div>
+        <div className="space-y-3">
+          {[
+            { key: 'name', label: '名称', placeholder: '我的机场' },
+            { key: 'url', label: '订阅 URL', placeholder: 'https://...' },
+            { key: 'user_agent', label: 'User-Agent', placeholder: 'clash-meta' },
+            { key: 'interval', label: '更新间隔', placeholder: '6h' },
+          ].map(({ key, label, placeholder }) => (
+            <div key={key}>
+              <label className="section-label block mb-1.5">{label}</label>
+              <input
+                className="input"
+                placeholder={placeholder}
+                value={(form as unknown as Record<string, string>)[key] ?? ''}
+                onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
         <div className="flex gap-3 pt-1">
           <button className="btn-ghost flex-1" onClick={onClose}>取消</button>
-          <button className="btn-primary flex-1" onClick={save} disabled={saving}>
-            {saving ? '保存中…' : '添加'}
+          <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={save} disabled={saving}>
+            {saving ? <><RefreshCw size={13} className="animate-spin" />保存中…</> : <><Plus size={13} />添加</>}
           </button>
         </div>
       </div>
@@ -603,7 +621,7 @@ function RunningConfigPanel({ activeSource }: { activeSource: ActiveSource | nul
   return (
     <div className="space-y-4">
       {activeSource && (
-        <div className="rounded-xl bg-success/10 border border-success/20 px-4 py-3 flex items-start gap-3">
+        <div className="card px-4 py-3 flex items-start gap-3 border-success/20 bg-success/[0.04]">
           <Database size={15} className="text-success flex-shrink-0 mt-0.5" />
           <div className="min-w-0">
             <p className="text-xs font-semibold text-success mb-0.5">当前运行配置来源</p>
@@ -616,19 +634,21 @@ function RunningConfigPanel({ activeSource }: { activeSource: ActiveSource | nul
       )}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-muted">ClashForge 生成的运行中配置（只读）。</p>
-        <button className="btn-ghost flex items-center gap-2" onClick={load} disabled={loading}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> 刷新
+        <button className="btn-ghost flex items-center gap-2 text-xs" onClick={load} disabled={loading}>
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> 刷新
         </button>
       </div>
       {loading ? (
-        <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-8 text-sm text-muted text-center">加载中…</div>
+        <div className="card px-4 py-8 text-sm text-muted text-center flex items-center justify-center gap-2">
+          <RefreshCw size={13} className="animate-spin" /> 加载中…
+        </div>
       ) : content === '' ? (
-        <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-8 text-sm text-muted text-center">
+        <div className="card px-4 py-8 text-sm text-muted text-center">
           配置文件不存在（核心尚未启动或尚未生成配置）
         </div>
       ) : (
         <textarea
-          className="w-full h-[32rem] bg-surface-2 border border-white/10 rounded-2xl px-4 py-3 text-sm font-mono text-slate-300 outline-none resize-none"
+          className="w-full h-[32rem] bg-surface-2/60 border border-white/[0.08] rounded-2xl px-4 py-3 text-sm font-mono text-slate-300 outline-none resize-none focus:border-brand/40 transition-colors"
           value={content ?? ''}
           readOnly
           spellCheck={false}
@@ -649,8 +669,8 @@ function behaviorLabel(b: string) {
 
 function vehicleTag(v: string) {
   const cls = v?.toUpperCase() === 'HTTP'
-    ? 'bg-sky-500/10 border-sky-500/25 text-sky-400'
-    : 'bg-white/5 border-white/15 text-slate-400'
+    ? 'bg-brand/10 border-brand/25 text-brand'
+    : 'bg-white/[0.05] border-white/[0.1] text-muted'
   return (
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${cls}`}>{v}</span>
   )
@@ -662,22 +682,24 @@ function ProviderRow({ p, onSync, syncing }: { p: RuleProvider; onSync: () => vo
     ? new Date(p.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : '—'
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 overflow-hidden">
+    <div className={`card overflow-hidden transition-all ${expanded ? 'border-white/10' : 'hover:border-white/10'}`}>
       <button
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] transition-all text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors text-left cursor-pointer"
         onClick={() => setExpanded(e => !e)}
       >
-        {expanded ? <ChevronDown size={14} className="text-muted flex-shrink-0" /> : <ChevronRight size={14} className="text-muted flex-shrink-0" />}
+        {expanded
+          ? <ChevronDown size={13} className="text-muted flex-shrink-0" />
+          : <ChevronRight size={13} className="text-muted flex-shrink-0" />}
         <span className="text-sm font-semibold text-slate-100 flex-1 min-w-0 truncate">{p.name}</span>
         <div className="flex items-center gap-2 flex-shrink-0">
           {vehicleTag(p.vehicleType)}
-          <span className="text-[10px] text-muted">{behaviorLabel(p.behavior)}</span>
-          <span className="text-xs text-slate-400 tabular-nums">{(p.ruleCount ?? 0).toLocaleString()} 条</span>
+          <span className="badge-muted hidden sm:inline">{behaviorLabel(p.behavior)}</span>
+          <span className="text-xs text-slate-300 tabular-nums font-mono">{(p.ruleCount ?? 0).toLocaleString()}<span className="text-muted text-[10px] ml-0.5">条</span></span>
           <span className="text-[10px] text-muted hidden sm:inline">{p.size_mb > 0 ? `${p.size_mb.toFixed(1)} MB` : '—'}</span>
           <span className="text-[10px] text-muted hidden md:inline">{updatedAt}</span>
         </div>
         <button
-          className="btn-ghost py-1 px-2.5 text-xs ml-2 flex items-center gap-1"
+          className="btn-ghost py-1 px-2.5 text-xs ml-2 flex items-center gap-1.5 flex-shrink-0"
           onClick={e => { e.stopPropagation(); onSync() }}
           disabled={syncing}
         >
@@ -686,7 +708,7 @@ function ProviderRow({ p, onSync, syncing }: { p: RuleProvider; onSync: () => vo
         </button>
       </button>
       {expanded && (
-        <div className="border-t border-white/8 px-4 py-3 space-y-1">
+        <div className="border-t border-white/[0.06] px-4 py-3 bg-black/10">
           <p className="text-[10px] text-muted font-mono break-all">{p.file_path || '路径未知'}</p>
         </div>
       )}
@@ -875,45 +897,43 @@ export function ConfigManagement() {
     }
   }, [coreRunning, coreChecked, tab])
 
+  const allTabs = [
+    { key: 'sources' as Tab, icon: <Database size={14} />, label: '配置文件' },
+    { key: 'subscriptions' as Tab, icon: <List size={14} />, label: '订阅' },
+    ...(coreRunning ? [
+      { key: 'rules' as Tab, icon: <Shield size={14} />, label: '规则集' },
+      { key: 'running' as Tab, icon: <Eye size={14} />, label: '运行中配置' },
+    ] : []),
+  ]
+
   return (
     <div className="p-6 space-y-5 max-w-4xl mx-auto">
       <div className="flex items-center gap-3">
-        <FolderCog size={20} className="text-brand" />
+        <div className="w-8 h-8 rounded-xl bg-brand/15 border border-brand/20 flex items-center justify-center">
+          <FolderCog size={15} className="text-brand" />
+        </div>
         <h1 className="text-lg font-semibold text-white">配置管理</h1>
       </div>
 
       {/* Tab switcher */}
-      <div className="flex gap-2 flex-wrap items-center">
-        <button
-          className={`btn-ghost flex items-center gap-2 ${tab === 'sources' ? 'border-brand/40 text-white' : ''}`}
-          onClick={() => setTab('sources')}
-        >
-          <Database size={14} /> 配置文件
-        </button>
-        <button
-          className={`btn-ghost flex items-center gap-2 ${tab === 'subscriptions' ? 'border-brand/40 text-white' : ''}`}
-          onClick={() => setTab('subscriptions')}
-        >
-          <List size={14} /> 订阅
-        </button>
-        {coreRunning && (
-          <>
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center bg-surface-1/80 rounded-2xl border border-white/[0.06] p-1.5 gap-1">
+          {allTabs.map(({ key, icon, label }) => (
             <button
-              className={`btn-ghost flex items-center gap-2 ${tab === 'rules' ? 'border-brand/40 text-white' : ''}`}
-              onClick={() => setTab('rules')}
+              key={key}
+              onClick={() => setTab(key)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                tab === key
+                  ? 'bg-brand/15 text-brand border border-brand/25'
+                  : 'text-muted hover:text-slate-300 hover:bg-white/[0.04]'
+              }`}
             >
-              <Shield size={14} /> 规则集
+              {icon}{label}
             </button>
-            <button
-              className={`btn-ghost flex items-center gap-2 ${tab === 'running' ? 'border-brand/40 text-white' : ''}`}
-              onClick={() => setTab('running')}
-            >
-              <Eye size={14} /> 运行中配置
-            </button>
-          </>
-        )}
+          ))}
+        </div>
         {!coreRunning && coreChecked && (
-          <span className="flex items-center gap-1.5 text-xs text-muted ml-1">
+          <span className="flex items-center gap-1.5 text-xs text-muted bg-surface-2/60 border border-white/[0.06] px-3 py-1.5 rounded-xl">
             <AlertCircle size={12} /> 服务未运行，规则集和运行配置不可用
           </span>
         )}
