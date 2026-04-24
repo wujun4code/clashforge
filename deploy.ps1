@@ -88,7 +88,7 @@ if ($Purge) {
     Step "Installing on router (keep-config)"
     $uninstallCmd = "uninstall-clashforge --keep-config"
 }
-$cmds = "$uninstallCmd; opkg install $remote; sleep 3; echo '--- processes ---'; pgrep -af clashforge || echo '(none)'; echo '--- service enabled ---'; /etc/init.d/clashforge enabled && echo 'enabled' || echo 'not enabled'"
+$cmds = "$uninstallCmd; opkg install $remote; sleep 3; pgrep -af clashforge > /dev/null || { echo '[WARN] clashforge process not found after install'; pgrep -af clashforge; }; /etc/init.d/clashforge enabled 2>/dev/null || echo '[WARN] clashforge service not enabled'"
 ssh "root@$Router" $cmds
 if ($LASTEXITCODE -ne 0) { Die "SSH install failed" }
 
