@@ -8,10 +8,13 @@ import {
   type ReactNode,
 } from 'react'
 
-export type ThemeName = 'neko' | 'cyberpunk'
+export type ThemeName = 'neko' | 'original'
 
 const STORAGE_KEY = 'clashforge:theme'
 const DEFAULT_THEME: ThemeName = 'neko'
+
+// Backwards-compat: prior builds stored 'cyberpunk' here. Treat as 'original'.
+type StoredTheme = ThemeName | 'cyberpunk'
 
 interface ThemeContextValue {
   theme: ThemeName
@@ -24,8 +27,9 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
 function readInitialTheme(): ThemeName {
   if (typeof window === 'undefined') return DEFAULT_THEME
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
-    if (stored === 'neko' || stored === 'cyberpunk') return stored
+    const stored = window.localStorage.getItem(STORAGE_KEY) as StoredTheme | null
+    if (stored === 'neko') return 'neko'
+    if (stored === 'original' || stored === 'cyberpunk') return 'original'
   } catch {
     /* ignore */
   }
@@ -65,7 +69,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const toggleTheme = useCallback(() => {
-    setTheme(theme === 'neko' ? 'cyberpunk' : 'neko')
+    setTheme(theme === 'neko' ? 'original' : 'neko')
   }, [theme, setTheme])
 
   const value = useMemo<ThemeContextValue>(

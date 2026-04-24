@@ -19,7 +19,7 @@
  * works (e.g. `bg-brand/20`). Hex-named vars (kept for any stray uses) are
  * derived from the same values.
  *
- * Toggle at runtime with `document.documentElement.dataset.theme = 'neko' | 'cyberpunk'`.
+ * Toggle at runtime with `document.documentElement.dataset.theme = 'neko' | 'original'`.
  */
 
 :root,
@@ -114,8 +114,8 @@
   --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* ── Cyberpunk theme ─────────────────────────────────── */
-:root[data-theme='cyberpunk'] {
+/* ── Original theme ─────────────────────────────────── */
+:root[data-theme='original'] {
   --color-surface-0: 2 4 8;
   --color-surface-1: 9 13 24;
   --color-surface-2: 15 20 36;
@@ -225,8 +225,8 @@
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 
-  /* Cyberpunk replaces the warm watermark with scanlines + grid */
-  :root[data-theme='cyberpunk'] body {
+  /* Original replaces the warm watermark with scanlines + grid */
+  :root[data-theme='original'] body {
     background-image:
       repeating-linear-gradient(
         0deg,
@@ -635,144 +635,144 @@
   }
 }
 
-/* ── Cyberpunk theme overrides ───────────────────────────── */
+/* ── Original theme overrides ───────────────────────────── */
 /*
  * Sharp corners, clipped HUD cards, neon glows, scanline accents.
- * Applied only when `data-theme='cyberpunk'` is set on <html>.
+ * Applied only when `data-theme='original'` is set on <html>.
  */
-:root[data-theme='cyberpunk'] {
+:root[data-theme='original'] {
   /* Tighter scrollbar */
 }
 
-:root[data-theme='cyberpunk'] *::-webkit-scrollbar { width: 4px; height: 4px; }
-:root[data-theme='cyberpunk'] *::-webkit-scrollbar-thumb {
+:root[data-theme='original'] *::-webkit-scrollbar { width: 4px; height: 4px; }
+:root[data-theme='original'] *::-webkit-scrollbar-thumb {
   background: rgba(0,245,255,0.25);
   border-radius: 0;
 }
-:root[data-theme='cyberpunk'] *::-webkit-scrollbar-thumb:hover { background: rgba(0,245,255,0.55); }
+:root[data-theme='original'] *::-webkit-scrollbar-thumb:hover { background: rgba(0,245,255,0.55); }
 
-:root[data-theme='cyberpunk'] ::selection {
+:root[data-theme='original'] ::selection {
   background-color: rgba(0,245,255,0.30);
   color: #ffffff;
 }
 
-:root[data-theme='cyberpunk'] html,
-:root[data-theme='cyberpunk'] body {
+:root[data-theme='original'] html,
+:root[data-theme='original'] body {
   font-family: 'Inter', 'Fira Sans', system-ui, sans-serif;
 }
 
-:root[data-theme='cyberpunk'] h1,
-:root[data-theme='cyberpunk'] h2,
-:root[data-theme='cyberpunk'] h3,
-:root[data-theme='cyberpunk'] h4,
-:root[data-theme='cyberpunk'] h5,
-:root[data-theme='cyberpunk'] h6 {
+:root[data-theme='original'] h1,
+:root[data-theme='original'] h2,
+:root[data-theme='original'] h3,
+:root[data-theme='original'] h4,
+:root[data-theme='original'] h5,
+:root[data-theme='original'] h6 {
   font-family: 'Inter', 'Fira Sans', system-ui, sans-serif;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
 /* Sharper corners on cards / buttons / inputs */
-:root[data-theme='cyberpunk'] .glass-card,
-:root[data-theme='cyberpunk'] .card,
-:root[data-theme='cyberpunk'] .glass-card-darker,
-:root[data-theme='cyberpunk'] .glass-card-active,
-:root[data-theme='cyberpunk'] .glass-card-warning,
-:root[data-theme='cyberpunk'] .glass-modal,
-:root[data-theme='cyberpunk'] .hero-panel,
-:root[data-theme='cyberpunk'] .glass-section,
-:root[data-theme='cyberpunk'] .table-shell {
+:root[data-theme='original'] .glass-card,
+:root[data-theme='original'] .card,
+:root[data-theme='original'] .glass-card-darker,
+:root[data-theme='original'] .glass-card-active,
+:root[data-theme='original'] .glass-card-warning,
+:root[data-theme='original'] .glass-modal,
+:root[data-theme='original'] .hero-panel,
+:root[data-theme='original'] .glass-section,
+:root[data-theme='original'] .table-shell {
   border-radius: 2px;
 }
 
-:root[data-theme='cyberpunk'] .glass-card,
-:root[data-theme='cyberpunk'] .card {
+:root[data-theme='original'] .glass-card,
+:root[data-theme='original'] .card {
   clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
   overflow: hidden;
   border-color: rgba(0,245,255,0.15);
 }
 
-:root[data-theme='cyberpunk'] .glass-card::before,
-:root[data-theme='cyberpunk'] .card::before {
+:root[data-theme='original'] .glass-card::before,
+:root[data-theme='original'] .card::before {
   content: '';
   position: absolute; inset: 0;
   pointer-events: none;
   background: linear-gradient(135deg, rgba(0,245,255,0.05) 0%, transparent 50%);
 }
 
-:root[data-theme='cyberpunk'] .glass-card:hover {
+:root[data-theme='original'] .glass-card:hover {
   border-color: rgba(0,245,255,0.55);
   box-shadow: 0 0 24px rgba(0,245,255,0.25);
 }
 
-:root[data-theme='cyberpunk'] .btn,
-:root[data-theme='cyberpunk'] .btn-primary,
-:root[data-theme='cyberpunk'] .btn-secondary,
-:root[data-theme='cyberpunk'] .btn-ghost,
-:root[data-theme='cyberpunk'] .btn-ghost-active,
-:root[data-theme='cyberpunk'] .btn-danger,
-:root[data-theme='cyberpunk'] .btn-cta,
-:root[data-theme='cyberpunk'] .btn-accent,
-:root[data-theme='cyberpunk'] .btn-icon,
-:root[data-theme='cyberpunk'] .btn-icon-sm {
+:root[data-theme='original'] .btn,
+:root[data-theme='original'] .btn-primary,
+:root[data-theme='original'] .btn-secondary,
+:root[data-theme='original'] .btn-ghost,
+:root[data-theme='original'] .btn-ghost-active,
+:root[data-theme='original'] .btn-danger,
+:root[data-theme='original'] .btn-cta,
+:root[data-theme='original'] .btn-accent,
+:root[data-theme='original'] .btn-icon,
+:root[data-theme='original'] .btn-icon-sm {
   border-radius: 2px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
-:root[data-theme='cyberpunk'] .btn-primary {
+:root[data-theme='original'] .btn-primary {
   background: linear-gradient(135deg, #00F5FF 0%, #0080FF 100%);
   color: #020408;
   text-shadow: 0 0 6px rgba(0,245,255,0.6);
   box-shadow: 0 0 16px rgba(0,245,255,0.35);
 }
-:root[data-theme='cyberpunk'] .btn-primary:hover {
+:root[data-theme='original'] .btn-primary:hover {
   background: linear-gradient(135deg, #33F8FF 0%, #3399FF 100%);
   box-shadow: 0 0 24px rgba(0,245,255,0.55);
 }
 
-:root[data-theme='cyberpunk'] .btn-cta {
+:root[data-theme='original'] .btn-cta {
   background: linear-gradient(135deg, #FF00AA 0%, #CC0088 100%);
   color: #ffffff;
   box-shadow: 0 0 16px rgba(255,0,170,0.40);
 }
-:root[data-theme='cyberpunk'] .btn-cta:hover {
+:root[data-theme='original'] .btn-cta:hover {
   background: linear-gradient(135deg, #FF33BB 0%, #DD0099 100%);
   box-shadow: 0 0 24px rgba(255,0,170,0.60);
 }
 
-:root[data-theme='cyberpunk'] .btn-accent {
+:root[data-theme='original'] .btn-accent {
   background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
   color: #ffffff;
 }
 
-:root[data-theme='cyberpunk'] .glass-input,
-:root[data-theme='cyberpunk'] .glass-textarea,
-:root[data-theme='cyberpunk'] select.glass-input {
+:root[data-theme='original'] .glass-input,
+:root[data-theme='original'] .glass-textarea,
+:root[data-theme='original'] select.glass-input {
   border-radius: 2px;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   border-color: rgba(0,245,255,0.15);
 }
 
-:root[data-theme='cyberpunk'] .glass-input:focus,
-:root[data-theme='cyberpunk'] .glass-textarea:focus {
+:root[data-theme='original'] .glass-input:focus,
+:root[data-theme='original'] .glass-textarea:focus {
   border-color: rgba(0,245,255,0.6);
   box-shadow: 0 0 16px rgba(0,245,255,0.25);
 }
 
-:root[data-theme='cyberpunk'] .badge {
+:root[data-theme='original'] .badge {
   border-radius: 2px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
-:root[data-theme='cyberpunk'] .tab-btn-active,
-:root[data-theme='cyberpunk'] .segmented-tab-active {
+:root[data-theme='original'] .tab-btn-active,
+:root[data-theme='original'] .segmented-tab-active {
   box-shadow: 0 0 12px rgba(0,245,255,0.35);
 }
 
-:root[data-theme='cyberpunk'] .text-display-gradient {
+:root[data-theme='original'] .text-display-gradient {
   background: linear-gradient(92deg, #00F5FF 0%, #A78BFA 50%, #FF00AA 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
@@ -781,19 +781,19 @@
   animation: borderFlow 8s linear infinite;
 }
 
-:root[data-theme='cyberpunk'] .text-neon-glow-cyan    { color: #00F5FF; text-shadow: 0 0 8px rgba(0,245,255,0.55); }
-:root[data-theme='cyberpunk'] .text-neon-glow-magenta { color: #FF00AA; text-shadow: 0 0 8px rgba(255,0,170,0.55); }
-:root[data-theme='cyberpunk'] .text-neon-glow-green   { color: #00FF88; text-shadow: 0 0 8px rgba(0,255,136,0.55); }
-:root[data-theme='cyberpunk'] .text-neon-glow-yellow  { color: #FFE600; text-shadow: 0 0 8px rgba(255,230,0,0.55); }
-:root[data-theme='cyberpunk'] .text-neon-glow-red     { color: #FF2255; text-shadow: 0 0 8px rgba(255,34,85,0.55); }
-:root[data-theme='cyberpunk'] .text-neon-glow-violet  { color: #A78BFA; text-shadow: 0 0 8px rgba(167,139,250,0.55); }
-:root[data-theme='cyberpunk'] .text-neon-glow-amber   { color: #F97316; text-shadow: 0 0 8px rgba(249,115,22,0.55); }
+:root[data-theme='original'] .text-neon-glow-cyan    { color: #00F5FF; text-shadow: 0 0 8px rgba(0,245,255,0.55); }
+:root[data-theme='original'] .text-neon-glow-magenta { color: #FF00AA; text-shadow: 0 0 8px rgba(255,0,170,0.55); }
+:root[data-theme='original'] .text-neon-glow-green   { color: #00FF88; text-shadow: 0 0 8px rgba(0,255,136,0.55); }
+:root[data-theme='original'] .text-neon-glow-yellow  { color: #FFE600; text-shadow: 0 0 8px rgba(255,230,0,0.55); }
+:root[data-theme='original'] .text-neon-glow-red     { color: #FF2255; text-shadow: 0 0 8px rgba(255,34,85,0.55); }
+:root[data-theme='original'] .text-neon-glow-violet  { color: #A78BFA; text-shadow: 0 0 8px rgba(167,139,250,0.55); }
+:root[data-theme='original'] .text-neon-glow-amber   { color: #F97316; text-shadow: 0 0 8px rgba(249,115,22,0.55); }
 
-:root[data-theme='cyberpunk'] .divider {
+:root[data-theme='original'] .divider {
   background: linear-gradient(90deg, transparent, rgba(0,245,255,0.55), transparent);
 }
 
-:root[data-theme='cyberpunk'] .progress-fill {
+:root[data-theme='original'] .progress-fill {
   background: linear-gradient(90deg, #00F5FF, #FF00AA);
   box-shadow: 0 0 10px rgba(0,245,255,0.45);
 }
@@ -813,12 +813,12 @@
   @apply bg-brand/15 text-brand;
   border: 1px solid rgba(var(--color-brand) / 0.40);
 }
-:root[data-theme='cyberpunk'] .theme-toggle-option,
-:root[data-theme='cyberpunk'] .theme-toggle {
+:root[data-theme='original'] .theme-toggle-option,
+:root[data-theme='original'] .theme-toggle {
   border-radius: 2px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-:root[data-theme='cyberpunk'] .theme-toggle-option-active {
+:root[data-theme='original'] .theme-toggle-option-active {
   box-shadow: 0 0 12px rgba(0,245,255,0.40);
 }

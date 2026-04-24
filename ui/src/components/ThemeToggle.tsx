@@ -1,8 +1,8 @@
 import { useTheme, type ThemeName } from '../contexts/ThemeContext'
 
 const options: Array<{ id: ThemeName; icon: string; label: string; title: string }> = [
-  { id: 'neko',      icon: '🐱', label: 'Neko',  title: '猫咪治愈模式' },
-  { id: 'cyberpunk', icon: '🌐', label: 'Cyber', title: '赛博朋克模式' },
+  { id: 'neko',     icon: '🐱', label: 'Neko',     title: '猫咪治愈模式' },
+  { id: 'original', icon: '🎨', label: 'Original', title: '原始霓虹风格' },
 ]
 
 export function ThemeToggle({ compact = false }: { compact?: boolean }) {

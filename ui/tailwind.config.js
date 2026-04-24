@@ -4,7 +4,7 @@
  *
  * Colors reference CSS custom properties defined in index.css. The actual
  * values depend on the active theme (`data-theme="neko"` or
- * `data-theme="cyberpunk"`) so the whole palette swaps at runtime without
+ * `data-theme="original"`) so the whole palette swaps at runtime without
  * a rebuild.
  *
  * Each color var is stored as a space-separated "R G B" triplet so Tailwind's

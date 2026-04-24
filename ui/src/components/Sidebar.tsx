@@ -98,14 +98,8 @@ export function Sidebar() {
         {/* Logo row */}
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex h-11 w-11 items-center justify-center flex-shrink-0 rounded-2xl bg-gradient-to-br from-brand/25 via-accent-violet/15 to-paw/20 shadow-soft">
-            {theme === 'cyberpunk' ? (
-              <span
-                aria-hidden
-                className="font-display text-xl font-black text-brand"
-                style={{ textShadow: '0 0 10px rgba(0,245,255,0.6)' }}
-              >
-                ▲
-              </span>
+            {theme === 'original' ? (
+              <img src="/favicon.svg" alt="ClashForge" className="h-6 w-6" />
             ) : (
               <CatMascot size={28} />
             )}
