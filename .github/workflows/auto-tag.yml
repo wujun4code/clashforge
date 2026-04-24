@@ -1,26 +1,25 @@
 name: Auto Tag on PR Merge
 
-# Triggers when a PR is merged into main BY A HUMAN (or GitHub UI auto-merge).
+# Triggers on every push to main. When auto-merge.yml (GITHUB_TOKEN) squash-merges
+# a PR, GitHub suppresses pull_request:closed for other workflows (security policy),
+# but the push event to main IS still delivered.
 #
-# NOTE: Do NOT use auto-merge.yml (GITHUB_TOKEN bot merge).
-# GITHUB_TOKEN-initiated merges suppress pull_request:closed events for other
-# workflows — GitHub security policy. When the user merges manually or via
-# GitHub's native auto-merge UI, this workflow fires correctly.
+# We only create a tag when the actor is github-actions[bot] (i.e. the squash merge
+# came from auto-merge.yml). Direct human pushes to main are intentionally skipped.
 #
 # 1. Reads the latest v* tag, increments the trailing number
 # 2. Pushes the new tag with GITHUB_TOKEN
 # 3. Triggers release.yml via workflow_dispatch
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches:
       - main
 
 jobs:
   auto-tag:
     name: Bump version tag
-    if: github.event.pull_request.merged == true
+    if: github.actor == 'github-actions[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: write
