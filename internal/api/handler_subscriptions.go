@@ -11,7 +11,18 @@ import (
 func handleGetSubscriptions(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		subs := deps.SubManager.GetAll()
-		JSON(w, http.StatusOK, map[string]interface{}{"subscriptions": subs})
+		type subWithCache struct {
+			subscription.Subscription
+			HasCache bool `json:"has_cache"`
+		}
+		result := make([]subWithCache, len(subs))
+		for i, s := range subs {
+			result[i] = subWithCache{
+				Subscription: s,
+				HasCache:     deps.SubManager.HasCache(s.ID),
+			}
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{"subscriptions": result})
 	}
 }
 

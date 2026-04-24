@@ -368,6 +368,8 @@ export function Setup() {
   const [savedSubs, setSavedSubs] = useState<Subscription[]>([])
   const [savedLoading, setSavedLoading] = useState(false)
   const [selectedSaved, setSelectedSaved] = useState<{ kind: 'file'; filename: string } | { kind: 'sub'; sub: Subscription } | null>(null)
+  const [subImportChoice, setSubImportChoice] = useState<'cache' | 'live' | null>(null)
+  const [subLiveFailed, setSubLiveFailed] = useState(false)
   const [pasteContent, setPasteContent] = useState('')
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -449,6 +451,12 @@ export function Setup() {
     }).finally(() => setSavedLoading(false))
   }, [importMode])
 
+  // ── reset subscription import choice when selection changes ──
+  useEffect(() => {
+    setSubImportChoice(null)
+    setSubLiveFailed(false)
+  }, [selectedSaved])
+
   // ── helpers ──
   const dnsSet = useCallback(<K extends keyof FormDNS>(k: K, v: FormDNS[K]) =>
     setDns(prev => ({ ...prev, [k]: v })), [])
@@ -505,7 +513,23 @@ export function Setup() {
           setClashParsed({})
         } else {
           const sub = selectedSaved.sub
-          await syncSubUpdate(sub.id)
+          // Default: use local cache if available (avoids network dead-loop).
+          const wantLive = subImportChoice === 'live'
+          const hasCache = !!sub.has_cache
+          if (wantLive || !hasCache) {
+            try {
+              await syncSubUpdate(sub.id)
+            } catch (e: unknown) {
+              if (hasCache) {
+                setSubLiveFailed(true)
+                setImportError('在线更新失败，请选择"使用本地缓存"继续。（' + (e instanceof Error ? e.message : String(e)) + '）')
+                return
+              }
+              throw e
+            }
+          } else {
+            // Using cached version — no network fetch needed
+          }
           await generateConfig().catch(() => null)
           await setActiveSource({ type: 'subscription', sub_id: sub.id, sub_name: sub.name }).catch(() => null)
           setClashParsed({})
@@ -901,6 +925,37 @@ export function Setup() {
                           </button>
                         )
                       })}
+                      {/* Cache vs live-update choice for selected subscription */}
+                      {selectedSaved?.kind === 'sub' && selectedSaved.sub.has_cache && (
+                        <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-4 py-3 space-y-2">
+                          <p className="text-xs font-semibold text-slate-300">订阅更新方式</p>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => { setSubImportChoice('cache'); setSubLiveFailed(false) }}
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border text-xs font-medium transition-all ${(subImportChoice === 'cache' || subImportChoice === null) ? 'border-brand/60 bg-brand/15 text-brand' : 'border-white/10 bg-white/5 text-muted hover:border-white/20'}`}
+                            >
+                              <Database size={12} />使用本地缓存
+                            </button>
+                            <button
+                              onClick={() => { setSubImportChoice('live'); setSubLiveFailed(false) }}
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border text-xs font-medium transition-all ${subImportChoice === 'live' ? 'border-brand/60 bg-brand/15 text-brand' : 'border-white/10 bg-white/5 text-muted hover:border-white/20'}`}
+                            >
+                              <Link2 size={12} />在线更新订阅
+                            </button>
+                          </div>
+                          {(subImportChoice === 'cache' || subImportChoice === null) && selectedSaved.sub.last_updated && (
+                            <p className="text-[11px] text-muted">
+                              缓存时间：{new Date(selectedSaved.sub.last_updated).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              {selectedSaved.sub.node_count ? `  ·  ${selectedSaved.sub.node_count} 节点` : ''}
+                            </p>
+                          )}
+                          {subLiveFailed && (
+                            <div className="flex items-center gap-2 text-xs text-warning">
+                              <AlertCircle size={12} />在线更新失败。请点击"使用本地缓存"继续。
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
