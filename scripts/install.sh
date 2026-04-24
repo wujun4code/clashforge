@@ -95,18 +95,16 @@ if [ "$INSTALL_VERSION" != "latest" ]; then
   TAG="$INSTALL_VERSION"
 else
   log "Resolving latest release from GitHub API..."
-  # per_page=1 returns only the newest release; avoids greedy-sed matching the last tag_name
-  # in a compact single-line JSON array containing all releases.
+  # per_page=1: only the newest release; avoids greedy matching across multiple objects.
   API_URL="https://api.github.com/repos/${REPO}/releases?per_page=1"
-  # busybox wget on OpenWrt doesn't send User-Agent; GitHub API blocks UA-less requests.
-  # Try wget with explicit UA first, fall back to curl.
-  TAG=$(wget -qO- -U "clashforge-installer/1.0" "$API_URL" 2>/dev/null \
-        | grep -o '"tag_name":"[^"]*"' | head -1 \
-        | sed 's/"tag_name":"\([^"]*\)"/\1/')
+  # Use awk (POSIX, always available on OpenWrt) instead of grep -o / sed to extract tag_name.
+  # busybox wget needs --user-agent= (long form); -U is not universally supported.
+  _resolve_tag() {
+    awk -F'"tag_name":"' 'NF>1{split($2,a,"\""); print a[1]; exit}'
+  }
+  TAG=$(wget -qO- --user-agent="clashforge-installer/1.0" "$API_URL" 2>/dev/null | _resolve_tag)
   if [ -z "$TAG" ] && command -v curl >/dev/null 2>&1; then
-    TAG=$(curl -fsSL -A "clashforge-installer/1.0" "$API_URL" 2>/dev/null \
-          | grep -o '"tag_name":"[^"]*"' | head -1 \
-          | sed 's/"tag_name":"\([^"]*\)"/\1/')
+    TAG=$(curl -fsSL -A "clashforge-installer/1.0" "$API_URL" 2>/dev/null | _resolve_tag)
   fi
   [ -n "$TAG" ] || die "Could not resolve latest version. Specify explicitly: sh install.sh --version v0.1.0-alpha.58"
 fi
