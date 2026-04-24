@@ -31,6 +31,7 @@ import type {
   OverviewResourceData,
 } from '../api/client'
 import type { ProxyNode } from '../api/client'
+import { PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
 import { useSSE } from '../hooks/useSSE'
 import { useStore } from '../store'
 import { formatBytes, formatGB, formatMB, formatPercent, formatUptime, latencyColor, latencyBarColor, latencyBarWidth } from '../utils/format'
@@ -319,39 +320,6 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
   )
 }
 
-function CoreStateBadge({ state }: { state: string }) {
-  const tone = {
-    running: 'success',
-    stopped: 'danger',
-    error: 'danger',
-    starting: 'warning',
-    stopping: 'warning',
-    querying: 'warning',
-    unknown: 'warning',
-  }[state] as 'success' | 'warning' | 'danger' | undefined
-
-  const label = {
-    running: '运行中',
-    stopped: '已停止',
-    error: '异常',
-    starting: '启动中',
-    stopping: '停止中',
-    querying: '查询中...',
-    unknown: '查询中...',
-  }[state] ?? state
-
-  if (state === 'querying' || state === 'unknown') {
-    return (
-      <span className="inline-flex items-center gap-2 rounded-full border border-warning/25 bg-warning/10 px-3 py-1 text-xs font-medium text-warning">
-        <Loader2 size={12} className="animate-spin" />
-        {label}
-      </span>
-    )
-  }
-
-  return <Pill tone={tone ?? 'muted'} label={label} />
-}
-
 function MetricTile({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
@@ -560,32 +528,34 @@ const SKIP_VERSION_KEY = 'cf_skip_version'
 
 function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: () => void }) {
   return (
-    <div className="rounded-2xl border border-warning/30 bg-warning/8 px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
-      <div className="flex items-center gap-3 min-w-0">
-        <span className="text-warning text-lg">🎉</span>
+    <div className="hero-panel border-warning/20 bg-[linear-gradient(145deg,rgba(245,158,11,0.16),rgba(255,255,255,0.03))]">
+      <div className="relative flex items-center justify-between gap-4 flex-wrap">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-warning">发现新版本 {data.latest}</p>
-          <p className="text-xs text-muted mt-0.5">当前版本 {data.current}，前往 GitHub Releases 下载安装包</p>
+          <div className="inline-flex items-center gap-2 rounded-full border border-warning/25 bg-warning/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-warning">
+            <Zap size={12} /> 新版本提醒
+          </div>
+          <p className="mt-3 text-lg font-semibold text-white">发现新版本 {data.latest}</p>
+          <p className="mt-1 text-sm leading-6 text-[#E9DFC0]">当前版本 {data.current}，可前往 GitHub Releases 下载最新安装包。</p>
         </div>
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <a
-          href={data.release_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-ghost flex items-center gap-1.5 text-warning border-warning/30 hover:bg-warning/10"
-        >
-          <ExternalLink size={13} />
-          查看发布页
-        </a>
-        <button
-          className="btn-ghost flex items-center gap-1.5 text-muted"
-          onClick={onSkip}
-          title="跳过此版本，不再提醒"
-        >
-          <X size={13} />
-          跳过
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <a
+            href={data.release_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-ghost flex items-center gap-1.5 text-warning border-warning/30 hover:bg-warning/10"
+          >
+            <ExternalLink size={13} />
+            查看发布页
+          </a>
+          <button
+            className="btn-ghost flex items-center gap-1.5 text-muted"
+            onClick={onSkip}
+            title="跳过此版本，不再提醒"
+          >
+            <X size={13} />
+            跳过
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -738,35 +708,12 @@ export function Dashboard() {
   )
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Dashboard</p>
-        <h1 className="text-base font-semibold text-white mt-1 mb-6">概览</h1>
-      </div>
-
-      {/* ── Update banner ── */}
-      {showBanner && versionData && (
-        <UpdateBanner
-          data={versionData}
-          onSkip={() => {
-            localStorage.setItem(SKIP_VERSION_KEY, versionData.latest)
-            setShowBanner(false)
-          }}
-        />
-      )}
-
-      {/* ── Core status + restart ── */}
-      <div className="glass-card px-6 py-5">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <CoreStateBadge state={effectiveState} />
-            <div>
-              <p className="text-sm font-semibold text-white">{coreRunning ? '内核运行中' : '内核未运行'}</p>
-              <p className="text-xs text-muted mt-0.5">
-                {coreData ? `PID ${coreData.core.pid} · 运行 ${formatUptime(coreData.core.uptime)}` : '等待状态'}
-              </p>
-            </div>
-          </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Dashboard"
+        title="ClashForge 控制总台"
+        description="在一个更现代、更亮眼的控制面板里统一查看核心状态、模块健康、代理选择与连通性诊断。"
+        actions={
           <div className="flex items-center gap-2">
             <button
               className="btn-ghost flex items-center gap-2"
@@ -774,7 +721,7 @@ export function Dashboard() {
               disabled={queryingCore}
             >
               <RefreshCw size={14} className={queryingCore ? 'animate-spin' : ''} />
-              刷新
+              刷新全局状态
             </button>
             <button
               className="btn-ghost flex items-center gap-2"
@@ -787,29 +734,45 @@ export function Dashboard() {
               disabled={!!loadingAction}
             >
               {loadingAction === 'restart' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              重启
+              重启核心
             </button>
           </div>
-        </div>
+        }
+        metrics={[
+          { label: '核心状态', value: coreRunning ? '运行中' : '未运行' },
+          { label: '活跃连接', value: `${connCount}` },
+          { label: '上行速率', value: formatBytes(currentUp) },
+          { label: '下行速率', value: formatBytes(currentDown) },
+        ]}
+      />
 
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-5">
+      {showBanner && versionData && (
+        <UpdateBanner
+          data={versionData}
+          onSkip={() => {
+            localStorage.setItem(SKIP_VERSION_KEY, versionData.latest)
+            setShowBanner(false)
+          }}
+        />
+      )}
+
+      <SectionCard
+        title="核心运行态"
+        description={coreData ? `PID ${coreData.core.pid} · 已运行 ${formatUptime(coreData.core.uptime)}` : '等待状态同步'}
+      >
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <MetricTile icon={<Activity size={16} />} label="上传速率" value={formatBytes(currentUp)} hint="实时上行" />
           <MetricTile icon={<Activity size={16} />} label="下载速率" value={formatBytes(currentDown)} hint="实时下行" />
           <MetricTile icon={<CheckCircle2 size={16} />} label="活跃连接" value={`${connCount}`} hint="当前连接数" />
           <MetricTile icon={<Cpu size={16} />} label="核心运行时长" value={coreData ? formatUptime(coreData.core.uptime) : '--'} hint={`PID ${coreData?.core.pid || '--'}`} />
         </div>
-      </div>
+      </SectionCard>
 
-      {/* ── Modules status ── */}
-      <div className="glass-card px-5 py-5">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Modules</p>
-            <h2 className="text-base font-semibold text-white mt-1">子模块状态</h2>
-          </div>
-          <p className="text-xs text-muted">{coreData?.checked_at ? `更新于 ${new Date(coreData.checked_at).toLocaleTimeString()}` : '等待查询'}</p>
-        </div>
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 mt-4">
+      <SectionCard
+        title="子模块状态"
+        description={coreData?.checked_at ? `更新于 ${new Date(coreData.checked_at).toLocaleTimeString()}` : '等待查询'}
+      >
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
           {visibleModules.map((module) => (
             <ModuleRow key={module.id} module={module} />
           ))}
@@ -819,15 +782,12 @@ export function Dashboard() {
             </div>
           )}
         </div>
-      </div>
+      </SectionCard>
 
-      {/* ── Proxy switcher ── */}
-      <div className="glass-card px-5 py-5">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxies</p>
-            <h2 className="text-base font-semibold text-white mt-1">节点切换</h2>
-          </div>
+      <SectionCard
+        title="节点切换"
+        description="快速浏览代理组、当前选中节点与最近测速结果。"
+        actions={
           <div className="flex items-center gap-2">
             <button className="btn-ghost flex items-center gap-2" onClick={refreshProxies}>
               <RefreshCw size={14} /> 刷新
@@ -837,14 +797,14 @@ export function Dashboard() {
               {testingLatency ? '测试中…' : '测速'}
             </button>
           </div>
-        </div>
-
+        }
+      >
         {proxyGroups.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 mt-4 text-sm text-muted">
+          <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
             {coreRunning ? '未找到代理组，请先添加订阅并更新节点。' : '内核未运行，无法获取节点列表。'}
           </div>
         ) : (
-          <div className="space-y-3 mt-4">
+          <div className="space-y-3">
             {proxyGroups.map(([name, group]) => (
               <ProxyGroup
                 key={name}
@@ -856,141 +816,130 @@ export function Dashboard() {
             ))}
           </div>
         )}
-      </div>
+      </SectionCard>
 
-      {/* ── On-demand probes + resources ── */}
-      <div className="glass-card px-5 py-5">
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Connectivity</p>
-            <h2 className="text-base font-semibold text-white mt-1">出口 IP / 访问检查</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className={`btn-ghost ${section === 'probes' ? 'border-brand/40 text-white' : ''}`}
-              onClick={() => { void openSection('probes') }}
-            >
-              IP 检查
-            </button>
-            <button
-              className={`btn-ghost ${section === 'resources' ? 'border-brand/40 text-white' : ''}`}
-              onClick={() => { void openSection('resources') }}
-            >
-              资源占用
-            </button>
-          </div>
-        </div>
+      <SectionCard title="连通性与资源诊断" description="在 IP 检查和资源占用之间切换，快速确认出口工作状态与系统压力。">
+        <div className="space-y-4">
+          <SegmentedTabs
+            items={[
+              { value: 'probes', label: 'IP 检查' },
+              { value: 'resources', label: '资源占用' },
+            ]}
+            value={section ?? 'probes'}
+            onChange={(value) => { void openSection(value) }}
+          />
 
-        {!section ? (
-          <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 mt-4 text-sm text-muted">
-            切换节点后会自动执行 IP 检查，也可手动点击上方按钮。
-          </div>
-        ) : null}
-
-        {section === 'probes' ? (
-          <div className="mt-4">
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <p className="text-sm text-muted">路由器侧经代理转发，浏览器侧由客户端直连。对比两侧可快速判断代理出口是否工作正常。</p>
-              <button className="btn-ghost flex items-center gap-2" onClick={() => { void refreshProbes() }} disabled={loadingSection === 'probes'}>
-                <RefreshCw size={14} className={loadingSection === 'probes' ? 'animate-spin' : ''} />
-                重新检测
-              </button>
+          {!section ? (
+            <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
+              切换节点后会自动执行 IP 检查，也可手动点击上方按钮。
             </div>
+          ) : null}
 
-            {!probeData ? (
-              <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
-                {loadingSection === 'probes' ? '正在进行联网检测…' : '点击"重新检测"开始。'}
+          {section === 'probes' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-muted">路由器侧经代理转发，浏览器侧由客户端直连。对比两侧可快速判断代理出口是否工作正常。</p>
+                <button className="btn-ghost flex items-center gap-2" onClick={() => { void refreshProbes() }} disabled={loadingSection === 'probes'}>
+                  <RefreshCw size={14} className={loadingSection === 'probes' ? 'animate-spin' : ''} />
+                  重新检测
+                </button>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <ProbePane
-                  title="路由器侧"
-                  subtitle="经 ClashForge mixed 端口转发"
-                  health={routerProbeHealth}
-                  ipChecks={probeData.ip_checks}
-                  accessChecks={probeData.access_checks}
-                  loading={loadingSection === 'probes'}
-                />
-                <ProbePane
-                  title="浏览器侧"
-                  subtitle="由当前浏览器客户端直连，不经过代理"
-                  health={browserProbeHealth}
-                  ipChecks={browserProbeData?.ip_checks ?? []}
-                  accessChecks={browserProbeData?.access_checks ?? []}
-                  loading={loadingBrowserProbe}
-                />
-              </div>
-            )}
-          </div>
-        ) : null}
 
-        {section === 'resources' ? (
-          <div className="mt-4 space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-muted">系统资源与 ClashForge 占用。</p>
-              <button className="btn-ghost flex items-center gap-2" onClick={() => { void refreshResources() }} disabled={loadingSection === 'resources'}>
-                <RefreshCw size={14} className={loadingSection === 'resources' ? 'animate-spin' : ''} />
-                刷新资源
-              </button>
+              {!probeData ? (
+                <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
+                  {loadingSection === 'probes' ? '正在进行联网检测…' : '点击“重新检测”开始。'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <ProbePane
+                    title="路由器侧"
+                    subtitle="经 ClashForge mixed 端口转发"
+                    health={routerProbeHealth}
+                    ipChecks={probeData.ip_checks}
+                    accessChecks={probeData.access_checks}
+                    loading={loadingSection === 'probes'}
+                  />
+                  <ProbePane
+                    title="浏览器侧"
+                    subtitle="由当前浏览器客户端直连，不经过代理"
+                    health={browserProbeHealth}
+                    ipChecks={browserProbeData?.ip_checks ?? []}
+                    accessChecks={browserProbeData?.access_checks ?? []}
+                    loading={loadingBrowserProbe}
+                  />
+                </div>
+              )}
             </div>
-            {!resourceData ? (
-              <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
-                {loadingSection === 'resources' ? '正在采样…' : '点击"刷新资源"开始加载。'}
+          ) : null}
+
+          {section === 'resources' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-muted">系统资源与 ClashForge 占用。</p>
+                <button className="btn-ghost flex items-center gap-2" onClick={() => { void refreshResources() }} disabled={loadingSection === 'resources'}>
+                  <RefreshCw size={14} className={loadingSection === 'resources' ? 'animate-spin' : ''} />
+                  刷新资源
+                </button>
               </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <MetricTile icon={<Cpu size={16} />} label="系统 CPU" value={formatPercent(resourceData.resources.system.cpu_percent)} />
-                  <MetricTile icon={<Activity size={16} />} label="系统内存" value={`${formatMB(resourceData.resources.system.memory_used_mb)} / ${formatMB(resourceData.resources.system.memory_total_mb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.memory_percent)}`} />
-                  <MetricTile icon={<HardDrive size={16} />} label="系统磁盘" value={`${formatGB(resourceData.resources.system.disk_used_gb)} / ${formatGB(resourceData.resources.system.disk_total_gb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.disk_percent)}`} />
+              {!resourceData ? (
+                <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
+                  {loadingSection === 'resources' ? '正在采样…' : '点击“刷新资源”开始加载。'}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {resourceData.resources.processes.map((item) => (
-                    <ProcessCard
-                      key={item.id}
-                      name={item.name}
-                      pid={item.pid}
-                      cpu={item.cpu_percent}
-                      memory={item.memory_rss_mb}
-                      uptime={item.uptime}
-                      running={item.running}
-                      command={item.command}
-                    />
-                  ))}
-                </div>
-                <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
-                  <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3 text-sm">
-                    {[
-                      { label: '运行目录', val: formatMB(resourceData.resources.app.runtime_mb) },
-                      { label: '数据目录', val: formatMB(resourceData.resources.app.data_mb) },
-                      { label: '程序文件', val: formatMB(resourceData.resources.app.binary_mb) },
-                      { label: '规则文件', val: formatMB(resourceData.resources.app.rules_mb) },
-                      { label: '总占用',   val: formatMB(resourceData.resources.app.total_mb) },
-                    ].map(({ label, val }) => (
-                      <div key={label}>
-                        <p className="text-[11px] uppercase tracking-[0.16em] text-muted">{label}</p>
-                        <p className="text-slate-200 mt-1">{val}</p>
-                      </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <MetricTile icon={<Cpu size={16} />} label="系统 CPU" value={formatPercent(resourceData.resources.system.cpu_percent)} />
+                    <MetricTile icon={<Activity size={16} />} label="系统内存" value={`${formatMB(resourceData.resources.system.memory_used_mb)} / ${formatMB(resourceData.resources.system.memory_total_mb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.memory_percent)}`} />
+                    <MetricTile icon={<HardDrive size={16} />} label="系统磁盘" value={`${formatGB(resourceData.resources.system.disk_used_gb)} / ${formatGB(resourceData.resources.system.disk_total_gb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.disk_percent)}`} />
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {resourceData.resources.processes.map((item) => (
+                      <ProcessCard
+                        key={item.id}
+                        name={item.name}
+                        pid={item.pid}
+                        cpu={item.cpu_percent}
+                        memory={item.memory_rss_mb}
+                        uptime={item.uptime}
+                        running={item.running}
+                        command={item.command}
+                      />
                     ))}
                   </div>
-                  {!!resourceData.resources.app.rule_assets?.length && (
-                    <div className="mt-4 border-t border-white/10 pt-3 space-y-2">
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted">规则文件明细</p>
-                      {resourceData.resources.app.rule_assets.map((asset) => (
-                        <div key={`${asset.name}-${asset.path}`} className="flex items-center justify-between gap-3 text-xs">
-                          <span className="text-slate-200">{asset.name}</span>
-                          <span className="text-muted">{formatMB(asset.size_mb)} · {asset.path}</span>
+                  <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+                    <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+                      {[
+                        { label: '运行目录', val: formatMB(resourceData.resources.app.runtime_mb) },
+                        { label: '数据目录', val: formatMB(resourceData.resources.app.data_mb) },
+                        { label: '程序文件', val: formatMB(resourceData.resources.app.binary_mb) },
+                        { label: '规则文件', val: formatMB(resourceData.resources.app.rules_mb) },
+                        { label: '总占用', val: formatMB(resourceData.resources.app.total_mb) },
+                      ].map(({ label, val }) => (
+                        <div key={label}>
+                          <p className="text-[11px] uppercase tracking-[0.16em] text-muted">{label}</p>
+                          <p className="mt-1 text-slate-200">{val}</p>
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        ) : null}
-      </div>
+                    {!!resourceData.resources.app.rule_assets?.length && (
+                      <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
+                        <p className="text-xs uppercase tracking-[0.16em] text-muted">规则文件明细</p>
+                        {resourceData.resources.app.rule_assets.map((asset) => (
+                          <div key={`${asset.name}-${asset.path}`} className="flex items-center justify-between gap-3 text-xs">
+                            <span className="text-slate-200">{asset.name}</span>
+                            <span className="text-muted">{formatMB(asset.size_mb)} · {asset.path}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </SectionCard>
     </div>
   )
 }
