@@ -100,7 +100,10 @@ export function Settings() {
   return (
     <div className="p-6 space-y-5 max-w-3xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-white">高级管理</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Settings</p>
+          <h1 className="text-base font-semibold text-white mt-1">高级管理</h1>
+        </div>
         <div className="flex items-center gap-2">
           {saveError && <span className="flex items-center gap-1 text-xs text-danger"><AlertCircle size={12} />{saveError}</span>}
           {saved && <span className="flex items-center gap-1 text-xs text-success"><CheckCircle2 size={12} /> 已保存</span>}
@@ -109,7 +112,7 @@ export function Settings() {
 
       {/* ── General ── */}
       <div className="space-y-4">
-        <div className="card px-5 py-5 space-y-4">
+        <div className="glass-card px-5 py-5 space-y-4">
           <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">核心</h2>
           <Field label="mihomo 路径">
             <TextInput value={get(['core', 'binary']) as string} onChange={v => set(['core', 'binary'], v)} />
@@ -137,7 +140,7 @@ export function Settings() {
       </div>
 
       {/* ── Danger zone ── */}
-      <div className="card px-5 py-5 space-y-4 border-danger/20">
+      <div className="glass-card px-5 py-5 space-y-4 border-danger/20">
         <div className="flex items-center gap-2">
           <Terminal size={15} className="text-danger" />
           <h2 className="text-sm font-semibold text-danger">危险操作</h2>

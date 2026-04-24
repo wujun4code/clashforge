@@ -50,7 +50,10 @@ export function Logs() {
   return (
     <div className="p-6 flex flex-col gap-5 max-w-6xl mx-auto" style={{ height: 'calc(100vh - 2rem)' }}>
       <div className="flex items-center justify-between flex-shrink-0">
-        <h1 className="text-lg font-semibold text-white">日志</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Logs</p>
+          <h1 className="text-base font-semibold text-white mt-1">系统日志</h1>
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           {['all','info','warning','error'].map(l => (
             <button key={l} onClick={() => setFilter(l)}
@@ -71,7 +74,7 @@ export function Logs() {
         </div>
       </div>
 
-      <div className="card flex-1 overflow-hidden min-h-0">
+      <div className="glass-card flex-1 overflow-hidden min-h-0">
         <div className="h-full overflow-y-auto px-4 py-3 font-mono text-xs space-y-0.5">
           {lines.length === 0 && (
             <p className="text-muted py-6 text-center">

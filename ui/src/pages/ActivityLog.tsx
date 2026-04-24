@@ -3,7 +3,7 @@ import { getConnections, closeAllConns, getLogs } from '../api/client'
 import type { Connection } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { formatBytes } from '../utils/format'
-import { Activity, RefreshCw, Trash2 } from 'lucide-react'
+import { RefreshCw, Trash2 } from 'lucide-react'
 
 // ── Connections panel ─────────────────────────────────────────────────────────
 
@@ -44,7 +44,7 @@ function ConnectionsPanel() {
         </div>
       </div>
 
-      <div className="card overflow-hidden">
+      <div className="glass-card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -155,7 +155,7 @@ function LogsPanel() {
         </div>
       </div>
 
-      <div className="card overflow-hidden" style={{ height: '60vh' }}>
+      <div className="glass-card overflow-hidden" style={{ height: '60vh' }}>
         <div className="h-full overflow-y-auto px-4 py-3 font-mono text-xs space-y-0.5">
           {filtered.length === 0 && (
             <p className="text-muted py-6 text-center">
@@ -189,9 +189,9 @@ export function ActivityLog() {
 
   return (
     <div className="p-6 space-y-5 max-w-6xl mx-auto">
-      <div className="flex items-center gap-3">
-        <Activity size={20} className="text-brand" />
-        <h1 className="text-lg font-semibold text-white">活动</h1>
+      <div>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Activity</p>
+        <h1 className="text-base font-semibold text-white mt-1">活动日志</h1>
       </div>
 
       <div className="flex gap-2">

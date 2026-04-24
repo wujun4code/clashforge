@@ -206,7 +206,7 @@ function Pill({ tone, label }: { tone: 'success' | 'warning' | 'danger' | 'muted
     danger: 'border-danger/25 bg-danger/10 text-danger',
     muted: 'border-white/10 bg-white/5 text-slate-300',
   }[tone]
-  return <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${className}`}>{label}</span>
+  return <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium backdrop-blur-sm ${className}`}>{label}</span>
 }
 
 function ModuleRow({ module }: { module: OverviewModule }) {
@@ -739,6 +739,10 @@ export function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      <div>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Dashboard</p>
+        <h1 className="text-base font-semibold text-white mt-1 mb-6">概览</h1>
+      </div>
 
       {/* ── Update banner ── */}
       {showBanner && versionData && (
@@ -752,7 +756,7 @@ export function Dashboard() {
       )}
 
       {/* ── Core status + restart ── */}
-      <div className="card px-6 py-5">
+      <div className="glass-card px-6 py-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <CoreStateBadge state={effectiveState} />
@@ -797,7 +801,7 @@ export function Dashboard() {
       </div>
 
       {/* ── Modules status ── */}
-      <div className="card px-5 py-5">
+      <div className="glass-card px-5 py-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
             <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Modules</p>
@@ -818,7 +822,7 @@ export function Dashboard() {
       </div>
 
       {/* ── Proxy switcher ── */}
-      <div className="card px-5 py-5">
+      <div className="glass-card px-5 py-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
             <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxies</p>
@@ -855,7 +859,7 @@ export function Dashboard() {
       </div>
 
       {/* ── On-demand probes + resources ── */}
-      <div className="card px-5 py-5">
+      <div className="glass-card px-5 py-5">
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Connectivity</p>

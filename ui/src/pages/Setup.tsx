@@ -136,7 +136,7 @@ function ConfigPreview({ content, onContinue }: { content: string; onContinue: (
   ]
   return (
     <div className="space-y-4">
-      <div className="card px-5 py-4 space-y-3">
+      <div className="glass-card px-5 py-4 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileText size={15} className="text-brand" />
@@ -744,12 +744,15 @@ export function Setup() {
               <Sparkles size={18} className="text-brand" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white">配置向导</h1>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Setup</p>
+                <h1 className="text-base font-bold text-white mt-1">配置向导</h1>
+              </div>
               <p className="text-xs text-muted">重新运行向导前需要先停止当前服务</p>
             </div>
           </div>
 
-          <div className="card px-5 py-5 space-y-4">
+          <div className="glass-card px-5 py-5 space-y-4">
             <div className="flex items-center gap-3">
               <span className="inline-flex h-2.5 w-2.5 rounded-full bg-success animate-pulse" />
               <p className="text-sm font-semibold text-white">内核正在运行</p>
@@ -803,7 +806,10 @@ export function Setup() {
             <Sparkles size={18} className="text-brand" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">快速配置向导</h1>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Setup</p>
+              <h1 className="text-base font-bold text-white mt-1">快速配置向导</h1>
+            </div>
             <p className="text-xs text-muted">导入配置 → 调整参数 → 一键启动 → 验证连通</p>
           </div>
         </div>
@@ -823,7 +829,7 @@ export function Setup() {
         {step === 'import' && !previewContent && (
           <div className="space-y-4">
             {/* Mode tabs */}
-            <div className="card px-5 py-5 space-y-4">
+            <div className="glass-card px-5 py-5 space-y-4">
               <div className="flex items-center gap-2 mb-1">
                 <FileText size={16} className="text-brand" />
                 <h2 className="text-sm font-semibold text-slate-200">选择导入方式</h2>
@@ -1018,7 +1024,7 @@ export function Setup() {
         {step === 'dns' && (
           <div className="space-y-4">
             {clashParsed?.dns && (
-              <div className="card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
+              <div className="glass-card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
                 <p className="text-xs font-semibold text-brand mb-2">从配置文件中读取到 DNS 设置</p>
                 {clashParsed.dns.enable !== undefined && <InfoBadge label="DNS 启用" value={String(clashParsed.dns.enable)} />}
                 {clashParsed.dns['enhanced-mode'] && <InfoBadge label="DNS 模式" value={clashParsed.dns['enhanced-mode']} />}
@@ -1030,7 +1036,7 @@ export function Setup() {
               </div>
             )}
 
-            <div className="card px-5 py-5 space-y-5">
+            <div className="glass-card px-5 py-5 space-y-5">
               <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">DNS 设置</h2>
 
               <Field label="启用 Mihomo DNS" hint="关闭时 Mihomo 使用系统 DNS，不接管查询">
@@ -1073,7 +1079,7 @@ export function Setup() {
             </div>
 
             <div className="flex gap-3">
-              <button className="btn btn-ghost flex-1" onClick={() => setStep('import')}>← 返回</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('import')}>← 返回</button>
               <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('network')}>
                 下一步：网络设置 <ChevronRight size={14} />
               </button>
@@ -1085,7 +1091,7 @@ export function Setup() {
         {step === 'network' && (
           <div className="space-y-4">
             {clashParsed && (
-              <div className="card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
+              <div className="glass-card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
                 <p className="text-xs font-semibold text-brand mb-2">从配置文件中读取到基本信息</p>
                 {clashParsed.mode && <InfoBadge label="代理模式" value={clashParsed.mode} />}
                 {clashParsed.port && <InfoBadge label="HTTP 端口" value={String(clashParsed.port)} />}
@@ -1095,7 +1101,7 @@ export function Setup() {
               </div>
             )}
 
-            <div className="card px-5 py-5 space-y-5">
+            <div className="glass-card px-5 py-5 space-y-5">
               <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">透明代理 / 网络设置</h2>
 
               <Field label="透明代理模式" hint="tproxy 适用于 OpenWrt；redir 兼容性更好；tun 模式需内核支持">
@@ -1136,7 +1142,7 @@ export function Setup() {
             </div>
 
             <div className="flex gap-3">
-              <button className="btn btn-ghost flex-1" onClick={() => setStep('dns')}>← 返回</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('dns')}>← 返回</button>
               <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('launch')}>
                 下一步：启动服务 <ChevronRight size={14} />
               </button>
@@ -1147,7 +1153,7 @@ export function Setup() {
         {/* ─── Step 4: Launch ─────────────────────────────────────────────── */}
         {step === 'launch' && (
           <div className="space-y-4">
-            <div className="card px-5 py-5 space-y-4">
+            <div className="glass-card px-5 py-5 space-y-4">
               <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">启动前确认</h2>
 
               {/* Summary */}
@@ -1249,7 +1255,7 @@ export function Setup() {
             </div>
 
             <div className="flex gap-3">
-              <button className="btn btn-ghost flex-1" onClick={() => setStep('network')} disabled={launching}>← 返回</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('network')} disabled={launching}>← 返回</button>
               {launchDone && (
                 <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('check')}>
                   开始连通检测 <ChevronRight size={14} />
@@ -1262,11 +1268,11 @@ export function Setup() {
         {/* ─── Step 5: Check ──────────────────────────────────────────────── */}
         {step === 'check' && (
           <div className="space-y-4">
-            <div className="card px-5 py-5 space-y-4">
+            <div className="glass-card px-5 py-5 space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-200">出口 IP / 连通检测</h2>
                 <button
-                  className="btn btn-ghost text-xs flex items-center gap-1.5"
+                  className="btn-ghost text-xs flex items-center gap-1.5"
                   onClick={handleCheck}
                   disabled={checking}
                 >
@@ -1383,7 +1389,7 @@ export function Setup() {
                       <p className="text-xs text-muted mt-1">代理工作正常，路由器和浏览器均可正常访问外网。</p>
                     </div>
                   </div>
-                  <div className="card px-5 py-4 space-y-4">
+                  <div className="glass-card px-5 py-4 space-y-4">
                     <h3 className="text-sm font-semibold text-slate-200">完成设置</h3>
                     <Field label="开机自动启动内核" hint="路由器重启后自动启动 ClashForge 并自动启动 Mihomo 内核">
                       <Toggle checked={autoStartCore} onChange={setAutoStartCore} label={autoStartCore ? '启用' : '禁用'} />
@@ -1417,7 +1423,7 @@ export function Setup() {
                   </div>
 
                   {probeLogs.length > 0 && (
-                    <div className="card px-4 py-4 space-y-2">
+                    <div className="glass-card px-4 py-4 space-y-2">
                       <p className="text-xs font-semibold text-muted uppercase tracking-wider">ClashForge 最近日志</p>
                       <div className="max-h-64 overflow-y-auto space-y-1">
                         {probeLogs.map((l, i) => (
@@ -1440,8 +1446,8 @@ export function Setup() {
             </div>
 
             <div className="flex gap-3">
-              <button className="btn btn-ghost flex-1" onClick={() => setStep('launch')}>← 返回</button>
-              <button className="btn btn-ghost flex-1" onClick={() => navigate('/')}>
+              <button className="btn-ghost flex-1" onClick={() => setStep('launch')}>← 返回</button>
+              <button className="btn-ghost flex-1" onClick={() => navigate('/')}>
                 跳过，直接进入概览
               </button>
             </div>
