@@ -5,12 +5,19 @@ import {
   ChevronRight,
   FolderCog,
   LayoutDashboard,
+  Rocket,
   Settings,
-  Sparkles,
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
 
-const links = [
+const setupLink = {
+  to: '/setup',
+  icon: Rocket,
+  label: '快速上线向导',
+  caption: '首次安装必经之路 · 导入订阅 · 接管透明代理',
+}
+
+const navLinks = [
   {
     to: '/',
     icon: LayoutDashboard,
@@ -28,12 +35,6 @@ const links = [
     icon: Activity,
     label: '活动日志',
     caption: '连接轨迹、实时日志与问题定位',
-  },
-  {
-    to: '/setup',
-    icon: Sparkles,
-    label: '配置向导',
-    caption: '导入配置、调优网络并快速上线',
   },
   {
     to: '/settings',
@@ -121,7 +122,71 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
-        {links.map(({ to, icon: Icon, label, caption }) => (
+        {/* Setup Wizard — primary CTA, visually distinct */}
+        <NavLink
+          to={setupLink.to}
+          className="group block"
+        >
+          {({ isActive }) => {
+            const Icon = setupLink.icon
+            return (
+              <div
+                className={[
+                  'relative rounded-[22px] p-[1.5px] transition-all duration-200',
+                  isActive
+                    ? 'bg-gradient-to-br from-violet-400/80 via-purple-500/60 to-indigo-500/70 shadow-[0_0_24px_rgba(139,92,246,0.35)]'
+                    : 'bg-gradient-to-br from-violet-500/50 via-purple-500/35 to-indigo-500/40 shadow-[0_0_14px_rgba(139,92,246,0.18)] group-hover:from-violet-400/70 group-hover:via-purple-500/50 group-hover:to-indigo-500/55 group-hover:shadow-[0_0_22px_rgba(139,92,246,0.30)]',
+                ].join(' ')}
+              >
+                <div
+                  className={[
+                    'flex items-center gap-3 rounded-[21px] px-4 py-3.5 transition-all duration-200',
+                    isActive
+                      ? 'bg-[linear-gradient(135deg,rgba(109,40,217,0.30),rgba(79,70,229,0.22))]'
+                      : 'bg-[linear-gradient(135deg,rgba(109,40,217,0.14),rgba(79,70,229,0.09))] group-hover:bg-[linear-gradient(135deg,rgba(109,40,217,0.20),rgba(79,70,229,0.15))]',
+                  ].join(' ')}
+                >
+                  <div
+                    className={[
+                      'relative flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl border transition-all duration-200',
+                      isActive
+                        ? 'border-violet-400/40 bg-[linear-gradient(135deg,rgba(139,92,246,0.45),rgba(99,102,241,0.35))] text-white shadow-[0_0_14px_rgba(139,92,246,0.4)]'
+                        : 'border-violet-500/30 bg-[linear-gradient(135deg,rgba(139,92,246,0.22),rgba(99,102,241,0.16))] text-violet-300 group-hover:border-violet-400/45 group-hover:text-white',
+                    ].join(' ')}
+                  >
+                    <Icon size={18} className="relative z-10" />
+                    <span className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,rgba(167,139,250,0.30),transparent_65%)]" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-white">{setupLink.label}</span>
+                      <span className="rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-400/30">
+                        入门必读
+                      </span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-violet-300/80 group-hover:text-violet-200">
+                      {setupLink.caption}
+                    </p>
+                  </div>
+                  <ChevronRight
+                    size={14}
+                    className={isActive ? 'text-violet-300' : 'text-violet-400/50 group-hover:text-violet-300/80'}
+                  />
+                </div>
+              </div>
+            )
+          }}
+        </NavLink>
+
+        {/* Divider */}
+        <div className="flex items-center gap-2 px-1 py-1">
+          <div className="h-px flex-1 bg-white/[0.06]" />
+          <span className="text-[10px] uppercase tracking-[0.22em] text-white/20">功能导航</span>
+          <div className="h-px flex-1 bg-white/[0.06]" />
+        </div>
+
+        {/* Regular nav links */}
+        {navLinks.map(({ to, icon: Icon, label, caption }) => (
           <NavLink
             key={to}
             to={to}
