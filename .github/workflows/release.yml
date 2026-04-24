@@ -321,11 +321,18 @@ jobs:
 
             ### 一键安装 / One-liner install
 
-            SSH 进入路由器后执行，**自动检测 CPU 架构**，自动下载并安装最新版（含 pre-release）：
+            SSH 进入路由器后执行，**自动检测 CPU 架构**，自动下载并安装最新版：
 
             ```sh
             wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
             ```
+
+            **🇨🇳 国内加速（GitHub 连接不稳定时使用）：**
+            ```sh
+            wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
+            ```
+            > 安装脚本会自动尝试多个镜像加速源，无需额外设置。
+            > 也可手动指定镜像：`sh install.sh --mirror https://ghproxy.com`
 
             **安装本版本（${{ steps.ver.outputs.tag }}）：**
             ```sh

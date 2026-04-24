@@ -1,18 +1,18 @@
 #!/bin/sh
 # install.sh — One-shot ClashForge installer / upgrader for OpenWrt
 #
-# Fixed URL (always installs the latest release, including pre-releases):
+# ── Standard (direct GitHub) ────────────────────────────────────────────────
 #   wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 #
-# Install a specific version:
-#   wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --version v0.1.0-alpha.48
-#
-# Full clean install (wipe old config and data first):
-#   wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --purge
+# ── 国内加速 / China mirror (via ghproxy) ───────────────────────────────────
+#   wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
+#   wget -qO- https://mirror.ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 #
 # Options:
 #   --version <tag>   Install a specific release tag (default: latest, including pre-releases)
 #   --purge           Uninstall old version and wipe all config/data before installing
+#   --mirror <url>    Force a specific GitHub mirror prefix (e.g. https://ghproxy.com)
+#                     When set, only that mirror is tried (no auto-fallback).
 #   --help            Show this help
 
 set -e
@@ -20,6 +20,7 @@ set -e
 REPO="wujun4code/clashforge"
 INSTALL_VERSION="latest"
 PURGE=0
+MIRROR=""   # empty = auto-detect (try direct then mirrors)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -32,11 +33,15 @@ usage() {
   cat <<'EOF'
 install.sh — ClashForge installer for OpenWrt
 
-  wget -qO- https://github.com/wujun4code/clashforge/releases/latest/download/install.sh | sh
+  wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
+
+  国内加速 (China mirror):
+  wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 
 Options:
   --version <tag>   Install specific version, e.g. v1.2.0  (default: latest)
   --purge           Full clean install: uninstall old version and wipe all config/data
+  --mirror <url>    Force a GitHub proxy prefix, e.g. --mirror https://ghproxy.com
   --help            Show this help
 EOF
 }
@@ -50,6 +55,9 @@ while [ $# -gt 0 ]; do
       INSTALL_VERSION="$2"; shift 2 ;;
     --purge)
       PURGE=1; shift ;;
+    --mirror)
+      [ -n "$2" ] || die "--mirror requires a value"
+      MIRROR="$2"; shift 2 ;;
     --help|-h)
       usage; exit 0 ;;
     *)
@@ -85,33 +93,70 @@ detect_ipk_arch() {
 IPK_ARCH=$(detect_ipk_arch)
 log "Detected architecture: $IPK_ARCH"
 
-# ── resolve version tag and pkg version ──────────────────────────────────────
-# Release tag:  v1.2.3
-# IPK version:  1.2.3  (no leading 'v')
+# ── mirror helpers ────────────────────────────────────────────────────────────
+# Proxy mirrors: prepend to full github.com URL.
+# e.g. https://ghproxy.com/https://github.com/owner/repo/...
+GH_PROXIES="https://ghproxy.com https://mirror.ghproxy.com https://ghfast.top https://github.moeyy.xyz"
+
+# Try fetching a URL to stdout (version probe). Short timeout to fail fast.
+_fetch_text() {
+  url="$1"
+  if command -v wget >/dev/null 2>&1; then
+    wget --timeout=10 -qO- --user-agent="clashforge-installer/1.0" "$url" 2>/dev/null
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 10 --max-time 15 -A "clashforge-installer/1.0" "$url" 2>/dev/null
+  fi
+}
+
+# Try downloading a file to $dest. Returns 0 on success.
+_fetch_file() {
+  url="$1"
+  dest="$2"
+  if command -v wget >/dev/null 2>&1; then
+    wget --timeout=30 -qO "$dest" --user-agent="clashforge-installer/1.0" "$url" 2>/dev/null
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 15 --max-time 300 -A "clashforge-installer/1.0" -o "$dest" "$url" 2>/dev/null
+  else
+    return 1
+  fi
+}
 
 # ── resolve version (called once, stored in TAG) ──────────────────────────────
+
+_resolve_tag() {
+  awk -F'"tag_name":"' 'NF>1{split($2,a,"\""); print a[1]; exit}'
+}
 
 if [ "$INSTALL_VERSION" != "latest" ]; then
   TAG="$INSTALL_VERSION"
 else
   log "Resolving latest release from GitHub API..."
-  # per_page=1: only the newest release; avoids greedy matching across multiple objects.
-  API_URL="https://api.github.com/repos/${REPO}/releases?per_page=1"
-  # Use awk (POSIX, always available on OpenWrt) instead of grep -o / sed to extract tag_name.
-  # busybox wget needs --user-agent= (long form); -U is not universally supported.
-  _resolve_tag() {
-    awk -F'"tag_name":"' 'NF>1{split($2,a,"\""); print a[1]; exit}'
-  }
-  TAG=$(wget -qO- --user-agent="clashforge-installer/1.0" "$API_URL" 2>/dev/null | _resolve_tag)
-  if [ -z "$TAG" ] && command -v curl >/dev/null 2>&1; then
-    TAG=$(curl -fsSL -A "clashforge-installer/1.0" "$API_URL" 2>/dev/null | _resolve_tag)
+  API_PATH="repos/${REPO}/releases?per_page=1"
+  TAG=""
+
+  if [ -n "$MIRROR" ]; then
+    # User forced a specific mirror
+    TAG=$(_fetch_text "${MIRROR}/https://api.github.com/${API_PATH}" | _resolve_tag)
+  else
+    # Try direct GitHub API first, then fall through proxies
+    TAG=$(_fetch_text "https://api.github.com/${API_PATH}" | _resolve_tag)
+    if [ -z "$TAG" ]; then
+      for _proxy in $GH_PROXIES; do
+        TAG=$(_fetch_text "${_proxy}/https://api.github.com/${API_PATH}" | _resolve_tag)
+        if [ -n "$TAG" ]; then
+          log "Version resolved via mirror: $_proxy"
+          break
+        fi
+      done
+    fi
   fi
-  [ -n "$TAG" ] || die "Could not resolve latest version. Specify explicitly: sh install.sh --version v0.1.0-alpha.58"
+
+  [ -n "$TAG" ] || die "Could not resolve latest version. Specify explicitly: sh install.sh --version v0.1.0"
 fi
 
 PKG_VER="${TAG#v}"
 IPK_NAME="clashforge_${PKG_VER}_${IPK_ARCH}.ipk"
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${IPK_NAME}"
+GH_DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${IPK_NAME}"
 
 log "Version : $TAG"
 log "Package : $IPK_NAME"
@@ -158,15 +203,34 @@ do_purge() {
 download_ipk() {
   TMP_IPK="/tmp/${IPK_NAME}"
   log "Downloading ${IPK_NAME}..."
-  if command -v wget >/dev/null 2>&1; then
-    wget -qO "$TMP_IPK" "$DOWNLOAD_URL" || die "Download failed: $DOWNLOAD_URL"
-  elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 -o "$TMP_IPK" "$DOWNLOAD_URL" || die "Download failed: $DOWNLOAD_URL"
-  else
-    die "Neither wget nor curl is available."
+
+  if [ -n "$MIRROR" ]; then
+    # User forced a specific mirror — try it exclusively
+    _url="${MIRROR}/${GH_DOWNLOAD_URL}"
+    log "Using mirror: $MIRROR"
+    if _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+      ok "Downloaded to $TMP_IPK"; echo "$TMP_IPK"; return 0
+    fi
+    die "Download failed from mirror $MIRROR"
   fi
-  ok "Downloaded to $TMP_IPK"
-  echo "$TMP_IPK"
+
+  # Try direct GitHub first, then fall through proxy mirrors
+  if _fetch_file "$GH_DOWNLOAD_URL" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+    ok "Downloaded to $TMP_IPK"; echo "$TMP_IPK"; return 0
+  fi
+  rm -f "$TMP_IPK"
+
+  for _proxy in $GH_PROXIES; do
+    log "Trying mirror: $_proxy"
+    _url="${_proxy}/${GH_DOWNLOAD_URL}"
+    if _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+      ok "Downloaded via $_proxy"
+      echo "$TMP_IPK"; return 0
+    fi
+    rm -f "$TMP_IPK"
+  done
+
+  die "Download failed from all sources. Try: sh install.sh --mirror https://ghproxy.com"
 }
 
 # ── install IPK via opkg ──────────────────────────────────────────────────────
