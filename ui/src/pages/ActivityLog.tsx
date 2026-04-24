@@ -32,46 +32,41 @@ function ConnectionsPanel() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted">ACTIVE_CONNS</span>
-          <span
-            className="font-mono text-xs font-bold px-2 py-0.5"
-            style={{ color: '#00F5FF', border: '1px solid rgba(0,245,255,0.25)', background: 'rgba(0,245,255,0.08)', textShadow: '0 0 6px rgba(0,245,255,0.5)' }}
-          >
-            {conns.length}
-          </span>
+          <span className="text-sm text-muted">活跃连接</span>
+          <span className="badge badge-muted">{conns.length}</span>
         </div>
-        <div className="flex gap-1.5">
-          <button className="btn-secondary btn-sm flex items-center gap-1.5" onClick={refresh}>
-            <RefreshCw size={12} /> SYNC
+        <div className="flex gap-2">
+          <button className="btn-ghost flex items-center gap-2" onClick={refresh}>
+            <RefreshCw size={14} /> 刷新
           </button>
-          <button className="btn-danger btn-sm flex items-center gap-1.5" onClick={handleCloseAll}>
-            <Trash2 size={12} /> CLOSE_ALL
+          <button className="btn-ghost border-danger/40 text-danger hover:bg-danger/10 flex items-center gap-2" onClick={handleCloseAll}>
+            <Trash2 size={14} /> 清理全部
           </button>
         </div>
       </div>
 
       <div className="table-shell">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-sm">
             <thead>
               <tr className="table-header-row">
-                <th className="px-4 py-2.5 text-left">TARGET</th>
-                <th className="px-4 py-2.5 text-left">PROTO</th>
-                <th className="px-4 py-2.5 text-left">CHAIN</th>
-                <th className="px-4 py-2.5 text-right">TX</th>
-                <th className="px-4 py-2.5 text-right">RX</th>
+                <th className="px-4 py-3 text-left">目标</th>
+                <th className="px-4 py-3 text-left">协议</th>
+                <th className="px-4 py-3 text-left">代理链</th>
+                <th className="px-4 py-3 text-right">上传</th>
+                <th className="px-4 py-3 text-right">下载</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center font-mono text-[10px] text-muted">LOADING...</td></tr>
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-muted">加载中…</td></tr>
               )}
               {!loading && conns.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8">
                     <EmptyState
-                      title="NO_ACTIVE_CONNECTIONS"
-                      description="Traffic through proxy chains will appear here in real-time"
+                      title="暂无活跃连接"
+                      description="当设备或应用开始通过代理链转发流量时，这里会实时显示目标、链路与吞吐量。"
                       icon={<ListTree size={18} />}
                     />
                   </td>
@@ -79,20 +74,15 @@ function ConnectionsPanel() {
               )}
               {conns.map(c => (
                 <tr key={c.id} className="table-row">
-                  <td className="px-4 py-2.5 font-mono text-[10px] max-w-xs truncate" style={{ color: '#C8E8F0' }}>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-200 max-w-xs truncate">
                     {c.metadata.host || c.metadata.sourceIP}:{c.metadata.destinationPort}
                   </td>
-                  <td className="px-4 py-2.5">
-                    <span
-                      className="font-mono text-[9px] px-1.5 py-0.5 uppercase"
-                      style={{ color: '#4A6080', border: '1px solid rgba(74,96,128,0.25)', background: 'rgba(74,96,128,0.06)' }}
-                    >
-                      {c.metadata.network || c.metadata.type}
-                    </span>
+                  <td className="px-4 py-3">
+                    <span className="badge badge-muted">{c.metadata.network || c.metadata.type}</span>
                   </td>
-                  <td className="px-4 py-2.5 font-mono text-[9px] text-muted">{c.chains?.join(' → ')}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[10px]" style={{ color: '#FF00AA', textShadow: '0 0 6px rgba(255,0,170,0.4)' }}>{formatBytes(c.upload, '')}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[10px]" style={{ color: '#00FF88', textShadow: '0 0 6px rgba(0,255,136,0.4)' }}>{formatBytes(c.download, '')}</td>
+                  <td className="px-4 py-3 text-xs text-muted">{c.chains?.join(' → ')}</td>
+                  <td className="px-4 py-3 text-right font-mono text-xs text-brand">{formatBytes(c.upload, '')}</td>
+                  <td className="px-4 py-3 text-right font-mono text-xs text-success">{formatBytes(c.download, '')}</td>
                 </tr>
               ))}
             </tbody>
@@ -112,31 +102,26 @@ const SKIP_FIELDS = new Set(['side', 'component', 'stream', 'batch'])
 // These fields are shown first in the chip list
 const PRIORITY_FIELDS = ['phase', 'status', 'provider', 'name', 'target', 'ok', 'error', 'pid']
 
-const LEVEL_STYLE: Record<string, { color: string; border: string; bg: string }> = {
-  info:    { color: '#00F5FF', border: 'rgba(0,245,255,0.3)', bg: 'rgba(0,245,255,0.08)' },
-  debug:   { color: '#4A6080', border: 'rgba(74,96,128,0.3)', bg: 'rgba(74,96,128,0.05)' },
-  warning: { color: '#FFE600', border: 'rgba(255,230,0,0.3)', bg: 'rgba(255,230,0,0.08)' },
-  warn:    { color: '#FFE600', border: 'rgba(255,230,0,0.3)', bg: 'rgba(255,230,0,0.08)' },
-  error:   { color: '#FF2255', border: 'rgba(255,34,85,0.3)', bg: 'rgba(255,34,85,0.08)' },
+const LEVEL_BADGE: Record<string, string> = {
+  info:    'text-sky-300 border-sky-500/30 bg-sky-500/10',
+  debug:   'text-slate-400 border-slate-600/30 bg-slate-500/10',
+  warning: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
+  warn:    'text-amber-300 border-amber-500/30 bg-amber-500/10',
+  error:   'text-red-300 border-red-500/30 bg-red-500/10',
 }
 
-const SIDE_STYLE: Record<string, { label: string; color: string; border: string; bg: string }> = {
-  router: { label: 'ROUTER', color: '#0080FF', border: 'rgba(0,128,255,0.3)', bg: 'rgba(0,128,255,0.08)' },
-  system: { label: 'SYSTEM', color: '#FF00AA', border: 'rgba(255,0,170,0.3)', bg: 'rgba(255,0,170,0.08)' },
+const SIDE_BADGE: Record<string, { label: string; cls: string }> = {
+  router: { label: 'ROUTER', cls: 'text-blue-300 bg-blue-500/15 border-blue-500/30' },
+  system: { label: 'SYSTEM', cls: 'text-purple-300 bg-purple-500/15 border-purple-500/30' },
 }
 
-const FIELD_STYLE: Record<string, { color: string; border: string; bg: string }> = {
-  ok:   { color: '#00FF88', border: 'rgba(0,255,136,0.25)', bg: 'rgba(0,255,136,0.06)' },
-  err:  { color: '#FF2255', border: 'rgba(255,34,85,0.25)', bg: 'rgba(255,34,85,0.06)' },
-  warn: { color: '#FFE600', border: 'rgba(255,230,0,0.25)', bg: 'rgba(255,230,0,0.06)' },
-  info: { color: '#00F5FF', border: 'rgba(0,245,255,0.25)', bg: 'rgba(0,245,255,0.06)' },
-  muted:{ color: '#4A6080', border: 'rgba(74,96,128,0.15)', bg: 'rgba(74,96,128,0.04)' },
-  dim:  { color: '#2A3848', border: 'transparent', bg: 'transparent' },
-}
-
-// Keep legacy FIELD_CLS for fieldStyle return type compatibility
 const FIELD_CLS: Record<string, string> = {
-  ok:   '', err: '', warn: '', info: '', muted: '', dim: '',
+  ok:   'text-emerald-300 bg-emerald-500/10 border-emerald-500/25',
+  err:  'text-red-300 bg-red-500/10 border-red-500/25',
+  warn: 'text-amber-300 bg-amber-500/10 border-amber-500/25',
+  info: 'text-sky-300 bg-sky-500/10 border-sky-500/25',
+  muted:'text-slate-400 bg-white/[0.04] border-white/[0.08]',
+  dim:  'text-slate-600 bg-transparent border-transparent',
 }
 
 function fieldStyle(key: string, val: unknown): { text: string; variant: keyof typeof FIELD_CLS } {
@@ -166,15 +151,11 @@ function fieldStyle(key: string, val: unknown): { text: string; variant: keyof t
 
 function FieldChip({ fieldKey, value }: { fieldKey: string; value: unknown }) {
   const { text, variant } = fieldStyle(fieldKey, value)
-  const s = FIELD_STYLE[variant]
   return (
-    <span
-      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 font-mono text-[9px] leading-tight select-text"
-      style={{ color: s.color, border: `1px solid ${s.border}`, background: s.bg }}
-    >
-      <span style={{ opacity: 0.5 }}>{fieldKey.replace(/_/g, '·')}</span>
-      <span style={{ opacity: 0.3 }}>=</span>
-      <span className="font-bold">{text}</span>
+    <span className={`inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] font-mono leading-tight select-text ${FIELD_CLS[variant]}`}>
+      <span className="opacity-50">{fieldKey.replace(/_/g, '·')}</span>
+      <span className="opacity-30">=</span>
+      <span className="font-semibold">{text}</span>
     </span>
   )
 }
@@ -204,47 +185,37 @@ function LogRow({ entry }: { entry: LogLine }) {
     ? new Date(entry.ts * 1000).toLocaleTimeString('zh-CN', { hour12: false })
     : '—'
 
-  const ls = LEVEL_STYLE[level]
-  const ss = side ? SIDE_STYLE[side] : null
-
   return (
-    <div className="group flex flex-col gap-1 px-2 py-1.5 transition-colors duration-150 hover:bg-neon-cyan/[0.02]">
+    <div className="group flex flex-col gap-1 rounded-lg px-2 py-1.5 transition-colors hover:bg-white/[0.03]">
+      {/* Header row: timestamp · level · side · message · copy */}
       <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-        <span className="font-mono tabular-nums text-[10px] flex-shrink-0 w-[60px] select-text" style={{ color: '#2A3848' }}>
+        <span className="text-slate-500 font-mono tabular-nums text-[11px] flex-shrink-0 w-[66px] select-text">
           {timeStr}
         </span>
-        <span
-          className="px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.12em] flex-shrink-0"
-          style={ls ? { color: ls.color, border: `1px solid ${ls.border}`, background: ls.bg, textShadow: `0 0 6px ${ls.color}60` } : { color: '#4A6080', border: '1px solid rgba(74,96,128,0.2)', background: 'transparent' }}
-        >
-          {entry.level || '?'}
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider flex-shrink-0 ${LEVEL_BADGE[level] ?? 'text-slate-400 border-white/10 bg-white/5'}`}>
+          {entry.level || '—'}
         </span>
-        {ss && (
-          <span
-            className="px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-[0.1em] flex-shrink-0"
-            style={{ color: ss.color, border: `1px solid ${ss.border}`, background: ss.bg }}
-          >
-            {ss.label}
+        {side && SIDE_BADGE[side] && (
+          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wider flex-shrink-0 ${SIDE_BADGE[side].cls}`}>
+            {SIDE_BADGE[side].label}
           </span>
         )}
-        <span className="font-mono text-[11px] select-text min-w-0 truncate flex-1" style={{ color: '#C8E8F0' }}>
+        <span className="text-slate-200 font-mono text-xs select-text min-w-0 truncate flex-1">
           {entry.msg ?? ''}
         </span>
         <button
           onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 flex-shrink-0 ml-auto cursor-pointer"
-          style={{ color: '#4A6080' }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#00F5FF' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#4A6080' }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-slate-600 hover:text-slate-300 hover:bg-white/5 flex-shrink-0 ml-auto"
           title="复制此行"
         >
           {copied
-            ? <span className="font-mono text-[10px]" style={{ color: '#00FF88' }}>✓</span>
+            ? <span className="text-[10px] text-emerald-400 font-mono">✓</span>
             : <Copy size={10} />}
         </button>
       </div>
+      {/* Structured field chips */}
       {sortedKeys.length > 0 && (
-        <div className="flex flex-wrap gap-1 pl-[68px]">
+        <div className="flex flex-wrap gap-1 pl-[74px]">
           {sortedKeys.map(k => <FieldChip key={k} fieldKey={k} value={fields[k]} />)}
         </div>
       )}
@@ -310,9 +281,9 @@ function LogsPanel() {
       if (lastBatch) {
         rows.push(
           <div key={`sep-${entry.id}`} className="flex items-center gap-2 my-1.5 px-2">
-            <div className="h-px flex-1" style={{ background: 'linear-gradient(90deg, transparent, rgba(0,245,255,0.10))' }} />
-            <span className="font-mono text-[9px] px-1" style={{ color: '#2A3848' }}>PROBE·{batch}</span>
-            <div className="h-px flex-1" style={{ background: 'linear-gradient(270deg, transparent, rgba(0,245,255,0.10))' }} />
+            <div className="h-px flex-1 bg-white/[0.05]" />
+            <span className="text-[10px] text-slate-600 font-mono px-1">probe · {batch}</span>
+            <div className="h-px flex-1 bg-white/[0.05]" />
           </div>
         )
       }
@@ -324,31 +295,31 @@ function LogsPanel() {
   return (
     <div className="space-y-4" style={{ minHeight: '60vh' }}>
       <SectionCard
-        title="LOG_STREAM"
-        description="3s_POLL · SSE_PUSH · STRUCTURED_FIELDS · BATCH_GROUPING"
+        title="实时日志流"
+        description="每 3 秒轮询 · SSE 推送叠加 · 路由器侧诊断请求含完整链路字段与 batch 分组"
         actions={
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {(['all', 'info', 'warning', 'error'] as const).map(l => (
+          <div className="flex items-center gap-2 flex-wrap">
+            {['all', 'info', 'warning', 'error'].map(l => (
               <button
                 key={l}
                 onClick={() => setFilter(l)}
-                className={`btn-xs flex items-center cursor-pointer ${filter === l ? 'btn-primary' : 'btn-secondary'}`}
+                className={`btn py-1.5 text-xs ${filter === l ? 'btn-primary' : 'btn-ghost'}`}
               >
-                {l === 'all' ? 'ALL' : l.toUpperCase()}
+                {l === 'all' ? '全部' : l.toUpperCase()}
               </button>
             ))}
-            <label className="flex items-center gap-1 font-mono text-[10px] text-muted cursor-pointer px-2 min-h-[32px]">
-              <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} style={{ accentColor: '#00F5FF' }} />
-              AUTO_SCROLL
+            <label className="flex min-h-[44px] items-center gap-1.5 text-xs text-muted cursor-pointer px-2">
+              <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} className="accent-brand" />
+              自动滚动
             </label>
-            <button className="btn-secondary btn-xs flex items-center gap-1 cursor-pointer" onClick={fetchLogs}>
-              <RefreshCw size={10} /> SYNC
+            <button className="btn-ghost flex items-center gap-2 py-1.5" onClick={fetchLogs}>
+              <RefreshCw size={13} /> 刷新
             </button>
-            <button className="btn-secondary btn-xs flex items-center gap-1 cursor-pointer" onClick={handleCopyAll}>
-              <Copy size={10} /> COPY_ALL
+            <button className="btn-ghost flex items-center gap-2 py-1.5" onClick={handleCopyAll} title="复制全部可见日志">
+              <Copy size={13} /> 复制全部
             </button>
-            <button className="btn-danger btn-xs flex items-center gap-1 cursor-pointer" onClick={() => setLines([])}>
-              <Trash2 size={10} /> CLEAR
+            <button className="btn-ghost flex items-center gap-2 py-1.5" onClick={() => setLines([])}>
+              <Trash2 size={13} /> 清空
             </button>
           </div>
         }
@@ -357,8 +328,8 @@ function LogsPanel() {
           <div className="h-full overflow-y-auto px-2 py-2 space-y-0">
             {rows.length === 0 && (
               <EmptyState
-                title="NO_LOG_ENTRIES"
-                description="Start ClashForge core, or adjust log level and filter conditions"
+                title="还没有匹配到日志"
+                description="确认 ClashForge 服务已启动，或调整日志级别与筛选条件后重新查看。"
                 icon={<ScrollText size={18} />}
               />
             )}
@@ -379,28 +350,31 @@ export function ActivityLog() {
   const [tab, setTab] = useState<Tab>('connections')
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <PageHeader
-        eyebrow="ACTIVITY_LOG"
+        eyebrow="Activity"
         title="活动与日志中心"
-        description="CONN_TRACE · PROXY_CHAIN · LIVE_LOG · ANOMALY_DETECT"
+        description="把活跃连接、代理链路与实时日志放进同一个观察面板，便于快速定位拥塞、异常与回源行为。"
         metrics={[
-          { label: 'VIEW_MODE', value: tab === 'connections' ? 'CONNECTIONS' : 'LOG_STREAM', color: 'cyan' },
-          { label: 'POLL_RATE', value: tab === 'connections' ? '2s_POLL' : '3s+SSE', color: 'green' },
+          { label: '视图', value: tab === 'connections' ? '连接面板' : '日志面板' },
+          { label: '刷新', value: tab === 'connections' ? '2 秒轮询' : '3 秒 + SSE' },
         ]}
       />
 
       <SegmentedTabs
         items={[
-          { value: 'connections', label: 'CONNECTIONS', icon: <Activity size={12} />, hint: 'Real-time proxy connections' },
-          { value: 'logs', label: 'LOG_STREAM', icon: <ScrollText size={12} />, hint: 'Live log feed with SSE' },
+          { value: 'connections', label: '连接', icon: <Activity size={14} />, hint: '查看实时连接与代理链' },
+          { value: 'logs', label: '日志', icon: <ScrollText size={14} />, hint: '查看实时日志流与错误' },
         ]}
         value={tab}
         onChange={setTab}
       />
 
       {tab === 'connections' && (
-        <SectionCard title="CONN_MATRIX" description="REAL_TIME · TARGET · PROTOCOL · CHAIN · THROUGHPUT">
+        <SectionCard
+          title="连接总览"
+          description="实时查看每条连接的目标地址、协议类型、代理链与上下行吞吐。"
+        >
           <ConnectionsPanel />
         </SectionCard>
       )}

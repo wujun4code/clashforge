@@ -7,8 +7,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="flex-shrink-0 w-44">
-        <label className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted">{label}</label>
-        {hint && <p className="font-mono text-[9px] text-muted mt-0.5 leading-4">{hint}</p>}
+        <label className="text-sm text-slate-300">{label}</label>
+        {hint && <p className="text-xs text-muted mt-0.5 leading-4">{hint}</p>}
       </div>
       <div className="flex-1">{children}</div>
     </div>
@@ -18,7 +18,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 function TextInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <input
-      className="glass-input"
+      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors"
       value={value}
       onChange={e => onChange(e.target.value)}
     />
@@ -28,7 +28,7 @@ function TextInput({ value, onChange }: { value: string; onChange: (v: string) =
 function SelectInput({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <select
-      className="glass-input"
+      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors appearance-none"
       value={value}
       onChange={e => onChange(e.target.value)}
     >
@@ -96,104 +96,84 @@ export function Settings() {
     }
   }
 
-  if (!cfg) return (
-    <div className="p-6 font-mono text-[10px] text-muted uppercase tracking-[0.15em]">
-      LOADING_CONFIG...
-    </div>
-  )
+  if (!cfg) return <div className="p-6 text-muted text-sm">加载中…</div>
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <PageHeader
-        eyebrow="SYS_ADMIN"
+        eyebrow="Settings"
         title="高级管理与系统行为"
-        description="CORE_PARAMS · LOG_POLICY · SYSTEM_ACTIONS · FACTORY_RESET"
+        description="调整 ClashForge 的核心路径、日志策略与系统级动作。所有改动只作用于管理体验与展示层，不改变业务流程。"
         actions={
-          <button className="btn-primary btn-sm flex items-center gap-1.5" onClick={saveGeneral} disabled={saving}>
-            <Save size={12} /> {saving ? 'SAVING...' : 'SAVE_CFG'}
+          <button className="btn-primary flex items-center gap-2" onClick={saveGeneral} disabled={saving}>
+            <Save size={14} /> {saving ? '保存中…' : '保存配置'}
           </button>
         }
         metrics={[
-          { label: 'SAVE_STATUS', value: saved ? 'COMMITTED' : saving ? 'WRITING' : 'PENDING', color: saved ? 'green' : saving ? 'yellow' : 'cyan' },
-          { label: 'DANGER_ZONE', value: 'PROTECTED', color: 'red' },
+          { label: '保存状态', value: saved ? '已保存' : saving ? '进行中' : '待提交' },
+          { label: '危险区', value: '受保护' },
         ]}
       />
 
       {saveError && (
-        <InlineNotice tone="danger" title="SAVE_FAILED">{saveError}</InlineNotice>
+        <InlineNotice tone="danger" title="保存失败">
+          {saveError}
+        </InlineNotice>
       )}
       {saved && (
-        <InlineNotice tone="success" title="COMMITTED">
-          CONFIG_WRITTEN — changes applied to ClashForge
+        <InlineNotice tone="success" title="保存成功">
+          配置已写入 ClashForge，可继续进行其他调整。
         </InlineNotice>
       )}
 
-      <SectionCard title="CORE_PARAMS" description="MIHOMO_PATH · RESTART_POLICY · LOG_LEVEL">
+      <SectionCard title="核心参数" description="用于管理 mihomo 启动路径、重启策略与日志级别。">
         <div className="space-y-4">
-          <Field label="MIHOMO_PATH">
+          <Field label="mihomo 路径">
             <TextInput value={get(['core', 'binary']) as string} onChange={v => set(['core', 'binary'], v)} />
           </Field>
-          <Field label="MAX_RESTARTS">
+          <Field label="最大重启次数">
             <TextInput value={String(get(['core', 'max_restarts']) ?? 3)} onChange={v => set(['core', 'max_restarts'], parseInt(v) || 3)} />
           </Field>
-          <Field label="LOG_LEVEL">
+          <Field label="日志级别">
             <SelectInput
               value={get(['log', 'level']) as string || 'info'}
               onChange={v => set(['log', 'level'], v)}
               options={[
-                { value: 'debug', label: 'DEBUG' },
-                { value: 'info', label: 'INFO' },
-                { value: 'warn', label: 'WARN' },
-                { value: 'error', label: 'ERROR' },
+                { value: 'debug', label: 'Debug' },
+                { value: 'info', label: 'Info' },
+                { value: 'warn', label: 'Warn' },
+                { value: 'error', label: 'Error' },
               ]}
             />
           </Field>
         </div>
       </SectionCard>
 
-      <SectionCard title="DANGER_ZONE" description="DESTRUCTIVE_OPERATIONS — handle with care" accent="red">
+      <SectionCard title="危险操作" description="以下行为会影响配置资产与运行态，请谨慎处理。" className="border-danger/20">
         <div className="space-y-4">
           {dangerResult && (
-            <InlineNotice tone={dangerResult.ok ? 'success' : 'danger'} title={dangerResult.ok ? 'OP_COMPLETE' : 'OP_FAILED'}>
+            <InlineNotice tone={dangerResult.ok ? 'success' : 'danger'} title={dangerResult.ok ? '操作完成' : '操作失败'}>
               <div className="space-y-2">
-                <p className="font-mono text-[10px] whitespace-pre-wrap leading-5">{dangerResult.message}</p>
+                <p className="whitespace-pre-wrap text-sm leading-6">{dangerResult.message}</p>
                 {resetDone ? (
-                  <p className="font-mono text-[10px] text-muted">
-                    WAIT ~3s then refresh.{' '}
-                    <button
-                      className="cursor-pointer"
-                      style={{ color: '#00F5FF', textShadow: '0 0 6px rgba(0,245,255,0.5)' }}
-                      onClick={() => window.location.reload()}
-                    >
-                      RELOAD_NOW
-                    </button>
+                  <p className="text-xs text-muted">
+                    请等待约 3 秒后刷新页面。
+                    <button className="ml-2 text-brand hover:underline" onClick={() => window.location.reload()}>立即刷新</button>
                   </p>
                 ) : null}
               </div>
             </InlineNotice>
           )}
 
-          <div
-            className="p-5"
-            style={{
-              border: '1px solid rgba(255,34,85,0.2)',
-              background: 'linear-gradient(135deg, rgba(255,34,85,0.06), rgba(6,12,18,0.8))',
-              clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px))',
-            }}
-          >
+          <div className="rounded-[24px] border border-danger/15 bg-[linear-gradient(180deg,rgba(239,68,68,0.12),rgba(239,68,68,0.05))] p-5">
             <div className="flex items-start gap-3">
-              <div
-                className="p-2.5 flex-shrink-0"
-                style={{ border: '1px solid rgba(255,34,85,0.3)', background: 'rgba(255,34,85,0.08)', color: '#FF2255' }}
-              >
-                <ShieldAlert size={16} />
+              <div className="rounded-2xl border border-danger/20 bg-danger/10 p-2.5 text-danger">
+                <ShieldAlert size={18} />
               </div>
               <div className="flex-1">
-                <p className="font-mono text-sm font-bold uppercase tracking-[0.06em]" style={{ color: '#FF2255', textShadow: '0 0 8px rgba(255,34,85,0.6)' }}>
-                  FACTORY_RESET
-                </p>
-                <p className="font-mono text-[10px] text-muted mt-1.5 leading-5">
-                  Clears all subscriptions, config overrides, and generated files. Restores defaults and auto-restarts process. Brief disconnect expected.
+                <p className="text-base font-semibold text-white">重置 ClashForge</p>
+                <p className="mt-2 text-sm leading-6 text-[#E8C5C5]">
+                  清除所有订阅、配置覆盖与生成文件，恢复为出厂默认设置，并自动重启进程。页面会短暂断开连接。
                 </p>
               </div>
             </div>
@@ -203,7 +183,7 @@ export function Settings() {
                 onClick={() => { setDangerConfirm('reset'); setDangerResult(null) }}
                 disabled={dangerRunning}
               >
-                <RotateCcw size={12} /> FACTORY_RESET
+                <RotateCcw size={13} /> 重置为出厂状态
               </button>
             </div>
           </div>
@@ -212,29 +192,29 @@ export function Settings() {
 
       {dangerConfirm && (
         <ModalShell
-          title="CONFIRM_FACTORY_RESET"
-          description="All subscriptions, config overrides, and generated configs will be wiped. ClashForge will auto-restart."
-          icon={<RotateCcw size={14} />}
+          title="确认重置 ClashForge"
+          description="该操作将清除所有订阅、配置覆盖与生成配置，并自动重启 ClashForge 进程。"
+          icon={<RotateCcw size={16} />}
           onClose={() => !dangerRunning && setDangerConfirm(null)}
           size="sm"
           dismissible={!dangerRunning}
         >
           <div className="space-y-5">
-            <p className="font-mono text-[10px] leading-5 text-muted">
-              // You will need to re-run the setup wizard after reset. Backup your config if troubleshooting.
+            <p className="text-sm leading-6 text-muted">
+              重启后你需要重新运行配置向导。若当前正在排查问题，建议先备份现有配置再继续。
             </p>
             <div className="flex gap-3 pt-1">
-              <button className="btn-secondary btn-sm flex-1" onClick={() => setDangerConfirm(null)} disabled={dangerRunning}>
-                CANCEL
+              <button className="btn-ghost flex-1" onClick={() => setDangerConfirm(null)} disabled={dangerRunning}>
+                取消
               </button>
               <button
-                className="btn-danger btn-sm flex-1 justify-center"
+                className="btn-danger flex-1 justify-center"
                 onClick={() => handleDangerAction(dangerConfirm)}
                 disabled={dangerRunning}
               >
                 {dangerRunning
-                  ? <><Loader2 size={12} className="animate-spin" />EXECUTING...</>
-                  : <><RotateCcw size={12} />CONFIRM_RESET</>}
+                  ? <><Loader2 size={13} className="animate-spin" />执行中…</>
+                  : <><RotateCcw size={13} />确认重置</>}
               </button>
             </div>
           </div>

@@ -22,11 +22,11 @@ type InitStatus = 'checking' | 'running' | 'ready'
 
 type Step = 'import' | 'dns' | 'network' | 'launch' | 'check'
 const STEPS: { id: Step; label: string }[] = [
-  { id: 'import',  label: 'IMPORT_CFG' },
-  { id: 'dns',     label: 'DNS_SETUP' },
-  { id: 'network', label: 'NET_CONFIG' },
-  { id: 'launch',  label: 'LAUNCH_SVC' },
-  { id: 'check',   label: 'CONN_CHECK' },
+  { id: 'import',  label: '导入配置' },
+  { id: 'dns',     label: 'DNS 设置' },
+  { id: 'network', label: '网络设置' },
+  { id: 'launch',  label: '启动服务' },
+  { id: 'check',   label: '连通检测' },
 ]
 
 interface ClashDNS {
@@ -115,61 +115,55 @@ function annotateLines(content: string): AnnotatedLine[] {
 }
 
 const CAT_ROW: Record<LineCat, string> = {
-  dns:       'border-l-2',
-  geo:       'border-l-2',
-  port:      'border-l-2',
+  dns:       'bg-blue-500/10 border-l-2 border-blue-400/50',
+  geo:       'bg-violet-500/10 border-l-2 border-violet-400/50',
+  port:      'bg-amber-500/10 border-l-2 border-amber-400/50',
   preserved: '',
 }
-const CAT_ROW_STYLE: Record<LineCat, React.CSSProperties> = {
-  dns:       { background: 'rgba(0,245,255,0.06)', borderLeftColor: 'rgba(0,245,255,0.5)' },
-  geo:       { background: 'rgba(255,0,170,0.06)', borderLeftColor: 'rgba(255,0,170,0.5)' },
-  port:      { background: 'rgba(255,230,0,0.06)', borderLeftColor: 'rgba(255,230,0,0.5)' },
-  preserved: {},
-}
-const CAT_LABEL_STYLE: Record<LineCat, React.CSSProperties> = {
-  dns:       { color: 'rgba(0,245,255,0.6)' },
-  geo:       { color: 'rgba(255,0,170,0.6)' },
-  port:      { color: 'rgba(255,230,0,0.6)' },
-  preserved: {},
+const CAT_LABEL: Record<LineCat, string> = {
+  dns:       'text-blue-300/70',
+  geo:       'text-violet-300/70',
+  port:      'text-amber-300/70',
+  preserved: '',
 }
 
 function ConfigPreview({ content, onContinue }: { content: string; onContinue: () => void }) {
   const lines = annotateLines(content)
   const legend = [
-    { style: { background: 'rgba(0,245,255,0.15)', color: '#00F5FF' },   label: 'DNS_CONFIG — rewritten per wizard' },
-    { style: { background: 'rgba(255,230,0,0.15)', color: '#FFE600' },   label: 'PORT/API — managed by ClashForge' },
-    { style: { background: 'rgba(255,0,170,0.15)', color: '#FF00AA' },   label: 'GEODATA — local files' },
+    { style: 'bg-blue-500/25 text-blue-200',   label: 'DNS 配置（已根据您的选择重写）' },
+    { style: 'bg-amber-500/25 text-amber-200', label: '端口 / API 地址（ClashForge 统一管理）' },
+    { style: 'bg-violet-500/25 text-violet-200', label: 'GeoData 设置（使用本地文件）' },
   ]
   return (
     <div className="space-y-4">
       <div className="glass-card px-5 py-4 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <FileText size={15} className="text-neon-cyan" />
-            <h2 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white">CONFIG_PREVIEW</h2>
+            <FileText size={15} className="text-brand" />
+            <h2 className="text-sm font-semibold text-slate-200">生成配置预览</h2>
           </div>
-          <span className="font-mono text-[10px] text-muted">{lines.length}_LINES</span>
+          <span className="text-xs text-muted">{lines.length} 行</span>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           {legend.map(l => (
-            <span key={l.label} className="font-mono inline-flex text-[10px] px-2 py-0.5" style={l.style}>{l.label}</span>
+            <span key={l.label} className={`inline-flex text-xs px-2 py-0.5 rounded-md ${l.style}`}>{l.label}</span>
           ))}
-          <span className="font-mono text-[10px] text-muted">NO_COLOR = PRESERVED</span>
+          <span className="text-xs text-muted">无底色 = 原样保留</span>
         </div>
-        <div className="overflow-auto max-h-96 text-xs font-mono select-text" style={{ background: 'rgba(2,4,8,0.6)', border: '1px solid rgba(0,245,255,0.08)' }}>
+        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-96 text-xs font-mono select-text">
           {lines.map((ln, i) => (
-            <div key={i} className={`flex items-start gap-2 px-2 py-px leading-5 ${CAT_ROW[ln.cat]}`} style={CAT_ROW_STYLE[ln.cat]}>
-              <span className="select-none w-7 flex-shrink-0 text-right tabular-nums" style={{ color: 'rgba(0,245,255,0.2)' }}>{i + 1}</span>
+            <div key={i} className={`flex items-start gap-2 px-2 py-px leading-5 ${CAT_ROW[ln.cat]}`}>
+              <span className="select-none text-white/20 w-7 flex-shrink-0 text-right tabular-nums">{i + 1}</span>
               <span className="flex-1 text-slate-200 whitespace-pre">{ln.text || ' '}</span>
               {ln.label && (
-                <span className="flex-shrink-0 text-[10px] pl-3 self-center" style={CAT_LABEL_STYLE[ln.cat]}>← {ln.label}</span>
+                <span className={`flex-shrink-0 text-[10px] pl-3 self-center ${CAT_LABEL[ln.cat]}`}>← {ln.label}</span>
               )}
             </div>
           ))}
         </div>
       </div>
       <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={onContinue}>
-        <ArrowRight size={14} />CONFIRM — CONTINUE_TO_DNS
+        <ArrowRight size={14} />确认，继续 DNS 设置
       </button>
     </div>
   )
@@ -181,8 +175,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="flex-shrink-0 w-44">
-        <label className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted">{label}</label>
-        {hint && <p className="font-mono text-[9px] text-muted mt-0.5 leading-4">{hint}</p>}
+        <label className="text-sm text-slate-300">{label}</label>
+        {hint && <p className="text-xs text-muted mt-0.5 leading-4">{hint}</p>}
       </div>
       <div className="flex-1">{children}</div>
     </div>
@@ -192,7 +186,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
     <input
-      className="glass-input"
+      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -203,7 +197,7 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
 function SelectInput({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <select
-      className="glass-input"
+      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors appearance-none"
       value={value}
       onChange={e => onChange(e.target.value)}
     >
@@ -218,27 +212,11 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
       <button
         type="button"
         onClick={() => onChange(!checked)}
-        className="w-10 h-5 flex-shrink-0 relative transition-all cursor-pointer"
-        style={{
-          border: `1px solid ${checked ? 'rgba(0,245,255,0.6)' : 'rgba(74,96,128,0.5)'}`,
-          background: checked ? 'rgba(0,245,255,0.15)' : 'rgba(6,12,18,0.8)',
-          boxShadow: checked ? '0 0 8px rgba(0,245,255,0.3)' : 'none',
-        }}
+        className={`w-10 h-5 rounded-full transition-colors flex-shrink-0 relative ${checked ? 'bg-brand' : 'bg-surface-3'}`}
       >
-        <span
-          className="absolute top-0.5 w-4 h-4 transition-all"
-          style={{
-            left: checked ? '1.25rem' : '0.125rem',
-            background: checked ? '#00F5FF' : '#4A6080',
-            boxShadow: checked ? '0 0 6px rgba(0,245,255,0.8)' : 'none',
-          }}
-        />
+        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${checked ? 'left-5' : 'left-0.5'}`} />
       </button>
-      {label && (
-        <span className="font-mono text-[10px] uppercase tracking-[0.12em]" style={{ color: checked ? '#00F5FF' : '#4A6080' }}>
-          {label}
-        </span>
-      )}
+      {label && <span className={`text-xs ${checked ? 'text-slate-200' : 'text-muted'}`}>{label}</span>}
     </div>
   )
 }
@@ -249,31 +227,18 @@ function StepBar({ step }: { step: Step }) {
     <div className="flex items-center gap-0">
       {STEPS.map((s, i) => (
         <div key={s.id} className="flex items-center">
-          <div
-            className="flex items-center gap-2 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-all"
-            style={
-              i < idx
-                ? { color: '#00FF88' }
-                : i === idx
-                ? { color: '#00F5FF', border: '1px solid rgba(0,245,255,0.3)', background: 'rgba(0,245,255,0.08)', textShadow: '0 0 8px rgba(0,245,255,0.6)' }
-                : { color: '#4A6080' }
-            }
-          >
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+            i < idx ? 'text-success' :
+            i === idx ? 'bg-brand/20 text-brand border border-brand/30' :
+            'text-muted'
+          }`}>
             {i < idx
-              ? <CheckCircle2 size={12} />
-              : (
-                <span
-                  className="w-4 h-4 flex items-center justify-center text-[10px] font-bold"
-                  style={i === idx
-                    ? { border: '1px solid rgba(0,245,255,0.5)', background: 'rgba(0,245,255,0.2)', color: '#00F5FF' }
-                    : { border: '1px solid rgba(74,96,128,0.4)', color: '#4A6080' }
-                  }
-                >{i + 1}</span>
-              )
+              ? <CheckCircle2 size={12} className="text-success" />
+              : <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold border ${i === idx ? 'border-brand bg-brand/30 text-brand' : 'border-white/15 text-muted'}`}>{i + 1}</span>
             }
             {s.label}
           </div>
-          {i < STEPS.length - 1 && <ChevronRight size={14} className="mx-1 flex-shrink-0" style={{ color: 'rgba(74,96,128,0.4)' }} />}
+          {i < STEPS.length - 1 && <ChevronRight size={14} className="text-white/15 mx-1 flex-shrink-0" />}
         </div>
       ))}
     </div>
@@ -282,9 +247,9 @@ function StepBar({ step }: { step: Step }) {
 
 function InfoBadge({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between py-1.5" style={{ borderBottom: '1px solid rgba(0,245,255,0.06)' }}>
-      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">{label}</span>
-      <span className="font-mono text-[10px] text-neon-cyan">{value}</span>
+    <div className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+      <span className="text-xs text-muted">{label}</span>
+      <span className="text-xs text-slate-200 font-mono">{value}</span>
     </div>
   )
 }
@@ -783,10 +748,10 @@ export function Setup() {
   // Guard: checking
   if (initStatus === 'checking') {
     return (
-      <div className="min-h-full flex items-center justify-center">
-        <div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
-          <Loader2 size={18} className="animate-spin" style={{ color: '#00F5FF' }} />
-          DETECTING_RUNTIME_STATE...
+      <div className="min-h-full bg-gradient-to-b from-surface-0 to-surface-1 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-muted text-sm">
+          <Loader2 size={18} className="animate-spin text-brand" />
+          正在检测当前运行状态…
         </div>
       </div>
     )
@@ -796,56 +761,58 @@ export function Setup() {
   if (initStatus === 'running') {
     const managed = runningModules.filter(m => m.managed_by_clashforge)
     return (
-      <div className="min-h-full px-6 py-8">
+      <div className="min-h-full bg-gradient-to-b from-surface-0 to-surface-1 px-6 py-8">
         <div className="max-w-xl mx-auto space-y-6">
           <div className="flex items-center gap-3">
-            <div className="p-2.5" style={{ border: '1px solid rgba(0,245,255,0.25)', background: 'rgba(0,245,255,0.08)' }}>
-              <Sparkles size={18} style={{ color: '#00F5FF' }} />
+            <div className="w-9 h-9 rounded-xl bg-brand/20 flex items-center justify-center">
+              <Sparkles size={18} className="text-brand" />
             </div>
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-muted">SYS_PROXY</p>
-              <h1 className="font-mono text-base font-bold uppercase tracking-[0.06em] text-white mt-1" style={{ textShadow: '0 0 12px rgba(0,245,255,0.3)' }}>PROXY_SERVICE</h1>
-              <p className="font-mono text-[10px] text-muted mt-0.5">STOP_REQUIRED before reconfiguration</p>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxy</p>
+                <h1 className="text-base font-bold text-white mt-1">代理服务</h1>
+              </div>
+              <p className="text-xs text-muted">重新配置前需要先停止当前服务</p>
             </div>
           </div>
 
           <div className="glass-card px-5 py-5 space-y-4">
             <div className="flex items-center gap-3">
-              <span className="inline-flex h-2 w-2 animate-pulse" style={{ background: '#00FF88', boxShadow: '0 0 6px rgba(0,255,136,0.8)' }} />
-              <p className="font-mono text-sm font-semibold uppercase tracking-[0.06em]" style={{ color: '#00FF88' }}>CORE_RUNNING</p>
+              <span className="inline-flex h-2.5 w-2.5 rounded-full bg-success animate-pulse" />
+              <p className="text-sm font-semibold text-white">内核正在运行</p>
             </div>
-            <p className="font-mono text-[10px] text-muted leading-6">
-              ClashForge core is ACTIVE and has taken over system services listed below.
-              Stop the core and release all takeovers before reconfiguring.
+            <p className="text-sm text-muted leading-6">
+              ClashForge 内核当前处于运行状态，并已接管以下系统服务。
+              要重新配置，请先停止内核并退出所有接管，然后再继续。
             </p>
 
             {managed.length > 0 && (
-              <div className="px-4 py-3 space-y-2" style={{ border: '1px solid rgba(0,245,255,0.1)', background: 'rgba(0,245,255,0.03)' }}>
-                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">ACTIVE_TAKEOVERS</p>
+              <div className="rounded-xl border border-white/8 bg-black/10 px-4 py-3 space-y-2">
+                <p className="text-xs text-muted uppercase tracking-wider font-semibold">当前已接管</p>
                 {managed.map(m => (
-                  <div key={m.id} className="flex items-center gap-2">
-                    <ShieldOff size={12} style={{ color: '#FFE600' }} />
-                    <span className="font-mono text-[10px] text-white">{m.title}</span>
-                    <span className="font-mono text-[10px] text-muted">— {m.current_owner}</span>
+                  <div key={m.id} className="flex items-center gap-2 text-xs">
+                    <ShieldOff size={12} className="text-warning" />
+                    <span className="text-slate-300">{m.title}</span>
+                    <span className="text-muted">— {m.current_owner}</span>
                   </div>
                 ))}
               </div>
             )}
 
             {stopError && (
-              <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: '#FF2255' }}>
+              <div className="flex items-center gap-2 text-xs text-danger">
                 <AlertCircle size={13} />{stopError}
               </div>
             )}
 
             <button
-              className="btn-danger w-full flex items-center justify-center gap-2 py-3"
+              className="btn-danger w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
               onClick={handleStopAll}
               disabled={stopping}
             >
               {stopping
-                ? <><Loader2 size={15} className="animate-spin" />STOPPING...</>
-                : <><Square size={15} />STOP_CORE + RELEASE_ALL</>}
+                ? <><Loader2 size={15} className="animate-spin" />停止中…</>
+                : <><Square size={15} />停止内核 + 退出所有接管</>}
             </button>
           </div>
         </div>
@@ -854,18 +821,20 @@ export function Setup() {
   }
 
   return (
-    <div className="min-h-full px-6 py-8">
+    <div className="min-h-full bg-gradient-to-b from-surface-0 to-surface-1 px-6 py-8">
       <div className="max-w-2xl mx-auto space-y-6">
 
         {/* Header */}
         <div className="flex items-center gap-3">
-          <div className="p-2.5" style={{ border: '1px solid rgba(0,245,255,0.25)', background: 'rgba(0,245,255,0.08)' }}>
-            <Sparkles size={18} style={{ color: '#00F5FF' }} />
+          <div className="w-9 h-9 rounded-xl bg-brand/20 flex items-center justify-center">
+            <Sparkles size={18} className="text-brand" />
           </div>
           <div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-muted">SETUP_WIZARD</p>
-            <h1 className="font-mono text-base font-bold uppercase tracking-[0.06em] text-white mt-1" style={{ textShadow: '0 0 12px rgba(0,245,255,0.3)' }}>PROXY_SETUP</h1>
-            <p className="font-mono text-[10px] text-muted mt-0.5">IMPORT → DNS → NETWORK → LAUNCH → VERIFY</p>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxy</p>
+              <h1 className="text-base font-bold text-white mt-1">代理服务</h1>
+            </div>
+            <p className="text-xs text-muted">导入配置 → 调整参数 → 一键启动 → 验证连通</p>
           </div>
         </div>
 
@@ -883,23 +852,24 @@ export function Setup() {
         )}
         {step === 'import' && !previewContent && (
           <div className="space-y-4">
+            {/* Mode tabs */}
             <div className="glass-card px-5 py-5 space-y-4">
               <div className="flex items-center gap-2 mb-1">
-                <FileText size={16} style={{ color: '#00F5FF' }} />
-                <h2 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white">SELECT_IMPORT_MODE</h2>
+                <FileText size={16} className="text-brand" />
+                <h2 className="text-sm font-semibold text-slate-200">选择导入方式</h2>
               </div>
               {importMode !== 'existing' && importMode !== 'existing_file' && (
                 <div className="flex gap-2 flex-wrap">
                   {([
-                    { id: 'saved', icon: <Database size={13} />, label: 'SAVED_CFG' },
-                    { id: 'paste', icon: <FileText size={13} />, label: 'PASTE_YAML' },
-                    { id: 'file',  icon: <Upload size={13} />,   label: 'UPLOAD_FILE' },
-                    { id: 'url',   icon: <Link2 size={13} />,    label: 'SUB_URL' },
+                    { id: 'saved', icon: <Database size={13} />, label: '已保存配置' },
+                    { id: 'paste', icon: <FileText size={13} />, label: '粘贴 YAML' },
+                    { id: 'file',  icon: <Upload size={13} />,   label: '上传文件' },
+                    { id: 'url',   icon: <Link2 size={13} />,    label: '订阅链接' },
                   ] as const).map(m => (
                     <button
                       key={m.id}
                       onClick={() => setImportMode(m.id)}
-                      className={`font-mono text-[10px] uppercase tracking-[0.1em] py-1.5 px-3 flex items-center gap-1.5 transition-all cursor-pointer ${importMode === m.id ? 'btn-primary' : 'btn-ghost'}`}
+                      className={`btn text-xs py-1.5 flex items-center gap-1.5 ${importMode === m.id ? 'btn-primary' : 'btn-ghost'}`}
                     >
                       {m.icon}{m.label}
                     </button>
@@ -909,31 +879,27 @@ export function Setup() {
 
               {importMode === 'saved' && (
                 <div className="space-y-3">
-                  {savedLoading && <p className="font-mono text-[10px] text-muted uppercase tracking-[0.15em]">LOADING...</p>}
+                  {savedLoading && <p className="text-xs text-muted">加载中…</p>}
                   {!savedLoading && savedFiles.length === 0 && savedSubs.length === 0 && (
-                    <p className="font-mono text-[10px] text-muted">NO_SAVED_CONFIGS — use another import mode.</p>
+                    <p className="text-xs text-muted">暂无已保存的配置，请使用其他方式导入。</p>
                   )}
                   {savedFiles.length > 0 && (
                     <div className="space-y-1.5">
-                      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">CONFIG_FILES</p>
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider">配置文件</p>
                       {savedFiles.map(f => {
                         const selected = selectedSaved?.kind === 'file' && selectedSaved.filename === f.filename
                         return (
                           <button
                             key={f.filename}
                             onClick={() => setSelectedSaved({ kind: 'file', filename: f.filename })}
-                            className="w-full flex items-center gap-3 px-4 py-3 text-left transition-all cursor-pointer"
-                            style={{
-                              border: selected ? '1px solid rgba(0,245,255,0.5)' : '1px solid rgba(0,245,255,0.1)',
-                              background: selected ? 'rgba(0,245,255,0.08)' : 'rgba(2,4,8,0.4)',
-                            }}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${selected ? 'border-brand/60 bg-brand/10' : 'border-white/8 bg-black/10 hover:border-white/20'}`}
                           >
-                            <FileText size={14} className="flex-shrink-0" style={{ color: selected ? '#00F5FF' : '#4A6080' }} />
+                            <FileText size={14} className={selected ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
                             <div className="flex-1 min-w-0">
-                              <p className="font-mono text-xs truncate" style={{ color: selected ? '#00F5FF' : '#CBD5E1' }}>{f.filename}</p>
-                              <p className="font-mono text-[10px] text-muted mt-0.5">{(f.size_bytes / 1024).toFixed(1)} KB · {new Date(f.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                              <p className={`text-sm font-mono font-medium truncate ${selected ? 'text-brand' : 'text-slate-200'}`}>{f.filename}</p>
+                              <p className="text-xs text-muted mt-0.5">{(f.size_bytes / 1024).toFixed(1)} KB · {new Date(f.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                             </div>
-                            {selected && <CheckCircle2 size={14} className="flex-shrink-0" style={{ color: '#00F5FF' }} />}
+                            {selected && <CheckCircle2 size={14} className="text-brand flex-shrink-0" />}
                           </button>
                         )
                       })}
@@ -941,62 +907,51 @@ export function Setup() {
                   )}
                   {savedSubs.length > 0 && (
                     <div className="space-y-1.5">
-                      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">SUBSCRIPTIONS</p>
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider">订阅配置</p>
                       {savedSubs.map(sub => {
                         const selected = selectedSaved?.kind === 'sub' && selectedSaved.sub.id === sub.id
                         return (
                           <button
                             key={sub.id}
                             onClick={() => setSelectedSaved({ kind: 'sub', sub })}
-                            className="w-full flex items-center gap-3 px-4 py-3 text-left transition-all cursor-pointer"
-                            style={{
-                              border: selected ? '1px solid rgba(0,245,255,0.5)' : '1px solid rgba(0,245,255,0.1)',
-                              background: selected ? 'rgba(0,245,255,0.08)' : 'rgba(2,4,8,0.4)',
-                            }}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${selected ? 'border-brand/60 bg-brand/10' : 'border-white/8 bg-black/10 hover:border-white/20'}`}
                           >
-                            <Radio size={14} className="flex-shrink-0" style={{ color: selected ? '#00F5FF' : '#4A6080' }} />
+                            <Radio size={14} className={selected ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
                             <div className="flex-1 min-w-0">
-                              <p className="font-mono text-xs truncate" style={{ color: selected ? '#00F5FF' : '#CBD5E1' }}>{sub.name}</p>
-                              <p className="font-mono text-[10px] text-muted mt-0.5">{sub.node_count ? `${sub.node_count}_NODES · ` : ''}{sub.url ? sub.url : 'NO_URL'}</p>
+                              <p className={`text-sm font-medium truncate ${selected ? 'text-brand' : 'text-slate-200'}`}>{sub.name}</p>
+                              <p className="text-xs text-muted mt-0.5">{sub.node_count ? `${sub.node_count} 节点 · ` : ''}{sub.url ? sub.url : '无 URL'}</p>
                             </div>
-                            {selected && <CheckCircle2 size={14} className="flex-shrink-0" style={{ color: '#00F5FF' }} />}
+                            {selected && <CheckCircle2 size={14} className="text-brand flex-shrink-0" />}
                           </button>
                         )
                       })}
+                      {/* Cache vs live-update choice for selected subscription */}
                       {selectedSaved?.kind === 'sub' && selectedSaved.sub.has_cache && (
-                        <div className="mt-2 px-4 py-3 space-y-2" style={{ border: '1px solid rgba(0,245,255,0.1)', background: 'rgba(0,245,255,0.03)' }}>
-                          <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-white">SUB_UPDATE_MODE</p>
+                        <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-4 py-3 space-y-2">
+                          <p className="text-xs font-semibold text-slate-300">订阅更新方式</p>
                           <div className="flex gap-2">
                             <button
                               onClick={() => { setSubImportChoice('cache'); setSubLiveFailed(false) }}
-                              className="flex-1 flex items-center justify-center gap-1.5 py-2 font-mono text-[10px] uppercase tracking-[0.1em] transition-all cursor-pointer"
-                              style={(subImportChoice === 'cache' || subImportChoice === null)
-                                ? { border: '1px solid rgba(0,245,255,0.5)', background: 'rgba(0,245,255,0.1)', color: '#00F5FF' }
-                                : { border: '1px solid rgba(0,245,255,0.1)', background: 'transparent', color: '#4A6080' }
-                              }
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border text-xs font-medium transition-all ${(subImportChoice === 'cache' || subImportChoice === null) ? 'border-brand/60 bg-brand/15 text-brand' : 'border-white/10 bg-white/5 text-muted hover:border-white/20'}`}
                             >
-                              <Database size={12} />USE_LOCAL_CACHE
+                              <Database size={12} />使用本地缓存
                             </button>
                             <button
                               onClick={() => { setSubImportChoice('live'); setSubLiveFailed(false) }}
-                              className="flex-1 flex items-center justify-center gap-1.5 py-2 font-mono text-[10px] uppercase tracking-[0.1em] transition-all cursor-pointer"
-                              style={subImportChoice === 'live'
-                                ? { border: '1px solid rgba(0,245,255,0.5)', background: 'rgba(0,245,255,0.1)', color: '#00F5FF' }
-                                : { border: '1px solid rgba(0,245,255,0.1)', background: 'transparent', color: '#4A6080' }
-                              }
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border text-xs font-medium transition-all ${subImportChoice === 'live' ? 'border-brand/60 bg-brand/15 text-brand' : 'border-white/10 bg-white/5 text-muted hover:border-white/20'}`}
                             >
-                              <Link2 size={12} />LIVE_UPDATE
+                              <Link2 size={12} />在线更新订阅
                             </button>
                           </div>
                           {(subImportChoice === 'cache' || subImportChoice === null) && selectedSaved.sub.last_updated && (
-                            <p className="font-mono text-[10px] text-muted">
-                              CACHED: {new Date(selectedSaved.sub.last_updated).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                              {selectedSaved.sub.node_count ? `  ·  ${selectedSaved.sub.node_count}_NODES` : ''}
+                            <p className="text-[11px] text-muted">
+                              缓存时间：{new Date(selectedSaved.sub.last_updated).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              {selectedSaved.sub.node_count ? `  ·  ${selectedSaved.sub.node_count} 节点` : ''}
                             </p>
                           )}
                           {subLiveFailed && (
-                            <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: '#FFE600' }}>
-                              <AlertCircle size={12} />LIVE_UPDATE_FAILED — select USE_LOCAL_CACHE to continue.
+                            <div className="flex items-center gap-2 text-xs text-warning">
+                              <AlertCircle size={12} />在线更新失败。请点击"使用本地缓存"继续。
                             </div>
                           )}
                         </div>
@@ -1008,38 +963,43 @@ export function Setup() {
 
               {importMode === 'existing' && activateSub && (
                 <div className="space-y-3">
-                  <p className="font-mono text-[10px] text-muted leading-5">Will fetch latest nodes from subscription and regenerate config.</p>
-                  <div className="px-4 py-3 space-y-1" style={{ background: 'rgba(0,245,255,0.06)', border: '1px solid rgba(0,245,255,0.3)' }}>
-                    <p className="font-mono text-sm font-semibold text-white">{activateSub.name}</p>
-                    {activateSub.url && <p className="font-mono text-[10px] text-muted truncate">{activateSub.url}</p>}
+                  <p className="text-xs text-muted leading-5">将拉取以下订阅的最新节点并重新生成配置。</p>
+                  <div className="rounded-xl bg-brand/10 border border-brand/30 px-4 py-3 space-y-1">
+                    <p className="text-sm font-semibold text-white">{activateSub.name}</p>
+                    {activateSub.url && <p className="text-xs text-muted truncate">{activateSub.url}</p>}
                   </div>
-                  <button className="font-mono text-[10px] text-muted hover:text-neon-cyan underline underline-offset-2 transition-colors cursor-pointer" onClick={() => setImportMode('paste')}>
-                    SWITCH_TO_MANUAL_IMPORT
+                  <button
+                    className="text-xs text-muted hover:text-white underline underline-offset-2 transition-colors"
+                    onClick={() => setImportMode('paste')}
+                  >
+                    切换到手动导入
                   </button>
                 </div>
               )}
 
               {importMode === 'existing_file' && activateFile && (
                 <div className="space-y-3">
-                  <p className="font-mono text-[10px] text-muted leading-5">Will load saved config file and regenerate config.</p>
-                  <div className="px-4 py-3 space-y-1" style={{ background: 'rgba(0,245,255,0.06)', border: '1px solid rgba(0,245,255,0.3)' }}>
-                    <p className="font-mono text-sm font-semibold text-white">{activateFile.filename}</p>
-                    <p className="font-mono text-[10px] text-muted">SOURCE: config file list</p>
+                  <p className="text-xs text-muted leading-5">将加载以下保存的配置文件并重新生成配置。</p>
+                  <div className="rounded-xl bg-brand/10 border border-brand/30 px-4 py-3 space-y-1">
+                    <p className="text-sm font-semibold text-white font-mono">{activateFile.filename}</p>
+                    <p className="text-xs text-muted">来自配置文件列表</p>
                   </div>
-                  <button className="font-mono text-[10px] text-muted hover:text-neon-cyan underline underline-offset-2 transition-colors cursor-pointer" onClick={() => setImportMode('paste')}>
-                    SWITCH_TO_MANUAL_IMPORT
+                  <button
+                    className="text-xs text-muted hover:text-white underline underline-offset-2 transition-colors"
+                    onClick={() => setImportMode('paste')}
+                  >
+                    切换到手动导入
                   </button>
                 </div>
               )}
 
               {importMode === 'paste' && (
                 <div className="space-y-3">
-                  <p className="font-mono text-[10px] text-muted leading-5">
-                    Paste complete Clash / Mihomo YAML config (local config file or subscription content).
+                  <p className="text-xs text-muted leading-5">
+                    粘贴完整的 Clash / Mihomo YAML 配置（本地配置文件或订阅下载内容）。
                   </p>
                   <textarea
-                    className="w-full px-3 py-3 font-mono text-xs text-white outline-none resize-none"
-                    style={{ background: 'rgba(2,4,8,0.8)', border: '1px solid rgba(0,245,255,0.15)' }}
+                    className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-3 text-xs text-white font-mono outline-none focus:border-brand transition-colors resize-none"
                     rows={16}
                     placeholder={'port: 7890\nsocks-port: 7891\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  listen: 0.0.0.0:7874\n  ...'}
                     value={pasteContent}
@@ -1051,18 +1011,17 @@ export function Setup() {
 
               {importMode === 'file' && (
                 <div className="space-y-3">
-                  <p className="font-mono text-[10px] text-muted leading-5">Upload .yaml / .yml config file.</p>
+                  <p className="text-xs text-muted leading-5">上传 .yaml / .yml 格式的配置文件。</p>
                   <div
-                    className="px-6 py-12 flex flex-col items-center gap-3 transition-all cursor-pointer"
-                    style={{ border: '2px dashed rgba(0,245,255,0.15)', background: 'rgba(2,4,8,0.4)' }}
+                    className="border-2 border-dashed border-white/15 rounded-2xl px-6 py-12 flex flex-col items-center gap-3 hover:border-brand/40 hover:bg-brand/5 transition-all cursor-pointer"
                     onClick={() => fileRef.current?.click()}
                     onDragOver={e => e.preventDefault()}
                     onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
                   >
                     <Upload size={28} className="text-muted" />
                     <div className="text-center">
-                      <p className="font-mono text-sm font-medium text-white">CLICK_UPLOAD or DROP_FILE</p>
-                      <p className="font-mono text-[10px] text-muted mt-1">.yaml / .yml format</p>
+                      <p className="text-sm text-slate-300 font-medium">点击上传或拖放文件</p>
+                      <p className="text-xs text-muted mt-1">.yaml / .yml 格式</p>
                     </div>
                     <input
                       ref={fileRef} type="file" accept=".yaml,.yml,.txt" className="hidden"
@@ -1070,9 +1029,9 @@ export function Setup() {
                     />
                   </div>
                   {pasteContent && (
-                    <div className="px-4 py-2 flex items-center gap-2" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }}>
-                      <CheckCircle2 size={14} className="flex-shrink-0" style={{ color: '#00FF88' }} />
-                      <span className="font-mono text-[10px]" style={{ color: '#00FF88' }}>FILE_LOADED — {pasteContent.split('\n').length}_LINES</span>
+                    <div className="rounded-xl bg-success/10 border border-success/20 px-4 py-2 flex items-center gap-2">
+                      <CheckCircle2 size={14} className="text-success flex-shrink-0" />
+                      <span className="text-xs text-success">文件已加载，共 {pasteContent.split('\n').length} 行</span>
                     </div>
                   )}
                 </div>
@@ -1080,16 +1039,16 @@ export function Setup() {
 
               {importMode === 'url' && (
                 <div className="space-y-3">
-                  <p className="font-mono text-[10px] text-muted leading-5">
-                    Enter Clash subscription URL. Backend will fetch and parse nodes automatically.
-                    A new subscription record will be created and can be managed in the Subscriptions page.
+                  <p className="text-xs text-muted leading-5">
+                    输入 Clash 订阅链接，后端将自动拉取并解析节点。
+                    此方式会创建一条新的订阅记录，后续可在「订阅」页管理。
                   </p>
                   <TextInput value={remoteUrl} onChange={setRemoteUrl} placeholder="https://example.com/clash-subscribe?token=..." />
                 </div>
               )}
 
               {importError && (
-                <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: '#FF2255' }}>
+                <div className="flex items-center gap-2 text-xs text-danger">
                   <AlertCircle size={13} />{importError}
                 </div>
               )}
@@ -1103,15 +1062,14 @@ export function Setup() {
                 }
               >
                 {importing
-                  ? <><Loader2 size={14} className="animate-spin" />PARSING...</>
-                  : <><ArrowRight size={14} />PARSE_AND_CONTINUE</>}
+                  ? <><Loader2 size={14} className="animate-spin" />解析中…</>
+                  : <><ArrowRight size={14} />解析并继续</>}
               </button>
             </div>
 
-            <p className="font-mono text-[10px] text-muted text-center">
-              No config file yet?{' '}
-              <button className="text-neon-cyan hover:underline cursor-pointer" onClick={() => { setClashParsed({}); setStep('dns') }}>
-                SKIP_IMPORT — MANUAL_SETUP
+            <p className="text-xs text-muted text-center">如果还没有配置文件，可以直接跳过 →
+              <button className="ml-1 text-brand hover:underline" onClick={() => { setClashParsed({}); setStep('dns') }}>
+                跳过导入，手动设置
               </button>
             </p>
           </div>
@@ -1121,66 +1079,64 @@ export function Setup() {
         {step === 'dns' && (
           <div className="space-y-4">
             {clashParsed?.dns && (
-              <div className="glass-card px-5 py-4 space-y-1" style={{ background: 'rgba(0,245,255,0.04)', borderColor: 'rgba(0,245,255,0.2)' }}>
-                <p className="font-mono text-[10px] uppercase tracking-[0.2em] mb-2" style={{ color: '#00F5FF' }}>DNS_DETECTED_FROM_CONFIG</p>
-                {clashParsed.dns.enable !== undefined && <InfoBadge label="DNS_ENABLE" value={String(clashParsed.dns.enable)} />}
-                {clashParsed.dns['enhanced-mode'] && <InfoBadge label="DNS_MODE" value={clashParsed.dns['enhanced-mode']} />}
-                {clashParsed.dns.listen && <InfoBadge label="LISTEN_ADDR" value={clashParsed.dns.listen} />}
-                {clashParsed.dns['fake-ip-range'] && <InfoBadge label="FAKE_IP_RANGE" value={clashParsed.dns['fake-ip-range']} />}
+              <div className="glass-card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
+                <p className="text-xs font-semibold text-brand mb-2">从配置文件中读取到 DNS 设置</p>
+                {clashParsed.dns.enable !== undefined && <InfoBadge label="DNS 启用" value={String(clashParsed.dns.enable)} />}
+                {clashParsed.dns['enhanced-mode'] && <InfoBadge label="DNS 模式" value={clashParsed.dns['enhanced-mode']} />}
+                {clashParsed.dns.listen && <InfoBadge label="监听地址" value={clashParsed.dns.listen} />}
+                {clashParsed.dns['fake-ip-range'] && <InfoBadge label="fake-ip 段" value={clashParsed.dns['fake-ip-range']} />}
                 {(clashParsed.dns.nameserver ?? []).length > 0 && (
-                  <InfoBadge label="UPSTREAM_DNS" value={(clashParsed.dns.nameserver ?? []).join(', ')} />
+                  <InfoBadge label="上游 DNS" value={(clashParsed.dns.nameserver ?? []).join(', ')} />
                 )}
               </div>
             )}
 
             <div className="glass-card px-5 py-5 space-y-5">
-              <h2 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white" style={{ borderBottom: '1px solid rgba(0,245,255,0.08)', paddingBottom: '0.75rem' }}>
-                <span style={{ color: 'rgba(0,245,255,0.4)', marginRight: '0.25rem' }}>{'>'}</span>DNS_SETTINGS
-              </h2>
+              <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">DNS 设置</h2>
 
-              <Field label="MIHOMO_DNS" hint="When disabled, Mihomo uses system DNS">
-                <Toggle checked={dns.enable} onChange={v => dnsSet('enable', v)} label={dns.enable ? 'ENABLED' : 'DISABLED'} />
+              <Field label="启用 Mihomo DNS" hint="关闭时 Mihomo 使用系统 DNS，不接管查询">
+                <Toggle checked={dns.enable} onChange={v => dnsSet('enable', v)} label={dns.enable ? '已启用' : '已禁用'} />
               </Field>
 
-              <Field label="DNS_MODE" hint="fake-ip mode uses virtual IPs for rule-based routing">
+              <Field label="DNS 解析模式" hint="fake-ip 模式下虚构 IP 实现规则分流">
                 <SelectInput
                   value={dns.mode} onChange={v => dnsSet('mode', v)}
-                  options={[{ value: 'fake-ip', label: 'FAKE_IP (recommended)' }, { value: 'redir-host', label: 'REDIR_HOST' }]}
+                  options={[{ value: 'fake-ip', label: 'Fake-IP（推荐）' }, { value: 'redir-host', label: 'Redir-Host' }]}
                 />
               </Field>
 
-              <Field label="LISTEN_ADDR">
+              <Field label="DNS 监听地址">
                 <TextInput value={dns.listen} onChange={v => dnsSet('listen', v)} placeholder="0.0.0.0:7874" />
               </Field>
 
-              <Field label="IPV6_DNS" hint="Disabled by default to prevent IPv6 leaks">
-                <Toggle checked={dns.ipv6} onChange={v => dnsSet('ipv6', v)} label={dns.ipv6 ? 'ENABLED' : 'DISABLED'} />
+              <Field label="IPv6 DNS" hint="默认关闭，避免 IPv6 泄露">
+                <Toggle checked={dns.ipv6} onChange={v => dnsSet('ipv6', v)} label={dns.ipv6 ? '启用' : '禁用'} />
               </Field>
 
-              <div className="space-y-4 pt-4" style={{ borderTop: '1px solid rgba(0,245,255,0.08)' }}>
-                <h3 className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">CLASHFORGE_DNS_TAKEOVER</h3>
+              <div className="border-t border-white/5 pt-4 space-y-4">
+                <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">ClashForge DNS 接管</h3>
 
-                <Field label="DNSMASQ_MODE" hint="none=no-op; upstream=set as upstream; replace=full replace">
+                <Field label="dnsmasq 共存模式" hint="none=不干预 dnsmasq；upstream=设为上游；replace=完全替换">
                   <SelectInput
                     value={dns.dnsmasq_mode} onChange={v => dnsSet('dnsmasq_mode', v)}
                     options={[
-                      { value: 'none',     label: 'NONE (default)' },
-                      { value: 'upstream', label: 'MIHOMO_AS_UPSTREAM' },
-                      { value: 'replace',  label: 'FULL_REPLACE' },
+                      { value: 'none',     label: '不干预 dnsmasq（默认）' },
+                      { value: 'upstream', label: 'Mihomo 作为 dnsmasq 上游' },
+                      { value: 'replace',  label: '完全替换 dnsmasq' },
                     ]}
                   />
                 </Field>
 
-                <Field label="AUTO_TAKEOVER_ON_START" hint="ClashForge will route DNS to Mihomo on startup">
-                  <Toggle checked={dns.apply_on_start} onChange={v => dnsSet('apply_on_start', v)} label={dns.apply_on_start ? 'YES' : 'NO'} />
+                <Field label="启动时接管 DNS" hint="开启后 ClashForge 启动时自动将 DNS 查询引向 Mihomo">
+                  <Toggle checked={dns.apply_on_start} onChange={v => dnsSet('apply_on_start', v)} label={dns.apply_on_start ? '是' : '否'} />
                 </Field>
               </div>
             </div>
 
             <div className="flex gap-3">
-              <button className="btn-ghost flex-1" onClick={() => setStep('import')}>← BACK</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('import')}>← 返回</button>
               <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('network')}>
-                NEXT: NET_CONFIG <ChevronRight size={14} />
+                下一步：网络设置 <ChevronRight size={14} />
               </button>
             </div>
           </div>
@@ -1190,62 +1146,60 @@ export function Setup() {
         {step === 'network' && (
           <div className="space-y-4">
             {clashParsed && (
-              <div className="glass-card px-5 py-4 space-y-1" style={{ background: 'rgba(0,245,255,0.04)', borderColor: 'rgba(0,245,255,0.2)' }}>
-                <p className="font-mono text-[10px] uppercase tracking-[0.2em] mb-2" style={{ color: '#00F5FF' }}>NET_INFO_FROM_CONFIG</p>
-                {clashParsed.mode && <InfoBadge label="PROXY_MODE" value={clashParsed.mode} />}
-                {clashParsed.port && <InfoBadge label="HTTP_PORT" value={String(clashParsed.port)} />}
-                {clashParsed['mixed-port'] && <InfoBadge label="MIXED_PORT" value={String(clashParsed['mixed-port'])} />}
-                {clashParsed['socks-port'] && <InfoBadge label="SOCKS_PORT" value={String(clashParsed['socks-port'])} />}
-                {clashParsed['allow-lan'] !== undefined && <InfoBadge label="ALLOW_LAN" value={String(clashParsed['allow-lan'])} />}
+              <div className="glass-card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
+                <p className="text-xs font-semibold text-brand mb-2">从配置文件中读取到基本信息</p>
+                {clashParsed.mode && <InfoBadge label="代理模式" value={clashParsed.mode} />}
+                {clashParsed.port && <InfoBadge label="HTTP 端口" value={String(clashParsed.port)} />}
+                {clashParsed['mixed-port'] && <InfoBadge label="混合端口" value={String(clashParsed['mixed-port'])} />}
+                {clashParsed['socks-port'] && <InfoBadge label="SOCKS 端口" value={String(clashParsed['socks-port'])} />}
+                {clashParsed['allow-lan'] !== undefined && <InfoBadge label="允许局域网" value={String(clashParsed['allow-lan'])} />}
               </div>
             )}
 
             <div className="glass-card px-5 py-5 space-y-5">
-              <h2 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white" style={{ borderBottom: '1px solid rgba(0,245,255,0.08)', paddingBottom: '0.75rem' }}>
-                <span style={{ color: 'rgba(0,245,255,0.4)', marginRight: '0.25rem' }}>{'>'}</span>TPROXY_NET_SETTINGS
-              </h2>
+              <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">透明代理 / 网络设置</h2>
 
-              <Field label="TPROXY_MODE" hint="tproxy: OpenWrt recommended; redir: better compat; tun: kernel support required">
+              <Field label="透明代理模式" hint="tproxy 适用于 OpenWrt；redir 兼容性更好；tun 模式需内核支持">
                 <SelectInput
                   value={net.mode} onChange={v => netSet('mode', v)}
                   options={[
-                    { value: 'tproxy', label: 'TPROXY (OpenWrt recommended)' },
-                    { value: 'redir',  label: 'REDIR_TCP' },
+                    { value: 'tproxy', label: 'TProxy（OpenWrt 推荐）' },
+                    { value: 'redir',  label: 'Redir-TCP' },
                     { value: 'tun',    label: 'TUN' },
-                    { value: 'none',   label: 'NONE (core only)' },
+                    { value: 'none',   label: '不接管（仅启动内核）' },
                   ]}
                 />
               </Field>
 
-              <Field label="FIREWALL_BACKEND" hint="auto detects nftables/iptables">
+              <Field label="防火墙后端" hint="auto 会自动探测 nftables/iptables">
                 <SelectInput
                   value={net.firewall_backend} onChange={v => netSet('firewall_backend', v)}
                   options={[
-                    { value: 'auto',      label: 'AUTO_DETECT' },
-                    { value: 'nftables',  label: 'NFTABLES' },
-                    { value: 'iptables',  label: 'IPTABLES' },
-                    { value: 'none',      label: 'NO_FIREWALL' },
+                    { value: 'auto',      label: '自动探测' },
+                    { value: 'nftables',  label: 'nftables' },
+                    { value: 'iptables',  label: 'iptables' },
+                    { value: 'none',      label: '不配置防火墙' },
                   ]}
                 />
               </Field>
 
-              <Field label="BYPASS_LAN" hint="LAN traffic bypasses transparent proxy">
-                <Toggle checked={net.bypass_lan} onChange={v => netSet('bypass_lan', v)} label={net.bypass_lan ? 'YES' : 'NO'} />
+              <Field label="绕过局域网" hint="局域网流量不走透明代理">
+                <Toggle checked={net.bypass_lan} onChange={v => netSet('bypass_lan', v)} label={net.bypass_lan ? '是' : '否'} />
               </Field>
 
-              <Field label="BYPASS_CN_IPS" hint="Direct connection for mainland China IPs, reduces latency">
-                <Toggle checked={net.bypass_china} onChange={v => netSet('bypass_china', v)} label={net.bypass_china ? 'YES' : 'NO'} />
+              <Field label="绕过中国大陆 IP" hint="国内 IP 直连，减少延迟">
+                <Toggle checked={net.bypass_china} onChange={v => netSet('bypass_china', v)} label={net.bypass_china ? '是' : '否'} />
               </Field>
 
-              <Field label="AUTO_TAKEOVER_ON_START" hint="Apply transparent proxy rules immediately on startup">
-                <Toggle checked={net.apply_on_start} onChange={v => netSet('apply_on_start', v)} label={net.apply_on_start ? 'YES' : 'NO'} />
+              <Field label="启动时自动接管流量" hint="开启后 ClashForge 启动时立即应用透明代理规则">
+                <Toggle checked={net.apply_on_start} onChange={v => netSet('apply_on_start', v)} label={net.apply_on_start ? '是' : '否'} />
               </Field>
             </div>
 
             <div className="flex gap-3">
-              <button className="btn-ghost flex-1" onClick={() => setStep('dns')}>← BACK</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('dns')}>← 返回</button>
               <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('launch')}>
-                NEXT: LAUNCH_SVC <ChevronRight size={14} />
+                下一步：启动服务 <ChevronRight size={14} />
               </button>
             </div>
           </div>
@@ -1255,112 +1209,111 @@ export function Setup() {
         {step === 'launch' && (
           <div className="space-y-4">
             <div className="glass-card px-5 py-5 space-y-4">
-              <h2 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white" style={{ borderBottom: '1px solid rgba(0,245,255,0.08)', paddingBottom: '0.75rem' }}>
-                <span style={{ color: 'rgba(0,245,255,0.4)', marginRight: '0.25rem' }}>{'>'}</span>PRE_LAUNCH_SUMMARY
-              </h2>
+              <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">启动前确认</h2>
 
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 font-mono text-[10px]">
-                  <Wifi size={12} style={{ color: '#00F5FF' }} />
-                  <span className="text-muted">DNS:</span>
-                  <span className="text-white">{dns.enable ? `ENABLED · ${dns.mode.toUpperCase()} · ${dns.listen}` : 'DISABLED'}</span>
-                  {dns.apply_on_start && dns.enable && <span style={{ color: '#00F5FF' }}>(AUTO_TAKEOVER)</span>}
+              {/* Summary */}
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center gap-2 text-muted">
+                  <Wifi size={12} className="text-brand" />
+                  <span className="text-slate-300">DNS：</span>
+                  {dns.enable ? `启用 · ${dns.mode} · ${dns.listen}` : '禁用'}
+                  {dns.apply_on_start && dns.enable && <span className="text-brand">（启动时接管）</span>}
                 </div>
-                <div className="flex items-center gap-2 font-mono text-[10px]">
-                  <Globe size={12} style={{ color: '#00F5FF' }} />
-                  <span className="text-muted">TPROXY:</span>
-                  <span className="text-white">{net.mode === 'none' ? 'NONE' : `${net.mode.toUpperCase()} · ${net.firewall_backend.toUpperCase()}`}</span>
-                  {net.apply_on_start && net.mode !== 'none' && <span style={{ color: '#00F5FF' }}>(AUTO_TAKEOVER)</span>}
+                <div className="flex items-center gap-2 text-muted">
+                  <Globe size={12} className="text-brand" />
+                  <span className="text-slate-300">透明代理：</span>
+                  {net.mode === 'none' ? '不接管' : `${net.mode.toUpperCase()} · ${net.firewall_backend}`}
+                  {net.apply_on_start && net.mode !== 'none' && <span className="text-brand">（启动时接管）</span>}
                 </div>
-                <div className="flex items-center gap-2 font-mono text-[10px]">
-                  <Sparkles size={12} style={{ color: '#00F5FF' }} />
-                  <span className="text-muted">BYPASS_LAN:</span><span className="text-white">{net.bypass_lan ? 'YES' : 'NO'}</span>
-                  <span className="text-muted ml-2">BYPASS_CN:</span><span className="text-white">{net.bypass_china ? 'YES' : 'NO'}</span>
+                <div className="flex items-center gap-2 text-muted">
+                  <Sparkles size={12} className="text-brand" />
+                  <span className="text-slate-300">绕过局域网：</span>{net.bypass_lan ? '是' : '否'}
+                  <span className="text-slate-300 ml-2">绕过国内 IP：</span>{net.bypass_china ? '是' : '否'}
                 </div>
               </div>
 
+              {/* Conflict warning banner */}
               {conflicts.length > 0 && (
-                <div className="px-4 py-4 space-y-3" style={{ background: 'rgba(255,230,0,0.06)', border: '1px solid rgba(255,230,0,0.3)' }}>
+                <div className="rounded-xl bg-amber-500/10 border border-amber-400/30 px-4 py-4 space-y-3">
                   <div className="flex items-start gap-2">
-                    <AlertCircle size={16} className="flex-shrink-0 mt-0.5" style={{ color: '#FFE600' }} />
+                    <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-mono text-sm font-semibold uppercase tracking-[0.06em]" style={{ color: '#FFE600' }}>CONFLICT_DETECTED</p>
-                      <p className="font-mono text-[10px] text-muted mt-0.5 leading-5">
-                        These services conflict with ClashForge ports or traffic takeover. Stop them before launch.
+                      <p className="text-sm font-semibold text-amber-300">检测到冲突服务</p>
+                      <p className="text-xs text-amber-200/70 mt-0.5 leading-5">
+                        以下服务与 ClashForge 存在端口或流量接管冲突，建议在启动前将其停止，以避免意外问题。
                       </p>
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     {conflicts.map(svc => (
-                      <div key={svc.name} className="flex items-center gap-2 px-3 py-2" style={{ background: 'rgba(255,230,0,0.06)', border: '1px solid rgba(255,230,0,0.2)' }}>
-                        <XCircle size={13} className="flex-shrink-0" style={{ color: '#FFE600' }} />
-                        <span className="font-mono text-[10px] font-medium text-white">{svc.label}</span>
+                      <div key={svc.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-400/20">
+                        <XCircle size={13} className="text-amber-400 flex-shrink-0" />
+                        <span className="text-xs text-amber-200 font-medium">{svc.label}</span>
                         {svc.pids && svc.pids.length > 0 && (
-                          <span className="font-mono text-[10px] text-muted ml-auto">PID_{svc.pids.join('_')}</span>
+                          <span className="text-xs text-amber-300/60 font-mono ml-auto">PID {svc.pids.join(', ')}</span>
                         )}
                       </div>
                     ))}
                   </div>
                   {stoppingConflicts ? (
-                    <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: '#FFE600' }}>
+                    <div className="flex items-center gap-2 text-xs text-amber-300">
                       <Loader2 size={13} className="animate-spin" />
-                      STOPPING_CONFLICTS...
+                      正在停止冲突服务，请稍候…
                     </div>
                   ) : (
                     <button
-                      className="w-full flex items-center justify-center gap-2 py-2.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-all cursor-pointer"
-                      style={{ background: 'rgba(255,230,0,0.1)', border: '1px solid rgba(255,230,0,0.4)', color: '#FFE600' }}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
                       onClick={handleStopConflicts}
                     >
                       <ShieldOff size={15} />
-                      STOP_CONFLICTS + LAUNCH_CLASHFORGE
+                      一键停止冲突服务并启动 ClashForge
                     </button>
                   )}
                 </div>
               )}
 
               {conflictStopped && conflicts.length === 0 && (
-                <div className="px-4 py-2 flex items-center gap-2" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }}>
-                  <CheckCircle2 size={13} className="flex-shrink-0" style={{ color: '#00FF88' }} />
-                  <p className="font-mono text-[10px]" style={{ color: '#00FF88' }}>CONFLICTS_CLEARED</p>
+                <div className="rounded-xl bg-success/8 border border-success/20 px-4 py-2 flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-success flex-shrink-0" />
+                  <p className="text-xs text-success">冲突服务已停止</p>
                 </div>
               )}
 
               {launchError && (
-                <div className="px-4 py-3 flex items-start gap-2" style={{ background: 'rgba(255,34,85,0.06)', border: '1px solid rgba(255,34,85,0.2)' }}>
-                  <XCircle size={15} className="flex-shrink-0 mt-0.5" style={{ color: '#FF2255' }} />
+                <div className="rounded-xl bg-danger/10 border border-danger/20 px-4 py-3 flex items-start gap-2">
+                  <XCircle size={15} className="text-danger flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-mono text-sm font-semibold uppercase" style={{ color: '#FF2255' }}>LAUNCH_FAILED</p>
-                    <p className="font-mono text-[10px] text-muted mt-0.5">{launchError}</p>
+                    <p className="text-sm font-semibold text-danger">启动失败</p>
+                    <p className="text-xs text-muted mt-0.5">{launchError}</p>
                   </div>
                 </div>
               )}
 
               {launchDone && (
-                <div className="px-4 py-3 flex items-center gap-2" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }}>
-                  <CheckCircle2 size={15} className="flex-shrink-0" style={{ color: '#00FF88' }} />
-                  <p className="font-mono text-sm font-semibold" style={{ color: '#00FF88' }}>CORE_LAUNCHED — entering CONN_CHECK...</p>
+                <div className="rounded-xl bg-success/10 border border-success/20 px-4 py-3 flex items-center gap-2">
+                  <CheckCircle2 size={15} className="text-success flex-shrink-0" />
+                  <p className="text-sm font-semibold text-success">内核已启动，即将进入连通检测…</p>
                 </div>
               )}
 
               {!launchDone && (
                 <button
-                  className="btn-primary w-full flex items-center justify-center gap-2 py-3"
+                  className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
                   onClick={handleLaunch}
                   disabled={launching || stoppingConflicts || conflicts.length > 0}
                 >
                   {launching
-                    ? <><Loader2 size={16} className="animate-spin" />LAUNCHING_CORE + TAKEOVER...</>
-                    : <><Play size={16} />LAUNCH_CORE + APPLY_TAKEOVER</>}
+                    ? <><Loader2 size={16} className="animate-spin" />正在启动内核 + 接管服务…</>
+                    : <><Play size={16} />一键启动内核 + 应用接管</>}
                 </button>
               )}
             </div>
 
             <div className="flex gap-3">
-              <button className="btn-ghost flex-1" onClick={() => setStep('network')} disabled={launching}>← BACK</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('network')} disabled={launching}>← 返回</button>
               {launchDone && (
                 <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('check')}>
-                  START_CONN_CHECK <ChevronRight size={14} />
+                  开始连通检测 <ChevronRight size={14} />
                 </button>
               )}
             </div>
@@ -1372,51 +1325,50 @@ export function Setup() {
           <div className="space-y-4">
             <div className="glass-card px-5 py-5 space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white">
-                  <span style={{ color: 'rgba(0,245,255,0.4)', marginRight: '0.25rem' }}>{'>'}</span>EGRESS_IP / CONN_CHECK
-                </h2>
+                <h2 className="text-sm font-semibold text-slate-200">出口 IP / 连通检测</h2>
                 <button
-                  className="btn-ghost font-mono text-[10px] uppercase tracking-[0.1em] flex items-center gap-1.5"
+                  className="btn-ghost text-xs flex items-center gap-1.5"
                   onClick={handleCheck}
                   disabled={checking}
                 >
                   <RotateCw size={12} className={checking ? 'animate-spin' : ''} />
-                  {checking ? 'CHECKING...' : 'RE_CHECK'}
+                  {checking ? '检测中…' : '重新检测'}
                 </button>
               </div>
 
               {!checkDone && !checking && (
-                <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={handleCheck}>
-                  <Wifi size={14} />START_CHECK
+                <button
+                  className="btn-primary w-full flex items-center justify-center gap-2"
+                  onClick={handleCheck}
+                >
+                  <Wifi size={14} />开始检测
                 </button>
               )}
 
               {checking && (
-                <div className="flex items-center gap-3 font-mono text-[10px] text-muted uppercase tracking-[0.12em]">
-                  <Loader2 size={16} className="animate-spin" style={{ color: '#00F5FF' }} />
-                  PROBING_FROM_ROUTER_AND_BROWSER...
+                <div className="flex items-center gap-3 text-sm text-muted">
+                  <Loader2 size={16} className="animate-spin text-brand" />
+                  正在从路由器和浏览器两侧发起检测…
                 </div>
               )}
 
+              {/* Router probe results */}
               {routerProbe && (
                 <div className="space-y-2">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">ROUTER_SIDE (SERVER_PROBE)</p>
+                  <p className="text-xs font-semibold text-muted uppercase tracking-wider">路由器侧（服务端检测）</p>
                   {routerProbe.ip_checks.reduce((acc, c, i) => {
                     const prev = i > 0 ? routerProbe.ip_checks[i - 1] : null
                     if (!prev || prev.group !== c.group) {
-                      acc.push(<p key={`ipg-${c.group}`} className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted mt-1">{c.group ?? 'OTHER'}_GROUP</p>)
+                      acc.push(<p key={`ipg-${c.group}`} className="text-[10px] uppercase tracking-wider text-muted mt-1">{c.group ?? '其他'}组</p>)
                     }
                     acc.push(
-                      <div key={i} className="flex items-start gap-2 font-mono text-xs px-3 py-2" style={c.ok
-                        ? { background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }
-                        : { background: 'rgba(255,34,85,0.06)', border: '1px solid rgba(255,34,85,0.2)' }
-                      }>
+                      <div key={i} className={`flex items-start gap-2 text-xs rounded-xl px-3 py-2 ${c.ok ? 'bg-success/8 border border-success/20' : 'bg-danger/8 border border-danger/20'}`}>
                         {c.ok
-                          ? <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#00FF88' }} />
-                          : <XCircle size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#FF2255' }} />}
+                          ? <CheckCircle2 size={13} className="text-success flex-shrink-0 mt-0.5" />
+                          : <XCircle size={13} className="text-danger flex-shrink-0 mt-0.5" />}
                         <div>
-                          <span style={{ color: c.ok ? '#00FF88' : '#FF2255' }}>{c.provider}</span>
-                          {c.ok && c.ip && <span className="ml-2 text-white">{c.ip}</span>}
+                          <span className={c.ok ? 'text-success' : 'text-danger'}>{c.provider}</span>
+                          {c.ok && c.ip && <span className="ml-2 text-slate-300 font-mono">{c.ip}</span>}
                           {c.ok && c.location && <span className="ml-1 text-muted">({c.location})</span>}
                           {!c.ok && c.error && <span className="ml-2 text-muted">{c.error}</span>}
                         </div>
@@ -1427,19 +1379,16 @@ export function Setup() {
                   {routerProbe.access_checks.reduce((acc, c, i) => {
                     const prev = i > 0 ? routerProbe.access_checks[i - 1] : null
                     if (!prev || prev.group !== c.group) {
-                      acc.push(<p key={`acg-${c.group}`} className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted mt-1">{c.group ?? 'OTHER'}_GROUP</p>)
+                      acc.push(<p key={`acg-${c.group}`} className="text-[10px] uppercase tracking-wider text-muted mt-1">{c.group ?? '其他'}组</p>)
                     }
                     acc.push(
-                      <div key={i} className="flex items-start gap-2 font-mono text-xs px-3 py-2" style={c.ok
-                        ? { background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }
-                        : { background: 'rgba(255,34,85,0.06)', border: '1px solid rgba(255,34,85,0.2)' }
-                      }>
+                      <div key={i} className={`flex items-start gap-2 text-xs rounded-xl px-3 py-2 ${c.ok ? 'bg-success/8 border border-success/20' : 'bg-danger/8 border border-danger/20'}`}>
                         {c.ok
-                          ? <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#00FF88' }} />
-                          : <XCircle size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#FF2255' }} />}
+                          ? <CheckCircle2 size={13} className="text-success flex-shrink-0 mt-0.5" />
+                          : <XCircle size={13} className="text-danger flex-shrink-0 mt-0.5" />}
                         <div>
-                          <span style={{ color: c.ok ? '#00FF88' : '#FF2255' }}>{c.name}</span>
-                          {c.ok && c.latency_ms && <span className="ml-2 text-muted">{c.latency_ms}_ms</span>}
+                          <span className={c.ok ? 'text-success' : 'text-danger'}>{c.name}</span>
+                          {c.ok && c.latency_ms && <span className="ml-2 text-muted">{c.latency_ms} ms</span>}
                           {!c.ok && c.error && <span className="ml-2 text-muted">{c.error}</span>}
                         </div>
                       </div>
@@ -1449,38 +1398,33 @@ export function Setup() {
                 </div>
               )}
 
+              {/* Browser probe results */}
               {browserProbe && (
                 <div className="space-y-2">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">BROWSER_SIDE (CLIENT_PROBE)</p>
-                  <div className="flex items-start gap-2 font-mono text-xs px-3 py-2" style={browserProbe.ipOK
-                    ? { background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }
-                    : { background: 'rgba(255,34,85,0.06)', border: '1px solid rgba(255,34,85,0.2)' }
-                  }>
+                  <p className="text-xs font-semibold text-muted uppercase tracking-wider">浏览器侧（前端直连检测）</p>
+                  <div className={`flex items-start gap-2 text-xs rounded-xl px-3 py-2 ${browserProbe.ipOK ? 'bg-success/8 border border-success/20' : 'bg-danger/8 border border-danger/20'}`}>
                     {browserProbe.ipOK
-                      ? <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#00FF88' }} />
-                      : <XCircle size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#FF2255' }} />}
+                      ? <CheckCircle2 size={13} className="text-success flex-shrink-0 mt-0.5" />
+                      : <XCircle size={13} className="text-danger flex-shrink-0 mt-0.5" />}
                     <div>
-                      <span style={{ color: browserProbe.ipOK ? '#00FF88' : '#FF2255' }}>EGRESS_IP (IP.SB)</span>
-                      {browserProbe.ipOK && browserProbe.ip && <span className="ml-2 text-white">{browserProbe.ip}</span>}
+                      <span className={browserProbe.ipOK ? 'text-success' : 'text-danger'}>出口 IP 检测 (IP.SB)</span>
+                      {browserProbe.ipOK && browserProbe.ip && <span className="ml-2 text-slate-300 font-mono">{browserProbe.ip}</span>}
                       {!browserProbe.ipOK && browserProbe.ipError && <span className="ml-2 text-muted">{browserProbe.ipError}</span>}
                     </div>
                   </div>
                   {browserProbe.accessChecks.reduce((acc, c, i) => {
                     const prev = i > 0 ? browserProbe.accessChecks[i - 1] : null
                     if (!prev || prev.group !== c.group) {
-                      acc.push(<p key={`bg-${c.group}`} className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted mt-1">{c.group ?? 'OTHER'}_GROUP</p>)
+                      acc.push(<p key={`bg-${c.group}`} className="text-[10px] uppercase tracking-wider text-muted mt-1">{c.group ?? '其他'}组</p>)
                     }
                     acc.push(
-                      <div key={i} className="flex items-start gap-2 font-mono text-xs px-3 py-2" style={c.ok
-                        ? { background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }
-                        : { background: 'rgba(255,34,85,0.06)', border: '1px solid rgba(255,34,85,0.2)' }
-                      }>
+                      <div key={i} className={`flex items-start gap-2 text-xs rounded-xl px-3 py-2 ${c.ok ? 'bg-success/8 border border-success/20' : 'bg-danger/8 border border-danger/20'}`}>
                         {c.ok
-                          ? <CheckCircle2 size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#00FF88' }} />
-                          : <XCircle size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#FF2255' }} />}
+                          ? <CheckCircle2 size={13} className="text-success flex-shrink-0 mt-0.5" />
+                          : <XCircle size={13} className="text-danger flex-shrink-0 mt-0.5" />}
                         <div>
-                          <span style={{ color: c.ok ? '#00FF88' : '#FF2255' }}>{c.name}</span>
-                          {c.ok && c.latency_ms && <span className="ml-2 text-muted">{c.latency_ms}_ms</span>}
+                          <span className={c.ok ? 'text-success' : 'text-danger'}>{c.name}</span>
+                          {c.ok && c.latency_ms && <span className="ml-2 text-muted">{c.latency_ms} ms</span>}
                           {!c.ok && c.error && <span className="ml-2 text-muted">{c.error}</span>}
                         </div>
                       </div>
@@ -1490,35 +1434,34 @@ export function Setup() {
                 </div>
               )}
 
+              {/* Overall result */}
               {checkDone && overallOK && (
                 <div className="space-y-3">
-                  <div className="px-5 py-4 flex items-start gap-3" style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.2)' }}>
-                    <CheckCircle2 size={20} className="flex-shrink-0 mt-0.5" style={{ color: '#00FF88' }} />
+                  <div className="rounded-xl bg-success/10 border border-success/20 px-5 py-4 flex items-start gap-3">
+                    <CheckCircle2 size={20} className="text-success flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-mono text-sm font-bold uppercase tracking-[0.06em]" style={{ color: '#00FF88' }}>ALL_CHECKS_PASSED</p>
-                      <p className="font-mono text-[10px] text-muted mt-1">Proxy operational — router and browser both reach external network.</p>
+                      <p className="text-sm font-bold text-success">全部检测通过！</p>
+                      <p className="text-xs text-muted mt-1">代理工作正常，路由器和浏览器均可正常访问外网。</p>
                     </div>
                   </div>
                   <div className="glass-card px-5 py-4 space-y-4">
-                    <h3 className="font-mono text-sm font-semibold uppercase tracking-[0.06em] text-white">
-                      <span style={{ color: 'rgba(0,245,255,0.4)', marginRight: '0.25rem' }}>{'>'}</span>COMPLETE_SETUP
-                    </h3>
-                    <Field label="AUTO_START_ON_BOOT" hint="Auto-start ClashForge and Mihomo core after router reboot">
-                      <Toggle checked={autoStartCore} onChange={setAutoStartCore} label={autoStartCore ? 'ENABLED' : 'DISABLED'} />
+                    <h3 className="text-sm font-semibold text-slate-200">完成设置</h3>
+                    <Field label="开机自动启动内核" hint="路由器重启后自动启动 ClashForge 并自动启动 Mihomo 内核">
+                      <Toggle checked={autoStartCore} onChange={setAutoStartCore} label={autoStartCore ? '启用' : '禁用'} />
                     </Field>
                     {saveError && (
-                      <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: '#FF2255' }}>
+                      <div className="flex items-center gap-2 text-xs text-danger">
                         <AlertCircle size={13} />{saveError}
                       </div>
                     )}
                     <button
-                      className="btn-primary w-full flex items-center justify-center gap-2 py-3"
+                      className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
                       onClick={handleComplete}
                       disabled={saving}
                     >
                       {saving
-                        ? <><Loader2 size={16} className="animate-spin" />SAVING...</>
-                        : <><ArrowRight size={16} />COMPLETE — ENTER_OVERVIEW</>}
+                        ? <><Loader2 size={16} className="animate-spin" />保存中…</>
+                        : <><ArrowRight size={16} />完成配置，进入概览</>}
                     </button>
                   </div>
                 </div>
@@ -1526,31 +1469,30 @@ export function Setup() {
 
               {checkDone && !overallOK && (
                 <div className="space-y-3">
-                  <div className="px-4 py-3 flex items-start gap-2" style={{ background: 'rgba(255,34,85,0.06)', border: '1px solid rgba(255,34,85,0.2)' }}>
-                    <AlertCircle size={15} className="flex-shrink-0 mt-0.5" style={{ color: '#FF2255' }} />
+                  <div className="rounded-xl bg-danger/10 border border-danger/20 px-4 py-3 flex items-start gap-2">
+                    <AlertCircle size={15} className="text-danger flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-mono text-sm font-semibold uppercase" style={{ color: '#FF2255' }}>CHECKS_FAILED</p>
-                      <p className="font-mono text-[10px] text-muted mt-1">Review logs below or go back to reconfigure.</p>
+                      <p className="text-sm font-semibold text-danger">部分检测未通过</p>
+                      <p className="text-xs text-muted mt-1">请检查以下日志排查问题，或返回上一步重新配置。</p>
                     </div>
                   </div>
 
                   {probeLogs.length > 0 && (
                     <div className="glass-card px-4 py-4 space-y-2">
-                      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">CLASHFORGE_RECENT_LOGS</p>
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider">ClashForge 最近日志</p>
                       <div className="max-h-64 overflow-y-auto space-y-1">
-                        {probeLogs.map((l, i) => {
-                          const level = (l as unknown as Record<string,string>).level
-                          const ts = (l as unknown as Record<string,string>).ts
-                          const msg = (l as unknown as Record<string,string>).msg
-                          const color = level === 'error' ? '#FF2255' : level === 'warn' ? '#FFE600' : '#4A6080'
-                          return (
-                            <div key={i} className="font-mono text-[10px] px-2 py-1" style={{ color, background: level === 'error' ? 'rgba(255,34,85,0.04)' : level === 'warn' ? 'rgba(255,230,0,0.04)' : 'transparent' }}>
-                              {ts ? new Date(Number(ts) * 1000).toLocaleTimeString() : ''}
-                              {' '}<span className="font-bold">[{level?.toUpperCase()}]</span>
-                              {' '}{msg}
-                            </div>
-                          )
-                        })}
+                        {probeLogs.map((l, i) => (
+                          <div key={i} className={`text-xs font-mono px-2 py-1 rounded ${
+                            (l as unknown as Record<string,string>).level === 'error' ? 'text-danger bg-danger/5' :
+                            (l as unknown as Record<string,string>).level === 'warn'  ? 'text-warning bg-warning/5' :
+                            'text-slate-400'
+                          }`}>
+                            {(l as unknown as Record<string,string>).ts ? new Date(Number((l as unknown as Record<string,string>).ts) * 1000).toLocaleTimeString() : ''}
+                            {' '}
+                            <span className="font-semibold uppercase">[{(l as unknown as Record<string,string>).level}]</span>
+                            {' '}{(l as unknown as Record<string,string>).msg}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -1559,9 +1501,9 @@ export function Setup() {
             </div>
 
             <div className="flex gap-3">
-              <button className="btn-ghost flex-1" onClick={() => setStep('launch')}>← BACK</button>
+              <button className="btn-ghost flex-1" onClick={() => setStep('launch')}>← 返回</button>
               <button className="btn-ghost flex-1" onClick={() => navigate('/')}>
-                SKIP — ENTER_OVERVIEW
+                跳过，直接进入概览
               </button>
             </div>
           </div>

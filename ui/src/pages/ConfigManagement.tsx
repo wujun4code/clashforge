@@ -876,43 +876,45 @@ export function ConfigManagement() {
   }, [coreRunning, coreChecked, tab])
 
   return (
-    <div className="space-y-5">
-      {/* HUD page header */}
-      <div
-        className="relative overflow-hidden px-5 py-5 md:px-7"
-        style={{
-          border: '1px solid rgba(0,245,255,0.12)',
-          background: 'linear-gradient(135deg, rgba(0,245,255,0.04) 0%, rgba(6,12,18,0.8) 60%)',
-          clipPath: 'polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px))',
-        }}
-      >
-        <div className="pointer-events-none absolute top-0 right-0" style={{ width: 16, height: 16, background: 'linear-gradient(225deg, rgba(0,245,255,0.5) 0%, transparent 60%)' }} />
-        <p className="font-mono text-[9px] uppercase tracking-[0.3em] text-muted">// CONFIG_MODULE</p>
-        <h1 className="font-mono text-xl font-bold mt-1" style={{ color: '#00F5FF', textShadow: '0 0 16px rgba(0,245,255,0.4)' }}>配置管理</h1>
-        <p className="font-mono text-[10px] text-muted mt-1">SOURCES · SUBSCRIPTIONS · RULE_PROVIDERS · RUNTIME_CFG</p>
+    <div className="p-6 space-y-5 max-w-4xl mx-auto">
+      <div>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Config</p>
+        <h1 className="text-base font-semibold text-white mt-1">配置管理</h1>
       </div>
 
-      {/* Tab nav */}
-      <div className="flex gap-0 flex-wrap items-end" style={{ borderBottom: '1px solid rgba(0,245,255,0.08)' }}>
-        {([
-          { id: 'sources', icon: Database, label: 'CONFIG_FILES' },
-          { id: 'subscriptions', icon: List, label: 'SUBSCRIPTIONS' },
-          ...(coreRunning ? [
-            { id: 'rules', icon: Shield, label: 'RULE_PROVIDERS' },
-            { id: 'running', icon: Eye, label: 'RUNTIME_CFG' },
-          ] : []),
-        ] as Array<{ id: string; icon: typeof Database; label: string }>).map(({ id, icon: Icon, label }) => (
-          <button
-            key={id}
-            className={`tab-btn flex items-center gap-1.5 cursor-pointer ${tab === id ? 'tab-btn-active' : ''}`}
-            onClick={() => setTab(id as Tab)}
-          >
-            <Icon size={11} /> {label}
-          </button>
-        ))}
+      {/* Tab switcher */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <button
+          className={`btn-ghost flex items-center gap-2 ${tab === 'sources' ? 'border-brand/40 text-white' : ''}`}
+          onClick={() => setTab('sources')}
+        >
+          <Database size={14} /> 配置文件
+        </button>
+        <button
+          className={`btn-ghost flex items-center gap-2 ${tab === 'subscriptions' ? 'border-brand/40 text-white' : ''}`}
+          onClick={() => setTab('subscriptions')}
+        >
+          <List size={14} /> 订阅
+        </button>
+        {coreRunning && (
+          <>
+            <button
+              className={`btn-ghost flex items-center gap-2 ${tab === 'rules' ? 'border-brand/40 text-white' : ''}`}
+              onClick={() => setTab('rules')}
+            >
+              <Shield size={14} /> 规则集
+            </button>
+            <button
+              className={`btn-ghost flex items-center gap-2 ${tab === 'running' ? 'border-brand/40 text-white' : ''}`}
+              onClick={() => setTab('running')}
+            >
+              <Eye size={14} /> 运行中配置
+            </button>
+          </>
+        )}
         {!coreRunning && coreChecked && (
-          <span className="flex items-center gap-1.5 font-mono text-[9px] text-muted ml-2 pb-2">
-            <AlertCircle size={10} /> CORE_OFFLINE
+          <span className="flex items-center gap-1.5 text-xs text-muted ml-1">
+            <AlertCircle size={12} /> 服务未运行，规则集和运行配置不可用
           </span>
         )}
       </div>
