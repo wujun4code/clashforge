@@ -9,27 +9,51 @@ import (
 	"time"
 )
 
-const githubReleasesURL = "https://api.github.com/repos/wujun4code/clashforge/releases/latest"
+const (
+	githubReleasesLatestURL = "https://api.github.com/repos/wujun4code/clashforge/releases/latest"
+	githubReleasesListURL   = "https://api.github.com/repos/wujun4code/clashforge/releases"
+)
 
-// versionCache caches the latest GitHub release to avoid hammering the API.
-var versionCache struct {
-	mu        sync.Mutex
-	latest    string
+type releaseInfo struct {
+	TagName    string `json:"tag_name"`
+	Body       string `json:"body"`
+	Prerelease bool   `json:"prerelease"`
+}
+
+// perChannelCache stores one cache entry per channel ("stable" | "preview").
+var releaseCache struct {
+	mu      sync.Mutex
+	entries map[string]releaseCacheEntry
+}
+
+type releaseCacheEntry struct {
+	info      releaseInfo
 	fetchedAt time.Time
 }
 
 const versionCacheTTL = 10 * time.Minute
 
-func fetchLatestRelease(ctx context.Context) (tag string, err error) {
-	versionCache.mu.Lock()
-	if time.Since(versionCache.fetchedAt) < versionCacheTTL && versionCache.latest != "" {
-		tag = versionCache.latest
-		versionCache.mu.Unlock()
+func init() {
+	releaseCache.entries = make(map[string]releaseCacheEntry)
+}
+
+func fetchRelease(ctx context.Context, channel string) (info releaseInfo, err error) {
+	releaseCache.mu.Lock()
+	if e, ok := releaseCache.entries[channel]; ok && time.Since(e.fetchedAt) < versionCacheTTL {
+		info = e.info
+		releaseCache.mu.Unlock()
 		return
 	}
-	versionCache.mu.Unlock()
+	releaseCache.mu.Unlock()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesURL, nil)
+	var url string
+	if channel == "preview" {
+		url = githubReleasesListURL
+	} else {
+		url = githubReleasesLatestURL
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return
 	}
@@ -43,18 +67,24 @@ func fetchLatestRelease(ctx context.Context) (tag string, err error) {
 	}
 	defer resp.Body.Close()
 
-	var payload struct {
-		TagName string `json:"tag_name"`
+	if channel == "preview" {
+		// List API returns an array; pick the first entry (newest, including pre-releases).
+		var releases []releaseInfo
+		if err = json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+			return
+		}
+		if len(releases) > 0 {
+			info = releases[0]
+		}
+	} else {
+		if err = json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			return
+		}
 	}
-	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return
-	}
-	tag = payload.TagName
 
-	versionCache.mu.Lock()
-	versionCache.latest = tag
-	versionCache.fetchedAt = time.Now()
-	versionCache.mu.Unlock()
+	releaseCache.mu.Lock()
+	releaseCache.entries[channel] = releaseCacheEntry{info: info, fetchedAt: time.Now()}
+	releaseCache.mu.Unlock()
 	return
 }
 
@@ -63,31 +93,39 @@ func stripV(s string) string { return strings.TrimPrefix(s, "v") }
 
 func handleClashforgeVersion(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		current := deps.Version // injected via ldflags as buildVersion
+		current := deps.Version
+
+		channel := r.URL.Query().Get("channel")
+		if channel != "preview" {
+			channel = "stable"
+		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 
-		latest, err := fetchLatestRelease(ctx)
-		if err != nil || latest == "" {
-			// Network unreachable or GitHub rate-limit — return current only, no error.
+		info, err := fetchRelease(ctx, channel)
+		if err != nil || info.TagName == "" {
 			JSON(w, http.StatusOK, map[string]any{
-				"current":      current,
-				"latest":       "",
-				"has_update":   false,
-				"download_url": "",
-				"release_url":  "",
+				"current":       current,
+				"latest":        "",
+				"has_update":    false,
+				"download_url":  "",
+				"release_url":   "",
+				"release_notes": "",
+				"channel":       channel,
 			})
 			return
 		}
 
-		hasUpdate := stripV(latest) != stripV(current) && latest != "" && stripV(current) != "0.1.0-dev"
+		hasUpdate := stripV(info.TagName) != stripV(current) && stripV(current) != "0.1.0-dev"
 		JSON(w, http.StatusOK, map[string]any{
-			"current":      current,
-			"latest":       latest,
-			"has_update":   hasUpdate,
-			"download_url": "https://github.com/wujun4code/clashforge/releases/download/" + latest + "/install.sh",
-			"release_url":  "https://github.com/wujun4code/clashforge/releases/tag/" + latest,
+			"current":       current,
+			"latest":        info.TagName,
+			"has_update":    hasUpdate,
+			"download_url":  "https://github.com/wujun4code/clashforge/releases/download/" + info.TagName + "/install.sh",
+			"release_url":   "https://github.com/wujun4code/clashforge/releases/tag/" + info.TagName,
+			"release_notes": info.Body,
+			"channel":       channel,
 		})
 	}
 }
