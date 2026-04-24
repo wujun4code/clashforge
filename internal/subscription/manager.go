@@ -276,6 +276,12 @@ func generateID() (string, error) {
 	return "sub_" + hex.EncodeToString(b), nil
 }
 
+// HasCache returns true if a cached node list exists on disk for the given subscription.
+func (m *Manager) HasCache(id string) bool {
+	_, err := os.Stat(filepath.Join(m.dataDir, "cache", id+".json"))
+	return err == nil
+}
+
 // GetRawYAMLForEnabled returns the saved raw YAML bytes for every enabled subscription
 // that was last fetched as a full Clash YAML (i.e. a .raw.yaml cache file exists).
 // This allows callers to extract extra sections (rule-providers, rules, etc.) that

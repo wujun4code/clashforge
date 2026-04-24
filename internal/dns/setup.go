@@ -6,7 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -63,6 +66,10 @@ func Restore(mode DnsmasqMode) error {
 // cause "illegal repeated keyword" because UCI already sets port=53 in the
 // generated config. Falls back to a conf-dir file on non-OpenWrt systems.
 func setupReplace() error {
+	// Kill any non-dnsmasq process occupying port 53 before reconfiguring.
+	if n := KillPortOccupiers(53); n > 0 {
+		log.Info().Int("killed", n).Msg("dns: killed port-53 occupiers before replace setup")
+	}
 	if _, err := exec.LookPath("uci"); err == nil {
 		return setupReplaceUCI()
 	}
@@ -70,7 +77,7 @@ func setupReplace() error {
 	if err := writeManagedDNSMasqConfig(content); err != nil {
 		return err
 	}
-	return reloadDnsmasq()
+	return restartDnsmasqFull()
 }
 
 func setupReplaceUCI() error {
@@ -81,7 +88,8 @@ func setupReplaceUCI() error {
 		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
 	}
 	log.Info().Msg("dns: dnsmasq port=0 set via UCI (replace mode)")
-	return reloadDnsmasq()
+	// Full restart (not just SIGHUP) so the port=0 change takes effect.
+	return restartDnsmasqFull()
 }
 
 func restoreReplace() error {
@@ -293,4 +301,151 @@ func dnsmasqPIDs() []string {
 	}
 
 	return pids
+}
+
+// restartDnsmasqFull performs a full dnsmasq restart (not just SIGHUP), which
+// is required when changing the listening port (e.g. port=0 in replace mode).
+func restartDnsmasqFull() error {
+	out, err := exec.Command("/etc/init.d/dnsmasq", "restart").CombinedOutput()
+	if err != nil {
+		log.Warn().Err(err).Str("output", string(out)).Msg("dns: dnsmasq full restart failed (not fatal)")
+	} else {
+		log.Info().Msg("dns: dnsmasq restarted via init.d (full restart)")
+	}
+	return nil
+}
+
+// KillPortOccupiers finds and kills every process (except dnsmasq and ourselves)
+// that is bound to port on TCP or UDP. Returns the number of processes signalled.
+func KillPortOccupiers(port int) int {
+	inodes := listeningInodes(port)
+	if len(inodes) == 0 {
+		return 0
+	}
+
+	myPID := os.Getpid()
+	skipPIDs := dnsmasqPIDSet()
+	skipPIDs[myPID] = struct{}{}
+
+	victims := inodeToPIDs(inodes)
+	killed := 0
+	for pid := range victims {
+		if _, skip := skipPIDs[pid]; skip {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		if proc.Signal(syscall.SIGTERM) == nil {
+			killed++
+			log.Info().Int("pid", pid).Int("port", port).Msg("dns: sent SIGTERM to port occupier")
+		}
+	}
+	if killed > 0 {
+		time.Sleep(500 * time.Millisecond)
+		for pid := range victims {
+			if _, skip := skipPIDs[pid]; skip {
+				continue
+			}
+			proc, err := os.FindProcess(pid)
+			if err != nil {
+				continue
+			}
+			_ = proc.Signal(syscall.SIGKILL)
+		}
+	}
+	return killed
+}
+
+// listeningInodes returns the set of socket inodes that are bound to port
+// across /proc/net/tcp, /proc/net/udp, /proc/net/tcp6, /proc/net/udp6.
+func listeningInodes(port int) map[uint64]struct{} {
+	hexPort := fmt.Sprintf("%04X", port)
+	inodes := make(map[uint64]struct{})
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/udp", "/proc/net/tcp6", "/proc/net/udp6"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if i == 0 {
+				continue // skip header
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 10 {
+				continue
+			}
+			// fields[1] = local_address as "IP:PORT" in hex
+			colon := strings.LastIndex(fields[1], ":")
+			if colon < 0 {
+				continue
+			}
+			if !strings.EqualFold(fields[1][colon+1:], hexPort) {
+				continue
+			}
+			// TCP entries: only LISTEN state (0A); UDP entries: no state filter
+			if strings.Contains(path, "tcp") && fields[3] != "0A" {
+				continue
+			}
+			inode, err := strconv.ParseUint(fields[9], 10, 64)
+			if err != nil {
+				continue
+			}
+			inodes[inode] = struct{}{}
+		}
+	}
+	return inodes
+}
+
+// inodeToPIDs maps a set of socket inodes to the PIDs that own them by
+// walking /proc/*/fd symlinks.
+func inodeToPIDs(inodes map[uint64]struct{}) map[int]struct{} {
+	pids := make(map[int]struct{})
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return pids
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		fdDir := filepath.Join("/proc", e.Name(), "fd")
+		fds, err := os.ReadDir(fdDir)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			link, err := os.Readlink(filepath.Join(fdDir, fd.Name()))
+			if err != nil || !strings.HasPrefix(link, "socket:[") {
+				continue
+			}
+			inodeStr := strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
+			inode, err := strconv.ParseUint(inodeStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			if _, ok := inodes[inode]; ok {
+				pids[pid] = struct{}{}
+				break
+			}
+		}
+	}
+	return pids
+}
+
+// dnsmasqPIDSet returns the set of dnsmasq PIDs (from known pid files) for
+// quick lookup during port-occupier detection.
+func dnsmasqPIDSet() map[int]struct{} {
+	set := make(map[int]struct{})
+	for _, s := range dnsmasqPIDs() {
+		if pid, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && pid > 0 {
+			set[pid] = struct{}{}
+		}
+	}
+	return set
 }

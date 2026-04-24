@@ -34,7 +34,7 @@ import type { ProxyNode } from '../api/client'
 import { PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
 import { useSSE } from '../hooks/useSSE'
 import { useStore } from '../store'
-import { formatBytes, formatGB, formatMB, formatPercent, formatUptime, latencyColor, latencyBarColor, latencyBarWidth } from '../utils/format'
+import { formatBytes, formatGB, formatMB, formatPercent, formatUptime } from '../utils/format'
 
 type SectionKey = 'probes' | 'resources'
 
@@ -201,41 +201,44 @@ async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<Brow
 }
 
 function Pill({ tone, label }: { tone: 'success' | 'warning' | 'danger' | 'muted'; label: string }) {
-  const className = {
-    success: 'border-success/25 bg-success/10 text-success',
-    warning: 'border-warning/25 bg-warning/10 text-warning',
-    danger: 'border-danger/25 bg-danger/10 text-danger',
-    muted: 'border-white/10 bg-white/5 text-slate-300',
-  }[tone]
-  return <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium backdrop-blur-sm ${className}`}>{label}</span>
+  const styles: Record<string, { border: string; bg: string; color: string; glow: string }> = {
+    success: { border: 'rgba(0,255,136,0.35)', bg: 'rgba(0,255,136,0.08)', color: '#00FF88', glow: '0 0 6px rgba(0,255,136,0.5)' },
+    warning: { border: 'rgba(255,230,0,0.35)', bg: 'rgba(255,230,0,0.08)', color: '#FFE600', glow: '0 0 6px rgba(255,230,0,0.5)' },
+    danger:  { border: 'rgba(255,34,85,0.35)',  bg: 'rgba(255,34,85,0.08)',  color: '#FF2255', glow: '0 0 6px rgba(255,34,85,0.5)' },
+    muted:   { border: 'rgba(255,255,255,0.10)', bg: 'rgba(255,255,255,0.04)', color: '#4A6080', glow: 'none' },
+  }
+  const s = styles[tone]
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.15em]"
+      style={{ border: `1px solid ${s.border}`, background: s.bg, color: s.color, textShadow: s.glow }}
+    >
+      {label}
+    </span>
+  )
 }
 
 function ModuleRow({ module }: { module: OverviewModule }) {
   const managed = module.managed_by_clashforge
-  const statusTone: 'success' | 'warning' | 'danger' | 'muted' = managed
+  const tone: 'success' | 'warning' | 'danger' | 'muted' = managed
     ? 'success'
-    : module.status === 'conflict'
-      ? 'warning'
-      : module.status === 'inactive'
-        ? 'danger'
-        : 'muted'
-
-  const statusLabel = managed
-    ? '已接管'
-    : module.status === 'conflict'
-      ? '有占用'
-      : module.status === 'inactive'
-        ? '未运行'
-        : '待接管'
+    : module.status === 'conflict' ? 'warning'
+    : module.status === 'inactive' ? 'danger'
+    : 'muted'
+  const statusLabel = managed ? 'MANAGED' : module.status === 'conflict' ? 'CONFLICT' : module.status === 'inactive' ? 'INACTIVE' : 'STANDBY'
+  const accentColor = { success: 'rgba(0,255,136,0.2)', warning: 'rgba(255,230,0,0.2)', danger: 'rgba(255,34,85,0.2)', muted: 'rgba(74,96,128,0.2)' }[tone]
 
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-100 truncate">{module.title}</p>
-          <p className="text-xs text-muted mt-1 leading-5">{module.current_owner}</p>
+    <div
+      className="px-4 py-3 transition-all duration-200"
+      style={{ border: '1px solid rgba(0,245,255,0.08)', background: `linear-gradient(135deg, rgba(6,12,18,0.8), ${accentColor})` }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#C8E8F0] truncate">{module.title}</p>
+          <p className="font-mono text-[10px] text-muted mt-0.5 truncate">{module.current_owner}</p>
         </div>
-        <Pill tone={statusTone} label={statusLabel} />
+        <Pill tone={tone} label={statusLabel} />
       </div>
     </div>
   )
@@ -244,13 +247,15 @@ function ModuleRow({ module }: { module: OverviewModule }) {
 // ── Proxy switcher helpers ──────────────────────────────────────────────────
 
 function LatencyBar({ ms }: { ms: number }) {
-  if (!ms || ms <= 0) return <span className="text-muted text-xs">—</span>
+  if (!ms || ms <= 0) return <span className="font-mono text-[10px] text-muted">—</span>
+  const color = ms < 100 ? '#00FF88' : ms < 300 ? '#FFE600' : '#FF2255'
+  const width = ms < 100 ? '90%' : ms < 300 ? '55%' : '25%'
   return (
     <div className="flex items-center gap-2">
-      <div className="w-12 h-1.5 bg-surface-3 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${latencyBarColor(ms)}`} style={{ width: latencyBarWidth(ms) }} />
+      <div className="w-10 h-0.5 overflow-hidden" style={{ background: 'rgba(0,245,255,0.1)' }}>
+        <div className="h-full transition-all duration-500" style={{ width, background: color, boxShadow: `0 0 4px ${color}` }} />
       </div>
-      <span className={`text-xs tabular-nums font-mono ${latencyColor(ms)}`}>{ms}ms</span>
+      <span className="font-mono text-[10px] tabular-nums" style={{ color, textShadow: `0 0 6px ${color}` }}>{ms}ms</span>
     </div>
   )
 }
@@ -263,39 +268,75 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
   const members = (group.all ?? []).filter(n => !IGNORED.includes(n))
 
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 overflow-hidden">
+    <div style={{ border: '1px solid rgba(0,245,255,0.10)', overflow: 'hidden' }}>
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-white/5 transition-all"
+        className="w-full flex items-center justify-between px-4 py-3 cursor-pointer transition-all duration-200"
+        style={{ background: open ? 'rgba(0,245,255,0.04)' : 'transparent' }}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(0,245,255,0.06)' }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = open ? 'rgba(0,245,255,0.04)' : 'transparent' }}
       >
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-white">{name}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-white/15 text-muted">{group.type}</span>
+          <span
+            className="font-mono text-xs font-bold uppercase tracking-[0.08em]"
+            style={{ color: '#00F5FF', textShadow: '0 0 8px rgba(0,245,255,0.5)' }}
+          >
+            {name}
+          </span>
+          <span
+            className="font-mono text-[9px] px-1.5 py-0.5 uppercase tracking-[0.1em] text-muted"
+            style={{ border: '1px solid rgba(0,245,255,0.15)' }}
+          >
+            {group.type}
+          </span>
           {group.now && (
-            <span className="text-xs text-muted">
-              → <span className="text-slate-300 font-medium">{group.now}</span>
+            <span className="font-mono text-[10px] text-muted">
+              {'→ '}<span style={{ color: '#C8E8F0' }}>{group.now}</span>
             </span>
           )}
         </div>
-        <span className="text-muted text-xs">{open ? '▲' : '▼'}</span>
+        <span className="font-mono text-[10px] text-muted">{open ? '▲' : '▼'}</span>
       </button>
+
       {open && (
-        <div className="px-3 pb-3 space-y-0.5 max-h-64 overflow-y-auto border-t border-white/5">
+        <div
+          className="px-2 pb-2 space-y-0.5 max-h-64 overflow-y-auto"
+          style={{ borderTop: '1px solid rgba(0,245,255,0.06)' }}
+        >
           {members.map(m => {
             const node = allProxies[m]
-            if (!node) return <div key={m} className="px-4 py-2 text-sm text-muted">{m}</div>
+            if (!node) return (
+              <div key={m} className="px-3 py-2 font-mono text-[10px] text-muted">{m}</div>
+            )
             const isSelected = group.now === m
             const lastDelay = node.history?.at(-1)?.delay ?? -1
             return (
               <button
                 key={m}
                 onClick={() => { if (group.type === 'Selector') onSelect(name, m) }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${isSelected ? 'bg-brand/15 ring-1 ring-brand/40' : 'hover:bg-white/5'}`}
+                className="w-full flex items-center gap-3 px-3 py-2 transition-all duration-200 text-left cursor-pointer"
+                style={{
+                  background: isSelected ? 'rgba(0,245,255,0.08)' : 'transparent',
+                  borderLeft: isSelected ? '2px solid #00F5FF' : '2px solid transparent',
+                }}
+                onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(0,245,255,0.04)' }}
+                onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
               >
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isSelected ? 'bg-brand' : 'bg-surface-3'}`} />
+                <div
+                  className="w-1.5 h-1.5 flex-shrink-0"
+                  style={{
+                    background: isSelected ? '#00F5FF' : 'rgba(74,96,128,0.5)',
+                    boxShadow: isSelected ? '0 0 6px #00F5FF' : 'none',
+                  }}
+                />
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${isSelected ? 'text-brand' : 'text-slate-200'}`}>{node.name}</p>
-                  <p className="text-xs text-muted">{node.type}</p>
+                  <p
+                    className="font-mono text-xs truncate"
+                    style={{ color: isSelected ? '#00F5FF' : '#C8E8F0', textShadow: isSelected ? '0 0 6px rgba(0,245,255,0.5)' : 'none' }}
+                  >
+                    {node.name}
+                  </p>
+                  <p className="font-mono text-[9px] text-muted">{node.type}</p>
                 </div>
                 <LatencyBar ms={lastDelay} />
               </button>
@@ -307,10 +348,14 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
               <button
                 key={n}
                 onClick={() => onSelect(name, n)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${isSelected ? 'bg-brand/15 ring-1 ring-brand/40' : 'hover:bg-white/5'}`}
+                className="w-full flex items-center gap-3 px-3 py-2 transition-all duration-200 text-left cursor-pointer"
+                style={{
+                  background: isSelected ? 'rgba(0,245,255,0.08)' : 'transparent',
+                  borderLeft: isSelected ? '2px solid #00F5FF' : '2px solid transparent',
+                }}
               >
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isSelected ? 'bg-brand' : 'bg-surface-3'}`} />
-                <span className={`text-sm font-medium ${isSelected ? 'text-brand' : 'text-slate-200'}`}>{n}</span>
+                <div className="w-1.5 h-1.5 flex-shrink-0" style={{ background: isSelected ? '#00F5FF' : 'rgba(74,96,128,0.5)' }} />
+                <span className="font-mono text-xs" style={{ color: isSelected ? '#00F5FF' : '#C8E8F0' }}>{n}</span>
               </button>
             )
           })}
@@ -320,15 +365,26 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
   )
 }
 
-function MetricTile({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
+function MetricTile({ icon, label, value, hint, color = 'cyan' }: {
+  icon: ReactNode; label: string; value: string; hint?: string; color?: 'cyan' | 'green' | 'magenta' | 'yellow'
+}) {
+  const c = { cyan: '#00F5FF', green: '#00FF88', magenta: '#FF00AA', yellow: '#FFE600' }[color]
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
-      <div className="flex items-center gap-2 text-slate-300">
+    <div
+      className="px-4 py-3 transition-all duration-200 hud-bracket"
+      style={{ border: '1px solid rgba(0,245,255,0.10)', background: 'rgba(6,12,18,0.7)' }}
+    >
+      <div className="flex items-center gap-1.5" style={{ color: 'rgba(74,96,128,0.8)' }}>
         {icon}
-        <p className="text-xs uppercase tracking-[0.16em] text-muted">{label}</p>
+        <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">{label}</p>
       </div>
-      <p className="text-lg font-semibold text-white mt-3">{value}</p>
-      {hint ? <p className="text-xs text-muted mt-2">{hint}</p> : null}
+      <p
+        className="font-mono text-xl font-bold mt-2 tabular-nums"
+        style={{ color: c, textShadow: `0 0 12px ${c}80` }}
+      >
+        {value}
+      </p>
+      {hint ? <p className="font-mono text-[10px] text-muted mt-1">{hint}</p> : null}
     </div>
   )
 }
@@ -336,8 +392,13 @@ function MetricTile({ icon, label, value, hint }: { icon: ReactNode; label: stri
 function StatusDot({ online }: { online: boolean }) {
   return (
     <span
-      className={`inline-flex h-2 w-2 rounded-full ${online ? 'bg-success animate-pulse' : 'bg-danger'}`}
+      className="inline-flex h-1.5 w-1.5 flex-shrink-0"
       aria-hidden
+      style={{
+        background: online ? '#00FF88' : '#FF2255',
+        boxShadow: online ? '0 0 6px #00FF88, 0 0 12px rgba(0,255,136,0.4)' : '0 0 6px #FF2255',
+        animation: online ? 'pulseSoft 2s ease-in-out infinite' : 'none',
+      }}
     />
   )
 }
@@ -353,15 +414,18 @@ function groupBy<T extends { group?: string }>(items: T[]): [string, T[]][] {
 }
 
 function GroupTag({ label }: { label: string }) {
-  const cls = label === '国内'
-    ? 'bg-sky-500/10 border-sky-500/25 text-sky-400'
+  const s = label === '国内'
+    ? { color: '#00F5FF', border: 'rgba(0,245,255,0.3)', bg: 'rgba(0,245,255,0.06)' }
     : label === '国外'
-      ? 'bg-violet-500/10 border-violet-500/25 text-violet-400'
+      ? { color: '#FF00AA', border: 'rgba(255,0,170,0.3)', bg: 'rgba(255,0,170,0.06)' }
       : label === 'AI'
-        ? 'bg-amber-500/10 border-amber-500/25 text-amber-400'
-        : 'bg-white/5 border-white/15 text-slate-400'
+        ? { color: '#FFE600', border: 'rgba(255,230,0,0.3)', bg: 'rgba(255,230,0,0.06)' }
+        : { color: '#4A6080', border: 'rgba(74,96,128,0.3)', bg: 'rgba(74,96,128,0.06)' }
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold tracking-wider ${cls}`}>
+    <span
+      className="inline-flex items-center px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.15em]"
+      style={{ color: s.color, border: `1px solid ${s.border}`, background: s.bg, textShadow: `0 0 6px ${s.color}80` }}
+    >
       {label}
     </span>
   )
@@ -369,18 +433,20 @@ function GroupTag({ label }: { label: string }) {
 
 function IPCard({ item }: { item: OverviewIPCheck }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="px-4 py-3 transition-all duration-200" style={{ border: '1px solid rgba(0,245,255,0.08)', background: 'rgba(6,12,18,0.6)' }}>
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-slate-100">{item.provider}</p>
-        <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? '已解析' : '失败'} />
+        <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#C8E8F0]">{item.provider}</p>
+        <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? 'RESOLVED' : 'FAILED'} />
       </div>
       {item.ok ? (
         <>
-          <p className="text-lg font-semibold text-white mt-3">{item.ip || '--'}</p>
-          <p className="text-xs text-muted mt-2 leading-5">{item.location || '未返回位置信息'}</p>
+          <p className="font-mono text-base font-bold mt-2 tabular-nums" style={{ color: '#00F5FF', textShadow: '0 0 8px rgba(0,245,255,0.5)' }}>
+            {item.ip || '--'}
+          </p>
+          <p className="font-mono text-[10px] text-muted mt-1 leading-5">{item.location || 'NO_LOCATION'}</p>
         </>
       ) : (
-        <p className="text-xs text-danger mt-3 leading-5">{item.error || '无法获取出口 IP'}</p>
+        <p className="font-mono text-[10px] mt-2 leading-5" style={{ color: '#FF2255' }}>{item.error || 'FETCH_FAILED'}</p>
       )}
     </div>
   )
@@ -388,57 +454,48 @@ function IPCard({ item }: { item: OverviewIPCheck }) {
 
 function AccessCard({ item }: { item: OverviewAccessCheck }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="px-4 py-3" style={{ border: '1px solid rgba(0,245,255,0.08)', background: 'rgba(6,12,18,0.6)' }}>
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-100">{item.name}</p>
-          <p className="text-xs text-muted mt-1">{item.description}</p>
+        <div className="min-w-0">
+          <p className="font-mono text-xs font-semibold uppercase tracking-[0.06em] text-[#C8E8F0] truncate">{item.name}</p>
+          <p className="font-mono text-[10px] text-muted mt-0.5">{item.description}</p>
         </div>
-        <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? '正常' : '失败'} />
+        <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? 'OK' : 'ERR'} />
       </div>
-      <p className="text-sm text-slate-200 mt-3">{item.ok ? `${item.latency_ms ?? 0} ms` : (item.error || '请求失败')}</p>
-      <p className="text-xs text-muted mt-2 break-all">{item.url}</p>
+      <p className="font-mono text-xs mt-2" style={{ color: item.ok ? '#00FF88' : '#FF2255' }}>
+        {item.ok ? `${item.latency_ms ?? 0}ms` : (item.error || 'REQUEST_FAILED')}
+      </p>
+      <p className="font-mono text-[9px] text-muted mt-1 break-all">{item.url}</p>
     </div>
   )
 }
 
 function ProcessCard({ name, pid, cpu, memory, uptime, running, command }: {
-  name: string
-  pid: number
-  cpu: number
-  memory: number
-  uptime: number
-  running: boolean
-  command?: string
+  name: string; pid: number; cpu: number; memory: number; uptime: number; running: boolean; command?: string
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="px-4 py-3" style={{ border: '1px solid rgba(0,245,255,0.10)', background: 'rgba(6,12,18,0.7)' }}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <StatusDot online={running} />
-          <p className="text-sm font-semibold text-slate-100">{name}</p>
+          <p className="font-mono text-xs font-bold uppercase tracking-[0.08em]" style={{ color: '#C8E8F0' }}>{name}</p>
         </div>
-        <p className="text-xs text-muted">PID {pid || '--'}</p>
+        <span className="font-mono text-[10px] text-muted">PID_{pid || '--'}</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.16em] text-muted">CPU</p>
-          <p className="text-slate-200 mt-1">{formatPercent(cpu)}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.16em] text-muted">内存</p>
-          <p className="text-slate-200 mt-1">{formatMB(memory)}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.16em] text-muted">运行时长</p>
-          <p className="text-slate-200 mt-1">{formatUptime(uptime)}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.16em] text-muted">状态</p>
-          <p className="text-slate-200 mt-1">{running ? '在线' : '离线'}</p>
-        </div>
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        {[
+          { label: 'CPU', val: formatPercent(cpu), color: cpu > 80 ? '#FF2255' : cpu > 50 ? '#FFE600' : '#00FF88' },
+          { label: 'MEM', val: formatMB(memory), color: '#00F5FF' },
+          { label: 'UPTIME', val: formatUptime(uptime), color: '#FF00AA' },
+          { label: 'STATUS', val: running ? 'ONLINE' : 'OFFLINE', color: running ? '#00FF88' : '#FF2255' },
+        ].map(({ label, val, color }) => (
+          <div key={label}>
+            <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">{label}</p>
+            <p className="font-mono text-xs font-bold mt-0.5" style={{ color, textShadow: `0 0 6px ${color}60` }}>{val}</p>
+          </div>
+        ))}
       </div>
-      {command ? <p className="text-xs text-muted mt-3 break-all">{command}</p> : null}
+      {command ? <p className="font-mono text-[9px] text-muted mt-2 break-all">{command}</p> : null}
     </div>
   )
 }
@@ -449,68 +506,61 @@ type PaneIPCheck = { provider: string; group?: string; ok: boolean; ip?: string;
 type PaneAccessCheck = { name: string; group?: string; url: string; description: string; via: string; ok: boolean; latency_ms?: number; error?: string }
 
 function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }: {
-  title: string
-  subtitle: string
-  health: ProbeHealth
-  ipChecks: PaneIPCheck[]
-  accessChecks: PaneAccessCheck[]
-  loading?: boolean
+  title: string; subtitle: string; health: ProbeHealth
+  ipChecks: PaneIPCheck[]; accessChecks: PaneAccessCheck[]; loading?: boolean
 }) {
   const ipGroups = groupBy(ipChecks)
   const accessGroups = groupBy(accessChecks)
   const hasContent = ipChecks.length > 0 || accessChecks.length > 0
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/15 overflow-hidden">
-      {/* Panel header */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/8 bg-white/[0.02]">
+    <div style={{ border: '1px solid rgba(0,245,255,0.10)', overflow: 'hidden', background: 'rgba(2,4,8,0.6)' }}>
+      <div
+        className="flex items-center justify-between gap-3 px-4 py-3"
+        style={{ borderBottom: '1px solid rgba(0,245,255,0.08)', background: 'rgba(0,245,255,0.03)' }}
+      >
         <div>
           <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold text-white">{title}</p>
-            {loading && <Loader2 size={12} className="animate-spin text-muted" />}
+            <p className="font-mono text-xs font-bold uppercase tracking-[0.08em] text-white">{title}</p>
+            {loading && <Loader2 size={11} className="animate-spin text-muted" />}
           </div>
-          <p className="text-xs text-muted mt-0.5">{subtitle}</p>
+          <p className="font-mono text-[9px] text-muted mt-0.5">{subtitle}</p>
         </div>
         {health.hasData
-          ? <Pill tone={health.healthy ? 'success' : 'warning'} label={health.healthy ? '通过' : '待修复'} />
-          : <Pill tone="muted" label={loading ? '检测中' : '等待'} />
+          ? <Pill tone={health.healthy ? 'success' : 'warning'} label={health.healthy ? 'PASS' : 'DEGRADED'} />
+          : <Pill tone="muted" label={loading ? 'SCANNING' : 'IDLE'} />
         }
       </div>
-
-      {/* Body */}
-      <div className="px-4 py-4 space-y-5">
+      <div className="px-4 py-4 space-y-4">
         {!hasContent ? (
-          <p className="text-xs text-muted py-2 text-center">{loading ? '正在检测...' : '暂无数据'}</p>
+          <p className="font-mono text-[10px] text-muted py-3 text-center">{loading ? 'SCANNING_NETWORK...' : 'NO_DATA'}</p>
         ) : (
           <>
-            {/* 出口 IP sub-section */}
             {ipGroups.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted whitespace-nowrap">出口 IP</span>
-                  <div className="flex-1 h-px bg-white/8" />
+                  <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-muted whitespace-nowrap">EGRESS_IP</span>
+                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(0,245,255,0.15), transparent)' }} />
                 </div>
                 {ipGroups.map(([group, items]) => (
-                  <div key={group} className="space-y-2">
+                  <div key={group} className="space-y-1.5">
                     <GroupTag label={group} />
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                       {items.map((item) => <IPCard key={item.provider} item={item as OverviewIPCheck} />)}
                     </div>
                   </div>
                 ))}
               </div>
             )}
-
-            {/* 访问检查 sub-section */}
             {accessGroups.length > 0 && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted whitespace-nowrap">访问检查</span>
-                  <div className="flex-1 h-px bg-white/8" />
+                  <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-muted whitespace-nowrap">ACCESS_CHECK</span>
+                  <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(0,245,255,0.15), transparent)' }} />
                 </div>
                 {accessGroups.map(([group, items]) => (
-                  <div key={group} className="space-y-2">
+                  <div key={group} className="space-y-1.5">
                     <GroupTag label={group} />
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                       {items.map((item) => <AccessCard key={item.name} item={item as OverviewAccessCheck} />)}
                     </div>
                   </div>
@@ -528,32 +578,47 @@ const SKIP_VERSION_KEY = 'cf_skip_version'
 
 function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: () => void }) {
   return (
-    <div className="hero-panel border-warning/20 bg-[linear-gradient(145deg,rgba(245,158,11,0.16),rgba(255,255,255,0.03))]">
-      <div className="relative flex items-center justify-between gap-4 flex-wrap">
+    <div
+      className="relative overflow-hidden px-5 py-4 animate-slide-up"
+      style={{
+        border: '1px solid rgba(255,230,0,0.3)',
+        background: 'linear-gradient(135deg, rgba(255,230,0,0.06), rgba(2,4,8,0.8))',
+        clipPath: 'polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))',
+      }}
+    >
+      {/* Corner accent */}
+      <div className="pointer-events-none absolute top-0 right-0" style={{ width: 12, height: 12, background: 'linear-gradient(225deg, rgba(255,230,0,0.6) 0%, transparent 60%)' }} />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="min-w-0">
-          <div className="inline-flex items-center gap-2 rounded-full border border-warning/25 bg-warning/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-warning">
-            <Zap size={12} /> 新版本提醒
+          <div
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.2em]"
+            style={{ border: '1px solid rgba(255,230,0,0.4)', background: 'rgba(255,230,0,0.08)', color: '#FFE600', textShadow: '0 0 8px rgba(255,230,0,0.8)' }}
+          >
+            <Zap size={10} /> UPDATE_AVAILABLE
           </div>
-          <p className="mt-3 text-lg font-semibold text-white">发现新版本 {data.latest}</p>
-          <p className="mt-1 text-sm leading-6 text-[#E9DFC0]">当前版本 {data.current}，可前往 GitHub Releases 下载最新安装包。</p>
+          <p className="font-mono text-sm font-bold mt-2" style={{ color: '#FFE600', textShadow: '0 0 10px rgba(255,230,0,0.5)' }}>
+            v{data.latest} detected
+          </p>
+          <p className="font-mono text-[10px] text-muted mt-1">current: v{data.current} — upgrade via GitHub Releases</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <a
             href={data.release_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="btn-ghost flex items-center gap-1.5 text-warning border-warning/30 hover:bg-warning/10"
+            className="btn-sm inline-flex items-center gap-1.5 cursor-pointer"
+            style={{ border: '1px solid rgba(255,230,0,0.4)', color: '#FFE600', background: 'rgba(255,230,0,0.08)' }}
           >
-            <ExternalLink size={13} />
-            查看发布页
+            <ExternalLink size={11} />
+            RELEASES
           </a>
           <button
-            className="btn-ghost flex items-center gap-1.5 text-muted"
+            className="btn-sm inline-flex items-center gap-1.5 text-muted cursor-pointer"
+            style={{ border: '1px solid rgba(74,96,128,0.3)', background: 'transparent' }}
             onClick={onSkip}
-            title="跳过此版本，不再提醒"
           >
-            <X size={13} />
-            跳过
+            <X size={11} />
+            SKIP
           </button>
         </div>
       </div>

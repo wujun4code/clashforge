@@ -278,6 +278,7 @@ export interface Subscription {
   id: string; name: string; type: string; url?: string
   enabled: boolean; last_updated?: string; node_count?: number
   user_agent?: string; interval?: string
+  has_cache?: boolean
   filter?: { include?: string[]; exclude?: string[]; max_nodes?: number }
 }
 
