@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
-import { getConfig, updateConfig, resetClashForge } from '../api/client'
-import { Save, Loader2, RotateCcw, ShieldAlert } from 'lucide-react'
+import { getConfig, updateConfig, resetClashForge, getClashforgeVersion } from '../api/client'
+import type { ClashforgeVersionData } from '../api/client'
+import { Save, Loader2, RotateCcw, ShieldAlert, RefreshCw, Download, Radio } from 'lucide-react'
 import { InlineNotice, ModalShell, PageHeader, SectionCard } from '../components/ui'
+
+const CHANNEL_KEY = 'cf_update_channel'
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -48,6 +51,36 @@ export function Settings() {
   const [dangerRunning, setDangerRunning] = useState(false)
   const [dangerResult, setDangerResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [resetDone, setResetDone] = useState(false)
+
+  // ── Update checker ─────────────────────────────────────────────────────────
+  type UpdateChannel = 'stable' | 'preview'
+  const [channel, setChannel] = useState<UpdateChannel>(
+    () => (localStorage.getItem(CHANNEL_KEY) as UpdateChannel) || 'stable'
+  )
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateData, setUpdateData] = useState<ClashforgeVersionData | null>(null)
+  const [updateError, setUpdateError] = useState('')
+
+  const changeChannel = (ch: UpdateChannel) => {
+    setChannel(ch)
+    localStorage.setItem(CHANNEL_KEY, ch)
+    setUpdateData(null)
+    setUpdateError('')
+  }
+
+  const checkUpdate = async () => {
+    setCheckingUpdate(true)
+    setUpdateError('')
+    setUpdateData(null)
+    try {
+      const data = await getClashforgeVersion(channel)
+      setUpdateData(data)
+    } catch (e: unknown) {
+      setUpdateError(String(e))
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
 
   useEffect(() => {
     getConfig().then(setCfg).catch(() => null)
@@ -187,6 +220,110 @@ export function Settings() {
               </button>
             </div>
           </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="软件更新"
+        description="手动检查 ClashForge 最新版本，并选择更新频道。"
+        actions={
+          <button
+            className="btn-primary flex items-center gap-2"
+            onClick={checkUpdate}
+            disabled={checkingUpdate}
+          >
+            <RefreshCw size={14} className={checkingUpdate ? 'animate-spin' : ''} />
+            {checkingUpdate ? '检查中…' : '检查更新'}
+          </button>
+        }
+      >
+        <div className="space-y-4">
+          {/* Channel picker */}
+          <Field label="更新频道" hint="正式版仅含稳定发布；体验版包含 alpha/beta 预发布版本">
+            <div className="flex gap-2">
+              {(['stable', 'preview'] as const).map(ch => (
+                <button
+                  key={ch}
+                  onClick={() => changeChannel(ch)}
+                  className={[
+                    'flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors',
+                    channel === ch
+                      ? 'border-brand bg-brand/10 text-brand'
+                      : 'border-white/10 bg-surface-2 text-slate-400 hover:border-white/20 hover:text-white',
+                  ].join(' ')}
+                >
+                  <Radio size={11} />
+                  {ch === 'stable' ? '正式版' : '体验版'}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          {updateError && (
+            <InlineNotice tone="danger" title="检查失败">{updateError}</InlineNotice>
+          )}
+
+          {updateData && (
+            <div className="space-y-3">
+              {/* Version info row */}
+              <div className="flex flex-wrap gap-3 rounded-xl border border-white/10 bg-surface-2 px-4 py-3 text-sm">
+                <span className="text-slate-400">当前版本 <span className="font-mono text-white">{updateData.current}</span></span>
+                <span className="text-slate-600">→</span>
+                <span className="text-slate-400">
+                  最新版本{' '}
+                  <span className={`font-mono ${updateData.has_update ? 'text-green-400' : 'text-white'}`}>
+                    {updateData.latest || '—'}
+                  </span>
+                </span>
+                {updateData.has_update && (
+                  <span className="ml-auto rounded-md bg-green-500/10 px-2 py-0.5 text-xs font-semibold text-green-400">
+                    有新版本
+                  </span>
+                )}
+                {!updateData.has_update && updateData.latest && (
+                  <span className="ml-auto rounded-md bg-white/5 px-2 py-0.5 text-xs text-slate-500">
+                    已是最新
+                  </span>
+                )}
+              </div>
+
+              {/* Download button */}
+              {updateData.has_update && updateData.download_url && (
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={updateData.download_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-primary flex items-center gap-2 text-xs"
+                  >
+                    <Download size={13} /> 下载安装脚本
+                  </a>
+                  {updateData.release_url && (
+                    <a
+                      href={updateData.release_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-ghost flex items-center gap-2 text-xs"
+                    >
+                      查看 Release
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {/* Release notes */}
+              {updateData.release_notes && (
+                <div className="rounded-xl border border-white/10 bg-surface-2">
+                  <p className="border-b border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
+                    Release Notes
+                  </p>
+                  <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-6 text-slate-300">
+                    {updateData.release_notes}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </SectionCard>
 

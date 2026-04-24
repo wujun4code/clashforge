@@ -308,8 +308,11 @@ export interface ClashforgeVersionData {
   has_update: boolean
   download_url: string
   release_url: string
+  release_notes: string
+  channel: string
 }
-export const getClashforgeVersion = () => request<ClashforgeVersionData>('GET', '/clashforge/version')
+export const getClashforgeVersion = (channel: 'stable' | 'preview' = 'stable') =>
+  request<ClashforgeVersionData>('GET', `/clashforge/version?channel=${channel}`)
 export const getProxies       = () => request<ProxiesData>('GET', '/proxies')
 export const selectProxy      = (group: string, name: string) => request('PUT', `/proxies/${encodeURIComponent(group)}/select`, { name })
 export const testLatency      = async (proxies: string[]): Promise<Record<string, number>> => {
