@@ -53,8 +53,7 @@ export function PageHeader({
 
           <div className="space-y-2">
             <h1
-              className="font-mono text-2xl font-bold tracking-[0.04em] text-white md:text-3xl"
-              style={{ textShadow: '0 0 20px rgba(0,245,255,0.25)' }}
+              className="font-mono text-2xl font-bold tracking-[0.04em] text-display-gradient md:text-3xl"
             >
               {title}
             </h1>

@@ -16,7 +16,27 @@ export default function App() {
         跳转到主要内容
       </a>
       <div className="relative flex h-screen overflow-hidden bg-surface-0 text-[#F0EFF8]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(124,58,237,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.14),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_40%)]" />
+        {/* Ambient cyber-glow background — cyan → violet → amber wash */}
+        <div className="pointer-events-none absolute inset-0 opacity-80">
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'radial-gradient(circle at 12% 8%, rgba(0,245,255,0.14), transparent 42%),' +
+                'radial-gradient(circle at 88% 18%, rgba(167,139,250,0.14), transparent 45%),' +
+                'radial-gradient(circle at 82% 96%, rgba(249,115,22,0.12), transparent 40%),' +
+                'radial-gradient(circle at 18% 92%, rgba(255,0,170,0.08), transparent 38%)',
+            }}
+          />
+          {/* vignette */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'radial-gradient(ellipse at center, transparent 40%, rgba(2,4,8,0.55) 100%)',
+            }}
+          />
+        </div>
         <Sidebar />
         <main id="main-content" className="relative z-10 flex-1 overflow-y-auto">
           <div className="mx-auto min-h-full w-full max-w-[1680px] px-4 py-4 md:px-6 md:py-6">

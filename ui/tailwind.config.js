@@ -21,6 +21,15 @@ export default {
           green:   '#00FF88',
           red:     '#FF2255',
           blue:    '#0080FF',
+          violet:  '#A78BFA',
+          amber:   '#F97316',
+        },
+        // Design-system accents (purple + orange pairing)
+        accent: {
+          violet:       '#7C3AED',
+          'violet-soft':'#A78BFA',
+          amber:        '#F97316',
+          'amber-soft': '#FDBA74',
         },
         // Semantic mappings — point to neon variants
         brand:          '#00F5FF',   // neon cyan as primary brand
@@ -37,9 +46,11 @@ export default {
         muted:          '#4A6080',
       },
       fontFamily: {
-        sans:    ['Fira Code', 'JetBrains Mono', 'monospace'],
-        mono:    ['Fira Code', 'JetBrains Mono', 'monospace'],
-        heading: ['Fira Code', 'monospace'],
+        // Body uses Fira Sans (readable), headings & code use Fira Code (technical)
+        sans:    ['"Fira Sans"', 'Inter', 'system-ui', 'sans-serif'],
+        body:    ['"Fira Sans"', 'Inter', 'system-ui', 'sans-serif'],
+        mono:    ['"Fira Code"', 'JetBrains Mono', 'monospace'],
+        heading: ['"Fira Code"', 'JetBrains Mono', 'monospace'],
       },
       opacity: { 96: '0.96' },
       backdropBlur: { xs: '2px' },
@@ -49,6 +60,8 @@ export default {
         'neon-green':   '0 0 8px #00FF88, 0 0 24px rgba(0,255,136,0.4)',
         'neon-yellow':  '0 0 8px #FFE600, 0 0 24px rgba(255,230,0,0.4)',
         'neon-red':     '0 0 8px #FF2255, 0 0 24px rgba(255,34,85,0.4)',
+        'neon-violet':  '0 0 8px #A78BFA, 0 0 24px rgba(167,139,250,0.4)',
+        'neon-amber':   '0 0 8px #F97316, 0 0 24px rgba(249,115,22,0.4)',
         glass:    '0 4px 24px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(0,245,255,0.06)',
         'glass-lg':'0 8px 40px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(0,245,255,0.08)',
         hud:      'inset 0 0 30px rgba(0,245,255,0.03), 0 0 0 1px rgba(0,245,255,0.15)',

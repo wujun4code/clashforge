@@ -108,19 +108,21 @@ export function Sidebar() {
             className="relative flex h-10 w-10 items-center justify-center flex-shrink-0"
             style={{
               border: '1px solid rgba(0,245,255,0.3)',
-              boxShadow: '0 0 12px rgba(0,245,255,0.2)',
+              boxShadow:
+                '0 0 12px rgba(0,245,255,0.25), inset 0 0 16px rgba(167,139,250,0.18)',
+              background:
+                'linear-gradient(135deg, rgba(0,245,255,0.08) 0%, rgba(167,139,250,0.10) 55%, rgba(249,115,22,0.08) 100%)',
             }}
           >
             <img src="/favicon.svg" alt="ClashForge" className="h-6 w-6" />
           </div>
           <div className="min-w-0">
             <p
-              className="font-mono text-base font-semibold tracking-[0.08em] text-neon-cyan animate-glitch"
-              style={{ textShadow: '0 0 12px rgba(0,245,255,0.7)' }}
+              className="font-mono text-base font-semibold tracking-[0.08em] text-display-gradient animate-glitch"
             >
               CLASHFORGE
             </p>
-            <p className="text-[9px] uppercase tracking-[0.3em] text-muted mt-0.5">
+            <p className="text-[9px] uppercase tracking-[0.3em] text-muted mt-0.5 font-mono">
               NETWORK_CONTROL_v{__APP_VERSION__}
             </p>
           </div>
