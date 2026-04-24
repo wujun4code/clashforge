@@ -180,7 +180,6 @@ jobs:
           # Staging tree
           mkdir -p ipk/CONTROL
           mkdir -p ipk/usr/bin
-          mkdir -p ipk/etc/metaclash
           mkdir -p ipk/etc/init.d
           mkdir -p ipk/usr/share/metaclash
           mkdir -p ipk/usr/share/luci/menu.d

@@ -16,9 +16,9 @@ export function Connections() {
   return (
     <div className="p-6 space-y-5 max-w-6xl mx-auto">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold text-white">连接</h1>
-          <span className="badge badge-muted">{conns.length} 活跃</span>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Connections</p>
+          <h1 className="text-base font-semibold text-white mt-1">连接管理</h1>
         </div>
         <div className="flex gap-2">
           <button className="btn-ghost flex items-center gap-2" onClick={refresh}><RefreshCw size={14}/> 刷新</button>
@@ -26,7 +26,7 @@ export function Connections() {
         </div>
       </div>
 
-      <div className="card overflow-hidden">
+      <div className="glass-card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

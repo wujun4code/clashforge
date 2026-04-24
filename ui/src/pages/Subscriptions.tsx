@@ -10,7 +10,7 @@ function SubCard({ sub, onDelete, onUpdate }: { sub: Subscription; onDelete: () 
     : '从未更新'
 
   return (
-    <div className="card px-5 py-4 flex items-start gap-4">
+    <div className="glass-card px-5 py-4 flex items-start gap-4">
       <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${sub.enabled ? 'bg-success' : 'bg-surface-3'}`} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -107,7 +107,10 @@ export function Subscriptions() {
   return (
     <div className="p-6 space-y-5 max-w-3xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-white">订阅</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Subscriptions</p>
+          <h1 className="text-base font-semibold text-white mt-1">订阅管理</h1>
+        </div>
         <div className="flex gap-2">
           <button className="btn-ghost flex items-center gap-2" onClick={() => triggerUpdateAll().then(refresh)}>
             <RefreshCw size={14}/> 全部更新
@@ -118,9 +121,9 @@ export function Subscriptions() {
         </div>
       </div>
 
-      {loading && <div className="card px-5 py-8 text-center text-muted text-sm">加载中…</div>}
+      {loading && <div className="glass-card px-5 py-8 text-center text-muted text-sm">加载中…</div>}
       {!loading && subs.length === 0 && (
-        <div className="card px-5 py-8 text-center text-muted text-sm">
+        <div className="glass-card px-5 py-8 text-center text-muted text-sm">
           还没有订阅。点击「添加订阅」开始配置。
         </div>
       )}

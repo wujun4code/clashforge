@@ -206,25 +206,53 @@ func shouldBypassFakeIPOnStartup(cfg *config.MetaclashConfig) bool {
 
 func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {
 	nodes := []subscription.ProxyNode{}
+	rawYAMLs := [][]byte{}
 	if subManager != nil {
 		nodes = subManager.GetAllCachedNodes()
-	}
-
-	generated, err := config.Generate(cfg, nodes)
-	if err != nil {
-		return err
+		rawYAMLs = subManager.GetRawYAMLForEnabled()
 	}
 
 	overridesPath := filepath.Join(cfg.Core.DataDir, "overrides.yaml")
 	overridesData, _ := os.ReadFile(overridesPath)
-	merged, err := config.MergeWithOverrides(generated, overridesData)
-	if err != nil {
-		return err
+
+	var generated map[string]interface{}
+	var err error
+
+	if len(rawYAMLs) > 0 {
+		// Full subscription YAML available: preserve rules, proxy-groups, rule-providers.
+		generated, err = config.GenerateFromBase(cfg, rawYAMLs[0], nodes)
+		if err != nil {
+			return err
+		}
+		if len(overridesData) > 0 {
+			generated, err = config.MergeWithOverrides(generated, overridesData)
+			if err != nil {
+				return err
+			}
+		}
+	} else if len(overridesData) > 0 {
+		// No subscription YAML: treat overrides.yaml as the full user config.
+		generated, err = config.GenerateFromBase(cfg, overridesData, nodes)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Fallback: generate a minimal config from available nodes.
+		generated, err = config.Generate(cfg, nodes)
+		if err != nil {
+			return err
+		}
+		if len(overridesData) > 0 {
+			generated, err = config.MergeWithOverrides(generated, overridesData)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	merged = config.ApplyManagedRuntimeSettings(cfg, merged)
+	generated = config.ApplyManagedRuntimeSettings(cfg, generated)
 
-	data, err := config.MarshalYAML(merged)
+	data, err := config.MarshalYAML(generated)
 	if err != nil {
 		return err
 	}

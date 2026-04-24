@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getConfig, updateConfig, resetClashForge } from '../api/client'
-import { Save, AlertCircle, CheckCircle2, Loader2, RotateCcw, Terminal } from 'lucide-react'
+import { Save, Loader2, RotateCcw, ShieldAlert } from 'lucide-react'
+import { InlineNotice, ModalShell, PageHeader, SectionCard } from '../components/ui'
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -98,19 +99,35 @@ export function Settings() {
   if (!cfg) return <div className="p-6 text-muted text-sm">加载中…</div>
 
   return (
-    <div className="p-6 space-y-5 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-white">高级管理</h1>
-        <div className="flex items-center gap-2">
-          {saveError && <span className="flex items-center gap-1 text-xs text-danger"><AlertCircle size={12} />{saveError}</span>}
-          {saved && <span className="flex items-center gap-1 text-xs text-success"><CheckCircle2 size={12} /> 已保存</span>}
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Settings"
+        title="高级管理与系统行为"
+        description="调整 ClashForge 的核心路径、日志策略与系统级动作。所有改动只作用于管理体验与展示层，不改变业务流程。"
+        actions={
+          <button className="btn-primary flex items-center gap-2" onClick={saveGeneral} disabled={saving}>
+            <Save size={14} /> {saving ? '保存中…' : '保存配置'}
+          </button>
+        }
+        metrics={[
+          { label: '保存状态', value: saved ? '已保存' : saving ? '进行中' : '待提交' },
+          { label: '危险区', value: '受保护' },
+        ]}
+      />
 
-      {/* ── General ── */}
-      <div className="space-y-4">
-        <div className="card px-5 py-5 space-y-4">
-          <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">核心</h2>
+      {saveError && (
+        <InlineNotice tone="danger" title="保存失败">
+          {saveError}
+        </InlineNotice>
+      )}
+      {saved && (
+        <InlineNotice tone="success" title="保存成功">
+          配置已写入 ClashForge，可继续进行其他调整。
+        </InlineNotice>
+      )}
+
+      <SectionCard title="核心参数" description="用于管理 mihomo 启动路径、重启策略与日志级别。">
+        <div className="space-y-4">
           <Field label="mihomo 路径">
             <TextInput value={get(['core', 'binary']) as string} onChange={v => set(['core', 'binary'], v)} />
           </Field>
@@ -123,96 +140,75 @@ export function Settings() {
               onChange={v => set(['log', 'level'], v)}
               options={[
                 { value: 'debug', label: 'Debug' },
-                { value: 'info',  label: 'Info' },
-                { value: 'warn',  label: 'Warn' },
+                { value: 'info', label: 'Info' },
+                { value: 'warn', label: 'Warn' },
                 { value: 'error', label: 'Error' },
               ]}
             />
           </Field>
         </div>
+      </SectionCard>
 
-        <button className="btn-primary flex items-center gap-2" onClick={saveGeneral} disabled={saving}>
-          <Save size={14} /> {saving ? '保存中…' : '保存配置'}
-        </button>
-      </div>
+      <SectionCard title="危险操作" description="以下行为会影响配置资产与运行态，请谨慎处理。" className="border-danger/20">
+        <div className="space-y-4">
+          {dangerResult && (
+            <InlineNotice tone={dangerResult.ok ? 'success' : 'danger'} title={dangerResult.ok ? '操作完成' : '操作失败'}>
+              <div className="space-y-2">
+                <p className="whitespace-pre-wrap text-sm leading-6">{dangerResult.message}</p>
+                {resetDone ? (
+                  <p className="text-xs text-muted">
+                    请等待约 3 秒后刷新页面。
+                    <button className="ml-2 text-brand hover:underline" onClick={() => window.location.reload()}>立即刷新</button>
+                  </p>
+                ) : null}
+              </div>
+            </InlineNotice>
+          )}
 
-      {/* ── Danger zone ── */}
-      <div className="card px-5 py-5 space-y-4 border-danger/20">
-        <div className="flex items-center gap-2">
-          <Terminal size={15} className="text-danger" />
-          <h2 className="text-sm font-semibold text-danger">危险操作</h2>
-        </div>
-
-        {dangerResult && (
-          <div className={`rounded-xl border px-4 py-3 space-y-2 ${dangerResult.ok ? 'bg-success/8 border-success/25' : 'bg-danger/8 border-danger/25'}`}>
-            <div className="flex items-center gap-2">
-              {dangerResult.ok
-                ? <CheckCircle2 size={14} className="text-success flex-shrink-0" />
-                : <AlertCircle size={14} className="text-danger flex-shrink-0" />}
-              <p className={`text-xs font-semibold ${dangerResult.ok ? 'text-success' : 'text-danger'}`}>
-                {dangerResult.ok ? '操作完成' : '操作失败'}
-              </p>
-              {!resetDone && (
-                <button className="ml-auto text-xs text-muted hover:text-white" onClick={() => setDangerResult(null)}>关闭</button>
-              )}
-            </div>
-            <p className="text-xs text-slate-400 leading-5 whitespace-pre-wrap">{dangerResult.message}</p>
-            {resetDone && (
-              <p className="text-xs text-muted">请等待约 3 秒后刷新页面…
-                <button className="ml-2 text-brand hover:underline" onClick={() => window.location.reload()}>立即刷新</button>
-              </p>
-            )}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="rounded-2xl border border-danger/15 bg-black/10 px-4 py-4 space-y-3">
-            <div>
-              <p className="text-sm font-semibold text-slate-100">重置 ClashForge</p>
-              <p className="text-xs text-muted mt-1 leading-5">
-                清除所有订阅、配置覆盖、生成的配置，恢复出厂默认设置，自动重启进程。
-                <span className="text-danger font-medium"> 页面将短暂断开。</span>
-              </p>
-            </div>
-            <button
-              className="w-full rounded-xl px-3 py-2 text-xs font-semibold border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-              onClick={() => { setDangerConfirm('reset'); setDangerResult(null) }}
-              disabled={dangerRunning}
-            >
-              <RotateCcw size={12} /> 重置为出厂状态
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Confirm dialog ── */}
-      {dangerConfirm && (
-        <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => !dangerRunning && setDangerConfirm(null)}
-        >
-          <div
-            className="bg-surface-1 rounded-2xl border border-white/10 w-full max-w-sm p-6 space-y-4"
-            onClick={e => e.stopPropagation()}
-          >
+          <div className="rounded-[24px] border border-danger/15 bg-[linear-gradient(180deg,rgba(239,68,68,0.12),rgba(239,68,68,0.05))] p-5">
             <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-danger/15">
-                <RotateCcw size={16} className="text-danger" />
+              <div className="rounded-2xl border border-danger/20 bg-danger/10 p-2.5 text-danger">
+                <ShieldAlert size={18} />
               </div>
               <div className="flex-1">
-                <h3 className="text-base font-semibold text-white">重置 ClashForge</h3>
-                <p className="text-sm text-muted mt-1.5 leading-6">
-                  将清除所有订阅、配置覆盖和生成的配置，恢复出厂默认设置，并自动重启 ClashForge 进程。Web UI 会短暂断开，重启后需重新运行配置向导。
+                <p className="text-base font-semibold text-white">重置 ClashForge</p>
+                <p className="mt-2 text-sm leading-6 text-[#E8C5C5]">
+                  清除所有订阅、配置覆盖与生成文件，恢复为出厂默认设置，并自动重启进程。页面会短暂断开连接。
                 </p>
               </div>
             </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                className="btn-danger flex items-center gap-2"
+                onClick={() => { setDangerConfirm('reset'); setDangerResult(null) }}
+                disabled={dangerRunning}
+              >
+                <RotateCcw size={13} /> 重置为出厂状态
+              </button>
+            </div>
+          </div>
+        </div>
+      </SectionCard>
 
+      {dangerConfirm && (
+        <ModalShell
+          title="确认重置 ClashForge"
+          description="该操作将清除所有订阅、配置覆盖与生成配置，并自动重启 ClashForge 进程。"
+          icon={<RotateCcw size={16} />}
+          onClose={() => !dangerRunning && setDangerConfirm(null)}
+          size="sm"
+          dismissible={!dangerRunning}
+        >
+          <div className="space-y-5">
+            <p className="text-sm leading-6 text-muted">
+              重启后你需要重新运行配置向导。若当前正在排查问题，建议先备份现有配置再继续。
+            </p>
             <div className="flex gap-3 pt-1">
               <button className="btn-ghost flex-1" onClick={() => setDangerConfirm(null)} disabled={dangerRunning}>
                 取消
               </button>
               <button
-                className="flex-1 rounded-xl px-4 py-2 text-sm font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2 bg-danger/20 text-danger border border-danger/30 hover:bg-danger/30"
+                className="btn-danger flex-1 justify-center"
                 onClick={() => handleDangerAction(dangerConfirm)}
                 disabled={dangerRunning}
               >
@@ -222,7 +218,7 @@ export function Settings() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalShell>
       )}
     </div>
   )

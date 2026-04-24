@@ -18,7 +18,7 @@ import {
 } from '../api/client'
 import type { Subscription, RuleProvider, RuleSearchResult, SourceFile, ActiveSource } from '../api/client'
 import {
-  FolderCog, List, RefreshCw, Plus, Trash2, MoreVertical, Zap, Eye,
+  List, RefreshCw, Plus, Trash2, MoreVertical, Zap, Eye,
   Shield, Search, ChevronDown, ChevronRight, Play, FileText, Database,
   Radio, AlertCircle, X,
 } from 'lucide-react'
@@ -235,10 +235,10 @@ function SourceFilesPanel({ coreRunning }: { coreRunning: boolean }) {
         </button>
       </div>
 
-      {loading && <div className="card px-5 py-8 text-center text-muted text-sm">加载中…</div>}
+      {loading && <div className="glass-card px-5 py-8 text-center text-muted text-sm">加载中…</div>}
 
       {isEmpty && (
-        <div className="card px-5 py-8 text-center text-muted text-sm space-y-2">
+        <div className="glass-card px-5 py-8 text-center text-muted text-sm space-y-2">
           <p>暂无配置文件记录</p>
           <p className="text-xs">通过「配置向导」导入配置后，记录将显示在这里。</p>
         </div>
@@ -539,10 +539,10 @@ function SubscriptionsPanel({ coreRunning, activeSource }: { coreRunning: boolea
       </div>
 
       {loading && (
-        <div className="card px-5 py-8 text-center text-muted text-sm">加载中…</div>
+        <div className="glass-card px-5 py-8 text-center text-muted text-sm">加载中…</div>
       )}
       {!loading && subs.length === 0 && (
-        <div className="card px-5 py-8 text-center text-muted text-sm">
+        <div className="glass-card px-5 py-8 text-center text-muted text-sm">
           还没有订阅。点击「添加订阅」开始配置。
         </div>
       )}
@@ -877,9 +877,9 @@ export function ConfigManagement() {
 
   return (
     <div className="p-6 space-y-5 max-w-4xl mx-auto">
-      <div className="flex items-center gap-3">
-        <FolderCog size={20} className="text-brand" />
-        <h1 className="text-lg font-semibold text-white">配置管理</h1>
+      <div>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Config</p>
+        <h1 className="text-base font-semibold text-white mt-1">配置管理</h1>
       </div>
 
       {/* Tab switcher */}

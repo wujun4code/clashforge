@@ -51,7 +51,7 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
   const members = (group.all ?? []).filter(n => !IGNORED.includes(n))
 
   return (
-    <div className="card overflow-hidden">
+    <div className="glass-card overflow-hidden">
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/5 transition-all"
@@ -137,7 +137,10 @@ export function Proxies() {
   return (
     <div className="p-6 space-y-5 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-white">节点</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxies</p>
+          <h1 className="text-base font-semibold text-white mt-1">节点切换</h1>
+        </div>
         <div className="flex gap-2">
           <button className="btn-ghost flex items-center gap-2" onClick={refresh}>
             <RefreshCw size={14}/> 刷新
@@ -149,11 +152,11 @@ export function Proxies() {
       </div>
 
       {loading && (
-        <div className="card px-5 py-8 text-center text-muted text-sm">加载中…</div>
+        <div className="glass-card px-5 py-8 text-center text-muted text-sm">加载中…</div>
       )}
 
       {!loading && groups.length === 0 && (
-        <div className="card px-5 py-8 text-center text-muted text-sm">
+        <div className="glass-card px-5 py-8 text-center text-muted text-sm">
           未找到代理组。请先添加订阅并更新节点。
         </div>
       )}

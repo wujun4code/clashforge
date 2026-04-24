@@ -1,0 +1,68 @@
+name: Auto Tag on PR Merge
+
+# Triggers when a PR is merged into main.
+# 1. Reads the latest v* tag, increments the trailing number
+# 2. Pushes the new tag with GITHUB_TOKEN
+# 3. Triggers release.yml via workflow_dispatch (no PAT needed)
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  auto-tag:
+    name: Bump version tag
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write   # needed for gh workflow run
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag
+        id: next
+        run: |
+          LATEST=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          echo "Latest tag: $LATEST"
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.1.0-alpha.1"
+          elif echo "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$'; then
+            BASE=$(echo "$LATEST" | sed 's/\.[0-9]*$//')
+            N=$(echo "$LATEST" | grep -oE '[0-9]+$')
+            NEXT="${BASE}.$((N + 1))"
+          elif echo "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          else
+            NEXT="${LATEST}-1"
+          fi
+
+          echo "Next tag: $NEXT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.next.outputs.tag }}" \
+            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ github.event.pull_request.number }})"
+          git push origin "${{ steps.next.outputs.tag }}"
+
+      # GITHUB_TOKEN tag pushes don't re-trigger on:push:tags in other workflows.
+      # Instead, trigger release.yml directly via workflow_dispatch.
+      - name: Trigger release.yml
+        run: |
+          gh workflow run release.yml \
+            --ref "${{ steps.next.outputs.tag }}" \
+            --field version="${{ steps.next.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
