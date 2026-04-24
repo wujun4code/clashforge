@@ -65,6 +65,7 @@ interface FormNetwork {
   bypass_lan: boolean
   bypass_china: boolean
   apply_on_start: boolean
+  ipv6: boolean
 }
 
 // ── Config preview helpers ──────────────────────────────────────────────────
@@ -386,7 +387,7 @@ export function Setup() {
   // ── network form ──
   const [net, setNet] = useState<FormNetwork>({
     mode: 'tproxy', firewall_backend: 'auto',
-    bypass_lan: true, bypass_china: true, apply_on_start: true,
+    bypass_lan: true, bypass_china: true, apply_on_start: true, ipv6: false,
   })
 
   // ── import preview ──
@@ -433,6 +434,7 @@ export function Setup() {
           bypass_lan: c.network?.bypass_lan !== undefined ? Boolean(c.network.bypass_lan) : prev.bypass_lan,
           bypass_china: c.network?.bypass_china !== undefined ? Boolean(c.network.bypass_china) : prev.bypass_china,
           apply_on_start: c.network?.apply_on_start !== undefined ? Boolean(c.network.apply_on_start) : prev.apply_on_start,
+          ipv6: c.network?.ipv6 !== undefined ? Boolean(c.network.ipv6) : prev.ipv6,
         }))
       }
     }).catch(() => null)
@@ -636,6 +638,7 @@ export function Setup() {
           bypass_lan: net.bypass_lan,
           bypass_china: net.bypass_china,
           apply_on_start: net.apply_on_start,
+          ipv6: net.ipv6,
         },
       }
       await updateConfig(updated as Record<string, unknown>)
@@ -1193,6 +1196,10 @@ export function Setup() {
 
               <Field label="启动时自动接管流量" hint="开启后 ClashForge 启动时立即应用透明代理规则">
                 <Toggle checked={net.apply_on_start} onChange={v => netSet('apply_on_start', v)} label={net.apply_on_start ? '是' : '否'} />
+              </Field>
+
+              <Field label="IPv6 透明代理" hint="同时拦截 IPv6 流量，防止浏览器优先走 IPv6 绕过代理（路由器需有公网 IPv6 才有效）">
+                <Toggle checked={net.ipv6} onChange={v => netSet('ipv6', v)} label={net.ipv6 ? '开启' : '关闭'} />
               </Field>
             </div>
 
