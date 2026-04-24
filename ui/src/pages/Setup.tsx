@@ -745,10 +745,10 @@ export function Setup() {
             </div>
             <div>
               <div>
-                <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Setup</p>
-                <h1 className="text-base font-bold text-white mt-1">配置向导</h1>
+                <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxy</p>
+                <h1 className="text-base font-bold text-white mt-1">代理服务</h1>
               </div>
-              <p className="text-xs text-muted">重新运行向导前需要先停止当前服务</p>
+              <p className="text-xs text-muted">重新配置前需要先停止当前服务</p>
             </div>
           </div>
 
@@ -759,7 +759,7 @@ export function Setup() {
             </div>
             <p className="text-sm text-muted leading-6">
               ClashForge 内核当前处于运行状态，并已接管以下系统服务。
-              要重新运行配置向导，请先停止内核并退出所有接管，然后再继续。
+              要重新配置，请先停止内核并退出所有接管，然后再继续。
             </p>
 
             {managed.length > 0 && (
@@ -807,8 +807,8 @@ export function Setup() {
           </div>
           <div>
             <div>
-              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Setup</p>
-              <h1 className="text-base font-bold text-white mt-1">快速配置向导</h1>
+              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxy</p>
+              <h1 className="text-base font-bold text-white mt-1">代理服务</h1>
             </div>
             <p className="text-xs text-muted">导入配置 → 调整参数 → 一键启动 → 验证连通</p>
           </div>
