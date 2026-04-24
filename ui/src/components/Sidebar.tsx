@@ -14,7 +14,6 @@ const setupLink = {
   to: '/setup',
   icon: Rocket,
   label: '快速上线',
-  caption: '新用户从这里开始',
 }
 
 const navLinks = [
@@ -123,10 +122,7 @@ export function Sidebar() {
 
       <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
         {/* Setup Wizard — primary CTA, visually distinct */}
-        <NavLink
-          to={setupLink.to}
-          className="group block"
-        >
+        <NavLink to={setupLink.to} className="group block">
           {({ isActive }) => {
             const Icon = setupLink.icon
             return (
@@ -135,12 +131,12 @@ export function Sidebar() {
                   'relative rounded-[22px] p-[1.5px] transition-all duration-200',
                   isActive
                     ? 'bg-gradient-to-br from-violet-400/80 via-purple-500/60 to-indigo-500/70 shadow-[0_0_24px_rgba(139,92,246,0.35)]'
-                    : 'bg-gradient-to-br from-violet-500/50 via-purple-500/35 to-indigo-500/40 shadow-[0_0_14px_rgba(139,92,246,0.18)] group-hover:from-violet-400/70 group-hover:via-purple-500/50 group-hover:to-indigo-500/55 group-hover:shadow-[0_0_22px_rgba(139,92,246,0.30)]',
+                    : 'bg-gradient-to-br from-violet-500/50 via-purple-500/35 to-indigo-500/40 shadow-[0_0_14px_rgba(139,92,246,0.18)] group-hover:from-violet-400/70 group-hover:to-indigo-500/55 group-hover:shadow-[0_0_22px_rgba(139,92,246,0.30)]',
                 ].join(' ')}
               >
                 <div
                   className={[
-                    'flex items-center gap-3 rounded-[21px] px-4 py-3.5 transition-all duration-200',
+                    'flex items-center gap-4 rounded-[21px] px-4 py-4 transition-all duration-200',
                     isActive
                       ? 'bg-[linear-gradient(135deg,rgba(109,40,217,0.30),rgba(79,70,229,0.22))]'
                       : 'bg-[linear-gradient(135deg,rgba(109,40,217,0.14),rgba(79,70,229,0.09))] group-hover:bg-[linear-gradient(135deg,rgba(109,40,217,0.20),rgba(79,70,229,0.15))]',
@@ -148,28 +144,23 @@ export function Sidebar() {
                 >
                   <div
                     className={[
-                      'relative flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl border transition-all duration-200',
+                      'relative flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-2xl border transition-all duration-200',
                       isActive
-                        ? 'border-violet-400/40 bg-[linear-gradient(135deg,rgba(139,92,246,0.45),rgba(99,102,241,0.35))] text-white shadow-[0_0_14px_rgba(139,92,246,0.4)]'
+                        ? 'border-violet-400/40 bg-[linear-gradient(135deg,rgba(139,92,246,0.45),rgba(99,102,241,0.35))] text-white shadow-[0_0_18px_rgba(139,92,246,0.45)]'
                         : 'border-violet-500/30 bg-[linear-gradient(135deg,rgba(139,92,246,0.22),rgba(99,102,241,0.16))] text-violet-300 group-hover:border-violet-400/45 group-hover:text-white',
                     ].join(' ')}
                   >
-                    <Icon size={18} className="relative z-10" />
+                    <Icon size={26} className="relative z-10" />
                     <span className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,rgba(167,139,250,0.30),transparent_65%)]" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-white">{setupLink.label}</span>
-                      <span className="rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-400/30">
-                        入门必读
-                      </span>
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-violet-300/80 group-hover:text-violet-200">
-                      {setupLink.caption}
-                    </p>
+                    <span className="text-base font-bold text-white">{setupLink.label}</span>
+                    <span className="ml-2 rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-400/30">
+                      Start
+                    </span>
                   </div>
                   <ChevronRight
-                    size={14}
+                    size={15}
                     className={isActive ? 'text-violet-300' : 'text-violet-400/50 group-hover:text-violet-300/80'}
                   />
                 </div>
