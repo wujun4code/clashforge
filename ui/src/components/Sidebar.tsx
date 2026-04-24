@@ -13,8 +13,8 @@ import { getOverviewCore } from '../api/client'
 const setupLink = {
   to: '/setup',
   icon: Rocket,
-  label: '快速上线向导',
-  caption: '首次安装必经之路 · 导入订阅 · 接管透明代理',
+  label: '快速上线',
+  caption: '新用户从这里开始',
 }
 
 const navLinks = [
