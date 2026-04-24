@@ -1,21 +1,26 @@
 name: Auto Tag on PR Merge
 
-# Triggers on every push to main (covers both manual merges and auto-merge via GITHUB_TOKEN).
-# pull_request: closed is NOT used because GITHUB_TOKEN-initiated merges (auto-merge)
-# do not re-trigger other workflows — GitHub security policy.
+# Triggers when a PR is merged into main BY A HUMAN (or GitHub UI auto-merge).
+#
+# NOTE: Do NOT use auto-merge.yml (GITHUB_TOKEN bot merge).
+# GITHUB_TOKEN-initiated merges suppress pull_request:closed events for other
+# workflows — GitHub security policy. When the user merges manually or via
+# GitHub's native auto-merge UI, this workflow fires correctly.
 #
 # 1. Reads the latest v* tag, increments the trailing number
 # 2. Pushes the new tag with GITHUB_TOKEN
-# 3. Triggers release.yml via workflow_dispatch (no PAT needed)
+# 3. Triggers release.yml via workflow_dispatch
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - main
 
 jobs:
   auto-tag:
     name: Bump version tag
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -55,7 +60,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "${{ steps.next.outputs.tag }}" \
-            -m "Release ${{ steps.next.outputs.tag }} (commit ${{ github.sha }})"
+            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ github.event.pull_request.number }})"
           git push origin "${{ steps.next.outputs.tag }}"
 
       # GITHUB_TOKEN tag pushes don't re-trigger on:push:tags in other workflows.
