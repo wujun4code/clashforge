@@ -10,7 +10,7 @@ const links = [
   { to: '/config',   icon: FolderCog,       label: '配置管理' },
   { to: '/activity', icon: Activity,        label: '活动' },
   { to: '/setup',    icon: Sparkles,        label: '配置向导' },
-  { to: '/settings', icon: Settings,        label: '设置' },
+  { to: '/settings', icon: Settings,        label: '高级管理' },
 ]
 
 function CoreStatusBadge() {

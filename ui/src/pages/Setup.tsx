@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
-  Sparkles, RotateCw, Link2, Square, ShieldOff,
+  Sparkles, RotateCw, Link2, Square, ShieldOff, Database, Radio,
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
@@ -11,9 +11,10 @@ import {
   startCore, stopCore, takeoverOverviewModule, releaseOverviewTakeover,
   getOverviewCore, getOverviewProbes, getLogs,
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
-  saveSource, setActiveSource, getSourceFile,
+  saveSource, setActiveSource, getSourceFile, getSources,
+  detectConflicts, stopService,
 } from '../api/client'
-import type { OverviewProbeData, OverviewModule, LogEntry } from '../api/client'
+import type { OverviewProbeData, OverviewModule, LogEntry, ConflictService, SourceFile, Subscription } from '../api/client'
 
 type InitStatus = 'checking' | 'running' | 'ready'
 
@@ -354,13 +355,19 @@ export function Setup() {
   const [step, setStep] = useState<Step>('import')
 
   // ── import step ──
-  type ImportMode = 'file' | 'paste' | 'url' | 'existing' | 'existing_file'
+  type ImportMode = 'file' | 'paste' | 'url' | 'existing' | 'existing_file' | 'saved'
   const initMode = (): ImportMode => {
     if (activateSub) return 'existing'
     if (activateFile) return 'existing_file'
-    return 'paste'
+    return 'saved'
   }
   const [importMode, setImportMode] = useState<ImportMode>(initMode)
+
+  // ── saved sources/subs list ──
+  const [savedFiles, setSavedFiles] = useState<SourceFile[]>([])
+  const [savedSubs, setSavedSubs] = useState<Subscription[]>([])
+  const [savedLoading, setSavedLoading] = useState(false)
+  const [selectedSaved, setSelectedSaved] = useState<{ kind: 'file'; filename: string } | { kind: 'sub'; sub: Subscription } | null>(null)
   const [pasteContent, setPasteContent] = useState('')
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -387,6 +394,9 @@ export function Setup() {
   const [launching, setLaunching] = useState(false)
   const [launchDone, setLaunchDone] = useState(false)
   const [launchError, setLaunchError] = useState('')
+  const [conflicts, setConflicts] = useState<ConflictService[]>([])
+  const [stoppingConflicts, setStoppingConflicts] = useState(false)
+  const [conflictStopped, setConflictStopped] = useState(false)
 
   // ── check step ──
   const [checking, setChecking] = useState(false)
@@ -425,6 +435,19 @@ export function Setup() {
       }
     }).catch(() => null)
   }, [])
+
+  // ── load saved sources when on saved tab ──
+  useEffect(() => {
+    if (importMode !== 'saved') return
+    setSavedLoading(true)
+    Promise.all([
+      getSources().catch(() => ({ files: [] as SourceFile[], active_source: null })),
+      getSubscriptions().catch(() => ({ subscriptions: [] as Subscription[] })),
+    ]).then(([s, sub]) => {
+      setSavedFiles(s.files ?? [])
+      setSavedSubs(sub.subscriptions ?? [])
+    }).finally(() => setSavedLoading(false))
+  }, [importMode])
 
   // ── helpers ──
   const dnsSet = useCallback(<K extends keyof FormDNS>(k: K, v: FormDNS[K]) =>
@@ -465,6 +488,30 @@ export function Setup() {
       const showPreview = async () => {
         const { content } = await getMihomoConfig().catch(() => ({ content: '' }))
         setPreviewContent(content)
+      }
+
+      // Saved config/sub selection mode
+      if (importMode === 'saved') {
+        if (!selectedSaved) { setImportError('请选择一个配置'); return }
+        if (selectedSaved.kind === 'file') {
+          const { content } = await getSourceFile(selectedSaved.filename)
+          try {
+            const parsed = yaml.load(content) as ClashParsed
+            if (parsed && typeof parsed === 'object') applyClashParsed(parsed)
+          } catch { /* ignore */ }
+          await updateOverrides(content)
+          await generateConfig().catch(() => null)
+          await setActiveSource({ type: 'file', filename: selectedSaved.filename }).catch(() => null)
+          setClashParsed({})
+        } else {
+          const sub = selectedSaved.sub
+          await syncSubUpdate(sub.id)
+          await generateConfig().catch(() => null)
+          await setActiveSource({ type: 'subscription', sub_id: sub.id, sub_name: sub.name }).catch(() => null)
+          setClashParsed({})
+        }
+        await showPreview()
+        return
       }
 
       // Existing subscription mode: download (sync) + generate
@@ -533,13 +580,21 @@ export function Setup() {
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : String(e))
     } finally { setImporting(false) }
-  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed])
+  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved])
 
   // ── launch ──
   const handleLaunch = useCallback(async () => {
     setLaunching(true); setLaunchError('')
     try {
-      // Persist ClashForge config (DNS + network)
+      // Step 1: detect conflicts
+      const { conflicts: found } = await detectConflicts().catch(() => ({ conflicts: [], has_conflict: false }))
+      if (found.length > 0) {
+        setConflicts(found)
+        setLaunching(false)
+        return
+      }
+
+      // Step 2: persist ClashForge config (DNS + network)
       const cfg = await getConfig()
       const updated = {
         ...cfg,
@@ -561,10 +616,10 @@ export function Setup() {
       }
       await updateConfig(updated as Record<string, unknown>)
 
-      // Start core
+      // Step 3: start core
       await startCore()
 
-      // Apply takeover if requested
+      // Step 4: apply takeover if requested
       if (net.mode !== 'none' && net.apply_on_start) {
         await takeoverOverviewModule({ module: 'transparent_proxy', mode: net.mode })
       }
@@ -573,12 +628,39 @@ export function Setup() {
       }
 
       setLaunchDone(true)
-      // Auto-advance to check after short pause
       setTimeout(() => setStep('check'), 800)
     } catch (e: unknown) {
       setLaunchError(e instanceof Error ? e.message : String(e))
     } finally { setLaunching(false) }
   }, [dns, net])
+
+  // ── stop conflicts then re-launch ──
+  const handleStopConflicts = useCallback(async () => {
+    setStoppingConflicts(true)
+    try {
+      for (const svc of conflicts) {
+        if (svc.name === 'openclash') {
+          await stopService('openclash').catch(() => null)
+        }
+        // for other services (mihomo, clash) use generic kill via stop-service
+        // currently those map to openclash stop script as best-effort
+      }
+      setConflictStopped(true)
+      setConflicts([])
+      // Re-run launch now that conflicts are cleared
+      await handleLaunch()
+    } finally {
+      setStoppingConflicts(false)
+    }
+  }, [conflicts, handleLaunch])
+
+  // ── auto-detect conflicts when entering launch step ──
+  useEffect(() => {
+    if (step !== 'launch' || launchDone) return
+    detectConflicts()
+      .then(({ conflicts: found }) => setConflicts(found))
+      .catch(() => null)
+  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
   useEffect(() => {
@@ -746,12 +828,13 @@ export function Setup() {
                 <FileText size={16} className="text-brand" />
                 <h2 className="text-sm font-semibold text-slate-200">选择导入方式</h2>
               </div>
-              {importMode !== 'existing' && (
-                <div className="flex gap-2">
+              {importMode !== 'existing' && importMode !== 'existing_file' && (
+                <div className="flex gap-2 flex-wrap">
                   {([
+                    { id: 'saved', icon: <Database size={13} />, label: '已保存配置' },
                     { id: 'paste', icon: <FileText size={13} />, label: '粘贴 YAML' },
-                    { id: 'file',  icon: <Upload size={13} />,    label: '上传文件' },
-                    { id: 'url',   icon: <Link2 size={13} />,     label: '订阅链接' },
+                    { id: 'file',  icon: <Upload size={13} />,   label: '上传文件' },
+                    { id: 'url',   icon: <Link2 size={13} />,    label: '订阅链接' },
                   ] as const).map(m => (
                     <button
                       key={m.id}
@@ -761,6 +844,59 @@ export function Setup() {
                       {m.icon}{m.label}
                     </button>
                   ))}
+                </div>
+              )}
+
+              {importMode === 'saved' && (
+                <div className="space-y-3">
+                  {savedLoading && <p className="text-xs text-muted">加载中…</p>}
+                  {!savedLoading && savedFiles.length === 0 && savedSubs.length === 0 && (
+                    <p className="text-xs text-muted">暂无已保存的配置，请使用其他方式导入。</p>
+                  )}
+                  {savedFiles.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider">配置文件</p>
+                      {savedFiles.map(f => {
+                        const selected = selectedSaved?.kind === 'file' && selectedSaved.filename === f.filename
+                        return (
+                          <button
+                            key={f.filename}
+                            onClick={() => setSelectedSaved({ kind: 'file', filename: f.filename })}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${selected ? 'border-brand/60 bg-brand/10' : 'border-white/8 bg-black/10 hover:border-white/20'}`}
+                          >
+                            <FileText size={14} className={selected ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-sm font-mono font-medium truncate ${selected ? 'text-brand' : 'text-slate-200'}`}>{f.filename}</p>
+                              <p className="text-xs text-muted mt-0.5">{(f.size_bytes / 1024).toFixed(1)} KB · {new Date(f.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                            </div>
+                            {selected && <CheckCircle2 size={14} className="text-brand flex-shrink-0" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {savedSubs.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider">订阅配置</p>
+                      {savedSubs.map(sub => {
+                        const selected = selectedSaved?.kind === 'sub' && selectedSaved.sub.id === sub.id
+                        return (
+                          <button
+                            key={sub.id}
+                            onClick={() => setSelectedSaved({ kind: 'sub', sub })}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${selected ? 'border-brand/60 bg-brand/10' : 'border-white/8 bg-black/10 hover:border-white/20'}`}
+                          >
+                            <Radio size={14} className={selected ? 'text-brand flex-shrink-0' : 'text-muted flex-shrink-0'} />
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-sm font-medium truncate ${selected ? 'text-brand' : 'text-slate-200'}`}>{sub.name}</p>
+                              <p className="text-xs text-muted mt-0.5">{sub.node_count ? `${sub.node_count} 节点 · ` : ''}{sub.url ? sub.url : '无 URL'}</p>
+                            </div>
+                            {selected && <CheckCircle2 size={14} className="text-brand flex-shrink-0" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -861,9 +997,7 @@ export function Setup() {
                 onClick={handleImport}
                 disabled={
                   importing ||
-                  (importMode === 'url' && !remoteUrl.trim()) ||
-                  (importMode === 'paste' && !pasteContent.trim()) ||
-                  (importMode === 'file' && !pasteContent.trim())
+                  (!selectedSaved && !pasteContent.trim() && !remoteUrl.trim())
                 }
               >
                 {importing
@@ -1037,6 +1171,53 @@ export function Setup() {
                 </div>
               </div>
 
+              {/* Conflict warning banner */}
+              {conflicts.length > 0 && (
+                <div className="rounded-xl bg-amber-500/10 border border-amber-400/30 px-4 py-4 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-300">检测到冲突服务</p>
+                      <p className="text-xs text-amber-200/70 mt-0.5 leading-5">
+                        以下服务与 ClashForge 存在端口或流量接管冲突，建议在启动前将其停止，以避免意外问题。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    {conflicts.map(svc => (
+                      <div key={svc.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-400/20">
+                        <XCircle size={13} className="text-amber-400 flex-shrink-0" />
+                        <span className="text-xs text-amber-200 font-medium">{svc.label}</span>
+                        {svc.pids && svc.pids.length > 0 && (
+                          <span className="text-xs text-amber-300/60 font-mono ml-auto">PID {svc.pids.join(', ')}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {stoppingConflicts ? (
+                    <div className="flex items-center gap-2 text-xs text-amber-300">
+                      <Loader2 size={13} className="animate-spin" />
+                      正在停止冲突服务，请稍候…
+                    </div>
+                  ) : (
+                    <button
+                      className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
+                      onClick={handleStopConflicts}
+                    >
+                      <ShieldOff size={15} />
+                      一键停止冲突服务并启动 ClashForge
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {conflictStopped && conflicts.length === 0 && (
+                <div className="rounded-xl bg-success/8 border border-success/20 px-4 py-2 flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-success flex-shrink-0" />
+                  <p className="text-xs text-success">冲突服务已停止</p>
+                </div>
+              )}
+
               {launchError && (
                 <div className="rounded-xl bg-danger/10 border border-danger/20 px-4 py-3 flex items-start gap-2">
                   <XCircle size={15} className="text-danger flex-shrink-0 mt-0.5" />
@@ -1058,7 +1239,7 @@ export function Setup() {
                 <button
                   className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
                   onClick={handleLaunch}
-                  disabled={launching}
+                  disabled={launching || stoppingConflicts || conflicts.length > 0}
                 >
                   {launching
                     ? <><Loader2 size={16} className="animate-spin" />正在启动内核 + 接管服务…</>

@@ -345,6 +345,9 @@ export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
 export const enableService    = () => request<{enabled: boolean}>('POST', '/service/enable')
 export const stopService      = (target: 'openclash' | 'clashforge-full') => request<{ok: boolean; target: string; output: string}>('POST', '/system/stop-service', { target })
+export interface ConflictService { name: string; label: string; running: boolean; pids?: number[] }
+export const detectConflicts  = () => request<{conflicts: ConflictService[]; has_conflict: boolean}>('GET', '/system/conflicts')
+export const resetClashForge  = () => request<{ok: boolean; message: string}>('POST', '/system/reset')
 
 // ---- rule providers ----
 export interface RuleProvider {

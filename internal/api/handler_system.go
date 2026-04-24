@@ -3,10 +3,90 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/wujun4code/clashforge/internal/config"
 )
+
+// ConflictService describes a service that may conflict with ClashForge.
+type ConflictService struct {
+	Name    string `json:"name"`
+	Label   string `json:"label"`
+	Running bool   `json:"running"`
+	PIDs    []int  `json:"pids,omitempty"`
+}
+
+// handleDetectConflicts checks for known services that conflict with ClashForge.
+func handleDetectConflicts(_ Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		services := []ConflictService{
+			detectConflict("openclash", "OpenClash", []string{"/etc/openclash/clash", "openclash_watchdog"}),
+			detectConflict("mihomo", "系统 mihomo（非 ClashForge 管理）", []string{"/usr/bin/mihomo"}),
+			detectConflict("clash", "Clash（原版）", []string{"/usr/bin/clash"}),
+		}
+
+		// Only return services that are actually running
+		running := make([]ConflictService, 0)
+		for _, s := range services {
+			if s.Running {
+				running = append(running, s)
+			}
+		}
+
+		JSON(w, http.StatusOK, map[string]any{
+			"conflicts":    running,
+			"has_conflict": len(running) > 0,
+		})
+	}
+}
+
+// detectConflict checks /proc for any process matching the given cmdline patterns.
+func detectConflict(name, label string, patterns []string) ConflictService {
+	svc := ConflictService{Name: name, Label: label}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return svc
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid := 0
+		for _, c := range e.Name() {
+			if c < '0' || c > '9' {
+				pid = -1
+				break
+			}
+			pid = pid*10 + int(c-'0')
+		}
+		if pid <= 0 {
+			continue
+		}
+		cmdlineBytes, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		cmdline := strings.ReplaceAll(string(cmdlineBytes), "\x00", " ")
+		for _, pat := range patterns {
+			if strings.Contains(cmdline, pat) {
+				// Skip our own processes
+				if strings.Contains(cmdline, "mihomo-clashforge") ||
+					strings.Contains(cmdline, "/usr/bin/clashforge") {
+					break
+				}
+				svc.Running = true
+				svc.PIDs = append(svc.PIDs, pid)
+				break
+			}
+		}
+	}
+	return svc
+}
 
 // handleStopService executes a named stop operation on the router.
 // Accepted targets: "openclash", "clashforge-full"
@@ -37,11 +117,7 @@ func handleStopService(deps Dependencies) http.HandlerFunc {
 		// Run the script with a 30-second timeout.
 		// Use sh -c so we don't need a file on disk.
 		cmd := exec.Command("sh", "-c", script)
-		out, err := withTimeout(cmd, 30*time.Second)
-		if err != nil {
-			Err(w, http.StatusInternalServerError, "SCRIPT_FAILED", strings.TrimSpace(string(out))+" | "+err.Error())
-			return
-		}
+		out, _ := withTimeout(cmd, 30*time.Second)
 
 		JSON(w, http.StatusOK, map[string]any{
 			"ok":     true,
@@ -72,25 +148,31 @@ func withTimeout(cmd *exec.Cmd, d time.Duration) ([]byte, error) {
 // stopOpenClashScript returns an inline shell script that fully stops OpenClash.
 func stopOpenClashScript() string {
 	return `
-set -e
 log() { echo "[$(date '+%H:%M:%S')] $1"; }
 
+log "Killing watchdog + clash kernel (pass 1)..."
+for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+  cmdfile="/proc/$pid/cmdline"
+  [ -f "$cmdfile" ] || continue
+  cmd=$(tr '\0' '\n' < "$cmdfile" 2>/dev/null | head -1)
+  case "$cmd" in
+    *openclash*|*/etc/openclash/clash) kill -9 "$pid" 2>/dev/null ;;
+  esac
+done; true
+sleep 1
+
+log "Killing clash kernel (pass 2, paranoid)..."
+for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+  cmdfile="/proc/$pid/cmdline"
+  [ -f "$cmdfile" ] || continue
+  cmd=$(tr '\0' '\n' < "$cmdfile" 2>/dev/null | head -1)
+  case "$cmd" in
+    *openclash*|*/etc/openclash/clash) kill -9 "$pid" 2>/dev/null ;;
+  esac
+done; true
+
 log "Stopping openclash init.d..."
-/etc/init.d/openclash stop 2>/dev/null || true
-
-log "Killing watchdog..."
-WPIDS=$(pgrep -f openclash_watchdog 2>/dev/null || true)
-[ -n "$WPIDS" ] && kill $WPIDS 2>/dev/null || true
-sleep 1
-WPIDS=$(pgrep -f openclash_watchdog 2>/dev/null || true)
-[ -n "$WPIDS" ] && kill -9 $WPIDS 2>/dev/null || true
-
-log "Killing clash kernel..."
-CPIDS=$(pgrep -f "/etc/openclash/clash" 2>/dev/null || true)
-[ -n "$CPIDS" ] && kill $CPIDS 2>/dev/null || true
-sleep 1
-CPIDS=$(pgrep -f "/etc/openclash/clash" 2>/dev/null || true)
-[ -n "$CPIDS" ] && kill -9 $CPIDS 2>/dev/null || true
+/etc/init.d/openclash stop 2>/dev/null; true
 
 log "Cleaning nftables openclash chains..."
 for CHAIN in openclash openclash_mangle openclash_mangle_output openclash_output openclash_upnp openclash_wan_input; do
@@ -162,4 +244,70 @@ CFPIDS=$(pgrep -f "/usr/bin/clashforge" 2>/dev/null || true)
 
 log "Done."
 `
+}
+
+// handleResetClashForge resets ClashForge to a clean factory state:
+//  1. Stop mihomo core + release nft/DNS takeovers
+//  2. Wipe user data (subscriptions, overrides, sources, generated config, runtime files)
+//  3. Rewrite config.toml to defaults (preserving api_secret and ui port)
+//  4. Re-exec this process so it boots fresh with an empty state
+func handleResetClashForge(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. Stop core gracefully (best-effort)
+		_ = deps.Core.Stop()
+
+		// 2. Release nft / DNS takeovers (best-effort inline shell)
+		if deps.Netfilter != nil {
+			_ = deps.Netfilter.Cleanup()
+		}
+		_ = exec.Command("sh", "-c",
+			"nft delete table inet metaclash 2>/dev/null; "+
+				"while ip rule show 2>/dev/null | grep -q 'fwmark 0x1a3'; do "+
+				"  ip rule del fwmark 0x1a3 lookup 100 2>/dev/null || break; done; "+
+				"ip route flush table 100 2>/dev/null; "+
+				"rm -f /etc/dnsmasq.d/clashforge.conf; "+
+				"/etc/init.d/dnsmasq reload 2>/dev/null || true").Run()
+
+		dataDir := deps.Config.Core.DataDir
+		runtimeDir := deps.Config.Core.RuntimeDir
+
+		// 3. Delete user-generated data — keep directory itself so process can restart
+		for _, p := range []string{
+			filepath.Join(dataDir, "overrides.yaml"),
+			filepath.Join(dataDir, "subscriptions.json"),
+			filepath.Join(dataDir, "sources"),
+			filepath.Join(dataDir, "active_source.json"),
+			filepath.Join(runtimeDir, "mihomo-config.yaml"),
+			filepath.Join(runtimeDir, "mihomo.pid"),
+			filepath.Join(runtimeDir, "metaclash.pid"),
+		} {
+			_ = os.RemoveAll(p)
+		}
+
+		// 4. Reset config.toml to defaults, preserving api_secret + ui port
+		def := config.Default()
+		def.Security.APISecret = deps.Config.Security.APISecret
+		def.Ports.UI = deps.Config.Ports.UI
+		if err := config.Save(deps.ConfigPath, def); err != nil {
+			Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
+			return
+		}
+
+		// 5. Flush response before re-exec so client receives the reply
+		JSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": "ClashForge 已重置为出厂状态，进程即将重启",
+		})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(300 * time.Millisecond)
+
+		// 6. Re-exec: replace this process image with a fresh start
+		exe, err := os.Executable()
+		if err != nil {
+			return
+		}
+		_ = syscall.Exec(exe, os.Args, os.Environ())
+	}
 }

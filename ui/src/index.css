@@ -23,7 +23,7 @@
     @apply px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-150 cursor-pointer;
   }
   .btn-primary {
-    @apply btn bg-brand text-white hover:bg-blue-500 active:scale-95;
+    @apply btn bg-brand text-white hover:bg-blue-500 active:scale-95 disabled:bg-white/10 disabled:text-white/30 disabled:cursor-not-allowed disabled:active:scale-100;
   }
   .btn-ghost {
     @apply btn bg-white/5 text-slate-300 hover:bg-white/10 active:scale-95;
