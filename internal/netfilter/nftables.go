@@ -62,6 +62,9 @@ table inet metaclash {
         meta mark {{ .FWMark }} return
         fib saddr type local return
         ip daddr @bypass_ipv4 return
+        # Block QUIC (HTTP/3 over UDP 443) — mihomo cannot SNI-sniff QUIC packets,
+        # dropping forces the client to retry over TCP where SNI matching works correctly.
+        udp dport 443 drop
         meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:{{ .TProxyPort }} meta mark set {{ .FWMark }}
 {{ if .EnableIPv6 }}
         ip6 daddr @bypass_ipv6 return
