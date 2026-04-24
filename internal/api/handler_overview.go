@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 
@@ -681,6 +683,25 @@ func buildOverviewResources(deps Dependencies, coreStatus core.Status) overviewR
 		buildProcessUsage("mihomo", coreStatus.PID, metrics[coreStatus.PID]),
 	}
 	app := buildAppStorage(deps)
+
+	log.Info().
+		Float64("cpu_pct", systemUsage.CPUPercent).
+		Float64("mem_used_mb", systemUsage.MemoryUsedMB).
+		Float64("mem_total_mb", systemUsage.MemoryTotalMB).
+		Float64("mem_pct", systemUsage.MemoryPercent).
+		Float64("disk_used_gb", systemUsage.DiskUsedGB).
+		Float64("disk_total_gb", systemUsage.DiskTotalGB).
+		Float64("disk_pct", systemUsage.DiskPercent).
+		Msg("resource_sample system")
+
+	for _, proc := range procIDs {
+		e := log.Info().Str("process", proc.ID).Int("pid", proc.PID).Bool("running", proc.Running)
+		if proc.Running {
+			e = e.Float64("cpu_pct", proc.CPUPercent).Float64("mem_rss_mb", proc.MemoryRSSMB).Int64("uptime_s", proc.Uptime)
+		}
+		e.Msg("resource_sample process")
+	}
+
 	return overviewResources{System: systemUsage, Processes: procIDs, App: app}
 }
 
@@ -750,6 +771,8 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 		{Name: "IP.SB", Group: "国外", URL: "https://api.ip.sb/geoip"},
 		{Name: "IPInfo", Group: "国外", URL: "https://ipinfo.io/json"},
 	}
+	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
+	logDNSSnapshot(snap)
 	result := make([]overviewIPCheck, len(providers))
 	var wg sync.WaitGroup
 	for index, provider := range providers {
@@ -759,11 +782,17 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 			GBK              bool
 		}) {
 			defer wg.Done()
+			log.Info().Str("provider", spec.Name).Str("url", spec.URL).Msg("ip_check start")
+			logResolveResult(resolveForDebug(spec.URL))
+			start := time.Now()
 			check, err := fetchIPCheck(deps, spec.Name, spec.URL, spec.GBK)
+			latency := time.Since(start)
 			if err != nil {
+				log.Info().Str("provider", spec.Name).Str("url", spec.URL).Dur("latency", latency).Err(err).Msg("ip_check failed")
 				result[i] = overviewIPCheck{Provider: spec.Name, Group: spec.Group, OK: false, Error: err.Error()}
 				return
 			}
+			log.Info().Str("provider", spec.Name).Str("url", spec.URL).Str("ip", check.IP).Str("location", check.Location).Dur("latency", latency).Msg("ip_check ok")
 			check.Group = spec.Group
 			result[i] = check
 		}(index, provider)
@@ -787,9 +816,20 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 		{Name: "Claude", Group: "AI", URL: "https://api.anthropic.com", Description: "用于验证 Claude AI 是否可通过代理访问。"},
 		{Name: "Gemini", Group: "AI", URL: "https://gemini.google.com", Description: "用于验证 Google Gemini 是否可通过代理访问。"},
 	}
+	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
+	logDNSSnapshot(snap)
 	checks := make([]overviewAccessCheck, 0, len(targets))
 	for _, target := range targets {
+		log.Info().Str("name", target.Name).Str("group", target.Group).Str("url", target.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
+		logResolveResult(resolveForDebug(target.URL))
+		start := time.Now()
 		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
+		latency := time.Since(start)
+		if probe.OK {
+			log.Info().Str("name", target.Name).Str("url", target.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Msg("access_check ok")
+		} else {
+			log.Info().Str("name", target.Name).Str("url", target.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Msg("access_check failed")
+		}
 		checks = append(checks, overviewAccessCheck{
 			Name:        target.Name,
 			Group:       target.Group,
@@ -1903,6 +1943,115 @@ func maxInt64(value int64, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+// ─── DNS diagnostic helpers ──────────────────────────────────────────────────
+
+type dnsSnapshot struct {
+	Port53UDP         bool
+	Port53TCP         bool
+	MihomoPort        int
+	MihomoListening   bool
+	ManagedFilePresent bool
+	UCIDnsmasqPort    string
+}
+
+type dnsResolveResult struct {
+	Host      string
+	Addrs     []string
+	IsFakeIP  bool
+	LatencyMS int64
+	Err       string
+}
+
+// captureDNSSnapshot collects the current DNS stack state. Reuses helpers from
+// handler_health.go which live in the same package.
+func captureDNSSnapshot(mihomoPort int) dnsSnapshot {
+	snap := dnsSnapshot{
+		Port53UDP:  isUDPPortListening(53),
+		Port53TCP:  isTCPPortListening(53),
+		MihomoPort: mihomoPort,
+	}
+	if mihomoPort > 0 {
+		snap.MihomoListening = isDNSPortListening(mihomoPort)
+	}
+	snap.ManagedFilePresent = fileExists("/etc/dnsmasq.d/clashforge.conf")
+	if out, err := exec.Command("uci", "get", "dhcp.@dnsmasq[0].port").Output(); err == nil {
+		snap.UCIDnsmasqPort = strings.TrimSpace(string(out))
+	}
+	return snap
+}
+
+// logDNSSnapshot emits a single structured log line for the current DNS state.
+func logDNSSnapshot(snap dnsSnapshot) {
+	log.Info().
+		Bool("port53_udp", snap.Port53UDP).
+		Bool("port53_tcp", snap.Port53TCP).
+		Bool("mihomo_dns_listening", snap.MihomoListening).
+		Int("mihomo_dns_port", snap.MihomoPort).
+		Bool("clashforge_dnsmasq_conf", snap.ManagedFilePresent).
+		Str("uci_dnsmasq_port", snap.UCIDnsmasqPort).
+		Msg("dns_snapshot")
+}
+
+// resolveForDebug resolves the hostname extracted from rawURL using the default
+// system resolver (dnsmasq on OpenWrt), and checks whether any returned address
+// falls in the mihomo fake-IP range 198.18.0.0/15.
+func resolveForDebug(rawURL string) dnsResolveResult {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return dnsResolveResult{Host: rawURL, Err: "url parse: " + err.Error()}
+	}
+	host := u.Hostname()
+	if host == "" {
+		return dnsResolveResult{Host: rawURL, Err: "no host in url"}
+	}
+	// Skip IP literals — nothing to resolve.
+	if net.ParseIP(host) != nil {
+		return dnsResolveResult{Host: host, Addrs: []string{host}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	latency := time.Since(start)
+	if err != nil {
+		return dnsResolveResult{Host: host, LatencyMS: latency.Milliseconds(), Err: err.Error()}
+	}
+	fakeIP := false
+	for _, a := range addrs {
+		if isMihomoFakeIP(a) {
+			fakeIP = true
+			break
+		}
+	}
+	return dnsResolveResult{Host: host, Addrs: addrs, IsFakeIP: fakeIP, LatencyMS: latency.Milliseconds()}
+}
+
+// logResolveResult emits a structured log line for one DNS resolution attempt.
+func logResolveResult(res dnsResolveResult) {
+	e := log.Info().
+		Str("host", res.Host).
+		Strs("addrs", res.Addrs).
+		Bool("fake_ip", res.IsFakeIP).
+		Int64("dns_latency_ms", res.LatencyMS)
+	if res.Err != "" {
+		e = e.Str("error", res.Err)
+	}
+	e.Msg("dns_resolve")
+}
+
+// isMihomoFakeIP reports whether addr falls in the default mihomo fake-IP
+// range 198.18.0.0/15 (covers 198.18.x.x and 198.19.x.x).
+func isMihomoFakeIP(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19)
+	}
+	return false
 }
 
 func dedupeInts(items []int) []int {
