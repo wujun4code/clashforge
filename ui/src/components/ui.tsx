@@ -1,11 +1,10 @@
 import type { ReactNode } from 'react'
-import { Terminal, X } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ')
 }
 
-/* ── PageHeader ─────────────────────────────────────────── */
 export function PageHeader({
   eyebrow,
   title,
@@ -17,63 +16,33 @@ export function PageHeader({
   title: string
   description?: string
   actions?: ReactNode
-  metrics?: Array<{ label: string; value: string; color?: 'cyan' | 'green' | 'yellow' | 'magenta' | 'red' }>
+  metrics?: Array<{ label: string; value: string }>
 }) {
-  // token names kept for backwards compat, but now map to the soft cat palette
-  const metricColor: Record<string, string> = {
-    cyan:    '#6AA8E0',
-    green:   '#8FD4A8',
-    yellow:  '#F5B86B',
-    magenta: '#F4A6B5',
-    red:     '#E87E7E',
-  }
-
   return (
-    <section className="hero-panel animate-fade-in">
+    <section className="hero-panel relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(167,139,250,0.26),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(249,115,22,0.16),transparent_32%)]" />
       <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-3xl space-y-3">
-          {/* Eyebrow tag */}
-          <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide text-brand border border-brand/30 bg-brand/10">
-            <Terminal size={11} />
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-brand-light">
+            <Sparkles size={12} className="text-cta" />
             {eyebrow}
           </div>
-
           <div className="space-y-2">
-            <h1 className="font-display text-2xl font-extrabold tracking-tight text-display-gradient md:text-3xl">
-              {title}
-            </h1>
-            {description ? (
-              <p className="max-w-2xl text-sm leading-7 text-[color:var(--text-secondary)]">
-                {description}
-              </p>
-            ) : null}
+            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">{title}</h1>
+            {description ? <p className="max-w-2xl text-sm leading-6 text-[#B9B6D3] md:text-[15px]">{description}</p> : null}
           </div>
         </div>
 
         <div className="flex w-full flex-col gap-4 lg:w-auto lg:min-w-[320px] lg:items-end">
-          {actions ? (
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">{actions}</div>
-          ) : null}
-
+          {actions ? <div className="flex flex-wrap items-center gap-2 lg:justify-end">{actions}</div> : null}
           {metrics?.length ? (
-            <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 lg:w-auto">
-              {metrics.map((m) => {
-                const c = m.color ?? 'cyan'
-                return (
-                  <div
-                    key={m.label}
-                    className="rounded-xl border border-white/10 bg-surface-2/50 px-3 py-2.5 backdrop-blur-xl transition-colors hover:border-brand/30"
-                  >
-                    <p className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">{m.label}</p>
-                    <p
-                      className="font-mono mt-1.5 text-sm font-bold tabular-nums"
-                      style={{ color: metricColor[c] }}
-                    >
-                      {m.value}
-                    </p>
-                  </div>
-                )
-              })}
+            <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-4 lg:w-auto">
+              {metrics.map((metric) => (
+                <div key={metric.label} className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 backdrop-blur-xl">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-muted">{metric.label}</p>
+                  <p className="mt-2 text-sm font-semibold text-white">{metric.value}</p>
+                </div>
+              ))}
             </div>
           ) : null}
         </div>
@@ -82,7 +51,6 @@ export function PageHeader({
   )
 }
 
-/* ── SectionCard ────────────────────────────────────────── */
 export function SectionCard({
   title,
   description,
@@ -95,33 +63,23 @@ export function SectionCard({
   actions?: ReactNode
   children: ReactNode
   className?: string
-  accent?: 'cyan' | 'magenta' | 'yellow' | 'green' | 'red'
 }) {
   return (
     <section className={cn('glass-card glass-section', className)}>
       {title || description || actions ? (
         <div className="panel-header">
           <div>
-            {title ? (
-              <h2 className="font-display text-base font-bold tracking-tight text-[color:var(--text-primary)]">
-                {title}
-              </h2>
-            ) : null}
-            {description ? (
-              <p className="mt-1 text-xs leading-6 text-[color:var(--text-muted)]">{description}</p>
-            ) : null}
+            {title ? <h2 className="text-base font-semibold text-white">{title}</h2> : null}
+            {description ? <p className="mt-1 text-sm leading-6 text-muted">{description}</p> : null}
           </div>
           {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
         </div>
       ) : null}
-      <div className={title || description || actions ? 'px-5 pb-5 pt-3 md:px-6 md:pb-6' : 'p-5 md:p-6'}>
-        {children}
-      </div>
+      <div className={title || description || actions ? 'px-5 pb-5 pt-1 md:px-6 md:pb-6' : 'p-5 md:p-6'}>{children}</div>
     </section>
   )
 }
 
-/* ── SegmentedTabs ──────────────────────────────────────── */
 export function SegmentedTabs<T extends string>({
   items,
   value,
@@ -155,7 +113,6 @@ export function SegmentedTabs<T extends string>({
   )
 }
 
-/* ── EmptyState ─────────────────────────────────────────── */
 export function EmptyState({
   title,
   description,
@@ -169,19 +126,16 @@ export function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <div className="empty-state-icon">{icon ?? <Terminal size={20} />}</div>
+      <div className="empty-state-icon">{icon ?? <Sparkles size={18} />}</div>
       <div className="space-y-1.5">
-        <p className="font-display text-base font-bold text-[color:var(--text-primary)]">{title}</p>
-        {description ? (
-          <p className="mx-auto max-w-xl text-sm leading-6 text-[color:var(--text-muted)]">{description}</p>
-        ) : null}
+        <p className="text-sm font-semibold text-white">{title}</p>
+        {description ? <p className="mx-auto max-w-xl text-xs leading-6 text-muted">{description}</p> : null}
       </div>
       {action ? <div className="pt-1">{action}</div> : null}
     </div>
   )
 }
 
-/* ── InlineNotice ───────────────────────────────────────── */
 export function InlineNotice({
   tone = 'info',
   title,
@@ -194,21 +148,17 @@ export function InlineNotice({
   action?: ReactNode
 }) {
   const toneClass = {
-    info:    'notice-info',
-    success: 'notice-success',
-    warning: 'notice-warning',
-    danger:  'notice-danger',
+    info: 'border-brand/25 bg-brand-subtle/35 text-[#E9E3FF]',
+    success: 'border-success/25 bg-success-subtle/30 text-[#DCFCE7]',
+    warning: 'border-warning/25 bg-warning-subtle/30 text-[#FEF3C7]',
+    danger: 'border-danger/25 bg-danger-subtle/30 text-[#FECACA]',
   }[tone]
 
   return (
-    <div className={toneClass}>
+    <div className={cn('rounded-2xl border px-4 py-3', toneClass)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          {title ? (
-            <p className="font-display text-xs font-bold tracking-wide uppercase opacity-90">
-              {title}
-            </p>
-          ) : null}
+          {title ? <p className="text-xs font-semibold uppercase tracking-[0.18em] opacity-90">{title}</p> : null}
           <div className="mt-1 text-sm leading-6">{children}</div>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
@@ -217,7 +167,6 @@ export function InlineNotice({
   )
 }
 
-/* ── ModalShell ─────────────────────────────────────────── */
 export function ModalShell({
   title,
   description,
@@ -239,41 +188,22 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md"
-      style={{ background: 'rgba(12,18,32,0.72)' }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#05030d]/70 p-4 backdrop-blur-md"
       onClick={dismissible ? onClose : undefined}
     >
       <div
-        className={cn('glass-modal w-full overflow-hidden animate-scale-in', maxWidth)}
-        onClick={(e) => e.stopPropagation()}
+        className={cn('glass-card glass-modal w-full overflow-hidden border-white/12 shadow-glass-lg', maxWidth)}
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* Modal header */}
-        <div className="flex items-start gap-3 px-5 py-4 md:px-6 border-b border-white/8">
-          {icon ? (
-            <div className="mt-0.5 flex-shrink-0 p-2 text-brand rounded-xl border border-brand/25 bg-brand/10">
-              {icon}
+        <div className="border-b border-white/8 px-5 py-4 md:px-6">
+          <div className="flex items-start gap-3">
+            {icon ? <div className="mt-0.5 rounded-2xl border border-white/10 bg-white/[0.04] p-2 text-brand-light">{icon}</div> : null}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-lg font-semibold text-white">{title}</h3>
+              {description ? <p className="mt-1 text-sm leading-6 text-muted">{description}</p> : null}
             </div>
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <h3 className="font-display text-lg font-bold text-[color:var(--text-primary)]">
-              {title}
-            </h3>
-            {description ? (
-              <p className="mt-1 text-xs leading-5 text-[color:var(--text-muted)]">{description}</p>
-            ) : null}
           </div>
-          {dismissible && onClose ? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-shrink-0 rounded-lg p-1.5 text-[color:var(--text-muted)] hover:bg-surface-2/60 hover:text-[color:var(--text-primary)] transition-colors cursor-pointer"
-              aria-label="关闭"
-            >
-              <X size={16} />
-            </button>
-          ) : null}
         </div>
-
         <div className="px-5 py-5 md:px-6">{children}</div>
       </div>
     </div>

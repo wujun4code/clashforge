@@ -52,7 +52,7 @@ export function Settings() {
   const [dangerResult, setDangerResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [resetDone, setResetDone] = useState(false)
 
-  // ── Update checker ───────────────────────────────────────────────
+  // ── Update checker ─────────────────────────────────────────────────────────
   type UpdateChannel = 'stable' | 'preview'
   const [channel, setChannel] = useState<UpdateChannel>(
     () => (localStorage.getItem(CHANNEL_KEY) as UpdateChannel) || 'stable'
@@ -238,6 +238,7 @@ export function Settings() {
         }
       >
         <div className="space-y-4">
+          {/* Channel picker */}
           <Field label="更新频道" hint="正式版仅含稳定发布；体验版包含 alpha/beta 预发布版本">
             <div className="flex gap-2">
               {(['stable', 'preview'] as const).map(ch => (
@@ -264,6 +265,7 @@ export function Settings() {
 
           {updateData && (
             <div className="space-y-3">
+              {/* Version info row */}
               <div className="flex flex-wrap gap-3 rounded-xl border border-white/10 bg-surface-2 px-4 py-3 text-sm">
                 <span className="text-slate-400">当前版本 <span className="font-mono text-white">{updateData.current}</span></span>
                 <span className="text-slate-600">→</span>
@@ -285,6 +287,7 @@ export function Settings() {
                 )}
               </div>
 
+              {/* Download button */}
               {updateData.has_update && updateData.download_url && (
                 <div className="flex flex-wrap gap-2">
                   <a
@@ -308,6 +311,7 @@ export function Settings() {
                 </div>
               )}
 
+              {/* Release notes */}
               {updateData.release_notes && (
                 <div className="rounded-xl border border-white/10 bg-surface-2">
                   <p className="border-b border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-500">

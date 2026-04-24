@@ -1,148 +1,37 @@
 /*
- * ClashForge — Cat Mascot + Geek style.
+ * ClashForge — dual-theme stylesheet.
  *
- * Warm soft-dark palette with cat-blue primary, cream accents, rounded
- * shapes, diffuse shadows. Monospace reserved for code/data so the
- * developer-tool feel stays intact.
+ * The default / `[data-theme='original']` palette is synced verbatim with
+ * the current `main` branch (violet #7C3AED + orange #F97316, Fira Sans /
+ * Fira Code, soft glass cards). The `[data-theme='neko']` overlay swaps
+ * the same component classes to a warm cat-blue palette with rounded
+ * shapes and Inter / Nunito typography.
+ *
+ * Tailwind colour tokens (`bg-brand`, `text-cta`, `bg-surface-1`, ...) are
+ * driven by CSS custom properties, so the whole UI re-skins at runtime by
+ * toggling `document.documentElement.dataset.theme`.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&family=Nunito:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ── CSS Custom Properties ─────────────────────────────── */
+/* ── Theme tokens ──────────────────────────────────────── */
 /*
- * Two themes live side-by-side. Every color token is stored as a
- * space-separated "R G B" triplet so Tailwind's `<alpha-value>` modifier
- * works (e.g. `bg-brand/20`). Hex-named vars (kept for any stray uses) are
- * derived from the same values.
- *
- * Toggle at runtime with `document.documentElement.dataset.theme = 'neko' | 'original'`.
+ * Each color is stored as a space-separated "R G B" triplet so Tailwind's
+ * `<alpha-value>` modifier (e.g. `bg-brand/20`) keeps working.
+ * Default (no attribute) and `data-theme='original'` resolve to main's palette.
  */
-
 :root,
-:root[data-theme='neko'] {
-  /* Surfaces (warm soft-dark) */
-  --color-surface-0: 26 31 46;
-  --color-surface-1: 34 41 56;
-  --color-surface-2: 43 51 70;
-  --color-surface-3: 53 64 85;
-  --color-surface-4: 65 77 102;
-
-  /* Neon tokens (remapped to soft cat palette) */
-  --color-neon-cyan:    106 168 224;
-  --color-neon-magenta: 244 166 181;
-  --color-neon-yellow:  245 184 107;
-  --color-neon-green:   143 212 168;
-  --color-neon-red:     232 126 126;
-  --color-neon-blue:     74 134 197;
-  --color-neon-violet:  200 181 232;
-  --color-neon-amber:   245 176 102;
-
-  --color-accent-violet:      200 181 232;
-  --color-accent-violet-soft: 220 203 240;
-  --color-accent-amber:       245 176 102;
-  --color-accent-amber-soft:  250 207 155;
-
-  /* Semantic */
-  --color-brand:       106 168 224;
-  --color-brand-light: 143 193 236;
-  --color-cta:         244 166 181;
-  --color-success:     143 212 168;
-  --color-warning:     245 184 107;
-  --color-danger:      232 126 126;
-  --color-muted:       142 160 184;
-
-  /* Cat-specific */
-  --color-cream:      243 232 213;
-  --color-cream-soft: 250 244 231;
-  --color-paw:        244 166 181;
-
-  /* Hex aliases still referenced by index.css component rules */
-  --cat-blue:     #6AA8E0;
-  --cat-blue-deep:#4A86C5;
-  --cat-blue-soft:#8FC1EC;
-  --cream:        #F3E8D5;
-  --cream-soft:   #FAF4E7;
-  --paw-pink:     #F4A6B5;
-  --catnip:       #8FD4A8;
-  --pumpkin:      #F5B86B;
-  --strawberry:   #E87E7E;
-  --lavender:     #C8B5E8;
-  --tangerine:    #F5B066;
-
-  --neon-cyan:    #6AA8E0;
-  --neon-magenta: #F4A6B5;
-  --neon-yellow:  #F5B86B;
-  --neon-green:   #8FD4A8;
-  --neon-red:     #E87E7E;
-  --neon-blue:    #4A86C5;
-  --neon-violet:  #C8B5E8;
-  --neon-amber:   #F5B066;
-  --accent-violet:#C8B5E8;
-  --accent-amber: #F5B066;
-
-  /* Backgrounds */
-  --bg-void:      #1A1F2E;
-  --bg-surface-1: #222938;
-  --bg-surface-2: #2B3346;
-  --bg-surface-3: #354055;
-
-  /* Text */
-  --text-primary: #EDE6D7;
-  --text-secondary:#C9D1DB;
-  --text-muted:   #8EA0B8;
-
-  /* Soft diffuse shadows (no glow) */
-  --shadow-neon-cyan:    0 4px 16px rgba(106,168,224,0.18), 0 2px 4px rgba(106,168,224,0.10);
-  --shadow-neon-magenta: 0 4px 16px rgba(244,166,181,0.20), 0 2px 4px rgba(244,166,181,0.10);
-  --shadow-neon-green:   0 4px 16px rgba(143,212,168,0.20), 0 2px 4px rgba(143,212,168,0.10);
-  --shadow-neon-yellow:  0 4px 16px rgba(245,184,107,0.20), 0 2px 4px rgba(245,184,107,0.10);
-  --shadow-neon-red:     0 4px 16px rgba(232,126,126,0.22), 0 2px 4px rgba(232,126,126,0.10);
-  --shadow-neon-violet:  0 4px 16px rgba(200,181,232,0.22), 0 2px 4px rgba(200,181,232,0.10);
-  --shadow-neon-amber:   0 4px 16px rgba(245,176,102,0.22), 0 2px 4px rgba(245,176,102,0.10);
-  --shadow-glow:         0 4px 20px rgba(106,168,224,0.25);
-  --shadow-paw:          0 2px 6px rgba(244,166,181,0.30);
-
-  /* Motion tokens */
-  --t-fast:   160ms;
-  --t-med:    220ms;
-  --t-slow:   320ms;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-/* ── Original theme ─────────────────────────────────── */
-/*
- * Synced with current `main` branch palette:
- *   surface 0..4 = #0B0A1A → #302F5A
- *   brand = violet #7C3AED, cta = orange #F97316
- *   text = #F0EFF8, muted = #9492B0
- *   font = Fira Sans + Fira Code
- */
 :root[data-theme='original'] {
+  /* Surfaces — main palette */
   --color-surface-0:  11  10  26;  /* #0B0A1A */
   --color-surface-1:  19  18  45;  /* #13122D */
   --color-surface-2:  28  27  59;  /* #1C1B3B */
   --color-surface-3:  38  37  74;  /* #26254A */
   --color-surface-4:  48  47  90;  /* #302F5A */
-
-  /* Neon → main violet/orange palette */
-  --color-neon-cyan:    124  58 237;
-  --color-neon-magenta: 249 115  22;
-  --color-neon-yellow:  245 158  11;
-  --color-neon-green:    34 197  94;
-  --color-neon-red:     239  68  68;
-  --color-neon-blue:    167 139 250;
-  --color-neon-violet:  167 139 250;
-  --color-neon-amber:   249 115  22;
-
-  --color-accent-violet:      124  58 237;
-  --color-accent-violet-soft: 167 139 250;
-  --color-accent-amber:       249 115  22;
-  --color-accent-amber-soft:  251 146  60;
 
   --color-brand:       124  58 237;  /* #7C3AED */
   --color-brand-light: 167 139 250;  /* #A78BFA */
@@ -152,98 +41,110 @@
   --color-danger:      239  68  68;  /* #EF4444 */
   --color-muted:       148 146 176;  /* #9492B0 */
 
+  /* Optional accents (kept for parity with Neko theme) */
+  --color-accent-violet:      124  58 237;
+  --color-accent-violet-soft: 167 139 250;
+  --color-accent-amber:       249 115  22;
+  --color-accent-amber-soft:  251 146  60;
   --color-cream:      240 239 248;
   --color-cream-soft: 248 250 252;
   --color-paw:        249 115  22;
 
-  /* Hex aliases */
-  --cat-blue:     #7C3AED;
-  --cat-blue-deep:#5B21B6;
-  --cat-blue-soft:#A78BFA;
-  --cream:        #F0EFF8;
-  --cream-soft:   #F8FAFC;
-  --paw-pink:     #F97316;
-  --catnip:       #22C55E;
-  --pumpkin:      #F59E0B;
-  --strawberry:   #EF4444;
-  --lavender:     #A78BFA;
-  --tangerine:    #F97316;
+  --text-primary:   #F0EFF8;
+  --text-secondary: #E0DFF0;
+  --text-muted:     #9492B0;
 
-  --neon-cyan:    #7C3AED;
-  --neon-magenta: #F97316;
-  --neon-yellow:  #F59E0B;
-  --neon-green:   #22C55E;
-  --neon-red:     #EF4444;
-  --neon-blue:    #A78BFA;
-  --neon-violet:  #A78BFA;
-  --neon-amber:   #F97316;
-  --accent-violet:#7C3AED;
-  --accent-amber: #F97316;
+  --shadow-glass:    0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-glass-lg: 0 8px 40px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-glow:        0 0 20px rgba(124, 58, 237, 0.30);
+  --shadow-glow-orange: 0 0 20px rgba(249, 115, 22, 0.30);
+  --shadow-glow-green:  0 0 20px rgba( 34, 197, 94, 0.20);
 
-  --bg-void:      #0B0A1A;
-  --bg-surface-1: #13122D;
-  --bg-surface-2: #1C1B3B;
-  --bg-surface-3: #26254A;
+  /* Body / scrollbar / selection knobs */
+  --font-body:    'Fira Sans', system-ui, sans-serif;
+  --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Fira Code', monospace;
+  --scrollbar-width: 5px;
+  --scrollbar-color: rgba(124, 58, 237, 0.25);
+  --scrollbar-color-hover: rgba(124, 58, 237, 0.40);
+  --selection-bg: rgba(124, 58, 237, 0.30);
+  --selection-fg: #F8FAFC;
+}
 
-  --text-primary:  #F0EFF8;
-  --text-secondary:#E0DFF0;
-  --text-muted:    #9492B0;
+/* ── Neko theme overlay ────────────────────────────────── */
+:root[data-theme='neko'] {
+  --color-surface-0: 26 31 46;
+  --color-surface-1: 34 41 56;
+  --color-surface-2: 43 51 70;
+  --color-surface-3: 53 64 85;
+  --color-surface-4: 65 77 102;
 
-  /* Subtle glass shadows (no neon glow) — matches main */
-  --shadow-neon-cyan:    0 4px 24px rgba(124, 58,237,0.20), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-neon-magenta: 0 4px 24px rgba(249,115, 22,0.20), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-neon-green:   0 4px 24px rgba( 34,197, 94,0.18), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-neon-yellow:  0 4px 24px rgba(245,158, 11,0.20), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-neon-red:     0 4px 24px rgba(239, 68, 68,0.20), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-neon-violet:  0 4px 24px rgba(167,139,250,0.22), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-neon-amber:   0 4px 24px rgba(249,115, 22,0.22), 0 1px 2px rgba(12,18,32,0.20);
-  --shadow-glow:         0 0 20px rgba(124, 58,237,0.30);
-  --shadow-paw:          0 0 16px rgba(249,115, 22,0.25);
+  --color-brand:       106 168 224;  /* #6AA8E0 cat-blue */
+  --color-brand-light: 143 193 236;  /* #8FC1EC */
+  --color-cta:         244 166 181;  /* #F4A6B5 paw-pink */
+  --color-success:     143 212 168;  /* #8FD4A8 catnip */
+  --color-warning:     245 184 107;  /* #F5B86B pumpkin */
+  --color-danger:      232 126 126;  /* #E87E7E strawberry */
+  --color-muted:       142 160 184;
+
+  --color-accent-violet:      200 181 232;
+  --color-accent-violet-soft: 220 203 240;
+  --color-accent-amber:       245 176 102;
+  --color-accent-amber-soft:  250 207 155;
+  --color-cream:      243 232 213;
+  --color-cream-soft: 250 244 231;
+  --color-paw:        244 166 181;
+
+  --text-primary:   #EDE6D7;
+  --text-secondary: #C9D1DB;
+  --text-muted:     #8EA0B8;
+
+  --shadow-glass:    0 4px 20px rgba(12, 18, 32, 0.35), 0 1px 2px rgba(12, 18, 32, 0.20);
+  --shadow-glass-lg: 0 10px 32px rgba(12, 18, 32, 0.40), 0 2px 6px rgba(12, 18, 32, 0.25);
+  --shadow-glow:        0 4px 20px rgba(106, 168, 224, 0.25);
+  --shadow-glow-orange: 0 4px 20px rgba(244, 166, 181, 0.25);
+  --shadow-glow-green:  0 4px 20px rgba(143, 212, 168, 0.20);
+
+  --font-body:    'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono:    '"JetBrains Mono"', '"Fira Code"', ui-monospace, monospace;
+  --font-heading: 'Nunito', 'Quicksand', 'Inter', system-ui, sans-serif;
+  --scrollbar-width: 8px;
+  --scrollbar-color: rgba(106, 168, 224, 0.30);
+  --scrollbar-color-hover: rgba(106, 168, 224, 0.55);
+  --selection-bg: rgba(244, 166, 181, 0.30);
+  --selection-fg: #1A1F2E;
 }
 
 /* ── Base ─────────────────────────────────────────────── */
 @layer base {
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(106, 168, 224, 0.35) transparent;
+    scrollbar-color: var(--scrollbar-color) transparent;
   }
-  *::-webkit-scrollbar { width: 8px; height: 8px; }
+
+  *::-webkit-scrollbar { width: var(--scrollbar-width); height: var(--scrollbar-width); }
   *::-webkit-scrollbar-track { background: transparent; }
-  *::-webkit-scrollbar-thumb {
-    background: rgba(106, 168, 224, 0.30);
-    border-radius: 999px;
-  }
-  *::-webkit-scrollbar-thumb:hover { background: rgba(106, 168, 224, 0.55); }
+  *::-webkit-scrollbar-thumb { background: var(--scrollbar-color); border-radius: 999px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-color-hover); }
 
   html {
-    font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+    font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
   }
 
   body {
-    @apply bg-surface-0 text-[15px] leading-relaxed;
+    @apply bg-surface-0 text-sm leading-relaxed;
     color: var(--text-primary);
-    font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-    background-color: var(--bg-void);
-    background-image:
-      radial-gradient(circle at 20% 15%, rgba(106,168,224,0.08), transparent 50%),
-      radial-gradient(circle at 85% 85%, rgba(244,166,181,0.06), transparent 50%);
-    background-attachment: fixed;
-    transition: background-color 0.3s ease, color 0.3s ease;
+    font-family: var(--font-body);
   }
 
-  /* Original swaps the warm watermark for main's violet/orange ambient halos */
-  :root[data-theme='original'] body {
-    background-image:
-      radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 30%),
-      radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.14), transparent 28%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
-    background-size: auto;
+  ::selection {
+    background-color: var(--selection-bg);
+    color: var(--selection-fg);
   }
 
-  /* Smooth cross-theme transition — applied transiently by ThemeProvider */
+  /* Cross-theme transition */
   html.theme-transition,
   html.theme-transition *,
   html.theme-transition *::before,
@@ -256,30 +157,6 @@
                 box-shadow 0.3s ease !important;
   }
 
-  /* Headings → rounded friendly display font */
-  h1, h2, h3, h4, h5, h6 {
-    font-family: 'Nunito', 'Quicksand', 'Inter', system-ui, sans-serif;
-    letter-spacing: 0.01em;
-  }
-
-  /* Code/technical lockups stay monospace for the geek feel */
-  code, kbd, pre, samp,
-  .font-mono {
-    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  }
-
-  /* Friendly focus ring */
-  :focus-visible {
-    outline: 2px solid rgba(106, 168, 224, 0.65);
-    outline-offset: 2px;
-    border-radius: 8px;
-  }
-
-  ::selection {
-    background-color: rgba(106, 168, 224, 0.30);
-    color: var(--cream-soft);
-  }
-
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
@@ -290,519 +167,316 @@
   }
 }
 
+/* ── Ambient backdrop (per-theme) ─────────────────────── */
+.app-ambient {
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
+}
+:root[data-theme='neko'] .app-ambient {
+  background:
+    radial-gradient(circle at 15% 12%, rgba(106, 168, 224, 0.18), transparent 45%),
+    radial-gradient(circle at 85% 18%, rgba(200, 181, 232, 0.14), transparent 45%),
+    radial-gradient(circle at 82% 88%, rgba(244, 166, 181, 0.13), transparent 42%),
+    radial-gradient(circle at 18% 92%, rgba(143, 212, 168, 0.10), transparent 40%);
+}
+
 /* ── Components ────────────────────────────────────────── */
 @layer components {
-
-  /* ── Cards ──────────────────────────────────────────── */
-
   .glass-card,
   .card {
-    @apply relative rounded-2xl
-           border border-white/10 bg-surface-1/70
-           shadow-soft backdrop-blur-xl;
-    transition: border-color var(--t-med) var(--ease-out),
-                box-shadow var(--t-med) var(--ease-out),
-                transform var(--t-med) var(--ease-out);
+    @apply rounded-2xl border border-white/[0.06] bg-white/[0.03]
+           shadow-glass backdrop-blur-xl;
   }
 
   .glass-card:hover {
-    border-color: rgba(106, 168, 224, 0.35);
-    box-shadow: 0 6px 24px rgba(12, 18, 32, 0.35),
-                0 2px 6px rgba(106,168,224,0.10);
+    @apply border-white/[0.10] bg-white/[0.05];
   }
 
   .glass-card-darker {
-    @apply relative rounded-2xl border border-white/5 bg-surface-0/90 shadow-soft backdrop-blur-xl;
+    @apply rounded-2xl border border-white/[0.06] bg-surface-1/80
+           shadow-glass backdrop-blur-xl;
   }
 
   .glass-card-active {
-    @apply relative rounded-2xl border bg-surface-1/90 shadow-neon-cyan backdrop-blur-xl;
-    border-color: rgba(106, 168, 224, 0.45);
+    @apply rounded-2xl border border-brand/30 bg-brand-subtle/20
+           shadow-glow backdrop-blur-xl;
   }
 
   .glass-card-warning {
-    @apply relative rounded-2xl bg-surface-1/80 shadow-neon-yellow backdrop-blur-xl;
-    border: 1px solid rgba(245, 184, 107, 0.35);
+    @apply rounded-2xl border border-cta/30 bg-cta-subtle/20
+           shadow-glow-orange backdrop-blur-xl;
   }
-
-  /* ── Inputs ─────────────────────────────────────────── */
 
   .glass-input {
-    @apply w-full rounded-xl border border-white/10 bg-surface-2/70
-           px-4 py-2.5 text-sm outline-none
+    @apply w-full rounded-xl border border-white/[0.08] bg-white/[0.04]
+           px-3.5 py-2.5 text-sm outline-none
            transition-all duration-200
-           placeholder:text-[color:var(--text-muted)]
-           focus:border-brand/60 focus:bg-surface-2/90 focus:shadow-neon-cyan;
+           focus:border-brand/50 focus:bg-brand-subtle/15 focus:shadow-glow;
     color: var(--text-primary);
-    font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
   }
+  .glass-input::placeholder { color: rgba(148, 146, 176, 0.6); }
 
   .glass-input-error {
-    @apply border-danger/60 focus:border-danger focus:shadow-neon-red;
+    @apply border-danger/40 focus:border-danger/60 focus:shadow-[0_0_20px_rgba(239,68,68,0.2)];
   }
 
   .glass-textarea {
-    @apply w-full rounded-xl border border-white/10 bg-surface-2/70
+    @apply w-full rounded-2xl border border-white/[0.08] bg-white/[0.03]
            px-4 py-3 text-sm font-mono outline-none
-           transition-all duration-200 resize-y
-           focus:border-brand/60;
-    color: var(--text-primary);
-    min-height: 120px;
+           transition-all duration-200 resize-none
+           focus:border-brand/40;
+    color: var(--text-secondary);
   }
 
   /* ── Buttons ───────────────────────────────────────── */
-
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5
-           rounded-xl
-           text-sm font-semibold
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-medium tracking-wide
            transition-all duration-200 ease-out
            cursor-pointer select-none
            disabled:opacity-40 disabled:cursor-not-allowed
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0;
-    font-family: 'Nunito', 'Quicksand', 'Inter', system-ui, sans-serif;
-    letter-spacing: 0.01em;
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50;
   }
 
   .btn-primary {
-    @apply btn text-white
-           hover:-translate-y-[1px] hover:shadow-neon-cyan
-           active:translate-y-0 active:scale-[0.98];
-    background: linear-gradient(135deg, #6AA8E0 0%, #4A86C5 100%);
-    box-shadow: 0 2px 8px rgba(74, 134, 197, 0.35);
-  }
-  .btn-primary:hover {
-    background: linear-gradient(135deg, #7FB5E7 0%, #5A94D0 100%);
+    @apply btn bg-brand text-white
+           hover:bg-brand-light hover:shadow-glow
+           active:scale-[0.97]
+           shadow-lg shadow-brand/25;
   }
 
   .btn-secondary {
-    @apply btn border border-white/10 bg-surface-2/70 text-[color:var(--text-primary)]
-           hover:bg-surface-3/80 hover:border-brand/40 hover:-translate-y-[1px]
-           active:translate-y-0 active:scale-[0.98];
+    @apply btn border border-white/[0.10] bg-white/[0.04]
+           hover:bg-white/[0.08] hover:border-white/[0.15]
+           active:scale-[0.97];
+    color: var(--text-secondary);
   }
 
   .btn-ghost {
-    @apply btn border border-transparent bg-transparent text-[color:var(--text-muted)]
-           hover:bg-surface-2/60 hover:text-[color:var(--text-primary)]
-           active:scale-[0.98];
+    @apply btn border border-white/[0.06] bg-transparent
+           hover:bg-white/[0.06] hover:border-white/[0.12]
+           active:scale-[0.97];
+    color: var(--text-muted);
   }
+  .btn-ghost:hover { color: var(--text-primary); }
 
   .btn-ghost-active {
-    @apply btn border border-brand/40 bg-brand/10 text-brand
-           hover:bg-brand/15;
+    @apply btn border border-brand/30 bg-brand-subtle text-brand-light
+           hover:bg-brand-subtle/30 hover:text-white;
   }
 
   .btn-danger {
-    @apply btn border border-danger/50 bg-danger/10 text-danger
-           hover:bg-danger/20 hover:border-danger hover:-translate-y-[1px]
-           active:translate-y-0 active:scale-[0.98];
+    @apply btn border border-danger/30 text-danger
+           hover:bg-danger-subtle hover:text-danger
+           active:scale-[0.97];
   }
 
-  .btn-cta {
-    @apply btn text-white
-           hover:-translate-y-[1px] hover:shadow-neon-magenta
-           active:translate-y-0 active:scale-[0.98];
-    background: linear-gradient(135deg, #F4A6B5 0%, #E98AA0 100%);
-    box-shadow: 0 2px 8px rgba(244, 166, 181, 0.35);
-  }
-  .btn-cta:hover { background: linear-gradient(135deg, #F8B8C4 0%, #EF9BAF 100%); }
+  .btn-sm  { @apply px-3 py-1.5 text-xs rounded-lg; }
+  .btn-xs  { @apply px-2 py-1 text-[11px] rounded-lg; }
+  .btn-icon    { @apply btn p-2 w-9 h-9; }
+  .btn-icon-sm { @apply btn p-1.5 w-7 h-7 text-xs; }
 
-  .btn-accent {
-    @apply btn text-white
-           hover:-translate-y-[1px] hover:shadow-neon-amber
-           active:translate-y-0 active:scale-[0.98];
-    background: linear-gradient(135deg, #F5B066 0%, #E89A48 100%);
-    box-shadow: 0 2px 8px rgba(245, 176, 102, 0.35);
-  }
-  .btn-accent:hover { background: linear-gradient(135deg, #F7BE7D 0%, #ECA85E 100%); }
-
-  .btn-sm   { @apply px-3 py-1.5 text-xs rounded-lg; }
-  .btn-xs   { @apply px-2 py-1 text-[11px] rounded-md; }
-  .btn-icon { @apply btn p-2 w-9 h-9 rounded-xl; }
-  .btn-icon-sm { @apply btn p-1.5 w-7 h-7 text-xs rounded-lg; }
-
-  /* ── Badge / Pill ──────────────────────────────────── */
-
+  /* ── Badge ─────────────────────────────────────────── */
   .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5
-           text-[11px] font-semibold
-           transition-colors duration-200;
-    border: 1px solid transparent;
-    font-family: 'Nunito', 'Inter', system-ui, sans-serif;
-    letter-spacing: 0.02em;
+           text-[11px] font-semibold uppercase tracking-wider
+           transition-all duration-200;
   }
 
-  .badge-success { @apply badge border-success/40 bg-success/15 text-success; }
-  .badge-warning { @apply badge border-warning/40 bg-warning/15 text-warning; }
-  .badge-danger  { @apply badge border-danger/40  bg-danger/15  text-danger; }
-  .badge-muted   { @apply badge border-white/10   bg-white/5    text-[color:var(--text-muted)]; }
-  .badge-brand   { @apply badge border-brand/40   bg-brand/15   text-brand; }
-  .badge-violet  { @apply badge border-accent-violet/45 bg-accent-violet/15 text-accent-violet; }
-  .badge-amber   { @apply badge border-accent-amber/45  bg-accent-amber/15  text-accent-amber; }
+  .badge-success { @apply badge border border-success/25 bg-success-subtle text-success; }
+  .badge-warning { @apply badge border border-warning/25 bg-warning-subtle text-warning; }
+  .badge-danger  { @apply badge border border-danger/25  bg-danger-subtle  text-danger; }
+  .badge-muted   { @apply badge border border-white/[0.08] bg-white/[0.04]; color: var(--text-muted); }
 
   /* ── Tabs ──────────────────────────────────────────── */
-
   .tab-btn {
-    @apply inline-flex items-center gap-2 px-3.5 py-2
-           rounded-lg text-sm font-semibold text-[color:var(--text-muted)]
-           transition-all duration-200 cursor-pointer
-           hover:text-[color:var(--text-primary)] hover:bg-surface-2/50;
-    border-bottom: 2px solid transparent;
+    @apply inline-flex items-center gap-2 rounded-lg px-3.5 py-2
+           text-sm font-medium transition-all duration-200 cursor-pointer
+           hover:bg-white/[0.05];
+    color: var(--text-muted);
   }
+  .tab-btn:hover { color: var(--text-secondary); }
 
   .tab-btn-active {
-    @apply tab-btn text-brand bg-brand/10;
-    border-bottom-color: var(--cat-blue);
+    @apply tab-btn bg-brand-subtle text-brand-light border border-brand/20;
   }
 
-  /* ── Segmented Tabs ────────────────────────────────── */
+  /* ── Divider ───────────────────────────────────────── */
+  .divider {
+    @apply h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent;
+  }
+
+  .divider-solid {
+    @apply h-px bg-white/[0.06];
+  }
+
+  /* ── Skeleton ──────────────────────────────────────── */
+  .skeleton {
+    @apply rounded-xl bg-gradient-to-r from-white/[0.04] via-white/[0.08] to-white/[0.04]
+           bg-[length:200%_100%] animate-shimmer;
+  }
+
+  /* ── Tooltip ───────────────────────────────────────── */
+  .tooltip-bubble {
+    @apply absolute z-50 px-2.5 py-1.5 rounded-lg text-[11px] font-medium
+           bg-surface-2 border border-white/[0.08]
+           shadow-glass backdrop-blur-xl
+           animate-fade-in;
+    color: #C8C7E0;
+  }
+
+  .hero-panel {
+    @apply relative overflow-hidden rounded-[28px] border border-white/[0.08]
+           bg-[linear-gradient(145deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))]
+           px-5 py-5 shadow-glass-lg backdrop-blur-2xl md:px-7 md:py-6;
+  }
+
+  .glass-section {
+    @apply overflow-hidden border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.025))];
+  }
+
+  .panel-header {
+    @apply flex flex-col gap-4 border-b border-white/[0.08] px-5 py-4 md:flex-row md:items-end md:justify-between md:px-6;
+  }
 
   .segmented-tabs {
-    @apply inline-flex flex-wrap items-center gap-1 rounded-2xl border border-white/10 bg-surface-1/60 p-1 backdrop-blur-xl;
+    @apply inline-flex flex-wrap items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-1.5 backdrop-blur-xl;
   }
 
   .segmented-tab {
-    @apply inline-flex min-h-[40px] items-center gap-2 rounded-xl border border-transparent px-4 py-2
-           text-xs font-semibold text-[color:var(--text-muted)]
-           transition-all duration-200
-           hover:bg-surface-2/60 hover:text-[color:var(--text-primary)]
+    @apply inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-transparent px-4 py-2.5
+           text-sm font-medium text-muted transition-all duration-200
+           hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40
            disabled:cursor-not-allowed disabled:opacity-40;
-    cursor: pointer;
-    font-family: 'Nunito', 'Inter', system-ui, sans-serif;
   }
 
   .segmented-tab-active {
-    @apply bg-brand/15 text-brand;
-    border-color: rgba(106, 168, 224, 0.40);
+    @apply border-brand/25 bg-brand-subtle text-white shadow-glow;
   }
-
-  /* ── Dividers ──────────────────────────────────────── */
-
-  .divider {
-    @apply h-px;
-    background: linear-gradient(90deg, transparent, rgba(106,168,224,0.25), transparent);
-  }
-
-  .divider-solid { @apply h-px bg-white/5; }
-
-  /* ── Table ─────────────────────────────────────────── */
 
   .table-shell {
-    @apply overflow-hidden rounded-2xl border border-white/10 bg-surface-1/60 backdrop-blur-xl;
+    @apply overflow-hidden rounded-[24px] border border-white/[0.08] bg-black/10 backdrop-blur-xl;
   }
 
   .table-header-row {
-    @apply border-b border-white/10 bg-surface-2/60
-           text-[11px] font-semibold uppercase tracking-wider text-[color:var(--text-muted)];
+    @apply border-b border-white/[0.08] bg-white/[0.03] text-[11px] uppercase tracking-[0.22em] text-muted;
   }
 
   .table-row {
-    @apply border-b border-white/[0.06] transition-colors duration-150;
+    @apply border-b border-white/[0.05] transition-colors duration-200 hover:bg-white/[0.035];
   }
 
-  .table-row:hover        { @apply bg-brand/[0.06]; }
-  .table-row:nth-child(even) { background-color: rgba(255,255,255,0.015); }
-  .table-row:nth-child(even):hover { background-color: rgba(106,168,224,0.08); }
-
-  /* ── Empty State ───────────────────────────────────── */
-
   .empty-state {
-    @apply flex flex-col items-center justify-center gap-4
-           rounded-2xl border border-dashed border-white/15
-           bg-surface-1/30 px-6 py-12 text-center;
+    @apply flex flex-col items-center justify-center gap-4 rounded-[24px] border border-dashed border-white/[0.14]
+           bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] px-6 py-10 text-center;
   }
 
   .empty-state-icon {
-    @apply flex h-14 w-14 items-center justify-center rounded-full border border-brand/25 bg-brand/10 text-brand;
+    @apply flex h-12 w-12 items-center justify-center rounded-2xl border border-brand/20 bg-brand-subtle text-brand-light shadow-glow;
   }
-
-  /* ── Status Orbs ───────────────────────────────────── */
 
   .status-orb {
     @apply relative inline-flex h-2.5 w-2.5 rounded-full;
   }
 
-  .status-orb-online  { background: var(--catnip);     box-shadow: 0 0 0 3px rgba(143,212,168,0.18); }
-  .status-orb-offline { background: var(--strawberry); box-shadow: 0 0 0 3px rgba(232,126,126,0.18); }
-  .status-orb-idle    { background: var(--pumpkin);    box-shadow: 0 0 0 3px rgba(245,184,107,0.18); }
-
-  /* ── Skeleton ──────────────────────────────────────── */
-
-  .skeleton {
-    @apply rounded-lg bg-gradient-to-r from-surface-2/60 via-white/10 to-surface-2/60
-           bg-[length:200%_100%] animate-shimmer;
-  }
-
-  /* ── Modal ─────────────────────────────────────────── */
+  .status-orb-online  { @apply bg-success shadow-[0_0_16px_rgba(34,197,94,0.5)]; }
+  .status-orb-offline { @apply bg-danger  shadow-[0_0_16px_rgba(239,68,68,0.4)]; }
+  .status-orb-idle    { @apply bg-warning shadow-[0_0_16px_rgba(245,158,11,0.4)]; }
 
   .glass-modal {
-    @apply bg-surface-1/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-glass-lg;
-  }
-
-  /* ── Panels ────────────────────────────────────────── */
-
-  .hero-panel {
-    @apply relative overflow-hidden rounded-2xl border border-white/10
-           bg-surface-1/70 px-5 py-5 shadow-soft backdrop-blur-2xl md:px-7 md:py-6;
-  }
-
-  .hero-panel::before {
-    content: '';
-    @apply absolute inset-0 pointer-events-none rounded-2xl;
-    background:
-      radial-gradient(circle at top right, rgba(106,168,224,0.10) 0%, transparent 45%),
-      radial-gradient(circle at bottom left, rgba(244,166,181,0.07) 0%, transparent 45%);
-  }
-
-  .glass-section {
-    @apply rounded-2xl border border-white/5 bg-surface-1/30;
-  }
-
-  .panel-header {
-    @apply flex flex-col gap-4 border-b border-white/5 px-5 py-4 md:flex-row md:items-end md:justify-between md:px-6;
-  }
-
-  /* ── Text helpers (legacy names – now soft, no glow) ─ */
-
-  .text-neon-glow-cyan    { color: var(--cat-blue); }
-  .text-neon-glow-magenta { color: var(--paw-pink); }
-  .text-neon-glow-green   { color: var(--catnip); }
-  .text-neon-glow-yellow  { color: var(--pumpkin); }
-  .text-neon-glow-red     { color: var(--strawberry); }
-  .text-neon-glow-violet  { color: var(--lavender); }
-  .text-neon-glow-amber   { color: var(--tangerine); }
-
-  /* Gradient display headline (cat-blue → lavender → pink) */
-  .text-display-gradient {
-    background: linear-gradient(92deg, #6AA8E0 0%, #C8B5E8 55%, #F4A6B5 100%);
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
-    animation: borderFlow 12s ease-in-out infinite;
-  }
-
-  /* ── Tooltip ───────────────────────────────────────── */
-
-  .tooltip-bubble {
-    @apply absolute z-50 rounded-lg px-2.5 py-1.5 text-[11px] font-medium
-           bg-surface-2 border border-white/10 text-[color:var(--text-primary)]
-           shadow-soft backdrop-blur-xl animate-fade-in;
-  }
-
-  /* ── Inline Notice ─────────────────────────────────── */
-
-  .notice {
-    @apply flex gap-3 rounded-xl border px-4 py-3 text-sm;
-  }
-
-  .notice-info    { @apply notice border-brand/30   bg-brand/[0.07]   text-brand; }
-  .notice-success { @apply notice border-success/30 bg-success/[0.08] text-success; }
-  .notice-warning { @apply notice border-warning/35 bg-warning/[0.08] text-warning; }
-  .notice-danger  { @apply notice border-danger/35  bg-danger/[0.08]  text-danger; }
-
-  /* Soft bracket decorator (used to be HUD-style neon brackets) */
-  .hud-bracket    { @apply relative rounded-xl; }
-
-  /* ── Progress bar ──────────────────────────────────── */
-
-  .progress-bar {
-    @apply h-2 w-full overflow-hidden rounded-full bg-surface-3/60;
-  }
-
-  .progress-fill {
-    @apply h-full rounded-full transition-all duration-500;
-    background: linear-gradient(90deg, var(--cat-blue), var(--lavender));
-  }
-
-  /* ── Select override ───────────────────────────────── */
-
-  select.glass-input {
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238EA0B8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    padding-right: 36px;
-  }
-
-  select.glass-input option {
-    background: var(--bg-surface-2);
-    color: var(--text-primary);
-  }
-
-  /* Small paw-print loading pulse (use e.g. <span class="cat-dot"/>) */
-  .cat-dot {
-    @apply inline-block h-1.5 w-1.5 rounded-full bg-brand animate-pulse-soft;
+    @apply bg-[linear-gradient(180deg,rgba(19,18,45,0.96),rgba(11,10,26,0.98))] backdrop-blur-2xl;
   }
 }
 
-/* ── Original theme overrides ───────────────────────────── */
-/*
- * Synced with the current `main` branch design language:
- *   - Fira Sans body / Fira Code for mono
- *   - Soft rounded glass cards (no clip-path, no sharp HUD corners)
- *   - Violet brand glow (subtle, not neon scanline)
- *   - Violet selection + thin scrollbar matching main
- */
-:root[data-theme='original'] *::-webkit-scrollbar { width: 5px; height: 5px; }
-:root[data-theme='original'] *::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.25);
-  border-radius: 999px;
-}
-:root[data-theme='original'] *::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 58, 237, 0.45);
-}
-
-:root[data-theme='original'] ::selection {
-  background-color: rgba(124, 58, 237, 0.30);
-  color: #F8FAFC;
-}
-
-:root[data-theme='original'] html,
-:root[data-theme='original'] body {
-  font-family: 'Fira Sans', 'Inter', 'Noto Sans SC', system-ui, sans-serif;
-}
-
-:root[data-theme='original'] h1,
-:root[data-theme='original'] h2,
-:root[data-theme='original'] h3,
-:root[data-theme='original'] h4,
-:root[data-theme='original'] h5,
-:root[data-theme='original'] h6 {
-  font-family: 'Fira Code', 'Fira Sans', monospace;
-  letter-spacing: 0.01em;
-  text-transform: none;
-}
-
-/* Re-enable smooth Neko-style rounding; main uses 16–20px radii. */
-:root[data-theme='original'] .glass-card,
-:root[data-theme='original'] .card,
-:root[data-theme='original'] .glass-card-darker,
-:root[data-theme='original'] .glass-card-active,
-:root[data-theme='original'] .glass-card-warning,
-:root[data-theme='original'] .glass-modal,
-:root[data-theme='original'] .hero-panel,
-:root[data-theme='original'] .glass-section,
-:root[data-theme='original'] .table-shell {
-  border-radius: 16px;
-}
-
-:root[data-theme='original'] .glass-card,
-:root[data-theme='original'] .card {
-  border-color: rgba(255, 255, 255, 0.06);
-}
-
-:root[data-theme='original'] .glass-card:hover {
-  border-color: rgba(255, 255, 255, 0.10);
-  background-color: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-:root[data-theme='original'] .btn-primary {
-  background: #7C3AED;
-  color: #ffffff;
-  text-shadow: none;
-  box-shadow: 0 0 20px rgba(124, 58, 237, 0.30), 0 4px 14px rgba(124, 58, 237, 0.25);
-}
-:root[data-theme='original'] .btn-primary:hover {
-  background: #A78BFA;
-  box-shadow: 0 0 24px rgba(167, 139, 250, 0.40);
-}
-
-:root[data-theme='original'] .btn-cta {
-  background: #F97316;
-  color: #ffffff;
-  box-shadow: 0 0 20px rgba(249, 115, 22, 0.30);
-}
-:root[data-theme='original'] .btn-cta:hover {
-  background: #FB923C;
-  box-shadow: 0 0 24px rgba(249, 115, 22, 0.45);
-}
-
-:root[data-theme='original'] .btn-accent {
-  background: #F97316;
-  color: #ffffff;
-}
-
-:root[data-theme='original'] .glass-input,
-:root[data-theme='original'] .glass-textarea,
-:root[data-theme='original'] select.glass-input {
-  border-radius: 12px;
-  font-family: 'Fira Sans', 'Inter', system-ui, sans-serif;
-  border-color: rgba(255, 255, 255, 0.08);
-}
-:root[data-theme='original'] .glass-textarea {
-  font-family: 'Fira Code', ui-monospace, monospace;
-}
-
-:root[data-theme='original'] .glass-input:focus,
-:root[data-theme='original'] .glass-textarea:focus {
-  border-color: rgba(124, 58, 237, 0.50);
-  box-shadow: 0 0 20px rgba(124, 58, 237, 0.20);
-}
-
-:root[data-theme='original'] .badge {
-  border-radius: 999px;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
-  font-family: 'Fira Code', ui-monospace, monospace;
-}
-
-:root[data-theme='original'] .tab-btn-active,
-:root[data-theme='original'] .segmented-tab-active {
-  box-shadow: 0 0 16px rgba(124, 58, 237, 0.30);
-}
-
-:root[data-theme='original'] .text-display-gradient {
-  background: linear-gradient(92deg, #7C3AED 0%, #A78BFA 50%, #F97316 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: borderFlow 8s linear infinite;
-}
-
-:root[data-theme='original'] .text-neon-glow-cyan    { color: #A78BFA; text-shadow: 0 0 8px rgba(167,139,250,0.45); }
-:root[data-theme='original'] .text-neon-glow-magenta { color: #F97316; text-shadow: 0 0 8px rgba(249,115, 22,0.45); }
-:root[data-theme='original'] .text-neon-glow-green   { color: #22C55E; text-shadow: 0 0 8px rgba( 34,197, 94,0.45); }
-:root[data-theme='original'] .text-neon-glow-yellow  { color: #F59E0B; text-shadow: 0 0 8px rgba(245,158, 11,0.45); }
-:root[data-theme='original'] .text-neon-glow-red     { color: #EF4444; text-shadow: 0 0 8px rgba(239, 68, 68,0.45); }
-:root[data-theme='original'] .text-neon-glow-violet  { color: #A78BFA; text-shadow: 0 0 8px rgba(167,139,250,0.45); }
-:root[data-theme='original'] .text-neon-glow-amber   { color: #F97316; text-shadow: 0 0 8px rgba(249,115, 22,0.45); }
-
-:root[data-theme='original'] .divider {
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.10), transparent);
-}
-
-:root[data-theme='original'] .progress-fill {
-  background: linear-gradient(90deg, #7C3AED, #F97316);
-  box-shadow: 0 0 12px rgba(124, 58, 237, 0.35);
-}
-
-/* Theme toggle helper classes (used by ThemeToggle.tsx) */
+/* ── Theme toggle (sidebar widget) ─────────────────────── */
 .theme-toggle {
   @apply inline-flex items-center gap-1 rounded-xl border border-white/10 bg-surface-1/70 p-1 backdrop-blur-xl;
 }
 .theme-toggle-option {
   @apply inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5
-         text-xs font-semibold text-[color:var(--text-muted)]
+         text-xs font-medium
          transition-all duration-200 cursor-pointer select-none
-         hover:text-[color:var(--text-primary)] hover:bg-surface-2/60;
-  font-family: 'Nunito', 'Inter', system-ui, sans-serif;
+         hover:bg-surface-2/60;
+  color: var(--text-muted);
+  font-family: var(--font-body);
 }
+.theme-toggle-option:hover { color: var(--text-primary); }
 .theme-toggle-option-active {
   @apply bg-brand/15 text-brand;
   border: 1px solid rgba(var(--color-brand) / 0.40);
 }
-:root[data-theme='original'] .theme-toggle,
-:root[data-theme='original'] .theme-toggle-option {
-  border-radius: 12px;
-  text-transform: none;
-  letter-spacing: normal;
-  font-family: 'Fira Sans', 'Inter', system-ui, sans-serif;
+
+/* ── Neko theme component overrides ────────────────────── */
+:root[data-theme='neko'] body {
+  background-color: #1A1F2E;
 }
-:root[data-theme='original'] .theme-toggle-option-active {
-  box-shadow: 0 0 16px rgba(124, 58, 237, 0.35);
+
+:root[data-theme='neko'] h1,
+:root[data-theme='neko'] h2,
+:root[data-theme='neko'] h3,
+:root[data-theme='neko'] h4,
+:root[data-theme='neko'] h5,
+:root[data-theme='neko'] h6 {
+  font-family: var(--font-heading);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+:root[data-theme='neko'] .glass-card,
+:root[data-theme='neko'] .card,
+:root[data-theme='neko'] .glass-card-darker,
+:root[data-theme='neko'] .glass-card-active,
+:root[data-theme='neko'] .glass-card-warning,
+:root[data-theme='neko'] .glass-modal,
+:root[data-theme='neko'] .hero-panel,
+:root[data-theme='neko'] .glass-section,
+:root[data-theme='neko'] .table-shell {
+  border-radius: 20px;
+}
+
+:root[data-theme='neko'] .glass-card:hover {
+  box-shadow: 0 4px 20px rgba(12, 18, 32, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme='neko'] .btn-primary {
+  background: linear-gradient(135deg, #6AA8E0 0%, #4A86C5 100%);
+  color: #ffffff;
+  text-shadow: none;
+  box-shadow: 0 4px 16px rgba(106, 168, 224, 0.30);
+}
+:root[data-theme='neko'] .btn-primary:hover {
+  background: linear-gradient(135deg, #8FC1EC 0%, #5A95D2 100%);
+  box-shadow: 0 6px 22px rgba(106, 168, 224, 0.40);
+}
+
+:root[data-theme='neko'] .glass-input,
+:root[data-theme='neko'] .glass-textarea,
+:root[data-theme='neko'] select.glass-input {
+  border-radius: 14px;
+  font-family: var(--font-body);
+}
+:root[data-theme='neko'] .glass-textarea { font-family: var(--font-mono); }
+
+:root[data-theme='neko'] .glass-input:focus,
+:root[data-theme='neko'] .glass-textarea:focus {
+  border-color: rgba(106, 168, 224, 0.50);
+  box-shadow: 0 4px 20px rgba(106, 168, 224, 0.25);
+}
+
+:root[data-theme='neko'] .badge {
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-family: var(--font-body);
+}
+
+:root[data-theme='neko'] .divider {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+}
+
+:root[data-theme='neko'] .theme-toggle-option-active {
+  box-shadow: 0 0 12px rgba(106, 168, 224, 0.30);
 }
