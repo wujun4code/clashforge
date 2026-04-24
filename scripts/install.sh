@@ -95,10 +95,18 @@ if [ "$INSTALL_VERSION" != "latest" ]; then
   TAG="$INSTALL_VERSION"
 else
   log "Resolving latest release from GitHub API..."
-  TAG=$(wget -qO- "https://api.github.com/repos/${REPO}/releases" 2>/dev/null \
+  API_URL="https://api.github.com/repos/${REPO}/releases"
+  # busybox wget on OpenWrt doesn't send User-Agent; GitHub API blocks UA-less requests.
+  # Try wget with explicit UA first, fall back to curl.
+  TAG=$(wget -qO- --user-agent="clashforge-installer/1.0" "$API_URL" 2>/dev/null \
         | grep '"tag_name"' | head -1 \
         | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  [ -n "$TAG" ] || die "Could not resolve latest version. Specify explicitly: sh install.sh --version v0.1.0-alpha.50"
+  if [ -z "$TAG" ] && command -v curl >/dev/null 2>&1; then
+    TAG=$(curl -fsSL -A "clashforge-installer/1.0" "$API_URL" 2>/dev/null \
+          | grep '"tag_name"' | head -1 \
+          | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+  fi
+  [ -n "$TAG" ] || die "Could not resolve latest version. Specify explicitly: sh install.sh --version v0.1.0-alpha.53"
 fi
 
 PKG_VER="${TAG#v}"
