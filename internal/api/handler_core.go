@@ -28,6 +28,11 @@ func handleCoreStart(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusInternalServerError, "CORE_START_FAILED", err.Error())
 			return
 		}
+
+		// Persist auto_start_core = true so the proxy stack survives upgrades.
+		deps.Config.Core.AutoStartCore = true
+		_ = saveRuntimeConfig(deps)
+
 		JSON(w, http.StatusOK, map[string]int{"pid": deps.Core.Status().PID})
 	}
 }
@@ -42,6 +47,11 @@ func handleCoreStop(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusInternalServerError, "CORE_STOP_FAILED", err.Error())
 			return
 		}
+
+		// Persist auto_start_core = false so the proxy stack stays stopped across upgrades.
+		deps.Config.Core.AutoStartCore = false
+		_ = saveRuntimeConfig(deps)
+
 		JSON(w, http.StatusOK, map[string]any{"stopped": true})
 	}
 }
