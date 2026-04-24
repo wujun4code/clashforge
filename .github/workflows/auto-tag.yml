@@ -54,12 +54,19 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Squash-merge PR
+      - name: Squash-merge PR (skip if already merged)
         if: steps.pr.outputs.skip != 'true'
+        id: merge
         run: |
-          gh pr merge "${{ steps.pr.outputs.number }}" \
-            --squash \
-            --delete-branch
+          STATE=$(gh pr view "${{ steps.pr.outputs.number }}" --json state -q .state)
+          echo "PR state: $STATE"
+          if [ "$STATE" = "MERGED" ] || [ "$STATE" = "CLOSED" ]; then
+            echo "PR already merged/closed — skipping merge step"
+            echo "already_merged=true" >> "$GITHUB_OUTPUT"
+          else
+            gh pr merge "${{ steps.pr.outputs.number }}" --squash --delete-branch
+            echo "already_merged=false" >> "$GITHUB_OUTPUT"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
