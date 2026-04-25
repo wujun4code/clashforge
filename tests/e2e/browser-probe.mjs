@@ -327,13 +327,46 @@ async function main() {
       recordTC('FAIL', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务', '返回有效出口 IP', '代理模式下 IP 检查全部失败')
     }
 
-    // BC-04 出口 IP 变化
+    // BC-04 出口 IP 变化 + 节点匹配验证
+    // 通过 Google DoH 解析代理服务器真实 IP（绕过 fake-ip）
+    let proxyServerIP = 'N/A'
+    const proxyServerHost = process.env.PROXY_SERVER_HOST || ''
+    const proxyNodeName = process.env.PROXY_NODE_NAME || ''
+    if (proxyServerHost) {
+      try {
+        const dohRes = await fetchVia(
+          `https://dns.google/resolve?name=${proxyServerHost}&type=A`,
+          null, 8000
+        )
+        const dohData = JSON.parse(dohRes.body)
+        proxyServerIP = dohData?.Answer?.[0]?.data || 'N/A'
+        info(`DoH 解析 ${proxyServerHost} → ${proxyServerIP}`)
+      } catch (e) { warn(`DoH 解析失败: ${e.message}`) }
+    }
+
     if (directIPStr2 !== proxyIPStr2 && proxyIPStr2 !== 'N/A') {
-      recordTC('PASS', 'BC-04', '代理出口 IP 变化验证', '对比直连 IP 与代理出口 IP', '两者不同，流量已走代理', `${directIPStr2} → ${proxyIPStr2}`)
+      const ipMatchesNode = proxyServerIP !== 'N/A' && proxyIPStr2 === proxyServerIP
+      const nodeNote = proxyServerIP !== 'N/A'
+        ? `节点[${proxyNodeName}] ${proxyServerHost}→${proxyServerIP}`
+        : '节点服务器 IP 未提供'
+      if (ipMatchesNode) {
+        recordTC('PASS', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
+          '对比直连 IP、代理出口 IP、DoH 解析代理服务器 IP',
+          '三者匹配：出口 IP 已变且等于节点服务器真实 IP',
+          `${directIPStr2} → ${proxyIPStr2} = ${nodeNote} ✓`)
+      } else {
+        recordTC('WARN', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
+          '对比直连 IP、代理出口 IP、DoH 解析代理服务器 IP',
+          '三者匹配',
+          `IP 已变 (${directIPStr2} → ${proxyIPStr2})，${nodeNote}`)
+      }
     } else if (proxyIPStr2 === 'N/A') {
-      recordTC('FAIL', 'BC-04', '代理出口 IP 变化验证', '对比直连 IP 与代理出口 IP', '两者不同', '代理 IP 不可用')
+      recordTC('FAIL', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
+        '对比直连 IP、代理出口 IP', 'IP 已变化，且与节点匹配', '代理 IP 不可用')
     } else {
-      recordTC('WARN', 'BC-04', '代理出口 IP 变化验证', '对比直连 IP 与代理出口 IP', '两者不同', `IP 未变化（可能同出口）: ${proxyIPStr2}`)
+      recordTC('WARN', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
+        '对比直连 IP、代理出口 IP', 'IP 已变化，且与节点匹配',
+        `IP 未变化（可能同出口）: ${proxyIPStr2}`)
     }
 
     // BC-05 国内站点通过代理

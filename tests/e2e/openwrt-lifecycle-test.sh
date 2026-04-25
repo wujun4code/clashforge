@@ -277,15 +277,55 @@ for c in checks:
     fi
 fi
 
-# TC-12 出口 IP 变化验证
+# TC-12 出口 IP 变化验证 + 与代理节点对应验证
 DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 CURRENT_PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
-if [ -n "$CURRENT_PROXY_IP" ] && [ "$CURRENT_PROXY_IP" != "$DIRECT_IP" ]; then
-    record PASS TC-12 "出口 IP 变化验证" "对比直连 IP 与代理探测出口 IP" "两者不同，流量已走代理" "直连: $DIRECT_IP → 代理: $CURRENT_PROXY_IP"
+
+# 从订阅缓存读取代理节点的服务器地址
+PROXY_SERVER=$(grep -A2 'name:.*sg\|name:.*proxy\|name:.*node\|name: ' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep 'server:' | head -1 | awk '{print $2}' | tr -d ' ')
+PROXY_NODE_NAME=$(grep -A1 '- name:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep 'name:' | grep -v '#' | head -1 | sed 's/.*name: //' | tr -d ' ')
+
+# 通过 DoH 解析代理服务器真实 IP（绕过 fake-ip DNS）
+PROXY_SERVER_IP=""
+if [ -n "$PROXY_SERVER" ]; then
+    PROXY_SERVER_IP=$(wget -q -O - --timeout=10 \
+        "https://dns.google/resolve?name=${PROXY_SERVER}&type=A" 2>/dev/null \
+        | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//')
+fi
+info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → 真实 IP: $PROXY_SERVER_IP)"
+info "代理出口 IP: $CURRENT_PROXY_IP"
+
+# 验证逻辑：IP 变化 + 出口与节点对应
+IP_CHANGED=$([ -n "$CURRENT_PROXY_IP" ] && [ "$CURRENT_PROXY_IP" != "$DIRECT_IP" ] && echo "yes" || echo "no")
+IP_MATCHES_NODE=$([ -n "$PROXY_SERVER_IP" ] && [ "$CURRENT_PROXY_IP" = "$PROXY_SERVER_IP" ] && echo "yes" || echo "no")
+
+if [ "$IP_CHANGED" = "yes" ] && [ "$IP_MATCHES_NODE" = "yes" ]; then
+    record PASS TC-12 "出口 IP 变化 + 节点对应验证" \
+        "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
+        "出口 IP 不同于直连，且与使用的代理节点地址匹配" \
+        "直连:$DIRECT_IP → 代理:$CURRENT_PROXY_IP = 节点[$PROXY_NODE_NAME] $PROXY_SERVER→$PROXY_SERVER_IP ✓"
+elif [ "$IP_CHANGED" = "yes" ] && [ -z "$PROXY_SERVER_IP" ]; then
+    record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
+        "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
+        "出口 IP 不同于直连，且与使用的代理节点地址匹配" \
+        "IP 已变化 ($DIRECT_IP → $CURRENT_PROXY_IP)，但无法解析节点服务器 DNS 做二次确认"
+elif [ "$IP_CHANGED" = "yes" ]; then
+    record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
+        "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
+        "出口 IP 不同于直连，且与节点匹配" \
+        "IP 已变化 ($DIRECT_IP → $CURRENT_PROXY_IP)，但节点服务器 IP ($PROXY_SERVER_IP) 不匹配"
 elif [ -n "$CURRENT_PROXY_IP" ]; then
-    record WARN TC-12 "出口 IP 变化验证" "对比直连 IP 与代理探测出口 IP" "两者不同" "IP 未变化（可能同出口）: $CURRENT_PROXY_IP"
+    record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
+        "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
+        "出口 IP 不同于直连" \
+        "IP 未变化（可能同出口）: $CURRENT_PROXY_IP"
 else
-    record FAIL TC-12 "出口 IP 变化验证" "对比直连 IP 与代理探测出口 IP" "代理出口 IP 可获取" "无法获取代理出口 IP"
+    record FAIL TC-12 "出口 IP 变化 + 节点对应验证" \
+        "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
+        "出口 IP 可获取且与节点匹配" \
+        "无法获取代理出口 IP"
 fi
 
 # ── Phase 4: 停止阶段 ─────────────────────────────────────────────────────────

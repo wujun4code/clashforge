@@ -57,6 +57,14 @@ jobs:
           else
             echo "url=http://127.0.0.1:7890" >> $GITHUB_OUTPUT
           fi
+          # 提取代理节点信息（供 browser-probe 做节点匹配验证）
+          CACHE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1)
+          if [ -n "$CACHE" ]; then
+            NODE_NAME=$(grep -m1 'name:' "$CACHE" 2>/dev/null | sed 's/.*name: *//' | tr -d ' ')
+            SERVER=$(grep -m1 'server:' "$CACHE" 2>/dev/null | awk '{print $2}' | tr -d ' ')
+            echo "node_name=$NODE_NAME" >> $GITHUB_OUTPUT
+            echo "server_host=$SERVER" >> $GITHUB_OUTPUT
+          fi
           # 判断 clashforge 是否还在运行
           if pgrep -f "mihomo-clashforge" > /dev/null 2>&1; then
             echo "running=true" >> $GITHUB_OUTPUT
@@ -69,6 +77,8 @@ jobs:
         if: steps.proxy.outputs.running == 'true'
         env:
           PROXY_URL: ${{ steps.proxy.outputs.url }}
+          PROXY_SERVER_HOST: ${{ steps.proxy.outputs.server_host }}
+          PROXY_NODE_NAME: ${{ steps.proxy.outputs.node_name }}
           PROBE_TIMEOUT: '10000'
         run: |
           node tests/e2e/browser-probe.mjs
