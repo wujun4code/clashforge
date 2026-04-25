@@ -1,16 +1,24 @@
 name: E2E Integration Test (OpenWrt)
 
 # 完整生命周期 + 浏览器端探测测试
+#
+# 关键设计原则：
+#   浏览器端探测在 OpenWrt VM 内部运行（通过 SSH），
+#   流量被 tproxy 透明拦截，消除宿主机直连能力导致的误判。
+#
 # 流程：
 #   1. 路由器端生命周期（安装→启动→接管验证→代理期探测→停止→还原验证）
-#   2. 代理运行期：浏览器端探测（走代理）
-#   3. 停止后：浏览器端探测（直连，验证恢复）
+#   2. 代理运行期：浏览器端探测（在 VM 内运行，流量被 tproxy 拦截）
+#   3. 停止服务
+#   4. 停止后：浏览器端探测（在 VM 内运行，验证网络恢复 + IP 还原）
+#   5. 紧急清理
 #
 # 所需 Secrets：
 #   SUBSCRIPTION_URL  — 订阅 URL（含 token）
 #
 # 所需 Runner：
-#   self-hosted, openwrt-x86 — OpenWrt VM 上的 GitHub Actions runner
+#   self-hosted, openwrt-x86 — 宿主机上的 GitHub Actions runner
+#   （可通过 SSH 连接 OpenWrt VM：ssh -p 2222 root@127.0.0.1）
 
 on:
   workflow_dispatch:
@@ -25,7 +33,7 @@ on:
 
 jobs:
   e2e-openwrt:
-    name: OpenWrt E2E — Lifecycle + Browser Probe
+    name: OpenWrt E2E — Lifecycle + Browser Probe (VM-internal)
     runs-on: [self-hosted, openwrt-x86]
     timeout-minutes: 20
 
@@ -34,30 +42,25 @@ jobs:
         uses: actions/checkout@v4
 
       # ── Step 1: 路由器端生命周期测试（含代理运行期路由器探测）─────────────────
-      - name: "[Router] Lifecycle test — install / launch / verify / probe"
+      - name: "[Router] Lifecycle — install / launch / verify / probe"
         id: lifecycle
         env:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
           CLASHFORGE_VERSION: ${{ inputs.clashforge_version || 'latest' }}
-          GITHUB_STEP_SUMMARY: ${{ env.GITHUB_STEP_SUMMARY }}
         run: |
           chmod +x tests/e2e/openwrt-lifecycle-test.sh
           sh tests/e2e/openwrt-lifecycle-test.sh
-        # 即使失败也继续，让后续 step 能做清理
 
-      # ── Step 2: 提取代理信息（供 browser probe 使用）─────────────────────────
-      - name: Extract proxy auth
+      # ── Step 2: 提取代理信息 ──────────────────────────────────────────────────
+      - name: Extract proxy info
         id: proxy
         if: always()
         run: |
           AUTH=$(grep -A1 'authentication:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
             | grep -v 'authentication:' | head -1 | tr -d ' -' || echo "")
-          if [ -n "$AUTH" ]; then
-            echo "url=http://${AUTH}@127.0.0.1:7890" >> $GITHUB_OUTPUT
-          else
-            echo "url=http://127.0.0.1:7890" >> $GITHUB_OUTPUT
-          fi
-          # 提取代理节点信息（供 browser-probe 做节点匹配验证）
+          [ -n "$AUTH" ] && echo "url=http://${AUTH}@127.0.0.1:7890" >> $GITHUB_OUTPUT \
+                         || echo "url=http://127.0.0.1:7890" >> $GITHUB_OUTPUT
+
           CACHE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1)
           if [ -n "$CACHE" ]; then
             NODE_NAME=$(grep -m1 'name:' "$CACHE" 2>/dev/null | sed 's/.*name: *//' | tr -d ' ')
@@ -65,25 +68,47 @@ jobs:
             echo "node_name=$NODE_NAME" >> $GITHUB_OUTPUT
             echo "server_host=$SERVER" >> $GITHUB_OUTPUT
           fi
-          # 判断 clashforge 是否还在运行
-          if pgrep -f "mihomo-clashforge" > /dev/null 2>&1; then
-            echo "running=true" >> $GITHUB_OUTPUT
-          else
-            echo "running=false" >> $GITHUB_OUTPUT
-          fi
 
-      # ── Step 3: 浏览器端探测（代理运行期，通过代理）─────────────────────────
-      - name: "[Browser] Probe — via proxy (代理运行期)"
+          pgrep -f "mihomo-clashforge" > /dev/null 2>&1 \
+            && echo "running=true" >> $GITHUB_OUTPUT \
+            || echo "running=false" >> $GITHUB_OUTPUT
+
+          DIRECT_IP=$(cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null || echo "unknown")
+          echo "direct_ip=$DIRECT_IP" >> $GITHUB_OUTPUT
+
+      # ── Step 3: 浏览器端探测（代理运行期，在 VM 内跑）────────────────────────
+      # 流量被 tproxy 透明拦截 → 消除宿主机直连能力的干扰
+      - name: "[Browser-VM] Probe — 代理运行期（VM 内 tproxy 拦截）"
         if: steps.proxy.outputs.running == 'true'
-        env:
-          PROXY_URL: ${{ steps.proxy.outputs.url }}
-          PROXY_SERVER_HOST: ${{ steps.proxy.outputs.server_host }}
-          PROXY_NODE_NAME: ${{ steps.proxy.outputs.node_name }}
-          PROBE_TIMEOUT: '10000'
         run: |
-          node tests/e2e/browser-probe.mjs
+          # 通过 DoH 解析代理节点服务器真实 IP（绕过 fake-ip DNS）
+          SERVER_HOST="${{ steps.proxy.outputs.server_host }}"
+          SERVER_IP=$(curl -sf --max-time 8 \
+            "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
+            | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//') || ""
+          echo "节点: ${{ steps.proxy.outputs.node_name }} / $SERVER_HOST / $SERVER_IP"
 
-      # ── Step 4: 停止 clashforge（由 lifecycle 脚本已处理，这里做兜底）────────
+          # 上传脚本到 VM
+          cat tests/e2e/browser-probe-router.sh | \
+            ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "cat > /tmp/browser-probe-router.sh && chmod +x /tmp/browser-probe-router.sh"
+
+          # 在 VM 内运行（流量被 tproxy 透明拦截，不设置代理）
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "PHASE=running \
+             DIRECT_IP='${{ steps.proxy.outputs.direct_ip }}' \
+             PROXY_SERVER_IP='$SERVER_IP' \
+             PROXY_NODE_NAME='${{ steps.proxy.outputs.node_name }}' \
+             sh /tmp/browser-probe-router.sh" | tee /tmp/browser-probe-running.log
+
+          # 写入 job summary
+          echo "## 🖥️ 浏览器端探测（VM 内 · 代理运行期）" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/browser-probe-running.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # ── Step 4: 停止 clashforge ───────────────────────────────────────────────
       - name: Stop clashforge
         if: always()
         run: |
@@ -95,37 +120,35 @@ jobs:
           pkill -f "mihomo-clashforge" 2>/dev/null || true
           sleep 3
 
-      # ── Step 5: 浏览器端探测（停止后，直连模式，验证网络已恢复）────────────
-      - name: "[Browser] Probe — direct only (停止后恢复验证)"
+      # ── Step 5: 浏览器端探测（停止后，在 VM 内跑，验证网络恢复）────────────
+      - name: "[Browser-VM] Probe — 停止后恢复验证（VM 内直连）"
         if: always()
-        env:
-          PROBE_TIMEOUT: '10000'
         run: |
-          echo "## 🔁 停止服务后浏览器端探测（直连恢复验证）" >> $GITHUB_STEP_SUMMARY
-          node tests/e2e/browser-probe.mjs
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "PHASE=stopped \
+             DIRECT_IP='${{ steps.proxy.outputs.direct_ip }}' \
+             sh /tmp/browser-probe-router.sh" | tee /tmp/browser-probe-stopped.log
 
-      # ── Step 6: 紧急清理（永远执行）────────────────────────────────────────
+          echo "## 🔁 浏览器端探测（VM 内 · 停止后恢复验证）" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/browser-probe-stopped.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # ── Step 6: 紧急清理 ──────────────────────────────────────────────────────
       - name: Emergency cleanup
         if: always()
         run: |
-          echo "=== Emergency cleanup ==="
-          # 确保 metaclash nft 表清除
-          if nft list tables 2>/dev/null | grep -q "metaclash"; then
-            echo "Removing metaclash nft table..."
+          nft list tables 2>/dev/null | grep -q "metaclash" && \
             nft delete table inet metaclash 2>/dev/null || true
-          fi
-          # 网络最终检查
           FINAL_IP=$(wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo "FAILED")
-          echo "Final network check: $FINAL_IP"
-          echo ""
-          echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
+          echo "Final IP: $FINAL_IP"
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
           echo "| 项目 | 状态 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
           echo "| nft 表 | $(nft list tables 2>/dev/null | tr '\n' ' ') |" >> $GITHUB_STEP_SUMMARY
           echo "| 出口 IP | $FINAL_IP |" >> $GITHUB_STEP_SUMMARY
-          if [ "$FINAL_IP" != "FAILED" ]; then
-            echo "| 网络状态 | ✅ 正常 |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| 网络状态 | ❌ 异常 |" >> $GITHUB_STEP_SUMMARY
-          fi
+          [ "$FINAL_IP" != "FAILED" ] \
+            && echo "| 网络状态 | ✅ 正常 |" >> $GITHUB_STEP_SUMMARY \
+            || echo "| 网络状态 | ❌ 异常 |" >> $GITHUB_STEP_SUMMARY
