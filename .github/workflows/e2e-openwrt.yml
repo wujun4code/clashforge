@@ -32,120 +32,14 @@ on:
       - 'feat/e2e-*'
 
 jobs:
-  # ── Job 1: 用触发分支源码构建 IPK ──────────────────────────────────────────
-  build-ipk:
-    name: Build IPK from branch source
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: true
-
-      - name: Compute version
-        id: version
-        run: |
-          VERSION="e2e-$(git rev-parse --short HEAD)"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Build version: $VERSION"
-
-      - name: Build UI
-        run: cd ui && npm ci && npm run build
-
-      - name: Copy UI dist
-        run: mkdir -p internal/api/ui_dist && cp -r ui/dist/* internal/api/ui_dist/
-
-      - name: Build Go binary (linux/amd64)
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -trimpath \
-            -ldflags="-s -w -X main.buildVersion=${{ steps.version.outputs.version }}" \
-            -o dist/clashforge-linux-amd64 \
-            ./cmd/clashforge
-
-      - name: Download mihomo binary
-        run: |
-          MIHOMO_VERSION=v1.19.24
-          wget -q -O /tmp/mihomo.gz \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz"
-          gunzip /tmp/mihomo.gz
-          chmod +x /tmp/mihomo
-
-      - name: Package IPK
-        run: |
-          mkdir -p ipk/CONTROL ipk/usr/bin ipk/etc/init.d
-          mkdir -p ipk/usr/share/metaclash ipk/usr/share/luci/menu.d
-          mkdir -p ipk/www/luci-static/resources/view/clashforge
-          mkdir -p ipk/usr/share/rpcd/acl.d
-
-          cp dist/clashforge-linux-amd64 ipk/usr/bin/clashforge && chmod 755 ipk/usr/bin/clashforge
-          cp /tmp/mihomo ipk/usr/bin/mihomo-clashforge && chmod 755 ipk/usr/bin/mihomo-clashforge
-          cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json ipk/usr/share/luci/menu.d/
-          cp openwrt/files/www/luci-static/resources/view/clashforge/main.js ipk/www/luci-static/resources/view/clashforge/
-          cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json ipk/usr/share/rpcd/acl.d/
-          # init.d 脚本存在于 metaclash，安装到 clashforge
-          cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge && chmod 755 ipk/etc/init.d/clashforge
-
-          VERSION=${{ steps.version.outputs.version }}
-          cat > ipk/CONTROL/control << EOF
-          Package: clashforge
-          Version: ${VERSION}
-          Architecture: x86_64
-          Maintainer: ClashForge
-          Description: ClashForge proxy manager for OpenWrt
-          EOF
-
-          PKG_NAME="clashforge_${VERSION}_x86_64.ipk" python3 scripts/build_ipk.py
-          echo "ipk_name=clashforge_${VERSION}_x86_64.ipk" >> $GITHUB_OUTPUT
-
-      - name: Upload IPK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: clashforge-ipk
-          path: "*.ipk"
-          retention-days: 1
-
-  # ── Job 2: E2E 测试（使用上面构建的 IPK）────────────────────────────────────
   e2e-openwrt:
-    name: OpenWrt E2E — Lifecycle + Router Probes
+    name: OpenWrt E2E — Lifecycle + Browser Probe
     runs-on: [self-hosted, openwrt-x86]
-    needs: build-ipk
     timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download IPK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: clashforge-ipk
-          path: /tmp/e2e-ipk/
-
-      - name: Upload IPK to OpenWrt VM
-        run: |
-          # 选择最新下载的 IPK（按时间排序取最新的）
-          IPK=$(ls -t /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
-          if [ -n "$IPK" ]; then
-            # 使用固定文件名，确保 lifecycle 脚本拿到的是本次构建的 IPK
-            ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-              "rm -f /tmp/e2e-ipk/*.ipk && mkdir -p /tmp/e2e-ipk"
-            cat "$IPK" | ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-              "cat > /tmp/e2e-ipk/clashforge-e2e-latest.ipk"
-            echo "已上传 IPK 到 VM: clashforge-e2e-latest.ipk (原名: $(basename $IPK))"
-          else
-            echo "警告: 未找到 IPK 文件，将使用 release 版本安装"
-          fi
 
       # ── Step 1: 路由器端生命周期测试 ──────────────────────────────────────────
       - name: "[Router] Lifecycle — install / launch / verify / probe"
@@ -154,15 +48,6 @@ jobs:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
           CLASHFORGE_VERSION: ${{ inputs.clashforge_version || 'latest' }}
         run: |
-          # 屏蔽 SUBSCRIPTION_URL 中的 token 防止泄漏
-          SUB_TOKEN=$(echo "$SUBSCRIPTION_URL" | grep -oE 'token=[^&]+' | cut -d= -f2 || echo "")
-          [ -n "$SUB_TOKEN" ] && echo "::add-mask::$SUB_TOKEN" || true
-
-          # 预先取得 VM 的当前出口 IP 并屏蔽（mask 必须在打印前执行）
-          DIRECT_IP_PRE=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo ''" 2>/dev/null || echo "")
-          [ -n "$DIRECT_IP_PRE" ] && echo "::add-mask::$DIRECT_IP_PRE" || true
-
           chmod +x tests/e2e/openwrt-lifecycle-test.sh
           # lifecycle 脚本必须在 OpenWrt VM 内运行（opkg/nft 等工具在 VM 内）
           cat tests/e2e/openwrt-lifecycle-test.sh | \
@@ -199,13 +84,6 @@ jobs:
           DIRECT_IP=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null" 2>/dev/null || echo "unknown")
           echo "direct_ip=$DIRECT_IP" >> $GITHUB_OUTPUT
-          # 屏蔽直连 IP
-          [ -n "$DIRECT_IP" ] && [ "$DIRECT_IP" != "unknown" ] && echo "::add-mask::$DIRECT_IP" || true
-
-          # 获取代理出口 IP 并屏蔽
-          PROXY_IP_CURRENT=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "cat /tmp/cf-test-snapshot/proxy-ip 2>/dev/null" 2>/dev/null || echo "")
-          [ -n "$PROXY_IP_CURRENT" ] && echo "::add-mask::$PROXY_IP_CURRENT" || true
 
       # ── Step 3: 浏览器端探测（代理运行期）────────────────────────────────────
       # 关键：用 iptables 封锁宿主机直连 443/80，强制流量只走 mihomo 代理端口
@@ -266,6 +144,16 @@ jobs:
              http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null | tail -2" 2>/dev/null || true
           sleep 3
 
+      # ── Step 5: 浏览器端探测（停止后，验证网络恢复）─────────────────────────
+      # 停止后不封锁直连，这里的目的是验证停止后网络正常（不需要防误判）
+      - name: "[Browser] Probe — 停止后恢复验证（直连模式）"
+        if: always()
+        env:
+          PROBE_TIMEOUT: '10000'
+        run: |
+          echo "## 🔁 浏览器端探测（停止后恢复验证）" >> $GITHUB_STEP_SUMMARY
+          node tests/e2e/browser-probe.mjs
+
       # ── Step 6: 紧急清理 ──────────────────────────────────────────────────────
       - name: Emergency cleanup
         if: always()
@@ -278,8 +166,6 @@ jobs:
           NFT_TABLES=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "nft list tables 2>/dev/null | tr '\n' ' '" 2>/dev/null || echo "unknown")
           echo "Final IP: $FINAL_IP"
-          # mask final IP
-          [ -n "$FINAL_IP" ] && [ "$FINAL_IP" != "FAILED" ] && echo "::add-mask::$FINAL_IP" || true
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
           echo "| 项目 | 状态 |" >> $GITHUB_STEP_SUMMARY

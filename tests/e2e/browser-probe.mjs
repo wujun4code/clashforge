@@ -36,18 +36,6 @@ const section = (msg) => console.log(`\n${B}${Y}=== ${msg} ===${X}`)
 
 let FAILED = 0
 
-// ── GitHub Actions IP mask helper ────────────────────────────────────────────
-function maskIP(ip) {
-  if (ip && process.env.GITHUB_ACTIONS) {
-    process.stdout.write(`::add-mask::${ip}\n`)
-  }
-  return ip
-}
-function redact(ip) {
-  return process.env.GITHUB_ACTIONS && ip ? '***MASKED***' : ip
-}
-
-
 // ── 参数解析 ──────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2)
 let PROXY_URL = process.env.PROXY_URL || ''
@@ -224,7 +212,7 @@ async function runIPChecks(label, proxyUrl) {
       const latency = Date.now() - started
       if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`)
       const { ip, location } = p.parse(res.body)
-      pass(`${p.name} [${p.group}] — IP: ${redact(ip)}${location ? ' · ' + location : ''} (${latency}ms)`)
+      pass(`${p.name} [${p.group}] — IP: ${ip}${location ? ' · ' + location : ''} (${latency}ms)`)
       results.push({ provider: p.name, ok: true, ip, location })
     } catch (e) {
       warn(`${p.name} [${p.group}] — 失败: ${e.message}`)
@@ -290,7 +278,7 @@ async function main() {
   const directIP = await runIPChecks('浏览器直连', null)
   const directIPOK = directIP.filter(r => r.ok)
   if (directIPOK.length > 0) {
-    recordTC('PASS', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', `${directIPOK.length}/${IP_PROVIDERS.length} 成功，IP: ${redact(directIPOK[0]?.ip)}`)
+    recordTC('PASS', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', `${directIPOK.length}/${IP_PROVIDERS.length} 成功，IP: ${directIPOK[0]?.ip}`)
   } else {
     recordTC('FAIL', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', '全部失败')
   }
@@ -329,12 +317,12 @@ async function main() {
     const directIPStr2 = directIPOK[0]?.ip || 'N/A'
     const proxyIPStr2 = proxyIP.find(r => r.ok)?.ip || 'N/A'
     const proxyLoc = proxyIP.find(r => r.ok)?.location || ''
-    info(`直连 IP:   ***MASKED***`)
-    info(`代理出口:  ***MASKED*** ${proxyLoc}`)
+    info(`直连 IP:   ${directIPStr2}`)
+    info(`代理出口:  ${proxyIPStr2} ${proxyLoc}`)
 
     // BC-03 代理 IP 检查
     if (proxyIPStr2 !== 'N/A') {
-      recordTC('PASS', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务，获取代理出口 IP', '返回有效出口 IP', `出口 IP: ${redact(proxyIPStr2)} (${proxyLoc})`)
+      recordTC('PASS', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务，获取代理出口 IP', '返回有效出口 IP', `出口 IP: ${proxyIPStr2} (${proxyLoc})`)
     } else {
       recordTC('FAIL', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务', '返回有效出口 IP', '代理模式下 IP 检查全部失败')
     }
@@ -365,7 +353,7 @@ async function main() {
         recordTC('PASS', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
           '对比直连 IP、代理出口 IP、DoH 解析代理服务器 IP',
           '三者匹配：出口 IP 已变且等于节点服务器真实 IP',
-          `${redact(directIPStr2)} → ${redact(proxyIPStr2)} = ${nodeNote} ✓`)
+          `${directIPStr2} → ${proxyIPStr2} = ${nodeNote} ✓`)
       } else {
         recordTC('WARN', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
           '对比直连 IP、代理出口 IP、DoH 解析代理服务器 IP',
@@ -413,8 +401,8 @@ async function main() {
   summary('')
   summary('| 项目 | 值 |')
   summary('|------|----|')
-  summary(`| **直连 IP** | ***MASKED*** |`)
-  summary(`| **代理出口 IP** | ***MASKED*** |`)
+  summary(`| **直连 IP** | ${directIPStr} |`)
+  summary(`| **代理出口 IP** | ${proxyIPStr} |`)
   summary(`| **代理地址** | ${PROXY_URL || '无'} |`)
   summary('')
   if (failCount === 0) {

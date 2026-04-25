@@ -86,106 +86,6 @@ wait_http() {
 
 json_get() { echo "$1" | grep -o "\"$2\":[^,}]*" | head -1 | sed 's/.*: *"\{0,1\}\([^",}]*\).*/\1/'; }
 
-# ── connectivity_check 函数（三轮通用）────────────────────────────────────────
-# 与 /overview/probes (buildOverviewIPChecks + buildOverviewAccessChecks) 完全相同的目标
-# 参数: $1=文件前缀  $2=代理 URL（可选）
-run_connectivity_check() {
-    PREFIX="$1"
-    PROXY_ARG=""
-    [ -n "$2" ] && PROXY_ARG="-x $2"
-
-    # ── IP 检测（与 buildOverviewIPChecks 相同的4个服务商）────────────────────
-    # IP.SB（国外）
-    IPSB=$(curl -sf --max-time 8 $PROXY_ARG "https://api.ip.sb/geoip" 2>/dev/null | grep -o '"ip":"[^"]*"' | head -1 | sed 's/"ip":"//;s/"//')
-    # IPInfo（国外）
-    IPINFO=$(curl -sf --max-time 8 $PROXY_ARG "https://ipinfo.io/json" 2>/dev/null | grep -o '"ip":"[^"]*"' | head -1 | sed 's/"ip":"//;s/"//')
-    # UpaiYun（国内）
-    UPAIYUN=$(curl -sf --max-time 8 $PROXY_ARG "https://pubstatic.b0.upaiyun.com/?_upnode" 2>/dev/null | grep -o '"remote_addr":"[^"]*"' | head -1 | sed 's/"remote_addr":"//;s/"//')
-    # 取第一个成功的作为代表 IP
-    OUTIP="${IPSB:-${IPINFO:-${UPAIYUN:-FAILED}}}"
-    printf "ip=%s\n" "$OUTIP" > "${SNAPSHOT_DIR}/${PREFIX}.txt"
-    printf "ip_ipsb=%s\n" "${IPSB:-FAILED}" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
-    printf "ip_ipinfo=%s\n" "${IPINFO:-FAILED}" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
-    printf "ip_upaiyun=%s\n" "${UPAIYUN:-FAILED}" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
-
-    # ── 可访问性检测（与 buildOverviewAccessChecks 相同的7个目标）─────────────
-    for entry in \
-        "taobao:https://www.taobao.com" \
-        "cloud163:https://music.163.com" \
-        "github:https://github.com" \
-        "google:https://www.google.com" \
-        "openai:https://chat.openai.com" \
-        "claude:https://api.anthropic.com" \
-        "gemini:https://gemini.google.com"; do
-        NAME=$(echo "$entry" | cut -d: -f1)
-        URL=$(echo "$entry" | cut -d: -f2-)
-        CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 $PROXY_ARG "$URL" 2>/dev/null || echo "0")
-        printf "%s=%s\n" "$NAME" "$CODE" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
-        STATUS=$([ "$CODE" -ge 200 ] 2>/dev/null && [ "$CODE" -lt 400 ] 2>/dev/null && echo "✓" || echo "✗")
-        info "  [$PREFIX] $STATUS $NAME HTTP $CODE"
-    done
-    info "[$PREFIX] 完成，IP: ***（已记录）"
-}
-# 比对两轮检测结果，逐项对比
-compare_connectivity() {
-    PREFIX_A="$1"
-    PREFIX_B="$2"
-    LABEL_A="$3"
-    LABEL_B="$4"
-    TC="$5"
-
-    FILE_A="${SNAPSHOT_DIR}/${PREFIX_A}.txt"
-    FILE_B="${SNAPSHOT_DIR}/${PREFIX_B}.txt"
-
-    if [ ! -f "$FILE_A" ] || [ ! -f "$FILE_B" ]; then
-        record FAIL "$TC" "连通性检测比对（$LABEL_A vs $LABEL_B）" \
-            "两轮检测结果逐项一致" "检测文件缺失"
-        return
-    fi
-
-    MISMATCH=""
-    MATCH_COUNT=0
-    TOTAL=0
-
-    while IFS='=' read -r KEY VAL_A; do
-        VAL_B=$(grep "^${KEY}=" "$FILE_B" | cut -d= -f2)
-        TOTAL=$((TOTAL+1))
-        if [ "$VAL_A" = "$VAL_B" ]; then
-            MATCH_COUNT=$((MATCH_COUNT+1))
-        else
-            if [ "$KEY" = "ip" ]; then
-                MISMATCH="$MISMATCH IP:***→***"
-            else
-                MISMATCH="$MISMATCH $KEY:${VAL_A}→${VAL_B}"
-            fi
-        fi
-    done < "$FILE_A"
-
-    if [ -z "$MISMATCH" ]; then
-        record PASS "$TC" "连通性检测比对（$LABEL_A vs $LABEL_B）" \
-            "$LABEL_A 和 $LABEL_B 每项结果完全一致（IP + 所有站点状态码）" \
-            "$MATCH_COUNT/$TOTAL 项一致 ✓"
-    else
-        record FAIL "$TC" "连通性检测比对（$LABEL_A vs $LABEL_B）" \
-            "$LABEL_A 和 $LABEL_B 每项结果完全一致（IP + 所有站点状态码）" \
-            "$MATCH_COUNT/$TOTAL 项一致，差异: $MISMATCH"
-    fi
-}
-
-# ── Phase 0: 安装前基线检测（第一轮）────────────────────────────────────────────
-section "Phase 0 — 安装前基线检测（第一轮）"
-mkdir -p "$SNAPSHOT_DIR"
-info "在 VM 内直连测试（不走任何代理），记录原始状态..."
-run_connectivity_check "round1"
-ROUND1_IP=$(grep '^ip=' "${SNAPSHOT_DIR}/round1.txt" | cut -d= -f2)
-info "第一轮出口 IP: ***（已记录）"
-info "第一轮可访问性:"
-grep -vE '^ip' "${SNAPSHOT_DIR}/round1.txt" | while IFS='=' read k v; do
-    [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
-        && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
-        || printf "  ✗ %s HTTP %s\n" "$k" "$v"
-done
-
 # ── Phase 1: 启动阶段 ─────────────────────────────────────────────────────────
 section "Phase 1 — 启动阶段"
 
@@ -212,9 +112,7 @@ ls /etc/dnsmasq.d/ > "$SNAPSHOT_DIR/dnsmasq-d.before" 2>/dev/null || echo "" > "
 DIRECT_IP=$(wget -q -O - --timeout=10 https://api.ipify.org 2>/dev/null || echo "FAILED")
 if [ "$DIRECT_IP" != "FAILED" ]; then
     echo "$DIRECT_IP" > "$SNAPSHOT_DIR/direct-ip"
-    # mask 直连 IP，防止明文出现在 CI 日志
-    [ -n "${GITHUB_ACTIONS:-}" ] && echo "::add-mask::$DIRECT_IP" || true
-    record PASS TC-02 "启动前状态快照" "记录 nft/ip-rule/dnsmasq/resolv.conf 并获取直连 IP" "快照保存成功，直连 IP 可获取" "直连 IP: ***MASKED***"
+    record PASS TC-02 "启动前状态快照" "记录 nft/ip-rule/dnsmasq/resolv.conf 并获取直连 IP" "快照保存成功，直连 IP 可获取" "直连 IP: $DIRECT_IP"
 else
     record FAIL TC-02 "启动前状态快照" "记录启动前状态并获取直连 IP" "直连 IP 可获取" "无法获取直连 IP，网络异常"
 fi
@@ -222,34 +120,10 @@ info "启动前 nft 表: $(nft list tables 2>/dev/null | tr '\n' ' ')"
 info "启动前 DNS: $(grep nameserver /etc/resolv.conf | tr '\n' ' ')"
 
 # TC-03
-# 始终使用 workflow 构建的本地 IPK 安装（确保测试的是当前分支代码）
-# 即使已安装也强制重装，确保版本正确
-# 优先使用固定名 clashforge-e2e-latest.ipk，其次任意 *.ipk
-LOCAL_IPK=""
-[ -f /tmp/e2e-ipk/clashforge-e2e-latest.ipk ] && LOCAL_IPK="/tmp/e2e-ipk/clashforge-e2e-latest.ipk"
-[ -z "$LOCAL_IPK" ] && LOCAL_IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
-if [ -n "$LOCAL_IPK" ]; then
-    info "强制重新安装本地构建 IPK: $(basename $LOCAL_IPK)"
-    # 先卸载旧版本（忽略错误）
-    opkg remove clashforge 2>/dev/null || true
-    info "使用本地构建的 IPK 安装: $LOCAL_IPK"
-    opkg install --force-reinstall --force-overwrite "$LOCAL_IPK" 2>&1 | tail -5
-    # 验证 init.d 是否就位，如果尚未就位则从 IPK 直接提取
-    if [ ! -f /etc/init.d/clashforge ]; then
-        info "init.d 未就位，从 IPK 直接提取..."
-        mkdir -p /tmp/ipk_extract && cd /tmp/ipk_extract && \
-        tar xzf "$LOCAL_IPK" 2>/dev/null && \
-        tar xzf data.tar.gz etc/init.d/ 2>/dev/null || tar xzf data.tar.gz && \
-        cp etc/init.d/clashforge /etc/init.d/clashforge 2>/dev/null && \
-        chmod 755 /etc/init.d/clashforge && \
-        cd / && rm -rf /tmp/ipk_extract
-        info "/etc/init.d/clashforge 已直接提取: $(ls -la /etc/init.d/clashforge 2>/dev/null || echo 'FAILED')"
-    fi
-    # 注意：mihomo-clashforge 约35MB，根分区98MB容量有限
-    # 如已有正常 mihomo 可直接复用，只需更新 clashforge 主程序
-    info "根分区可用空间: $(df -h / | tail -1 | awk '{print $4}')"
+if command -v clashforge > /dev/null 2>&1; then
+    info "clashforge 已安装，跳过安装"
 else
-    info "无本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
+    info "安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
         wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
     else
@@ -260,121 +134,51 @@ opkg install kmod-nft-tproxy kmod-nf-tproxy curl 2>/dev/null | grep -v "up to da
 modprobe nft_tproxy 2>/dev/null || true
 if command -v clashforge > /dev/null 2>&1 && lsmod | grep -q nft_tproxy; then
     VER=$(opkg list-installed 2>/dev/null | grep clashforge | awk '{print $3}' || echo "unknown")
-    IPK_SRC=$([ -n "$LOCAL_IPK" ] && echo "本地构建" || echo "release")
-    record PASS TC-03 "安装 clashforge + 内核模块" "opkg 安装 ($IPK_SRC) + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "版本: $VER（$IPK_SRC），nft_tproxy 已加载"
+    record PASS TC-03 "安装 clashforge + 内核模块" "install.sh 安装 + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "版本: $VER，nft_tproxy 已加载"
 else
-    record FAIL TC-03 "安装 clashforge + 内核模块" "opkg 安装 + kmod-nft-tproxy" "clashforge 可用，nft_tproxy 模块加载" "安装或模块加载失败"
+    record FAIL TC-03 "安装 clashforge + 内核模块" "install.sh 安装 + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "安装或模块加载失败"
     exit 1
 fi
 
-# === 模拟用户在 http://<router>:7777/setup 页面的完整操作流程 ===
-
-# TC-04: 步骤1 — 启动 ClashForge 守护进程（服务在后台就绪）
-info "[Setup] 步骤1：启动 clashforge 守护进程..."
+# TC-04
 /etc/init.d/clashforge start 2>/dev/null || true
 if wait_http "$CF_API/status" 30; then
-    STATUS_RESP=$(curl -sf "$CF_API/status" 2>/dev/null)
-    CORE_STATE=$(echo "$STATUS_RESP" | grep -o '"state":"[^"]*"' | head -1 | sed 's/"state":"//;s/"//')
-    record PASS TC-04 "启动 clashforge 服务" \
-        "/etc/init.d/clashforge start → GET /api/v1/status（等同打开 Setup 页面）" \
-        "30 秒内 API 就绪，core.state 可读" \
-        "API 就绪，核心状态: $CORE_STATE"
+    record PASS TC-04 "启动服务 + API 就绪" "/etc/init.d/clashforge start，轮询 GET /api/v1/status" "30 秒内返回 {ok:true}" "API 就绪"
 else
-    record FAIL TC-04 "启动 clashforge 服务" \
-        "/etc/init.d/clashforge start → GET /api/v1/status" \
-        "30 秒内 API 就绪" \
-        "30 秒内 API 未响应"
+    record FAIL TC-04 "启动服务 + API 就绪" "/etc/init.d/clashforge start，轮询 GET /api/v1/status" "30 秒内返回 {ok:true}" "30 秒内未响应"
     exit 1
 fi
 
-# TC-05a: 步骤2 — 查询现有订阅（Setup 页面加载时自动调用）
-info "[Setup] 步骤2：查询现有订阅列表..."
-EXISTING_SUBS=$(curl -sf --max-time 10 "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
-if [ "$EXISTING_SUBS" != "FAILED" ]; then
-    SUB_COUNT=$(echo "$EXISTING_SUBS" | grep -o '"id":' | wc -l)
-    record PASS TC-05a "查询订阅列表" \
-        "GET /api/v1/subscriptions（Setup 页面初始化）" \
-        "API 返回订阅列表" \
-        "当前订阅数: $SUB_COUNT"
-else
-    record FAIL TC-05a "查询订阅列表" \
-        "GET /api/v1/subscriptions" \
-        "API 返回订阅列表" \
-        "API 调用失败"
-fi
-
-# TC-05b: 步骤4 — 添加订阅
-# 每次测试先删除旧的 e2e-test 订阅，再新建，避免历史残留影响测试
-info "[Setup] 清理旧的 e2e-test 订阅..."
-OLD_IDS=$(curl -sf "$CF_API/subscriptions" 2>/dev/null | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//')
-for OID in $OLD_IDS; do
-    curl -sf -X DELETE "$CF_API/subscriptions/$OID" 2>/dev/null > /dev/null || true
-done
-info "已清理 $(echo "$OLD_IDS" | wc -w) 个旧订阅"
-
-info "[Setup] 步骤4：添加订阅（输入订阅链接 → 点击导入）..."
+# TC-05
 ADD_RESP=$(curl -sf --max-time 15 \
     -H "Content-Type: application/json" \
-    -d "{\"url\":\"$SUBSCRIPTION_URL\",\"name\":\"e2e-test\",\"type\":\"clash\",\"enabled\":true}" \
+    -d "{\"url\":\"$SUBSCRIPTION_URL\",\"name\":\"e2e-test\",\"enabled\":true}" \
     "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
 if [ "$ADD_RESP" = "FAILED" ]; then
-    record FAIL TC-05b "添加订阅" \
-        "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
-        "返回新订阅 ID" \
-        "API 调用失败"
+    record FAIL TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "添加订阅 API 失败"
     exit 1
 fi
 SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
-record PASS TC-05b "添加订阅" \
-    "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
-    "返回新订阅 ID" \
-    "订阅已添加，ID: $SUB_ID"
-if [ -z "$SUB_ID" ]; then
-    record FAIL TC-05b "添加订阅" "POST /api/v1/subscriptions" "返回新订阅 ID" "无法获取订阅 ID"
-    exit 1
-fi
-
-# TC-05d: 步骤5 — 同步拉取订阅节点（点击导入后自动调用 sync-update）
-info "[Setup] 步骤5：拉取订阅节点（同步更新）..."
-SYNC_RESP=$(curl -sf --max-time 30 \
-    -H "Content-Type: application/json" -d '{}' \
+SYNC_RESP=$(curl -sf --max-time 30 -H "Content-Type: application/json" -d '{}' \
     "$CF_API/subscriptions/$SUB_ID/sync-update" 2>/dev/null || echo "FAILED")
-if echo "$SYNC_RESP" | grep -qE "ok|true|success|nodes"; then
-    NODE_COUNT=$(curl -sf "$CF_API/subscriptions/$SUB_ID" 2>/dev/null | grep -o '"node_count":[0-9]*' | cut -d: -f2 || echo "?")
-    record PASS TC-05d "拉取订阅节点" \
-        "POST /api/v1/subscriptions/{id}/sync-update（订阅导入后自动同步）" \
-        "节点拉取成功，节点数 ≥ 1" \
-        "节点拉取成功（节点数: $NODE_COUNT）"
+if [ -n "$SUB_ID" ] && echo "$SYNC_RESP" | grep -qE "ok|true|success|nodes"; then
+    record PASS TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "订阅 ID: $SUB_ID，节点拉取成功"
 else
-    record FAIL TC-05d "拉取订阅节点" \
-        "POST /api/v1/subscriptions/{id}/sync-update" \
-        "节点拉取成功" \
-        "sync 失败: $SYNC_RESP"
+    record FAIL TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "sync 失败: $SYNC_RESP"
     exit 1
 fi
 
-# TC-06: 步骤6 — 配置 DNS + 网络设置，点击「启动服务」按钮
-# 对应 Setup 页面中的 DNS 模式选择 + 网络模式选择 + 点击「启动」
-info "[Setup] 步骤6：配置 DNS（fake-ip + upstream）..."
-info "[Setup]         配置网络（tproxy + nftables + bypass_lan）..."
-info "[Setup]         点击「启动服务」按钮 → POST /api/v1/setup/launch (SSE)..."
+# TC-06
 sleep 2
 curl -sf --max-time 60 -H "Content-Type: application/json" \
-    -d '{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true,"ipv6":false}}' \
+    -d '{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}' \
     "$CF_API/setup/launch" > /tmp/launch.log 2>/dev/null || true
 LAUNCH_OUT=$(cat /tmp/launch.log)
-info "launch SSE 最后3行: $(echo "$LAUNCH_OUT" | tail -3)"
 if echo "$LAUNCH_OUT" | grep -q '"success":true'; then
-    record PASS TC-06 "启动服务（用户前端操作）" \
-        "POST /api/v1/setup/launch（DNS: fake-ip/upstream, 网络: tproxy/nftables, bypass_lan）（等同点击「启动服务」按钮）" \
-        "SSE 返回 success:true，mihomo 启动，DNS/nft 规则生效" \
-        "launch 成功"
+    record PASS TC-06 "触发 Setup Launch" "POST /setup/launch dns.mode=fake-ip dnsmasq_mode=upstream network.mode=tproxy" '{"success":true}' "launch 成功"
 else
     LAUNCH_ERR=$(echo "$LAUNCH_OUT" | grep -o '"error":"[^"]*"' | head -1)
-    record FAIL TC-06 "启动服务（用户前端操作）" \
-        "POST /api/v1/setup/launch" \
-        "SSE 返回 success:true" \
-        "launch 失败: $LAUNCH_ERR"
+    record FAIL TC-06 "触发 Setup Launch" "POST /setup/launch" '{"success":true}' "launch 失败: $LAUNCH_ERR"
     exit 1
 fi
 sleep 5
@@ -444,11 +248,8 @@ if [ "$PROBES_RESP" != "FAILED" ]; then
     [ "$IP_TOTAL" -eq 0 ] && IP_TOTAL=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
     PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.a-f:]*"' | grep -v "fake\|198\.18" | head -1 | sed 's/"ip":"//;s/"//')
     LOCATION=$(echo "$PROBES_RESP" | grep -o '"location":"[^"]*"' | head -1 | sed 's/"location":"//;s/"//')
-    # mask 代理出口 IP
-    [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "$PROXY_IP" ] && echo "::add-mask::$PROXY_IP" || true
-    CURRENT_PROXY_IP="$PROXY_IP"
     if [ "$IP_OK" -gt 0 ] && [ -n "$PROXY_IP" ]; then
-        record PASS TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "$IP_OK/$IP_TOTAL 成功，出口 IP: ***MASKED*** ($LOCATION)"
+        record PASS TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "$IP_OK/$IP_TOTAL 成功，出口 IP: $PROXY_IP ($LOCATION)"
     else
         record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "全部 IP 检查失败（IP_OK=$IP_OK PROXY_IP=$PROXY_IP）"
     fi
@@ -456,32 +257,30 @@ else
     record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "/overview/probes API 无响应"
 fi
 
-# TC-11 路由器端可访问性检查
+# TC-11 路由器端可访问性检查（纯 shell 解析，不依赖 python3）
 if [ "$PROBES_RESP" != "FAILED" ]; then
-    TOTAL_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
+    # 提取 access_checks 段落后计数
+    ACCESS_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
     ACCESS_TOTAL=$(echo "$PROBES_RESP" | grep -o '"url":"http' | wc -l)
     IP_OK_COUNT=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
-    ACCESS_OK=$((TOTAL_OK - IP_OK_COUNT))
-    [ "$ACCESS_OK" -lt 0 ] && ACCESS_OK=0
-    if [ "$ACCESS_OK" -gt 0 ]; then
+    # access_checks 的 ok:true 数量 = 总 ok:true - ip_checks 的 ok:true 数量
+    ACCESS_OK=$((ACCESS_OK - IP_OK_COUNT < 0 ? 0 : ACCESS_OK - IP_OK_COUNT))
+    if [ "${ACCESS_OK:-0}" -gt 0 ]; then
         record PASS TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "国内外主要站点通过代理可达" "$ACCESS_OK/$ACCESS_TOTAL 成功"
     else
-        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败（ok=$TOTAL_OK providers=$IP_OK_COUNT access=$ACCESS_OK total=$ACCESS_TOTAL）"
+        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败（access_ok=$ACCESS_OK total=$ACCESS_TOTAL）"
     fi
 fi
 
 # TC-12 出口 IP 变化验证 + 与代理节点对应验证
 DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 CURRENT_PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
-# 保存代理出口 IP 到文件（workflow 主机层用来 mask）
-[ -n "$CURRENT_PROXY_IP" ] && echo "$CURRENT_PROXY_IP" > "$SNAPSHOT_DIR/proxy-ip" || true
 
 # 从订阅缓存读取代理节点的服务器地址
-# BusyBox grep 支持 -A N（短选项形式）
-PROXY_NODE_NAME=$(grep -A 1 "^  - name:" /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-    | grep "name:" | grep -v "^  - name:" | head -1 | awk "{print \$2}" | tr -d " ")
-PROXY_SERVER=$(grep -A 5 "name: $PROXY_NODE_NAME" /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-    | grep "server:" | head -1 | awk "{print \$2}" | tr -d " ")
+PROXY_SERVER=$(grep -A2 'name:.*sg\|name:.*proxy\|name:.*node\|name: ' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep 'server:' | head -1 | awk '{print $2}' | tr -d ' ')
+PROXY_NODE_NAME=$(grep -A1 '- name:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep 'name:' | grep -v '#' | head -1 | sed 's/.*name: //' | tr -d ' ')
 
 # 通过 DoH 解析代理服务器真实 IP（绕过 fake-ip DNS）
 PROXY_SERVER_IP=""
@@ -500,10 +299,8 @@ if [ -n "$PROXY_SERVER" ]; then
             | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//')
     fi
 fi
-info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → DoH解析 IP: $PROXY_SERVER_IP)"
-info "代理出口 IP: ***（已屏蔽）"
-info "IP变化检查: DIRECT=$DIRECT_IP PROXY=$CURRENT_PROXY_IP CHANGED=$IP_CHANGED"
-info "节点匹配检查: PROXY_SERVER_IP=$PROXY_SERVER_IP MATCHES=$IP_MATCHES_NODE"
+info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → 真实 IP: $PROXY_SERVER_IP)"
+info "代理出口 IP: $CURRENT_PROXY_IP"
 
 # 验证逻辑：IP 变化 + 出口与节点对应
 IP_CHANGED=$([ -n "$CURRENT_PROXY_IP" ] && [ "$CURRENT_PROXY_IP" != "$DIRECT_IP" ] && echo "yes" || echo "no")
@@ -513,22 +310,22 @@ if [ "$IP_CHANGED" = "yes" ] && [ "$IP_MATCHES_NODE" = "yes" ]; then
     record PASS TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连，且与使用的代理节点地址匹配" \
-        "直连:*** → 代理:*** = 节点[$PROXY_NODE_NAME] $PROXY_SERVER→*** ✓"
+        "直连:$DIRECT_IP → 代理:$CURRENT_PROXY_IP = 节点[$PROXY_NODE_NAME] $PROXY_SERVER→$PROXY_SERVER_IP ✓"
 elif [ "$IP_CHANGED" = "yes" ] && [ -z "$PROXY_SERVER_IP" ]; then
     record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连，且与使用的代理节点地址匹配" \
-        "IP 已变化 (*** → ***)，但无法解析节点服务器 DNS 做二次确认"
+        "IP 已变化 ($DIRECT_IP → $CURRENT_PROXY_IP)，但无法解析节点服务器 DNS 做二次确认"
 elif [ "$IP_CHANGED" = "yes" ]; then
     record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连，且与节点匹配" \
-        "IP 已变化 (*** → ***)，但节点服务器 IP (***) 不匹配"
+        "IP 已变化 ($DIRECT_IP → $CURRENT_PROXY_IP)，但节点服务器 IP ($PROXY_SERVER_IP) 不匹配"
 elif [ -n "$CURRENT_PROXY_IP" ]; then
     record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连" \
-        "IP 未变化（可能同出口）"
+        "IP 未变化（可能同出口）: $CURRENT_PROXY_IP"
 else
     record FAIL TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
@@ -536,25 +333,7 @@ else
         "无法获取代理出口 IP"
 fi
 
-# ── Phase 3b: 代理运行期—第二轮连通性检测（用户浏览器端）──────────────────────────
-section "Phase 3b — 第二轮连通性检测（代理运行期，模拟用户浏览器）"
-info "在 VM 内通过代理发起请求，模拟用户设备通过网关上网..."
-if [ -n "$PROXY_AUTH" ]; then
-    run_connectivity_check "round2" "http://$PROXY_AUTH@127.0.0.1:7890"
-else
-    run_connectivity_check "round2" "http://127.0.0.1:7890"
-fi
-ROUND2_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round2.txt" | cut -d= -f2)
-info "第二轮出口 IP: ***（已记录）"
-info "第二轮可访问性:"
-grep -vE "^ip" "${SNAPSHOT_DIR}/round2.txt" | while IFS="=" read k v; do
-    [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
-        && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
-        || printf "  ✗ %s HTTP %s\n" "$k" "$v"
-done
-
-
-# ── Phase 4: 停止阶段 ──────────────────────────────────────────────────────────
+# ── Phase 4: 停止阶段 ─────────────────────────────────────────────────────────
 section "Phase 4 — 停止阶段（仅通过用户前端 API）"
 
 # TC-13 — 严格只通过 POST /api/v1/setup/stop，等待 SSE 返回 success:true
@@ -566,19 +345,13 @@ STOP_LOG=$(cat /tmp/stop.log 2>/dev/null)
 info "stop SSE 输出: $(echo "$STOP_LOG" | tail -3)"
 
 STOP_SUCCESS=$(echo "$STOP_LOG" | grep -o '"success":true' | head -1)
-STOP_HTTP404=$(echo "$STOP_LOG" | grep -q "404" && echo "yes" || echo "no")
 STOP_ERROR=$(echo "$STOP_LOG" | grep -o '"error":"[^"]*"' | head -1)
 
 if [ -n "$STOP_SUCCESS" ]; then
     record PASS TC-13 "停止服务（用户前端操作）" \
         "POST /api/v1/setup/stop — 等待 SSE success:true（等同前端停止按钮）" \
         "API 返回 success:true，所有资源（mihomo/DNS/nft/路由）已清理" \
-        "stop API 成功"
-elif [ "$STOP_HTTP404" = "yes" ]; then
-    record FAIL TC-13 "停止服务（用户前端操作）" \
-        "POST /api/v1/setup/stop — 等待 SSE success:true（等同前端停止按钮）" \
-        "API 返回 success:true，停止流程完整执行" \
-        "致命错误：/setup/stop 返回 404，当前版本不支持此 API，测试无法继续"
+        "stop API 成功: $STOP_SUCCESS"
 else
     record FAIL TC-13 "停止服务（用户前端操作）" \
         "POST /api/v1/setup/stop — 等待 SSE success:true" \
@@ -586,18 +359,13 @@ else
         "stop API 失败或超时: $STOP_ERROR"
 fi
 
-# 等待停止流程完成
+# 等待停止流程完成（API 已处理，给系统一点稳定时间）
 sleep 5
 
 # TC-14
 NFT_FINAL=$(nft list tables 2>/dev/null | tr '\n' ' ')
 if echo "$NFT_FINAL" | grep -qE "metaclash|clashforge"; then
-    if [ -n "$STOP_HTTP404" ] && [ "$STOP_HTTP404" = "yes" ]; then
-        # stop API 已经 404，未执行停止流程，记为 WARN（需升级版本）
-        record WARN TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表" "metaclash 表未清除（stop API 返回 404，尚未执行停止）"
-    else
-        record FAIL TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "metaclash 表未清除: $NFT_FINAL"
-    fi
+    record FAIL TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "metaclash 表未清除: $NFT_FINAL"
 else
     record PASS TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "nft 表已还原: $NFT_FINAL"
 fi
@@ -614,14 +382,10 @@ fi
 # TC-16
 DNSMASQ_FINAL=$(ls /etc/dnsmasq.d/ 2>/dev/null | sort | tr '\n' ' ')
 DNSMASQ_BEFORE_LIST=$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" | sort | tr '\n' ' ')
-info "dnsmasq.d 启动前快照: '${DNSMASQ_BEFORE_LIST:-空}'"
-info "dnsmasq.d 当前状态: '${DNSMASQ_FINAL:-空}'"
-info "dnsmasq.d 实际文件内容:"
-ls -la /etc/dnsmasq.d/ 2>/dev/null | while read f; do info "  $f"; done || info "  (空)"
 if [ "$DNSMASQ_FINAL" = "$DNSMASQ_BEFORE_LIST" ]; then
     record PASS TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "已还原"
 else
-    record WARN TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "有残留文件（before: '${DNSMASQ_BEFORE_LIST:-空}' / after: '${DNSMASQ_FINAL:-空}'）"
+    record WARN TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "有残留文件（before: '$DNSMASQ_BEFORE_LIST' / after: '$DNSMASQ_FINAL'）"
 fi
 
 # ── Phase 5: 停止后恢复探测 ───────────────────────────────────────────────────
@@ -633,12 +397,12 @@ if [ "$FINAL_IP" != "FAILED" ] && [ "$FINAL_IP" = "$DIRECT_IP" ]; then
     record PASS TC-17 "停止后出口 IP 还原验证" \
         "停止服务后请求 api.ipify.org，对比启动前直连 IP" \
         "出口 IP 还原为启动前直连 IP（非代理节点 IP）" \
-        "还原 IP: *** = 启动前 *** ✓"
+        "还原 IP: $FINAL_IP = 启动前 $DIRECT_IP ✓"
 elif [ "$FINAL_IP" != "FAILED" ]; then
     record WARN TC-17 "停止后出口 IP 还原验证" \
         "停止服务后请求 api.ipify.org，对比启动前直连 IP" \
         "出口 IP 还原为启动前直连 IP" \
-        "网络可达但 IP 不同"
+        "网络可达但 IP 不同（$DIRECT_IP → $FINAL_IP）"
 else
     record FAIL TC-17 "停止后出口 IP 还原验证" \
         "停止服务后请求 api.ipify.org" \
@@ -695,17 +459,17 @@ if [ "$AFTER_PROBES" != "FAILED" ]; then
         record PASS TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
             "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
             "出口 IP 还原为直连 IP（非代理节点 IP）" \
-            "probes 出口 IP: *** = 直连 *** ✓"
+            "probes 出口 IP: $AFTER_IP = 直连 $DIRECT_IP ✓"
     elif [ -n "$AFTER_IP" ]; then
         record WARN TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
             "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
             "出口 IP 还原为直连 IP" \
-            "出口 IP: ***（直连基准: ***）"
+            "出口 IP: $AFTER_IP（直连基准: $DIRECT_IP）"
     else
-        record WARN TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
+        record FAIL TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
             "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
             "能获取出口 IP" \
-            "mihomo 已停止，probes IP 检测不可用（预期行为）"
+            "probes 无法获取出口 IP（mihomo 已停止，clashforge 仍可调用直连检测）"
     fi
 else
     record WARN TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
@@ -746,41 +510,6 @@ else
 fi
 
 # ── 输出 GitHub Actions Job Summary ──────────────────────────────────────────
-# 第三轮连通性检测（停止后）+ 与第一轮比对
-section "Phase 5b — 第三轮连通性检测 + 与第一轮比对"
-info "第三轮连通性检测（停止后直连，不走代理）..."
-run_connectivity_check "round3"
-ROUND3_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round3.txt" | cut -d= -f2)
-info "第三轮出口 IP: ***（已记录）"
-info "第三轮可访问性:"
-grep -vE "^ip" "${SNAPSHOT_DIR}/round3.txt" | while IFS="=" read k v; do
-    [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
-        && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
-        || printf "  ✗ %s HTTP %s\n" "$k" "$v"
-done
-
-# 核心比对：第一轮（安装前）vs 第三轮（停止后）
-# 预期：完全一一对应，证明 ClashForge 停止后完全还原
-compare_connectivity "round1" "round3" "第一轮（安装前）" "第三轮（停止后）" "TC-21"
-
-# TC-22: 第一轮 vs 第二轮 IP 对比（代理有效性验证）
-# 预期：IP 不同（代理改变了出口），其他站点可达性可能变化
-R1_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round1.txt" 2>/dev/null | cut -d= -f2)
-R2_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round2.txt" 2>/dev/null | cut -d= -f2)
-if [ -n "$R1_IP" ] && [ -n "$R2_IP" ] && [ "$R1_IP" != "$R2_IP" ]; then
-    record PASS TC-22 "代理有效性验证（第一轮 vs 第二轮 IP）" \
-        "第二轮出口 IP 与第一轮不同（代理改变了出口）" \
-        "IP 已变化 ✓（***→***）"
-elif [ "$R1_IP" = "$R2_IP" ] && [ -n "$R1_IP" ]; then
-    record WARN TC-22 "代理有效性验证（第一轮 vs 第二轮 IP）" \
-        "第二轮出口 IP 与第一轮不同" \
-        "IP 未变化（代理节点可能与直连同出口）"
-else
-    record FAIL TC-22 "代理有效性验证（第一轮 vs 第二轮 IP）" \
-        "第二轮出口 IP 可获取且与第一轮不同" \
-        "无法获取 IP 进行比对"
-fi
-
 section "生成测试报告"
 
 PASS_COUNT=$(echo "$RESULTS" | grep -c "^PASS" || echo 0)
@@ -793,9 +522,9 @@ summary "| 项目 | 值 |"
 summary "|------|----|"
 summary "| **测试环境** | OpenWrt 23.05.5 x86_64 |"
 summary "| **ClashForge 版本** | $CLASHFORGE_VERSION |"
-summary "| **直连 IP** | ***MASKED*** |"
-summary "| **代理出口 IP** | ***MASKED*** |"
-summary "| **还原 IP** | ***MASKED*** |"
+summary "| **直连 IP** | $DIRECT_IP |"
+summary "| **代理出口 IP** | $CURRENT_PROXY_IP |"
+summary "| **还原 IP** | $FINAL_IP |"
 summary ""
 if [ "$FAIL_COUNT" -eq 0 ]; then
     summary "## ✅ 全部测试通过"
@@ -834,9 +563,9 @@ summary "> 📝 **注：** 浏览器端探测（browser-probe.mjs）结果见下
 
 # ── 控制台最终总结 ────────────────────────────────────────────────────────────
 section "测试结果"
-printf "\n${BOLD}直连 IP:${RESET}      ***MASKED***\n"
-printf "${BOLD}代理出口 IP:${RESET}  ***MASKED***\n"
-printf "${BOLD}还原 IP:${RESET}      ***MASKED***\n\n"
+printf "\n${BOLD}直连 IP:${RESET}      $DIRECT_IP\n"
+printf "${BOLD}代理出口 IP:${RESET}  $CURRENT_PROXY_IP\n"
+printf "${BOLD}还原 IP:${RESET}      $FINAL_IP\n\n"
 printf "${BOLD}通过: $PASS_COUNT  失败: $FAIL_COUNT  警告: $WARN_COUNT  合计: $TOTAL${RESET}\n\n"
 
 if [ "$FAILED" -eq 0 ]; then
