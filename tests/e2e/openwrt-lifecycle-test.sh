@@ -329,24 +329,32 @@ else
 fi
 
 # ── Phase 4: 停止阶段 ─────────────────────────────────────────────────────────
-section "Phase 4 — 停止阶段"
+section "Phase 4 — 停止阶段（仅通过用户前端 API）"
 
-# TC-13
-curl -sf --max-time 30 -H "Content-Type: application/json" -d '{}' \
-    "$CF_API/setup/stop" > /dev/null 2>/dev/null || true
-/etc/init.d/clashforge stop 2>/dev/null || true
-sleep 5
-if pgrep -f "clashforge\|mihomo" > /dev/null 2>&1; then
-    pkill -f "clashforge" 2>/dev/null || true
-    pkill -f "mihomo-clashforge" 2>/dev/null || true
-    sleep 2
-fi
-if ! pgrep -f "clashforge\|mihomo-clashforge" > /dev/null 2>&1; then
-    record PASS TC-13 "停止服务" "POST /setup/stop + /etc/init.d/clashforge stop" "clashforge / mihomo 进程退出" "进程已退出"
+# TC-13 — 严格只通过 POST /api/v1/setup/stop，等待 SSE 返回 success:true
+# 这等同于用户在前端点击「停止服务」按钮，不使用任何脚本/命令强制停止
+info "调用 POST /api/v1/setup/stop（等同于用户前端操作）..."
+STOP_LOG=$(curl -sN --max-time 60 -H "Content-Type: application/json" -d '{}' \
+    "$CF_API/setup/stop" 2>/dev/null)
+info "stop SSE 输出: $(echo "$STOP_LOG" | tail -3)"
+
+STOP_SUCCESS=$(echo "$STOP_LOG" | grep -o '"success":true' | head -1)
+STOP_ERROR=$(echo "$STOP_LOG" | grep -o '"error":"[^"]*"' | head -1)
+
+if [ -n "$STOP_SUCCESS" ]; then
+    record PASS TC-13 "停止服务（用户前端操作）" \
+        "POST /api/v1/setup/stop — 等待 SSE success:true（等同前端停止按钮）" \
+        "API 返回 success:true，所有资源（mihomo/DNS/nft/路由）已清理" \
+        "stop API 成功: $STOP_SUCCESS"
 else
-    record FAIL TC-13 "停止服务" "POST /setup/stop + /etc/init.d/clashforge stop" "clashforge / mihomo 进程退出" "进程未退出"
+    record FAIL TC-13 "停止服务（用户前端操作）" \
+        "POST /api/v1/setup/stop — 等待 SSE success:true" \
+        "API 返回 success:true" \
+        "stop API 失败或超时: $STOP_ERROR"
 fi
-sleep 3
+
+# 等待停止流程完成（API 已处理，给系统一点稳定时间）
+sleep 5
 
 # TC-14
 NFT_FINAL=$(nft list tables 2>/dev/null | tr '\n' ' ')
@@ -377,18 +385,95 @@ fi
 # ── Phase 5: 停止后恢复探测 ───────────────────────────────────────────────────
 section "Phase 5 — 停止后恢复探测"
 
-# TC-17
+# TC-17 出口 IP 还原验证
 FINAL_IP=$(wget -q -O - --timeout=10 https://api.ipify.org 2>/dev/null || echo "FAILED")
 if [ "$FINAL_IP" != "FAILED" ] && [ "$FINAL_IP" = "$DIRECT_IP" ]; then
-    record PASS TC-17 "停止后网络可达性 + IP 还原" "停止服务后请求 api.ipify.org，对比直连 IP" "网络正常，出口 IP 还原为启动前直连 IP" "还原 IP: $FINAL_IP = 启动前 $DIRECT_IP ✓"
+    record PASS TC-17 "停止后出口 IP 还原验证" \
+        "停止服务后请求 api.ipify.org，对比启动前直连 IP" \
+        "出口 IP 还原为启动前直连 IP（非代理节点 IP）" \
+        "还原 IP: $FINAL_IP = 启动前 $DIRECT_IP ✓"
 elif [ "$FINAL_IP" != "FAILED" ]; then
-    record WARN TC-17 "停止后网络可达性 + IP 还原" "停止服务后请求 api.ipify.org，对比直连 IP" "出口 IP 还原为启动前直连 IP" "网络可达但 IP 不同（$DIRECT_IP → $FINAL_IP）"
+    record WARN TC-17 "停止后出口 IP 还原验证" \
+        "停止服务后请求 api.ipify.org，对比启动前直连 IP" \
+        "出口 IP 还原为启动前直连 IP" \
+        "网络可达但 IP 不同（$DIRECT_IP → $FINAL_IP）"
 else
-    record FAIL TC-17 "停止后网络可达性 + IP 还原" "停止服务后请求 api.ipify.org" "网络正常可达" "停止服务后网络不可达！DNS/nft 可能未还原"
+    record FAIL TC-17 "停止后出口 IP 还原验证" \
+        "停止服务后请求 api.ipify.org" \
+        "网络正常，出口 IP 还原" \
+        "停止服务后网络不可达！DNS/nft 可能未还原"
 fi
 
-# TC-18 / TC-19 停止后路由器端探测（直接发请求，不走代理）
-info "停止后路由器端探测（直连模式）..."
+# TC-20 DNS 原生性验证（核心！确认不再使用 clashforge fake-ip）
+info "验证 DNS 是否还原为 OpenWrt 原生..."
+# 1. dnsmasq.d 无 clashforge 残留配置
+CF_DNSMASQ_FILES=$(ls /etc/dnsmasq.d/ 2>/dev/null | grep -iE "clash|mihomo|metaclash" || echo "")
+# 2. DNS 解析不再返回 fake-ip（198.18.x.x 段）
+DNS_TEST_DOMAIN="google.com"
+DNS_RESULT=$(nslookup "$DNS_TEST_DOMAIN" 2>/dev/null | grep "Address:" | grep -v "#53" | head -1 | awk '{print $2}')
+IS_FAKEIP=$(echo "$DNS_RESULT" | grep -qE "^198\.18\.|^198\.19\." && echo "yes" || echo "no")
+# 3. dnsmasq upstream 不再指向 mihomo
+DNSMASQ_UPSTREAM=$(cat /etc/dnsmasq.d/*.conf 2>/dev/null | grep "^server=" | head -3 || echo "")
+HAS_MIHOMO_UPSTREAM=$(echo "$DNSMASQ_UPSTREAM" | grep -qE "127\.0\.0\.1#[0-9]" && echo "yes" || echo "no")
+
+info "DNS 测试结果: $DNS_TEST_DOMAIN -> $DNS_RESULT (fake-ip: $IS_FAKEIP)"
+info "dnsmasq.d clash 残留文件: '${CF_DNSMASQ_FILES:-无}'"
+info "dnsmasq upstream 指向 mihomo: $HAS_MIHOMO_UPSTREAM"
+
+if [ "$IS_FAKEIP" = "no" ] && [ -z "$CF_DNSMASQ_FILES" ] && [ "$HAS_MIHOMO_UPSTREAM" = "no" ]; then
+    record PASS TC-20 "DNS 原生性验证（停止后）" \
+        "检查 dnsmasq.d 无 clashforge 残留、DNS 不返回 fake-ip、dnsmasq 不指向 mihomo" \
+        "DNS 完全还原为 OpenWrt 原生，无 clashforge 残留" \
+        "DNS 结果: $DNS_RESULT（非 fake-ip）, dnsmasq 无残留配置 ✓"
+elif [ "$IS_FAKEIP" = "yes" ]; then
+    record FAIL TC-20 "DNS 原生性验证（停止后）" \
+        "检查 DNS 解析不返回 fake-ip（198.18.x.x）" \
+        "DNS 还原为真实 IP，不再返回 fake-ip" \
+        "DNS 仍返回 fake-ip: $DNS_RESULT — clashforge DNS 未完全清除！"
+elif [ -n "$CF_DNSMASQ_FILES" ]; then
+    record FAIL TC-20 "DNS 原生性验证（停止后）" \
+        "检查 dnsmasq.d 无 clashforge 残留配置文件" \
+        "dnsmasq.d 无 clashforge 残留" \
+        "发现残留配置: $CF_DNSMASQ_FILES"
+else
+    record WARN TC-20 "DNS 原生性验证（停止后）" \
+        "检查 dnsmasq 不再指向 mihomo upstream" \
+        "dnsmasq upstream 已清除" \
+        "dnsmasq 仍有 mihomo upstream 配置: $DNSMASQ_UPSTREAM"
+fi
+
+# TC-18 停止后路由器端 probes（调用 /overview/probes API，验证出口已回直连）
+# 注：此时 clashforge 仍在运行但 mihomo 已停止，API 可用
+info "停止后路由器端 probes..."
+AFTER_PROBES=$(curl -sf --max-time 20 "$CF_API/overview/probes" 2>/dev/null || echo "FAILED")
+if [ "$AFTER_PROBES" != "FAILED" ]; then
+    AFTER_IP=$(echo "$AFTER_PROBES" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
+    info "停止后 probes 出口 IP: $AFTER_IP"
+    if [ -n "$AFTER_IP" ] && [ "$AFTER_IP" = "$DIRECT_IP" ]; then
+        record PASS TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
+            "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
+            "出口 IP 还原为直连 IP（非代理节点 IP）" \
+            "probes 出口 IP: $AFTER_IP = 直连 $DIRECT_IP ✓"
+    elif [ -n "$AFTER_IP" ]; then
+        record WARN TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
+            "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
+            "出口 IP 还原为直连 IP" \
+            "出口 IP: $AFTER_IP（直连基准: $DIRECT_IP）"
+    else
+        record FAIL TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
+            "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
+            "能获取出口 IP" \
+            "probes 无法获取出口 IP（mihomo 已停止，clashforge 仍可调用直连检测）"
+    fi
+else
+    record WARN TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
+        "停止 ClashForge 后调用 GET /overview/probes" \
+        "出口 IP 还原为直连 IP" \
+        "probes API 无响应（clashforge 可能也已停止）"
+fi
+
+# TC-19 停止后可访问性检查
+info "停止后路由器端可访问性检查..."
 DIRECT_TARGETS="https://www.baidu.com https://music.163.com https://github.com https://www.youtube.com"
 DIRECT_OK=0; DIRECT_TOTAL=0
 for url in $DIRECT_TARGETS; do
@@ -401,16 +486,21 @@ for url in $DIRECT_TARGETS; do
         info "  ✗ $url HTTP $CODE"
     fi
 done
-
 if [ "$DIRECT_OK" = "$DIRECT_TOTAL" ]; then
-    record PASS TC-18 "停止后路由器端 IP 检查" "直连请求 api.ipify.org，确认出口 IP 已回直连" "出口 IP = 启动前直连 IP" "已验证: $FINAL_IP"
-    record PASS TC-19 "停止后路由器端可访问性检查" "直连访问百度/网易云/GitHub/YouTube" "所有站点直连可达" "$DIRECT_OK/$DIRECT_TOTAL 成功"
+    record PASS TC-19 "停止后路由器端可访问性检查" \
+        "直连访问百度/网易云/GitHub/YouTube（ClashForge 已停止）" \
+        "所有站点直连可达，网络恢复正常" \
+        "$DIRECT_OK/$DIRECT_TOTAL 成功"
 elif [ "$DIRECT_OK" -gt 0 ]; then
-    record WARN TC-18 "停止后路由器端 IP 检查" "直连请求 api.ipify.org" "出口 IP = 启动前直连 IP" "$FINAL_IP（$([ "$FINAL_IP" = "$DIRECT_IP" ] && echo '一致' || echo '不一致')"
-    record WARN TC-19 "停止后路由器端可访问性检查" "直连访问百度/网易云/GitHub/YouTube" "所有站点直连可达" "$DIRECT_OK/$DIRECT_TOTAL 成功"
+    record WARN TC-19 "停止后路由器端可访问性检查" \
+        "直连访问百度/网易云/GitHub/YouTube" \
+        "所有站点直连可达" \
+        "$DIRECT_OK/$DIRECT_TOTAL 成功"
 else
-    record FAIL TC-18 "停止后路由器端 IP 检查" "直连请求 api.ipify.org" "出口 IP 可获取" "无法获取出口 IP"
-    record FAIL TC-19 "停止后路由器端可访问性检查" "直连访问百度/网易云/GitHub/YouTube" "站点直连可达" "全部不可达"
+    record FAIL TC-19 "停止后路由器端可访问性检查" \
+        "直连访问百度/网易云/GitHub/YouTube" \
+        "至少部分站点直连可达" \
+        "全部不可达（DNS 或路由可能未完全还原）"
 fi
 
 # ── 输出 GitHub Actions Job Summary ──────────────────────────────────────────
