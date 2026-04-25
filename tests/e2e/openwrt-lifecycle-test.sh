@@ -300,34 +300,32 @@ else
         "API 调用失败"
 fi
 
-# TC-05b: 步骤3 — 输入订阅链接，检查是否已存在（Setup 页面去重逻辑）
-info "[Setup] 步骤3：检查订阅是否已存在（去重）..."
-MATCHED_ID=$(echo "$EXISTING_SUBS" | grep -o '"url":"[^"]*"' | grep -F "$(echo "$SUBSCRIPTION_URL" | cut -c1-30)" | head -1 || echo "")
-if [ -n "$MATCHED_ID" ]; then
-    # 已存在同 URL 的订阅，复用
-    SUB_ID=$(echo "$EXISTING_SUBS" | grep -B5 "$(echo "$SUBSCRIPTION_URL" | cut -c1-30)" | grep '"id":' | tail -1 | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//')
-    info "订阅已存在，复用 ID: $SUB_ID"
-else
-    # TC-05c: 步骤4 — 添加新订阅（用户输入 URL 后点击「导入」）
-    info "[Setup] 步骤4：添加订阅（输入订阅链接 → 点击导入）..."
-    ADD_RESP=$(curl -sf --max-time 15 \
-        -H "Content-Type: application/json" \
-        -d "{"url":"$SUBSCRIPTION_URL","name":"e2e-test","type":"clash","enabled":true}" \
-        "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
-    if [ "$ADD_RESP" = "FAILED" ]; then
-        record FAIL TC-05b "添加订阅" \
-            "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
-            "返回新订阅 ID" \
-            "API 调用失败"
-        exit 1
-    fi
-    SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
-    record PASS TC-05b "添加订阅" \
+# TC-05b: 步骤4 — 添加订阅
+# 每次测试先删除旧的 e2e-test 订阅，再新建，避免历史残留影响测试
+info "[Setup] 清理旧的 e2e-test 订阅..."
+OLD_IDS=$(curl -sf "$CF_API/subscriptions" 2>/dev/null | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//')
+for OID in $OLD_IDS; do
+    curl -sf -X DELETE "$CF_API/subscriptions/$OID" 2>/dev/null > /dev/null || true
+done
+info "已清理 $(echo "$OLD_IDS" | wc -w) 个旧订阅"
+
+info "[Setup] 步骤4：添加订阅（输入订阅链接 → 点击导入）..."
+ADD_RESP=$(curl -sf --max-time 15 \
+    -H "Content-Type: application/json" \
+    -d "{\"url\":\"$SUBSCRIPTION_URL\",\"name\":\"e2e-test\",\"type\":\"clash\",\"enabled\":true}" \
+    "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
+if [ "$ADD_RESP" = "FAILED" ]; then
+    record FAIL TC-05b "添加订阅" \
         "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
         "返回新订阅 ID" \
-        "订阅已添加，ID: $SUB_ID"
+        "API 调用失败"
+    exit 1
 fi
-
+SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
+record PASS TC-05b "添加订阅" \
+    "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
+    "返回新订阅 ID" \
+    "订阅已添加，ID: $SUB_ID"
 if [ -z "$SUB_ID" ]; then
     record FAIL TC-05b "添加订阅" "POST /api/v1/subscriptions" "返回新订阅 ID" "无法获取订阅 ID"
     exit 1
