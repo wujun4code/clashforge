@@ -550,7 +550,9 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 	// IsApplied() is in-memory only; also check the actual kernel table so status
 	// survives process restarts when rules were previously applied.
 	clashforgeOwned := deps.Netfilter != nil && (deps.Netfilter.IsApplied() || nftTablePresent())
-	dnsManaged := deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none"
+	// dnsManaged reflects actual runtime state: config intent AND core is currently running.
+	// When mihomo stops, this becomes false so the UI correctly shows "让 ClashForge 接管".
+	dnsManaged := coreStatus.Ready && deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none"
 	dnsListenerReady := isDNSPortListening(deps.Config.Ports.DNS)
 	stopTargets := collectStopServices(influences, "transparent_proxy", "nft_firewall")
 	dnsStopTargets := collectStopServices(influences, "dns_entry")
