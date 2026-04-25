@@ -39,6 +39,12 @@ func handleCoreStart(deps Dependencies) http.HandlerFunc {
 
 func handleCoreStop(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Release DNS + nftables BEFORE stopping the core so there is no DNS
+		// blackout window.  Restoring dnsmasq first keeps mihomo's dns_redirect
+		// chain alive during dnsmasq restart; by the time we remove the metaclash
+		// nft table dnsmasq is already listening on :53.
+		_, _ = releaseAllTakeover(deps)
+
 		if err := deps.Core.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
 			Err(w, http.StatusInternalServerError, "CORE_STOP_FAILED", err.Error())
 			return

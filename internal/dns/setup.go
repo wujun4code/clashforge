@@ -77,7 +77,11 @@ func setupReplace() error {
 	if err := writeManagedDNSMasqConfig(content); err != nil {
 		return err
 	}
-	return restartDnsmasqFull()
+	if err := restartDnsmasqFull(); err != nil {
+		return err
+	}
+	removeDnsmasqNftHijack()
+	return nil
 }
 
 func setupReplaceUCI() error {
@@ -89,7 +93,35 @@ func setupReplaceUCI() error {
 	}
 	log.Info().Msg("dns: dnsmasq port=0 set via UCI (replace mode)")
 	// Full restart (not just SIGHUP) so the port=0 change takes effect.
-	return restartDnsmasqFull()
+	if err := restartDnsmasqFull(); err != nil {
+		return err
+	}
+	// After dnsmasq restarts with port=0, remove its auto-injected nftables HIJACK
+	// rule (table inet dnsmasq, priority dstnat-5). If left in place it intercepts
+	// client DNS before clashforge's own dns_redirect chain (priority dstnat),
+	// redirecting packets to port 53 where nothing is listening — breaking DNS for
+	// all LAN clients even though mihomo is up and healthy.
+	removeDnsmasqNftHijack()
+	return nil
+}
+
+// removeDnsmasqNftHijack deletes the nftables table that dnsmasq injects on
+// startup to hijack port-53 traffic. In replace mode clashforge owns DNS, so
+// this table must not exist — it would intercept client queries before
+// clashforge's own dns_redirect chain and forward them to port 53 where dnsmasq
+// is not listening (port=0), causing a full DNS blackout for LAN clients.
+func removeDnsmasqNftHijack() {
+	out, err := exec.Command("nft", "delete", "table", "inet", "dnsmasq").CombinedOutput()
+	if err != nil {
+		s := string(out)
+		// Not an error if the table simply doesn't exist.
+		if strings.Contains(s, "No such file") || strings.Contains(s, "table not found") || strings.Contains(s, "does not exist") {
+			return
+		}
+		log.Warn().Str("output", s).Msg("dns: failed to remove dnsmasq nft hijack table (non-fatal)")
+		return
+	}
+	log.Info().Msg("dns: removed dnsmasq nft hijack table (inet dnsmasq)")
 }
 
 func restoreReplace() error {

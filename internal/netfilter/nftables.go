@@ -14,6 +14,11 @@ import (
 const fwMark = "0x1a3"
 const routeTable = "100"
 
+// FWMark and RouteTable are exported so the API layer can display them in
+// stop-flow SSE messages without duplicating the values.
+const FWMark = fwMark
+const RouteTable = routeTable
+
 // NftablesBackend manages nftables TProxy rules.
 type NftablesBackend struct {
 	TProxyPort        int

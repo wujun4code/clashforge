@@ -15,7 +15,7 @@ coverage.out
 internal/api/ui_dist/
 
 # Local packaging artifacts
-/*.ipk
+*.ipk
 /data.tar.gz
 /control.tar.gz
 /debian-binary

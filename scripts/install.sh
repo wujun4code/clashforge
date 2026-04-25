@@ -161,30 +161,107 @@ GH_DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${IPK_NAME}
 log "Version : $TAG"
 log "Package : $IPK_NAME"
 
+# ── pre-upgrade cleanup ───────────────────────────────────────────────────────
+# Run before every install (fresh or upgrade).
+# Restores the system to a clean pre-clashforge state without touching user
+# config/data (/etc/metaclash is left intact).
+#
+# ORDER matters for zero-DNS-blackout teardown:
+#   1. DNS restore FIRST — UCI deletes port=0 override, dnsmasq restarts on :53.
+#      While dnsmasq is restarting the metaclash dns_redirect chain (:53→mihomo)
+#      is still active, so LAN clients never lose DNS resolution.
+#   2. nftables cleanup SECOND — by the time we delete table inet metaclash,
+#      dnsmasq is already on :53 and takes over seamlessly.
+#   3. Kill processes LAST — avoids racing with the service's own SIGTERM handler.
+
+pre_upgrade_cleanup() {
+  # Quick check: skip if nothing is running and no nft metaclash table exists.
+  _cf_running=0
+  pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && _cf_running=1
+  pgrep -f "/usr/bin/mihomo-clashforge" >/dev/null 2>&1 && _cf_running=1
+  nft list table inet metaclash >/dev/null 2>&1 && _cf_running=1
+
+  if [ "$_cf_running" = "0" ]; then
+    log "pre-upgrade: no running clashforge state detected, skipping cleanup"
+    return 0
+  fi
+
+  log "pre-upgrade: restoring system state before install..."
+
+  # 1. Restore dnsmasq DNS config (UCI)
+  log "  [1/5] restoring dnsmasq via UCI..."
+  if command -v uci >/dev/null 2>&1; then
+    uci -q delete dhcp.@dnsmasq[0].port    || true   # replace mode: port=0 override
+    uci -q delete dhcp.@dnsmasq[0].server  || true   # upstream mode: server= override
+    uci -q delete dhcp.@dnsmasq[0].noresolv || true  # upstream mode: noresolv= override
+    uci commit dhcp 2>/dev/null            || true
+    log "  UCI dhcp.@dnsmasq[0] overrides deleted and committed"
+  fi
+  # conf-dir fallback (non-UCI systems)
+  rm -f /etc/dnsmasq.d/clashforge.conf 2>/dev/null || true
+  /etc/init.d/dnsmasq restart 2>/dev/null || true
+  log "  dnsmasq restarted (full restart, not SIGHUP)"
+
+  # 2. Remove table inet metaclash (tproxy_prerouting + dns_redirect chains)
+  log "  [2/5] removing nftables table inet metaclash..."
+  if nft list table inet metaclash >/dev/null 2>&1; then
+    nft delete table inet metaclash 2>/dev/null \
+      && log "  table inet metaclash deleted" \
+      || warn "  failed to delete table inet metaclash (will retry after kill)"
+  else
+    log "  table inet metaclash not present, skipping"
+  fi
+
+  # 3. Remove table inet dnsmasq HIJACK table
+  # dnsmasq injects this on every restart (priority dstnat-5).  When port=0 the
+  # redirect :53→:53 hits nothing and breaks DNS for all LAN clients.
+  log "  [3/5] removing nftables table inet dnsmasq (HIJACK)..."
+  if nft list table inet dnsmasq >/dev/null 2>&1; then
+    nft delete table inet dnsmasq 2>/dev/null \
+      && log "  table inet dnsmasq (HIJACK) deleted" \
+      || warn "  failed to delete table inet dnsmasq"
+  else
+    log "  table inet dnsmasq not present, skipping"
+  fi
+
+  # 4. Clean up policy routing rules and route table (IPv4 + IPv6)
+  log "  [4/5] cleaning up policy routing fwmark 0x1a3 / table 100..."
+  _removed=0
+  while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do _removed=$((_removed+1)); done
+  [ "$_removed" -gt 0 ] && log "  removed $_removed IPv4 ip rule(s)" || log "  no IPv4 ip rules to remove"
+  ip route flush table 100 2>/dev/null || true
+  _removed6=0
+  while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do _removed6=$((_removed6+1)); done
+  [ "$_removed6" -gt 0 ] && log "  removed $_removed6 IPv6 ip rule(s)" || log "  no IPv6 ip rules to remove"
+  ip -6 route flush table 100 2>/dev/null || true
+
+  # 5. Stop clashforge service and kill any remaining processes
+  log "  [5/5] stopping clashforge service and processes..."
+  /etc/init.d/clashforge stop 2>/dev/null || true
+  sleep 1
+  for _name in clashforge mihomo-clashforge; do
+    _pids=$(pgrep -f "/usr/bin/$_name" 2>/dev/null || true)
+    if [ -n "$_pids" ]; then
+      # shellcheck disable=SC2086
+      kill $_pids 2>/dev/null || true
+      sleep 1
+      _pids=$(pgrep -f "/usr/bin/$_name" 2>/dev/null || true)
+      # shellcheck disable=SC2086
+      [ -n "$_pids" ] && kill -9 $_pids 2>/dev/null || true
+      log "  $_name processes stopped"
+    fi
+  done
+
+  ok "pre-upgrade cleanup complete"
+}
+
 # ── purge old installation ────────────────────────────────────────────────────
 
 do_purge() {
   log "Purging old installation..."
 
-  # Stop service and kill any survivors
-  /etc/init.d/clashforge stop 2>/dev/null || true
-  /etc/init.d/clashforge disable 2>/dev/null || true
-  for pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
-    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
-    case "$cmdline" in
-      *"/usr/bin/clashforge"*|*"/usr/bin/mihomo-clashforge"*)
-        kill -9 "$pid" 2>/dev/null || true ;;
-    esac
-  done
-
-  # Firewall / routing cleanup
-  nft delete table inet metaclash 2>/dev/null || true
-  while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-  ip route flush table 100 2>/dev/null || true
-
-  # DNS cleanup
-  rm -f /etc/dnsmasq.d/clashforge.conf /tmp/dnsmasq.d/clashforge.conf
-  /etc/init.d/dnsmasq restart 2>/dev/null || /etc/init.d/dnsmasq reload 2>/dev/null || true
+  # Use pre_upgrade_cleanup for the network/process teardown (correct order).
+  pre_upgrade_cleanup
 
   # Remove via opkg (runs prerm/postrm scripts)
   if command -v opkg >/dev/null 2>&1 && opkg status clashforge 2>/dev/null | grep -q "^Package:"; then
@@ -260,7 +337,11 @@ print_success() {
 # ── main ──────────────────────────────────────────────────────────────────────
 
 if [ "$PURGE" = "1" ]; then
+  # --purge: full wipe (network cleanup + opkg remove + data wipe)
   do_purge
+else
+  # Normal install / upgrade: clean up running state first, keep config/data.
+  pre_upgrade_cleanup
 fi
 
 IPK_PATH=$(download_ipk)

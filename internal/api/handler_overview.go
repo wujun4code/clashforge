@@ -1418,6 +1418,18 @@ func releaseAllTakeover(deps Dependencies) (string, error) {
 	// Release system-level takeover modules.
 	// Do NOT touch ApplyOnStart flags — they represent the user's intent and
 	// must remain sticky so that restarting the core re-applies the same setup.
+	//
+	// ORDER MATTERS for zero-blackout teardown:
+	//  1. DNS restore FIRST — deletes UCI port=0 override and restarts dnsmasq so
+	//     it is listening on :53 again.  While dnsmasq restarts, the metaclash
+	//     dns_redirect chain (:53→mihomo) is still active, so LAN clients keep
+	//     working throughout the dnsmasq restart window.
+	//  2. Nftables cleanup SECOND — by the time we delete table inet metaclash,
+	//     dnsmasq is already on :53 and takes over seamlessly.
+
+	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
+		_ = dns.Restore(mode) // best-effort; log inside Restore
+	}
 
 	if deps.Netfilter != nil {
 		_ = deps.Netfilter.Cleanup()
@@ -1430,12 +1442,6 @@ func releaseAllTakeover(deps Dependencies) (string, error) {
 			continue
 		}
 		_ = (&netfilter.IptablesBackend{DNSPort: dnsPort}).Cleanup()
-	}
-
-	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
-		if err := dns.Restore(mode); err != nil {
-			return "", err
-		}
 	}
 
 	if deps.Core.Status().Ready {
