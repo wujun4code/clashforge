@@ -208,11 +208,15 @@ info "启动前 nft 表: $(nft list tables 2>/dev/null | tr '\n' ' ')"
 info "启动前 DNS: $(grep nameserver /etc/resolv.conf | tr '\n' ' ')"
 
 # TC-03
-# 优先使用 workflow 构建的本地 IPK（使用触发分支源码），如果没有才 fallback 到最新 release
+# 始终使用 workflow 构建的本地 IPK 安装（确保测试的是当前分支代码）
+# 即使已安装也强制重装，确保版本正确
 LOCAL_IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
-if command -v clashforge > /dev/null 2>&1; then
-    info "clashforge 已安装，跳过安装"
-elif [ -n "$LOCAL_IPK" ]; then
+if [ -n "$LOCAL_IPK" ]; then
+    info "强制重新安装本地构建 IPK: $(basename $LOCAL_IPK)"
+    # 先卸载旧版本（忽略错误）
+    opkg remove clashforge 2>/dev/null || true
+elif false; then
+    : # placeholder
     info "使用本地构建的 IPK 安装: $LOCAL_IPK"
     opkg install "$LOCAL_IPK" 2>&1 | tail -5
 else
@@ -234,45 +238,116 @@ else
     exit 1
 fi
 
-# TC-04
+# === 模拟用户在 http://<router>:7777/setup 页面的完整操作流程 ===
+
+# TC-04: 步骤1 — 启动 ClashForge 守护进程（服务在后台就绪）
+info "[Setup] 步骤1：启动 clashforge 守护进程..."
 /etc/init.d/clashforge start 2>/dev/null || true
 if wait_http "$CF_API/status" 30; then
-    record PASS TC-04 "启动服务 + API 就绪" "/etc/init.d/clashforge start，轮询 GET /api/v1/status" "30 秒内返回 {ok:true}" "API 就绪"
+    STATUS_RESP=$(curl -sf "$CF_API/status" 2>/dev/null)
+    CORE_STATE=$(echo "$STATUS_RESP" | grep -o '"state":"[^"]*"' | head -1 | sed 's/"state":"//;s/"//')
+    record PASS TC-04 "启动 clashforge 服务" \
+        "/etc/init.d/clashforge start → GET /api/v1/status（等同打开 Setup 页面）" \
+        "30 秒内 API 就绪，core.state 可读" \
+        "API 就绪，核心状态: $CORE_STATE"
 else
-    record FAIL TC-04 "启动服务 + API 就绪" "/etc/init.d/clashforge start，轮询 GET /api/v1/status" "30 秒内返回 {ok:true}" "30 秒内未响应"
+    record FAIL TC-04 "启动 clashforge 服务" \
+        "/etc/init.d/clashforge start → GET /api/v1/status" \
+        "30 秒内 API 就绪" \
+        "30 秒内 API 未响应"
     exit 1
 fi
 
-# TC-05
-ADD_RESP=$(curl -sf --max-time 15 \
-    -H "Content-Type: application/json" \
-    -d "{\"url\":\"$SUBSCRIPTION_URL\",\"name\":\"e2e-test\",\"enabled\":true}" \
-    "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
-if [ "$ADD_RESP" = "FAILED" ]; then
-    record FAIL TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "添加订阅 API 失败"
+# TC-05a: 步骤2 — 查询现有订阅（Setup 页面加载时自动调用）
+info "[Setup] 步骤2：查询现有订阅列表..."
+EXISTING_SUBS=$(curl -sf --max-time 10 "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
+if [ "$EXISTING_SUBS" != "FAILED" ]; then
+    SUB_COUNT=$(echo "$EXISTING_SUBS" | grep -o '"id":' | wc -l)
+    record PASS TC-05a "查询订阅列表" \
+        "GET /api/v1/subscriptions（Setup 页面初始化）" \
+        "API 返回订阅列表" \
+        "当前订阅数: $SUB_COUNT"
+else
+    record FAIL TC-05a "查询订阅列表" \
+        "GET /api/v1/subscriptions" \
+        "API 返回订阅列表" \
+        "API 调用失败"
+fi
+
+# TC-05b: 步骤3 — 输入订阅链接，检查是否已存在（Setup 页面去重逻辑）
+info "[Setup] 步骤3：检查订阅是否已存在（去重）..."
+MATCHED_ID=$(echo "$EXISTING_SUBS" | grep -o '"url":"[^"]*"' | grep -F "$(echo "$SUBSCRIPTION_URL" | cut -c1-30)" | head -1 || echo "")
+if [ -n "$MATCHED_ID" ]; then
+    # 已存在同 URL 的订阅，复用
+    SUB_ID=$(echo "$EXISTING_SUBS" | grep -B5 "$(echo "$SUBSCRIPTION_URL" | cut -c1-30)" | grep '"id":' | tail -1 | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//')
+    info "订阅已存在，复用 ID: $SUB_ID"
+else
+    # TC-05c: 步骤4 — 添加新订阅（用户输入 URL 后点击「导入」）
+    info "[Setup] 步骤4：添加订阅（输入订阅链接 → 点击导入）..."
+    ADD_RESP=$(curl -sf --max-time 15 \
+        -H "Content-Type: application/json" \
+        -d "{"url":"$SUBSCRIPTION_URL","name":"e2e-test","type":"clash","enabled":true}" \
+        "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
+    if [ "$ADD_RESP" = "FAILED" ]; then
+        record FAIL TC-05b "添加订阅" \
+            "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
+            "返回新订阅 ID" \
+            "API 调用失败"
+        exit 1
+    fi
+    SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
+    record PASS TC-05b "添加订阅" \
+        "POST /api/v1/subscriptions（用户输入订阅 URL → 点击导入按钮）" \
+        "返回新订阅 ID" \
+        "订阅已添加，ID: $SUB_ID"
+fi
+
+if [ -z "$SUB_ID" ]; then
+    record FAIL TC-05b "添加订阅" "POST /api/v1/subscriptions" "返回新订阅 ID" "无法获取订阅 ID"
     exit 1
 fi
-SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
-SYNC_RESP=$(curl -sf --max-time 30 -H "Content-Type: application/json" -d '{}' \
+
+# TC-05d: 步骤5 — 同步拉取订阅节点（点击导入后自动调用 sync-update）
+info "[Setup] 步骤5：拉取订阅节点（同步更新）..."
+SYNC_RESP=$(curl -sf --max-time 30 \
+    -H "Content-Type: application/json" -d '{}' \
     "$CF_API/subscriptions/$SUB_ID/sync-update" 2>/dev/null || echo "FAILED")
-if [ -n "$SUB_ID" ] && echo "$SYNC_RESP" | grep -qE "ok|true|success|nodes"; then
-    record PASS TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "订阅 ID: $SUB_ID，节点拉取成功"
+if echo "$SYNC_RESP" | grep -qE "ok|true|success|nodes"; then
+    NODE_COUNT=$(curl -sf "$CF_API/subscriptions/$SUB_ID" 2>/dev/null | grep -o '"node_count":[0-9]*' | cut -d: -f2 || echo "?")
+    record PASS TC-05d "拉取订阅节点" \
+        "POST /api/v1/subscriptions/{id}/sync-update（订阅导入后自动同步）" \
+        "节点拉取成功，节点数 ≥ 1" \
+        "节点拉取成功（节点数: $NODE_COUNT）"
 else
-    record FAIL TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "sync 失败: $SYNC_RESP"
+    record FAIL TC-05d "拉取订阅节点" \
+        "POST /api/v1/subscriptions/{id}/sync-update" \
+        "节点拉取成功" \
+        "sync 失败: $SYNC_RESP"
     exit 1
 fi
 
-# TC-06
+# TC-06: 步骤6 — 配置 DNS + 网络设置，点击「启动服务」按钮
+# 对应 Setup 页面中的 DNS 模式选择 + 网络模式选择 + 点击「启动」
+info "[Setup] 步骤6：配置 DNS（fake-ip + upstream）..."
+info "[Setup]         配置网络（tproxy + nftables + bypass_lan）..."
+info "[Setup]         点击「启动服务」按钮 → POST /api/v1/setup/launch (SSE)..."
 sleep 2
 curl -sf --max-time 60 -H "Content-Type: application/json" \
-    -d '{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}' \
+    -d '{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true,"ipv6":false}}' \
     "$CF_API/setup/launch" > /tmp/launch.log 2>/dev/null || true
 LAUNCH_OUT=$(cat /tmp/launch.log)
+info "launch SSE 最后3行: $(echo "$LAUNCH_OUT" | tail -3)"
 if echo "$LAUNCH_OUT" | grep -q '"success":true'; then
-    record PASS TC-06 "触发 Setup Launch" "POST /setup/launch dns.mode=fake-ip dnsmasq_mode=upstream network.mode=tproxy" '{"success":true}' "launch 成功"
+    record PASS TC-06 "启动服务（用户前端操作）" \
+        "POST /api/v1/setup/launch（DNS: fake-ip/upstream, 网络: tproxy/nftables, bypass_lan）（等同点击「启动服务」按钮）" \
+        "SSE 返回 success:true，mihomo 启动，DNS/nft 规则生效" \
+        "launch 成功"
 else
     LAUNCH_ERR=$(echo "$LAUNCH_OUT" | grep -o '"error":"[^"]*"' | head -1)
-    record FAIL TC-06 "触发 Setup Launch" "POST /setup/launch" '{"success":true}' "launch 失败: $LAUNCH_ERR"
+    record FAIL TC-06 "启动服务（用户前端操作）" \
+        "POST /api/v1/setup/launch" \
+        "SSE 返回 success:true" \
+        "launch 失败: $LAUNCH_ERR"
     exit 1
 fi
 sleep 5
@@ -432,9 +507,9 @@ else
         "无法获取代理出口 IP"
 fi
 
-# ── Phase 4: 停止阶段 ─────────────────────────────────────────────────────────
-# 第二轮连通性检测（代理运行期）
-info "第二轮连通性检测（通过代理）..."
+# ── Phase 3b: 代理运行期—第二轮连通性检测（用户浏览器端）──────────────────────────
+section "Phase 3b — 第二轮连通性检测（代理运行期，模拟用户浏览器）"
+info "在 VM 内通过代理发起请求，模拟用户设备通过网关上网..."
 if [ -n "$PROXY_AUTH" ]; then
     run_connectivity_check "round2" "http://$PROXY_AUTH@127.0.0.1:7890"
 else
@@ -449,6 +524,8 @@ grep -v "^ip=" "${SNAPSHOT_DIR}/round2.txt" | while IFS="=" read k v; do
         || printf "  ✗ %s HTTP %s\n" "$k" "$v"
 done
 
+
+# ── Phase 4: 停止阶段 ──────────────────────────────────────────────────────────
 section "Phase 4 — 停止阶段（仅通过用户前端 API）"
 
 # TC-13 — 严格只通过 POST /api/v1/setup/stop，等待 SSE 返回 success:true
@@ -469,10 +546,10 @@ if [ -n "$STOP_SUCCESS" ]; then
         "API 返回 success:true，所有资源（mihomo/DNS/nft/路由）已清理" \
         "stop API 成功"
 elif [ "$STOP_HTTP404" = "yes" ]; then
-    record WARN TC-13 "停止服务（用户前端操作）" \
+    record FAIL TC-13 "停止服务（用户前端操作）" \
         "POST /api/v1/setup/stop — 等待 SSE success:true（等同前端停止按钮）" \
-        "API 返回 success:true" \
-        "/setup/stop 在当前版本返回 404，需升级到包含 setup/stop 的版本"
+        "API 返回 success:true，停止流程完整执行" \
+        "致命错误：/setup/stop 返回 404，当前版本不支持此 API，测试无法继续"
 else
     record FAIL TC-13 "停止服务（用户前端操作）" \
         "POST /api/v1/setup/stop — 等待 SSE success:true" \
@@ -481,12 +558,6 @@ else
 fi
 
 # 等待停止流程完成
-# stop API 返回 404（版本不支持）时，必须通过 init.d 停止，否则后续验证无意义
-if [ -n "$STOP_HTTP404" ] && [ "$STOP_HTTP404" = "yes" ]; then
-    info "stop API 返回 404，使用 init.d 停止流程（限于版本）..."
-    /etc/init.d/clashforge stop 2>/dev/null || true
-    sleep 5
-fi
 sleep 5
 
 # TC-14
