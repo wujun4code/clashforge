@@ -143,6 +143,8 @@ go build ./cmd/clashforge
 
 架构与设计文档：[`docs/CLASH_REPLACEMENT_DESIGN.md`](./docs/CLASH_REPLACEMENT_DESIGN.md)
 
+**Fork 后自托管分发：** 如果你 fork 了本仓库并希望将 IPK 文件同步到自己的 Cloudflare R2，请参考 [`docs/guides/fork-r2-setup.md`](./docs/guides/fork-r2-setup.md)。
+
 ## 上游项目
 
 - [vernesong/openclash](https://github.com/vernesong/openclash)
@@ -290,6 +292,8 @@ Pushing a tag matching `v*` triggers the GitHub Actions release pipeline: UI bui
 ## Documentation
 
 Architecture and design document: [`docs/CLASH_REPLACEMENT_DESIGN.md`](./docs/CLASH_REPLACEMENT_DESIGN.md)
+
+**Fork & self-hosted distribution:** If you have forked this repo and want to sync IPK releases to your own Cloudflare R2 bucket, see [`docs/guides/fork-r2-setup.md`](./docs/guides/fork-r2-setup.md).
 
 ## Upstream Projects
 
