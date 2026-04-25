@@ -4,17 +4,17 @@ import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
   Sparkles, RotateCw, Link2, Square, ShieldOff, Database, Radio,
+  Minus, Terminal,
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
   updateOverrides, generateConfig, getMihomoConfig, getConfig, updateConfig,
-  startCore, stopCore, takeoverOverviewModule, releaseOverviewTakeover,
+  stopCore, releaseOverviewTakeover,
   getOverviewCore, getOverviewProbes, getLogs,
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
   saveSource, setActiveSource, getSourceFile, getSources,
-  detectConflicts, stopService,
 } from '../api/client'
-import type { OverviewProbeData, OverviewModule, LogEntry, ConflictService, SourceFile, Subscription } from '../api/client'
+import type { OverviewProbeData, OverviewModule, LogEntry, SourceFile, Subscription } from '../api/client'
 
 type InitStatus = 'checking' | 'running' | 'ready'
 
@@ -66,6 +66,17 @@ interface FormNetwork {
   bypass_china: boolean
   apply_on_start: boolean
   ipv6: boolean
+}
+
+// Streaming launch event received from POST /api/v1/setup/launch
+interface LaunchEvent {
+  type: 'step' | 'info' | 'done'
+  step?: string
+  status?: 'running' | 'ok' | 'error' | 'skip' | 'info'
+  message: string
+  detail?: string
+  success?: boolean
+  error?: string
 }
 
 // ── Config preview helpers ──────────────────────────────────────────────────
@@ -397,9 +408,7 @@ export function Setup() {
   const [launching, setLaunching] = useState(false)
   const [launchDone, setLaunchDone] = useState(false)
   const [launchError, setLaunchError] = useState('')
-  const [conflicts, setConflicts] = useState<ConflictService[]>([])
-  const [stoppingConflicts, setStoppingConflicts] = useState(false)
-  const [conflictStopped, setConflictStopped] = useState(false)
+  const [launchLog, setLaunchLog] = useState<LaunchEvent[]>([])
 
   // ── check step ──
   const [checking, setChecking] = useState(false)
@@ -608,86 +617,72 @@ export function Setup() {
     } finally { setImporting(false) }
   }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved])
 
-  // ── launch ──
+  // ── launch (streaming SSE from POST /api/v1/setup/launch) ──
+  const logEndRef = useRef<HTMLDivElement>(null)
   const handleLaunch = useCallback(async () => {
-    setLaunching(true); setLaunchError('')
+    setLaunching(true)
+    setLaunchLog([])
+    setLaunchDone(false)
+    setLaunchError('')
+
+    const secret = localStorage.getItem('cf_secret') || ''
+    let res: Response
     try {
-      // Step 1: detect conflicts
-      const { conflicts: found } = await detectConflicts().catch(() => ({ conflicts: [], has_conflict: false }))
-      if (found.length > 0) {
-        setConflicts(found)
-        setLaunching(false)
-        return
-      }
-
-      // Step 2: persist ClashForge config (DNS + network)
-      const cfg = await getConfig()
-      const updated = {
-        ...cfg,
-        dns: {
-          ...(cfg as Record<string, unknown>).dns as Record<string, unknown>,
-          enable: dns.enable,
-          mode: dns.mode,
-          dnsmasq_mode: dns.dnsmasq_mode,
-          apply_on_start: dns.apply_on_start,
+      res = await fetch('/api/v1/setup/launch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
         },
-        network: {
-          ...(cfg as Record<string, unknown>).network as Record<string, unknown>,
-          mode: net.mode,
-          firewall_backend: net.firewall_backend,
-          bypass_lan: net.bypass_lan,
-          bypass_china: net.bypass_china,
-          apply_on_start: net.apply_on_start,
-          ipv6: net.ipv6,
-        },
-      }
-      await updateConfig(updated as Record<string, unknown>)
-
-      // Step 3: start core
-      await startCore()
-
-      // Step 4: apply takeover if requested
-      if (net.mode !== 'none' && net.apply_on_start) {
-        await takeoverOverviewModule({ module: 'transparent_proxy', mode: net.mode })
-      }
-      if (dns.enable && dns.apply_on_start) {
-        await takeoverOverviewModule({ module: 'dns_entry' })
-      }
-
-      setLaunchDone(true)
-      setTimeout(() => setStep('check'), 800)
-    } catch (e: unknown) {
-      setLaunchError(e instanceof Error ? e.message : String(e))
-    } finally { setLaunching(false) }
-  }, [dns, net])
-
-  // ── stop conflicts then re-launch ──
-  const handleStopConflicts = useCallback(async () => {
-    setStoppingConflicts(true)
-    try {
-      for (const svc of conflicts) {
-        if (svc.name === 'openclash') {
-          await stopService('openclash').catch(() => null)
-        }
-        // for other services (mihomo, clash) use generic kill via stop-service
-        // currently those map to openclash stop script as best-effort
-      }
-      setConflictStopped(true)
-      setConflicts([])
-      // Re-run launch now that conflicts are cleared
-      await handleLaunch()
-    } finally {
-      setStoppingConflicts(false)
+        body: JSON.stringify({
+          dns: { enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode, apply_on_start: dns.apply_on_start },
+          network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
+        }),
+      })
+    } catch (e) {
+      setLaunchError(e instanceof Error ? e.message : '无法连接到服务器')
+      setLaunching(false)
+      return
     }
-  }, [conflicts, handleLaunch])
 
-  // ── auto-detect conflicts when entering launch step ──
-  useEffect(() => {
-    if (step !== 'launch' || launchDone) return
-    detectConflicts()
-      .then(({ conflicts: found }) => setConflicts(found))
-      .catch(() => null)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+    const reader = res.body?.getReader()
+    if (!reader) {
+      setLaunchError('服务器未返回数据流')
+      setLaunching(false)
+      return
+    }
+
+    const decoder = new TextDecoder()
+    let buf = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev: LaunchEvent = JSON.parse(line.slice(6))
+            setLaunchLog(prev => [...prev, ev])
+            setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+            if (ev.type === 'done') {
+              setLaunchDone(ev.success ?? false)
+              if (!ev.success) setLaunchError(ev.error ?? '启动失败')
+              setLaunching(false)
+              if (ev.success) setTimeout(() => setStep('check'), 1800)
+              return
+            }
+          } catch { /* ignore unparseable line */ }
+        }
+      }
+    } catch (e) {
+      setLaunchError(e instanceof Error ? e.message : '数据流读取错误')
+    } finally {
+      setLaunching(false)
+    }
+  }, [dns, net])
 
   // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
   useEffect(() => {
@@ -1216,101 +1211,107 @@ export function Setup() {
         {step === 'launch' && (
           <div className="space-y-4">
             <div className="glass-card px-5 py-5 space-y-4">
-              <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">启动前确认</h2>
-
-              {/* Summary */}
+              {/* Config summary */}
+              <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">启动服务</h2>
               <div className="space-y-2 text-xs">
                 <div className="flex items-center gap-2 text-muted">
                   <Wifi size={12} className="text-brand" />
                   <span className="text-slate-300">DNS：</span>
-                  {dns.enable ? `启用 · ${dns.mode} · ${dns.listen}` : '禁用'}
-                  {dns.apply_on_start && dns.enable && <span className="text-brand">（启动时接管）</span>}
+                  {dns.enable ? `启用 · ${dns.mode} · ${dns.dnsmasq_mode}` : '禁用'}
+                  {dns.apply_on_start && dns.enable && <span className="text-brand ml-1">（启动时接管）</span>}
                 </div>
                 <div className="flex items-center gap-2 text-muted">
                   <Globe size={12} className="text-brand" />
                   <span className="text-slate-300">透明代理：</span>
                   {net.mode === 'none' ? '不接管' : `${net.mode.toUpperCase()} · ${net.firewall_backend}`}
-                  {net.apply_on_start && net.mode !== 'none' && <span className="text-brand">（启动时接管）</span>}
+                  {net.apply_on_start && net.mode !== 'none' && <span className="text-brand ml-1">（启动时接管）</span>}
                 </div>
                 <div className="flex items-center gap-2 text-muted">
                   <Sparkles size={12} className="text-brand" />
                   <span className="text-slate-300">绕过局域网：</span>{net.bypass_lan ? '是' : '否'}
                   <span className="text-slate-300 ml-2">绕过国内 IP：</span>{net.bypass_china ? '是' : '否'}
+                  {net.ipv6 && <span className="text-slate-300 ml-2">IPv6 透明代理：开启</span>}
                 </div>
               </div>
 
-              {/* Conflict warning banner */}
-              {conflicts.length > 0 && (
-                <div className="rounded-xl bg-amber-500/10 border border-amber-400/30 px-4 py-4 space-y-3">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-amber-300">检测到冲突服务</p>
-                      <p className="text-xs text-amber-200/70 mt-0.5 leading-5">
-                        以下服务与 ClashForge 存在端口或流量接管冲突，建议在启动前将其停止，以避免意外问题。
-                      </p>
-                    </div>
+              {/* Streaming launch log panel */}
+              {launchLog.length > 0 && (
+                <div className="rounded-xl bg-black/40 border border-white/8 overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 py-2 border-b border-white/8 bg-white/3">
+                    <Terminal size={13} className="text-brand" />
+                    <span className="text-xs font-semibold text-slate-300">启动日志</span>
+                    {launching && <Loader2 size={12} className="animate-spin text-brand ml-auto" />}
                   </div>
-                  <div className="space-y-1.5">
-                    {conflicts.map(svc => (
-                      <div key={svc.name} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-400/20">
-                        <XCircle size={13} className="text-amber-400 flex-shrink-0" />
-                        <span className="text-xs text-amber-200 font-medium">{svc.label}</span>
-                        {svc.pids && svc.pids.length > 0 && (
-                          <span className="text-xs text-amber-300/60 font-mono ml-auto">PID {svc.pids.join(', ')}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {stoppingConflicts ? (
-                    <div className="flex items-center gap-2 text-xs text-amber-300">
-                      <Loader2 size={13} className="animate-spin" />
-                      正在停止冲突服务，请稍候…
-                    </div>
-                  ) : (
-                    <button
-                      className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
-                      onClick={handleStopConflicts}
-                    >
-                      <ShieldOff size={15} />
-                      一键停止冲突服务并启动 ClashForge
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {conflictStopped && conflicts.length === 0 && (
-                <div className="rounded-xl bg-success/8 border border-success/20 px-4 py-2 flex items-center gap-2">
-                  <CheckCircle2 size={13} className="text-success flex-shrink-0" />
-                  <p className="text-xs text-success">冲突服务已停止</p>
-                </div>
-              )}
-
-              {launchError && (
-                <div className="rounded-xl bg-danger/10 border border-danger/20 px-4 py-3 flex items-start gap-2">
-                  <XCircle size={15} className="text-danger flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-semibold text-danger">启动失败</p>
-                    <p className="text-xs text-muted mt-0.5">{launchError}</p>
+                  <div className="px-2 py-2 max-h-72 overflow-y-auto space-y-px font-mono text-xs">
+                    {launchLog.map((ev, i) => {
+                      if (ev.type === 'done') return null
+                      if (ev.type === 'info') return (
+                        <div key={i} className="flex items-start gap-2 px-2 py-0.5 text-slate-400">
+                          <span className="flex-shrink-0 text-white/20 mt-px">›</span>
+                          <span className="flex-1 leading-5">{ev.message}</span>
+                        </div>
+                      )
+                      // type === 'step'
+                      const icon = ev.status === 'running'
+                        ? <Loader2 size={12} className="animate-spin text-brand flex-shrink-0 mt-px" />
+                        : ev.status === 'ok'
+                          ? <CheckCircle2 size={12} className="text-success flex-shrink-0 mt-px" />
+                          : ev.status === 'error'
+                            ? <XCircle size={12} className="text-danger flex-shrink-0 mt-px" />
+                            : <Minus size={12} className="text-muted flex-shrink-0 mt-px" />
+                      const textColor = ev.status === 'ok' ? 'text-slate-200' : ev.status === 'error' ? 'text-red-300' : ev.status === 'running' ? 'text-white' : 'text-slate-400'
+                      return (
+                        <div key={i} className="px-2 py-0.5">
+                          <div className={`flex items-start gap-2 ${textColor}`}>
+                            {icon}
+                            <span className="flex-1 leading-5">{ev.message}</span>
+                          </div>
+                          {ev.detail && (
+                            <div className="pl-6 text-muted leading-4 mt-0.5">{ev.detail}</div>
+                          )}
+                        </div>
+                      )
+                    })}
+                    <div ref={logEndRef} />
                   </div>
                 </div>
               )}
 
+              {/* Final status banners */}
               {launchDone && (
                 <div className="rounded-xl bg-success/10 border border-success/20 px-4 py-3 flex items-center gap-2">
                   <CheckCircle2 size={15} className="text-success flex-shrink-0" />
-                  <p className="text-sm font-semibold text-success">内核已启动，即将进入连通检测…</p>
+                  <p className="text-sm font-semibold text-success">所有服务已启动 ✓ 即将进入连通检测…</p>
                 </div>
               )}
 
-              {!launchDone && (
+              {launchError && !launching && (
+                <div className="rounded-xl bg-danger/10 border border-danger/20 px-4 py-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <XCircle size={15} className="text-danger flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-danger">启动失败</p>
+                      <p className="text-xs text-muted mt-0.5">{launchError}</p>
+                    </div>
+                  </div>
+                  <button
+                    className="w-full flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 transition-colors"
+                    onClick={handleLaunch}
+                  >
+                    <RotateCw size={13} />重试
+                  </button>
+                </div>
+              )}
+
+              {/* Launch button (shown before first launch attempt) */}
+              {launchLog.length === 0 && !launchDone && (
                 <button
                   className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
                   onClick={handleLaunch}
-                  disabled={launching || stoppingConflicts || conflicts.length > 0}
+                  disabled={launching}
                 >
                   {launching
-                    ? <><Loader2 size={16} className="animate-spin" />正在启动内核 + 接管服务…</>
+                    ? <><Loader2 size={16} className="animate-spin" />正在启动…</>
                     : <><Play size={16} />一键启动内核 + 应用接管</>}
                 </button>
               )}
