@@ -87,31 +87,45 @@ wait_http() {
 json_get() { echo "$1" | grep -o "\"$2\":[^,}]*" | head -1 | sed 's/.*: *"\{0,1\}\([^",}]*\).*/\1/'; }
 
 # ── connectivity_check 函数（三轮通用）────────────────────────────────────────
+# 与 /overview/probes (buildOverviewIPChecks + buildOverviewAccessChecks) 完全相同的目标
 # 参数: $1=文件前缀  $2=代理 URL（可选）
 run_connectivity_check() {
     PREFIX="$1"
     PROXY_ARG=""
     [ -n "$2" ] && PROXY_ARG="-x $2"
 
-    # IP 检测（依次尝试多个服务商）
-    OUTIP=""
-    for ipurl in https://api.ipify.org https://api.ip.sb/ip https://ipinfo.io/ip; do
-        OUTIP=$(curl -sf --max-time 8 $PROXY_ARG "$ipurl" 2>/dev/null | tr -d ' \n' | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
-        [ -n "$OUTIP" ] && break
-    done
-    [ -z "$OUTIP" ] && OUTIP="FAILED"
+    # ── IP 检测（与 buildOverviewIPChecks 相同的4个服务商）────────────────────
+    # IP.SB（国外）
+    IPSB=$(curl -sf --max-time 8 $PROXY_ARG "https://api.ip.sb/geoip" 2>/dev/null | grep -o '"ip":"[^"]*"' | head -1 | sed 's/"ip":"//;s/"//')
+    # IPInfo（国外）
+    IPINFO=$(curl -sf --max-time 8 $PROXY_ARG "https://ipinfo.io/json" 2>/dev/null | grep -o '"ip":"[^"]*"' | head -1 | sed 's/"ip":"//;s/"//')
+    # UpaiYun（国内）
+    UPAIYUN=$(curl -sf --max-time 8 $PROXY_ARG "https://pubstatic.b0.upaiyun.com/?_upnode" 2>/dev/null | grep -o '"remote_addr":"[^"]*"' | head -1 | sed 's/"remote_addr":"//;s/"//')
+    # 取第一个成功的作为代表 IP
+    OUTIP="${IPSB:-${IPINFO:-${UPAIYUN:-FAILED}}}"
     printf "ip=%s\n" "$OUTIP" > "${SNAPSHOT_DIR}/${PREFIX}.txt"
+    printf "ip_ipsb=%s\n" "${IPSB:-FAILED}" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
+    printf "ip_ipinfo=%s\n" "${IPINFO:-FAILED}" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
+    printf "ip_upaiyun=%s\n" "${UPAIYUN:-FAILED}" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
 
-    # 可访问性检测（与 /overview/probes 保持一致）
-    for entry in "baidu:https://www.baidu.com" "cloud163:https://music.163.com" "github:https://github.com" "youtube:https://www.youtube.com" "google:https://www.google.com" "openai:https://chat.openai.com"; do
+    # ── 可访问性检测（与 buildOverviewAccessChecks 相同的7个目标）─────────────
+    for entry in \
+        "taobao:https://www.taobao.com" \
+        "cloud163:https://music.163.com" \
+        "github:https://github.com" \
+        "google:https://www.google.com" \
+        "openai:https://chat.openai.com" \
+        "claude:https://api.anthropic.com" \
+        "gemini:https://gemini.google.com"; do
         NAME=$(echo "$entry" | cut -d: -f1)
         URL=$(echo "$entry" | cut -d: -f2-)
         CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 $PROXY_ARG "$URL" 2>/dev/null || echo "0")
         printf "%s=%s\n" "$NAME" "$CODE" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
+        STATUS=$([ "$CODE" -ge 200 ] 2>/dev/null && [ "$CODE" -lt 400 ] 2>/dev/null && echo "✓" || echo "✗")
+        info "  [$PREFIX] $STATUS $NAME HTTP $CODE"
     done
-    info "[$PREFIX] IP: $(grep '^ip=' "${SNAPSHOT_DIR}/${PREFIX}.txt" | cut -d= -f2 | head -c 3)***"
+    info "[$PREFIX] 完成，IP: ***（已记录）"
 }
-
 # 比对两轮检测结果，逐项对比
 compare_connectivity() {
     PREFIX_A="$1"
