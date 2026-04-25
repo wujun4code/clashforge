@@ -49,31 +49,40 @@ jobs:
           CLASHFORGE_VERSION: ${{ inputs.clashforge_version || 'latest' }}
         run: |
           chmod +x tests/e2e/openwrt-lifecycle-test.sh
-          sh tests/e2e/openwrt-lifecycle-test.sh
+          # lifecycle 脚本必须在 OpenWrt VM 内运行（opkg/nft 等工具在 VM 内）
+          cat tests/e2e/openwrt-lifecycle-test.sh | \
+            ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "cat > /tmp/lifecycle-test.sh && chmod +x /tmp/lifecycle-test.sh"
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' CLASHFORGE_VERSION='$CLASHFORGE_VERSION' sh /tmp/lifecycle-test.sh"
 
       # ── Step 2: 提取代理信息 ──────────────────────────────────────────────────
       - name: Extract proxy info
         id: proxy
         if: always()
         run: |
-          AUTH=$(grep -A1 'authentication:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-            | grep -v 'authentication:' | head -1 | tr -d ' -' || echo "")
+          # 从 VM 内读取代理信息
+          AUTH=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "grep -A1 'authentication:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+             | grep -v 'authentication:' | head -1 | tr -d ' -'" 2>/dev/null || echo "")
           [ -n "$AUTH" ] && echo "url=http://${AUTH}@127.0.0.1:7890" >> $GITHUB_OUTPUT \
                          || echo "url=http://127.0.0.1:7890" >> $GITHUB_OUTPUT
 
-          CACHE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1)
-          if [ -n "$CACHE" ]; then
-            NODE_NAME=$(grep -m1 'name:' "$CACHE" 2>/dev/null | sed 's/.*name: *//' | tr -d ' ')
-            SERVER=$(grep -m1 'server:' "$CACHE" 2>/dev/null | awk '{print $2}' | tr -d ' ')
-            echo "node_name=$NODE_NAME" >> $GITHUB_OUTPUT
-            echo "server_host=$SERVER" >> $GITHUB_OUTPUT
-          fi
+          NODE_INFO=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "CACHE=\$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1); \
+             [ -n \"\$CACHE\" ] && echo \"name:\$(grep -m1 'name:' \"\$CACHE\" | sed 's/.*name: *//' | tr -d ' ') server:\$(grep -m1 'server:' \"\$CACHE\" | awk '{print \$2}' | tr -d ' ')\"" 2>/dev/null || echo "")
+          NODE_NAME=$(echo "$NODE_INFO" | grep -o 'name:[^ ]*' | sed 's/name://')
+          SERVER=$(echo "$NODE_INFO" | grep -o 'server:[^ ]*' | sed 's/server://')
+          [ -n "$NODE_NAME" ] && echo "node_name=$NODE_NAME" >> $GITHUB_OUTPUT
+          [ -n "$SERVER" ] && echo "server_host=$SERVER" >> $GITHUB_OUTPUT
 
-          pgrep -f "mihomo-clashforge" > /dev/null 2>&1 \
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "pgrep -f 'mihomo-clashforge' > /dev/null 2>&1" 2>/dev/null \
             && echo "running=true" >> $GITHUB_OUTPUT \
             || echo "running=false" >> $GITHUB_OUTPUT
 
-          DIRECT_IP=$(cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null || echo "unknown")
+          DIRECT_IP=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null" 2>/dev/null || echo "unknown")
           echo "direct_ip=$DIRECT_IP" >> $GITHUB_OUTPUT
 
       # ── Step 3: 浏览器端探测（代理运行期）────────────────────────────────────
@@ -129,12 +138,10 @@ jobs:
       - name: Stop clashforge
         if: always()
         run: |
-          curl -sf -H "Content-Type: application/json" -d '{}' \
-            http://127.0.0.1:7777/api/v1/setup/stop > /dev/null 2>/dev/null || true
-          /etc/init.d/clashforge stop 2>/dev/null || true
-          sleep 5
-          pkill -f "clashforge" 2>/dev/null || true
-          pkill -f "mihomo-clashforge" 2>/dev/null || true
+          # 将停止命令发送到 VM 内执行（仅通过用户 API）
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "curl -sN --max-time 60 -H 'Content-Type: application/json' -d '{}' \
+             http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null | tail -2" 2>/dev/null || true
           sleep 3
 
       # ── Step 5: 浏览器端探测（停止后，验证网络恢复）─────────────────────────
@@ -151,18 +158,19 @@ jobs:
       - name: Emergency cleanup
         if: always()
         run: |
-          # 确保 iptables 封锁规则已清除（防止 Step 3 异常退出残留）
-          iptables -F OUTPUT 2>/dev/null || true
-          # 清除 nft metaclash 表
-          nft list tables 2>/dev/null | grep -q "metaclash" && \
-            nft delete table inet metaclash 2>/dev/null || true
-          FINAL_IP=$(wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo "FAILED")
+          # 清理工作在 VM 内执行
+          FINAL_IP=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "nft list tables 2>/dev/null | grep -q 'metaclash' && \
+             nft delete table inet metaclash 2>/dev/null || true; \
+             wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo 'FAILED'" 2>/dev/null || echo "FAILED")
+          NFT_TABLES=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "nft list tables 2>/dev/null | tr '\n' ' '" 2>/dev/null || echo "unknown")
           echo "Final IP: $FINAL_IP"
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
           echo "| 项目 | 状态 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| nft 表 | $(nft list tables 2>/dev/null | tr '\n' ' ') |" >> $GITHUB_STEP_SUMMARY
+          echo "| nft 表 | $NFT_TABLES |" >> $GITHUB_STEP_SUMMARY
           echo "| 出口 IP | $FINAL_IP |" >> $GITHUB_STEP_SUMMARY
           [ "$FINAL_IP" != "FAILED" ] \
             && echo "| 网络状态 | ✅ 正常 |" >> $GITHUB_STEP_SUMMARY \
