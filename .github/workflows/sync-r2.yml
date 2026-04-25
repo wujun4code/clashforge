@@ -1,0 +1,89 @@
+name: Sync Release Assets to Cloudflare R2
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to sync (e.g. v0.1.0-alpha.78)'
+        required: true
+
+jobs:
+  sync-r2:
+    name: Upload to R2
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      R2_BUCKET:      ${{ secrets.R2_BUCKET_NAME }}
+      R2_ACCOUNT_ID:  ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY:  ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_KEY:  ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.event.release.tag_name }}
+
+    steps:
+      - name: Download all release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" \
+            --repo "${{ github.repository }}" \
+            --dir dist \
+            --pattern "*.ipk" \
+            --pattern "install.sh" \
+            --pattern "SHA256SUMS.txt"
+          echo "=== Downloaded assets ==="
+          ls -lh dist/
+
+      - name: Install rclone
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version
+
+      - name: Configure rclone for R2
+        run: |
+          mkdir -p ~/.config/rclone
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [r2]
+          type = s3
+          provider = Cloudflare
+          access_key_id = ${R2_ACCESS_KEY}
+          secret_access_key = ${R2_SECRET_KEY}
+          endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+          acl = private
+          EOF
+
+      - name: Upload assets to R2
+        run: |
+          # Upload all assets under releases/<tag>/
+          rclone copy dist/ r2:${R2_BUCKET}/releases/${TAG}/ \
+            --s3-no-check-bucket \
+            --progress \
+            --stats-one-line
+
+          # Also keep a "latest/" pointer (overwrite every release)
+          rclone copy dist/ r2:${R2_BUCKET}/releases/latest/ \
+            --s3-no-check-bucket \
+            --progress \
+            --stats-one-line
+
+          echo "=== Uploaded to R2 ==="
+          rclone ls r2:${R2_BUCKET}/releases/${TAG}/
+
+      - name: Summary
+        run: |
+          echo "## ✅ R2 Upload Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release:** \`${TAG}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**R2 paths:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`releases/${TAG}/\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`releases/latest/\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Files:**" >> $GITHUB_STEP_SUMMARY
+          ls dist/ | while read f; do
+            echo "- \`${f}\`" >> $GITHUB_STEP_SUMMARY
+          done
