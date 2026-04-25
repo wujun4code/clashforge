@@ -2,8 +2,12 @@ name: E2E Integration Test (OpenWrt)
 
 # 完整端到端测试
 #
-# 测试步骤：
-#   Step 1  从当前分支/tag 编译打包 IPK
+# 安全模型：
+#   - build job 跑在 GitHub 托管的 ubuntu-latest，PR 代码只在沙箱里编译，不碰 self-hosted 机器
+#   - e2e job 跑在 self-hosted runner，只接收打包好的 IPK artifact，不执行任何来自 PR 的编译操作
+#
+# 测试步骤（e2e job）：
+#   Step 1  下载 IPK artifact
 #   Step 2  基准状态快照（nft / ip-rule / dnsmasq / resolv.conf / 直连 IP）
 #   Step 3  Round 1 网络探测基准（VM 内 curl，无代理）
 #   Step 4  安装 IPK + 完备性检测
@@ -17,7 +21,8 @@ name: E2E Integration Test (OpenWrt)
 #   SUBSCRIPTION_URL  — 订阅 URL（含 token）
 #
 # 所需 Runner：
-#   self-hosted, openwrt-x86
+#   build:      ubuntu-latest（GitHub 托管）
+#   e2e:        self-hosted, openwrt-x86
 
 on:
   pull_request:
@@ -34,10 +39,15 @@ on:
       - 'feat/e2e-*'
 
 jobs:
-  e2e-openwrt:
-    name: OpenWrt E2E — Full Lifecycle
-    runs-on: [self-hosted, openwrt-x86]
-    timeout-minutes: 30
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: 编译打包 IPK — 在 GitHub 托管的沙箱里执行，PR 代码不落到 self-hosted 机器
+  # ────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build IPK (x86_64)
+    runs-on: ubuntu-latest
+    outputs:
+      ipk_name: ${{ steps.pkg.outputs.ipk_name }}
+      version:  ${{ steps.ver.outputs.version }}
 
     steps:
       - name: Checkout
@@ -56,11 +66,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
-      # ── Step 1: 编译打包 IPK（x86_64，内联）─────────────────────────────────────
-      - name: "[Build] Compile & package IPK"
-        id: build
+      - name: Compute version
+        id: ver
         run: |
-          # ── 版本号 ──────────────────────────────────────────────────────────────
           if [ "${{ github.event_name }}" = "push" ] && echo "${{ github.ref }}" | grep -q "refs/tags/"; then
             VERSION="${{ github.ref_name }}"
           elif [ -n "${{ inputs.clashforge_version }}" ] && [ "${{ inputs.clashforge_version }}" != "latest" ]; then
@@ -68,62 +76,62 @@ jobs:
           else
             VERSION="dev-$(git rev-parse --short HEAD)"
           fi
-          PKG_VERSION="${VERSION#v}"
-          echo "version=$VERSION"         >> "$GITHUB_OUTPUT"
-          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building $VERSION (pkg: $PKG_VERSION)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION"
 
-          # ── Build UI ────────────────────────────────────────────────────────────
-          cd ui && npm ci --prefer-offline
-          VITE_APP_VERSION="$VERSION" npm run build
+      - name: Build UI
+        run: |
+          cd ui && npm ci
+          VITE_APP_VERSION="${{ steps.ver.outputs.version }}" npm run build
           cd ..
-
-          # ── Embed UI dist ───────────────────────────────────────────────────────
           mkdir -p internal/api/ui_dist
           cp -r ui/dist/* internal/api/ui_dist/
 
-          # ── Build Go binary (amd64) ─────────────────────────────────────────────
+      - name: Build Go binary (amd64)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build \
-              -trimpath \
-              -ldflags="-s -w -X main.buildVersion=${VERSION}" \
-              -o dist/clashforge-linux-amd64 \
-              ./cmd/clashforge
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.buildVersion=${{ steps.ver.outputs.version }}" \
+            -o dist/clashforge-linux-amd64 \
+            ./cmd/clashforge
           echo "Binary: $(ls -lh dist/clashforge-linux-amd64)"
 
-          # ── Download bundled mihomo ─────────────────────────────────────────────
+      - name: Download bundled mihomo
+        run: |
           MIHOMO_VER=$(curl -sf https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
             | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "Downloading mihomo $MIHOMO_VER (amd64-compatible)"
+          echo "Downloading mihomo $MIHOMO_VER"
           curl -fsSL -o /tmp/mihomo.gz \
             "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-compatible-${MIHOMO_VER}.gz"
           gunzip -f /tmp/mihomo.gz
           chmod +x /tmp/mihomo
-          echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
+          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
 
-          # ── Package IPK ─────────────────────────────────────────────────────────
+      - name: Package IPK
+        id: pkg
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          PKG_VERSION="${VERSION#v}"
           ARCH="x86_64"
           PKG_NAME="clashforge_${PKG_VERSION}_${ARCH}.ipk"
 
-          mkdir -p ipk/CONTROL
-          mkdir -p ipk/usr/bin
-          mkdir -p ipk/etc/init.d
-          mkdir -p ipk/usr/share/metaclash
-          mkdir -p ipk/usr/share/luci/menu.d
-          mkdir -p ipk/www/luci-static/resources/view/clashforge
-          mkdir -p ipk/usr/share/rpcd/acl.d
+          mkdir -p ipk/CONTROL ipk/usr/bin ipk/etc/init.d \
+                   ipk/usr/share/metaclash ipk/usr/share/luci/menu.d \
+                   ipk/www/luci-static/resources/view/clashforge \
+                   ipk/usr/share/rpcd/acl.d
 
-          cp dist/clashforge-linux-amd64        ipk/usr/bin/clashforge          && chmod 755 ipk/usr/bin/clashforge
-          cp /tmp/mihomo                         ipk/usr/bin/mihomo-clashforge   && chmod 755 ipk/usr/bin/mihomo-clashforge
-          cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json \
-             ipk/usr/share/luci/menu.d/luci-app-clashforge.json
-          cp openwrt/files/www/luci-static/resources/view/clashforge/main.js \
-             ipk/www/luci-static/resources/view/clashforge/main.js
-          cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json \
-             ipk/usr/share/rpcd/acl.d/luci-app-clashforge.json
-          cp openwrt/files/etc/init.d/metaclash  ipk/etc/init.d/clashforge      && chmod 755 ipk/etc/init.d/clashforge
-          cp openwrt/files/etc/metaclash/uninstall-clashforge.sh ipk/usr/bin/uninstall-clashforge && chmod 755 ipk/usr/bin/uninstall-clashforge
+          cp dist/clashforge-linux-amd64                                         ipk/usr/bin/clashforge          && chmod 755 ipk/usr/bin/clashforge
+          cp /tmp/mihomo                                                          ipk/usr/bin/mihomo-clashforge   && chmod 755 ipk/usr/bin/mihomo-clashforge
+          cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json        ipk/usr/share/luci/menu.d/
+          cp openwrt/files/www/luci-static/resources/view/clashforge/main.js     ipk/www/luci-static/resources/view/clashforge/
+          cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json         ipk/usr/share/rpcd/acl.d/
+          cp openwrt/files/etc/init.d/metaclash                                  ipk/etc/init.d/clashforge       && chmod 755 ipk/etc/init.d/clashforge
+          cp openwrt/files/etc/metaclash/uninstall-clashforge.sh                 ipk/usr/bin/uninstall-clashforge && chmod 755 ipk/usr/bin/uninstall-clashforge
 
           cat > ipk/CONTROL/control << EOF
           Package: clashforge
@@ -146,11 +154,38 @@ jobs:
 
           python3 scripts/build_ipk.py
           ls -lh "$PKG_NAME"
-          echo "ipk_path=$(pwd)/$PKG_NAME" >> "$GITHUB_OUTPUT"
-          echo "ipk_name=$PKG_NAME"        >> "$GITHUB_OUTPUT"
+          echo "ipk_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
-      # ── Step 2: 基准状态快照（VM 内）──────────────────────────────────────────
-      - name: "[Snapshot] Record baseline state"
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-e2e-x86_64
+          path: "*.ipk"
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: E2E 测试 — 在 self-hosted runner 上执行，只消费 artifact，不编译代码
+  # ────────────────────────────────────────────────────────────────────────────
+  e2e-openwrt:
+    name: OpenWrt E2E — Full Lifecycle
+    runs-on: [self-hosted, openwrt-x86]
+    needs: build
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout (test scripts only)
+        uses: actions/checkout@v4
+
+      # ── Step 1: 下载 IPK artifact ──────────────────────────────────────────
+      - name: "[Step 1] Download IPK artifact"
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: ipk-e2e-x86_64
+          path: /tmp/e2e-ipk/
+
+      # ── Step 2: 基准状态快照（VM 内）──────────────────────────────────────
+      - name: "[Step 2] Record baseline state"
         id: snapshot
         run: |
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
@@ -160,13 +195,12 @@ jobs:
 
           _ssh "sh /tmp/e2e-snapshot.sh"
 
-          # 读出直连 IP 供后续 steps 使用
           DIRECT_IP=$(_ssh "cat /tmp/cf-snapshot/direct-ip 2>/dev/null" || echo "unknown")
           echo "direct_ip=$DIRECT_IP" >> "$GITHUB_OUTPUT"
           echo "直连基准 IP: $DIRECT_IP"
 
-      # ── Step 3: Round 1 网络探测基准（VM 内，无代理）─────────────────────────
-      - name: "[Probe] Round 1 — Baseline (direct, no proxy)"
+      # ── Step 3: Round 1 网络探测基准（VM 内，无代理）─────────────────────
+      - name: "[Step 3] Probe — Round 1 baseline (direct)"
         id: probe_baseline
         run: |
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
@@ -176,27 +210,28 @@ jobs:
 
           _ssh "PHASE=baseline sh /tmp/e2e-probe.sh"
 
-      # ── Step 4: 安装 IPK + 完备性检测 ────────────────────────────────────────
-      - name: "[Install] Install IPK & verify"
+      # ── Step 4: 安装 IPK + 完备性检测 ────────────────────────────────────
+      - name: "[Step 4] Install IPK & verify"
         id: install
         run: |
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
 
-          IPK_PATH="${{ steps.build.outputs.ipk_path }}"
-          echo "安装 IPK: $IPK_PATH"
+          IPK_NAME="${{ needs.build.outputs.ipk_name }}"
+          IPK_LOCAL="/tmp/e2e-ipk/${IPK_NAME}"
+          echo "安装 IPK: $IPK_NAME"
 
           # 推送 IPK 到 VM 并安装
-          scp -o StrictHostKeyChecking=no -P 2222 "$IPK_PATH" root@127.0.0.1:/tmp/clashforge.ipk
+          scp -o StrictHostKeyChecking=no -P 2222 "$IPK_LOCAL" root@127.0.0.1:/tmp/clashforge.ipk
           _ssh "opkg install --force-reinstall /tmp/clashforge.ipk"
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
           _ssh "modprobe nft_tproxy 2>/dev/null || true"
 
-          # 启动服务（postinst 不自动启动，需手动 start）
+          # 启动服务
           _ssh "/etc/init.d/clashforge start"
 
-          # 等待 API 就绪
+          # 等待 API 就绪（最多 30s）
           _ssh "i=0; while [ \$i -lt 30 ]; do \
                   wget -q -O /dev/null --timeout=2 http://127.0.0.1:7777/api/v1/status 2>/dev/null && break; \
                   sleep 1; i=\$((i+1)); \
@@ -210,8 +245,8 @@ jobs:
 
           _ssh "sh /tmp/e2e-install-verify.sh"
 
-      # ── Step 5: Setup Wizard + 接管断言 ──────────────────────────────────────
-      - name: "[Setup] Import subscription / launch / verify takeover"
+      # ── Step 5: Setup Wizard + 接管断言 ──────────────────────────────────
+      - name: "[Step 5] Setup launch & verify takeover"
         id: setup
         env:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
@@ -228,7 +263,7 @@ jobs:
           PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
           SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
 
-          # DoH 解析节点服务器真实 IP（在宿主机执行）
+          # DoH 解析节点服务器真实 IP
           SERVER_IP=""
           if [ -n "$SERVER_HOST" ]; then
             SERVER_IP=$(curl -sf --max-time 8 \
@@ -236,29 +271,25 @@ jobs:
               | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//' || echo "")
           fi
 
-          echo "proxy_auth=$PROXY_AUTH"      >> "$GITHUB_OUTPUT"
-          echo "proxy_node=$PROXY_NODE"      >> "$GITHUB_OUTPUT"
-          echo "server_host=$SERVER_HOST"    >> "$GITHUB_OUTPUT"
-          echo "server_ip=$SERVER_IP"        >> "$GITHUB_OUTPUT"
+          echo "proxy_auth=$PROXY_AUTH"   >> "$GITHUB_OUTPUT"
+          echo "proxy_node=$PROXY_NODE"   >> "$GITHUB_OUTPUT"
+          echo "server_host=$SERVER_HOST" >> "$GITHUB_OUTPUT"
+          echo "server_ip=$SERVER_IP"     >> "$GITHUB_OUTPUT"
           [ -n "$PROXY_AUTH" ] && \
             echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:7890" >> "$GITHUB_OUTPUT" || \
             echo "mixed_port_url=http://127.0.0.1:7890"               >> "$GITHUB_OUTPUT"
 
-          echo "节点: $PROXY_NODE / IP: $SERVER_IP"
+          echo "节点: $PROXY_NODE / 节点 IP: $SERVER_IP"
 
-      # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────────
-      - name: "[Probe] Round 2 — Running (tproxy active)"
+      # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────
+      - name: "[Step 6] Probe — Round 2 running (tproxy)"
         id: probe_running
         run: |
-          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "PHASE=running PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' sh /tmp/e2e-probe.sh"
 
-          # 主路径：VM 内 curl（tproxy 透明拦截）
-          _ssh "PHASE=running \
-                PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
-                sh /tmp/e2e-probe.sh"
-
-      # ── Step 6b: Round 2 附加 — 宿主机 mixed port ────────────────────────────
-      - name: "[Probe] Round 2 — Host mixed port (browser simulation)"
+      # ── Step 6b: Round 2 附加 — 宿主机 mixed port ────────────────────────
+      - name: "[Step 6b] Probe — Round 2 host mixed port (browser)"
         id: probe_mixed
         if: ${{ steps.setup.outputs.proxy_auth != '' }}
         run: |
@@ -266,9 +297,7 @@ jobs:
           SERVER_HOST="${{ steps.setup.outputs.server_host }}"
           NODE_NAME=$(echo "${{ steps.setup.outputs.proxy_node }}" | cut -d: -f1)
 
-          echo "宿主机通过 mixed port 探测: $PROXY_URL"
-
-          # 封锁宿主机直连（防止宿主机自身直连导致误判）
+          # 封锁宿主机直连，防止绕过代理导致误判
           MIHOMO_UID=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "ps -eo uid,comm 2>/dev/null | grep mihomo | head -1 | awk '{print \$1}'" 2>/dev/null || echo "")
 
@@ -277,7 +306,6 @@ jobs:
               -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
             iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
               -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
-            echo "已封锁宿主机直连 80/443"
           fi
 
           set +e
@@ -285,23 +313,21 @@ jobs:
           PROXY_SERVER_HOST="$SERVER_HOST" \
           PROXY_NODE_NAME="$NODE_NAME" \
           PROBE_TIMEOUT=12000 \
-          node tests/e2e/host/browser-probe.mjs | tee /tmp/browser-probe-running.log
+          node tests/e2e/host/browser-probe.mjs
           PROBE_EXIT=$?
           set -e
 
-          # 清除封锁规则
           if [ -n "$MIHOMO_UID" ]; then
             iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
               -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
             iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
               -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
-            echo "iptables 封锁规则已清除"
           fi
 
           exit $PROBE_EXIT
 
-      # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────────
-      - name: "[Stop] Stop clashforge & verify rollback"
+      # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────
+      - name: "[Step 7] Stop clashforge & verify rollback"
         id: stop
         if: always()
         run: |
@@ -309,43 +335,41 @@ jobs:
 
           _ssh "cat > /tmp/e2e-stop-verify.sh && chmod +x /tmp/e2e-stop-verify.sh" \
             < tests/e2e/vm/stop-verify.sh
-            < tests/e2e/vm/stop-verify.sh
 
           _ssh "sh /tmp/e2e-stop-verify.sh"
 
-      # ── Step 8: Round 3 网络探测（停止后，恢复直连）──────────────────────────
-      - name: "[Probe] Round 3 — Stopped (direct, restored)"
+      # ── Step 8: Round 3 网络探测（停止后，恢复直连）──────────────────────
+      - name: "[Step 8] Probe — Round 3 stopped (direct restored)"
         id: probe_stopped
         if: always()
         run: |
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
 
-          # 重传 probe.sh（Step 1 失败时 VM 内可能没有此文件）
           _ssh "cat > /tmp/e2e-probe.sh && chmod +x /tmp/e2e-probe.sh" \
             < tests/e2e/vm/probe.sh
 
           _ssh "PHASE=stopped sh /tmp/e2e-probe.sh"
 
-      # ── Step 9: 紧急清理 ──────────────────────────────────────────────────────
-      - name: "[Cleanup] Emergency cleanup"
+      # ── Step 9: 紧急清理 ──────────────────────────────────────────────────
+      - name: "[Step 9] Emergency cleanup"
         if: always()
         run: |
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
 
-          # 确保 mihomo 已停止，残留 nft 表已清除
           _ssh "pgrep -f 'mihomo-clashforge' > /dev/null 2>&1 && \
                   curl -sf --max-time 10 -H 'Content-Type: application/json' -d '{}' \
-                    http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null || true"
-          _ssh "nft list tables 2>/dev/null | grep -qE 'metaclash|clashforge' && \
-                  nft delete table inet metaclash 2>/dev/null || true"
-          _ssh "pkill -f mihomo-clashforge 2>/dev/null || true"
+                    http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null || true; \
+                nft list tables 2>/dev/null | grep -qE 'metaclash|clashforge' && \
+                  nft delete table inet metaclash 2>/dev/null || true; \
+                pkill -f mihomo-clashforge 2>/dev/null || true"
 
-          # 清理宿主机 iptables 残留（防万一）
+          # 清理宿主机 iptables 残留
           iptables -D OUTPUT -p tcp --dport 443 -j REJECT 2>/dev/null || true
           iptables -D OUTPUT -p tcp --dport 80  -j REJECT 2>/dev/null || true
 
           FINAL_IP=$(_ssh "curl -sf --max-time 8 https://api.ipify.org 2>/dev/null || echo 'FAILED'")
           NFT_TABLES=$(_ssh "nft list tables 2>/dev/null | tr '\n' ' '" || echo "unknown")
+          BASELINE="${{ steps.snapshot.outputs.direct_ip }}"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## 🏁 最终环境状态" >> "$GITHUB_STEP_SUMMARY"
@@ -353,9 +377,7 @@ jobs:
           echo "|------|------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| nft 表 | ${NFT_TABLES:-(空)} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 出口 IP | $FINAL_IP |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 直连基准 IP | ${{ steps.snapshot.outputs.direct_ip }} |" >> "$GITHUB_STEP_SUMMARY"
-          [ "$FINAL_IP" = "${{ steps.snapshot.outputs.direct_ip }}" ] \
-            && echo "| 网络状态 | ✅ 已还原 |" >> "$GITHUB_STEP_SUMMARY" \
-            || echo "| 网络状态 | ⚠️ IP 未还原（$FINAL_IP ≠ ${{ steps.snapshot.outputs.direct_ip }}）|" >> "$GITHUB_STEP_SUMMARY"
-
-          echo "Final IP: $FINAL_IP (baseline: ${{ steps.snapshot.outputs.direct_ip }})"
+          echo "| 直连基准 IP | $BASELINE |" >> "$GITHUB_STEP_SUMMARY"
+          [ "$FINAL_IP" = "$BASELINE" ] \
+            && echo "| 网络状态 | ✅ 已还原 |"   >> "$GITHUB_STEP_SUMMARY" \
+            || echo "| 网络状态 | ⚠️ IP 未还原（$FINAL_IP ≠ $BASELINE）|" >> "$GITHUB_STEP_SUMMARY"
