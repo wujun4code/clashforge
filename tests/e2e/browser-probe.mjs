@@ -247,6 +247,28 @@ async function runAccessChecks(label, proxyUrl) {
   return results
 }
 
+// ── GitHub Actions summary helper ──────────────────────────────────────────
+import * as fs from 'fs'
+const SUMMARY_FILE = process.env.GITHUB_STEP_SUMMARY || ''
+const summaryLines = []
+function summary(line) {
+  summaryLines.push(line)
+}
+function flushSummary() {
+  if (SUMMARY_FILE) {
+    fs.appendFileSync(SUMMARY_FILE, summaryLines.join('\n') + '\n')
+  }
+}
+
+// 测试结果记录
+const tcResults = []
+function recordTC(status, tc, name, op, expected, actual) {
+  tcResults.push({ status, tc, name, op, expected, actual })
+  const icon = status === 'PASS' ? `${G}✅ PASS${X}` : status === 'FAIL' ? `${R}❌ FAIL${X}` : `${Y}⚠️  WARN${X}`
+  console.log(`${icon} [${tc}] ${name} — ${actual}`)
+  if (status === 'FAIL') FAILED++
+}
+
 async function main() {
   console.log(`${B}ClashForge Browser-Side Probe Test${X}`)
   console.log(`代理: ${PROXY_URL || '无（直连模式）'}`)
@@ -256,14 +278,23 @@ async function main() {
   const directIP = await runIPChecks('浏览器直连', null)
   const directIPOK = directIP.filter(r => r.ok)
   if (directIPOK.length > 0) {
-    pass(`直连 IP 检查: ${directIPOK.length}/${IP_PROVIDERS.length} 成功`)
+    recordTC('PASS', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', `${directIPOK.length}/${IP_PROVIDERS.length} 成功，IP: ${directIPOK[0]?.ip}`)
   } else {
-    fail(`直连 IP 检查: 全部失败`)
+    recordTC('FAIL', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', '全部失败')
   }
 
   // ── 2. 直连可访问性（模拟浏览器直连）
   const directAccess = await runAccessChecks('浏览器直连', null)
   const directOK = directAccess.filter(r => r.ok).length
+  const directTotal = directAccess.length
+  const directDetail = directAccess.map(r => `${r.ok ? '✓' : '✗'} ${r.name} HTTP ${r.status || 'ERR'} ${r.latency_ms || '?'}ms`).join(' | ')
+  if (directOK === directTotal) {
+    recordTC('PASS', 'BC-02', '直连可访问性检查', '不走代理，访问百度/网易云/GitHub/YouTube', '所有站点 HTTP 2xx/3xx', `${directOK}/${directTotal} 成功: ${directDetail}`)
+  } else if (directOK > 0) {
+    recordTC('WARN', 'BC-02', '直连可访问性检查', '不走代理，访问百度/网易云/GitHub/YouTube', '所有站点 HTTP 2xx/3xx', `${directOK}/${directTotal} 成功: ${directDetail}`)
+  } else {
+    recordTC('FAIL', 'BC-02', '直连可访问性检查', '不走代理，访问百度/网易云/GitHub/YouTube', '所有站点 HTTP 2xx/3xx', `全部失败: ${directDetail}`)
+  }
 
   // ── 3. 代理模式检查（如果提供了 PROXY_URL）
   let proxyIP = [], proxyAccess = []
@@ -271,43 +302,104 @@ async function main() {
     proxyIP = await runIPChecks('通过代理', PROXY_URL)
     proxyAccess = await runAccessChecks('通过代理', PROXY_URL)
 
-    // 验证：代理模式下国际站点应该可达
     const intlViaProxy = proxyAccess.filter(r => {
       const t = ACCESS_TARGETS.find(t => t.name === r.name)
       return t && t.group === '国际' && r.ok
     })
+    const intlTargets = ACCESS_TARGETS.filter(t => t.group === '国际')
+    const domTargets = ACCESS_TARGETS.filter(t => t.group === '国内')
+    const domViaProxy = proxyAccess.filter(r => {
+      const t = ACCESS_TARGETS.find(t => t.name === r.name)
+      return t && t.group === '国内' && r.ok
+    })
 
     section('对比分析')
+    const directIPStr2 = directIPOK[0]?.ip || 'N/A'
+    const proxyIPStr2 = proxyIP.find(r => r.ok)?.ip || 'N/A'
+    const proxyLoc = proxyIP.find(r => r.ok)?.location || ''
+    info(`直连 IP:   ${directIPStr2}`)
+    info(`代理出口:  ${proxyIPStr2} ${proxyLoc}`)
 
-    const directIPStr = directIPOK[0]?.ip || 'N/A'
-    const proxyIPStr = proxyIP.find(r => r.ok)?.ip || 'N/A'
-    info(`直连 IP:   ${directIPStr}`)
-    info(`代理出口:  ${proxyIPStr}`)
-
-    if (directIPStr !== proxyIPStr && proxyIPStr !== 'N/A') {
-      pass(`IP 已变化（流量走代理）: ${directIPStr} → ${proxyIPStr}`)
-    } else if (proxyIPStr === 'N/A') {
-      fail(`代理模式下 IP 检查全部失败`)
+    // BC-03 代理 IP 检查
+    if (proxyIPStr2 !== 'N/A') {
+      recordTC('PASS', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务，获取代理出口 IP', '返回有效出口 IP', `出口 IP: ${proxyIPStr2} (${proxyLoc})`)
     } else {
-      warn(`IP 未变化（代理节点可能和直连同出口）`)
+      recordTC('FAIL', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务', '返回有效出口 IP', '代理模式下 IP 检查全部失败')
     }
 
-    // 国际站点通过代理应该能访问
-    const intlTargets = ACCESS_TARGETS.filter(t => t.group === '国际')
-    if (intlViaProxy.length === intlTargets.length) {
-      pass(`国际站点全部通过代理可达 (${intlViaProxy.length}/${intlTargets.length})`)
-    } else if (intlViaProxy.length > 0) {
-      warn(`国际站点部分通过代理可达 (${intlViaProxy.length}/${intlTargets.length})`)
+    // BC-04 出口 IP 变化
+    if (directIPStr2 !== proxyIPStr2 && proxyIPStr2 !== 'N/A') {
+      recordTC('PASS', 'BC-04', '代理出口 IP 变化验证', '对比直连 IP 与代理出口 IP', '两者不同，流量已走代理', `${directIPStr2} → ${proxyIPStr2}`)
+    } else if (proxyIPStr2 === 'N/A') {
+      recordTC('FAIL', 'BC-04', '代理出口 IP 变化验证', '对比直连 IP 与代理出口 IP', '两者不同', '代理 IP 不可用')
     } else {
-      fail(`国际站点通过代理全部不可达`)
+      recordTC('WARN', 'BC-04', '代理出口 IP 变化验证', '对比直连 IP 与代理出口 IP', '两者不同', `IP 未变化（可能同出口）: ${proxyIPStr2}`)
+    }
+
+    // BC-05 国内站点通过代理
+    const domDetail = proxyAccess.filter(r => domTargets.find(t => t.name === r.name))
+      .map(r => `${r.ok ? '✓' : '✗'} ${r.name} HTTP ${r.status || 'ERR'} ${r.latency_ms || '?'}ms`).join(' | ')
+    if (domViaProxy.length === domTargets.length) {
+      recordTC('PASS', 'BC-05', '代理模式国内站点可访问性', '通过代理访问百度/网易云', '国内站点正常回落直连，HTTP 2xx/3xx', `${domViaProxy.length}/${domTargets.length} 成功: ${domDetail}`)
+    } else {
+      recordTC('WARN', 'BC-05', '代理模式国内站点可访问性', '通过代理访问百度/网易云', '国内站点正常回落直连，HTTP 2xx/3xx', `${domViaProxy.length}/${domTargets.length} 成功: ${domDetail}`)
+    }
+
+    // BC-06 国际站点通过代理
+    const intlDetail = proxyAccess.filter(r => intlTargets.find(t => t.name === r.name))
+      .map(r => `${r.ok ? '✓' : '✗'} ${r.name} HTTP ${r.status || 'ERR'} ${r.latency_ms || '?'}ms`).join(' | ')
+    if (intlViaProxy.length === intlTargets.length) {
+      recordTC('PASS', 'BC-06', '代理模式国际站点可访问性', '通过代理访问 GitHub / YouTube', '国际站点通过代理节点可达，HTTP 2xx/3xx', `${intlViaProxy.length}/${intlTargets.length} 成功: ${intlDetail}`)
+    } else if (intlViaProxy.length > 0) {
+      recordTC('WARN', 'BC-06', '代理模式国际站点可访问性', '通过代理访问 GitHub / YouTube', '国际站点通过代理节点可达，HTTP 2xx/3xx', `${intlViaProxy.length}/${intlTargets.length} 成功: ${intlDetail}`)
+    } else {
+      recordTC('FAIL', 'BC-06', '代理模式国际站点可访问性', '通过代理访问 GitHub / YouTube', '国际站点通过代理节点可达，HTTP 2xx/3xx', `全部失败: ${intlDetail}`)
     }
   }
 
-  // ── Summary
+  // ── 输出 GitHub Actions Job Summary
+  const passCount = tcResults.filter(r => r.status === 'PASS').length
+  const failCount = tcResults.filter(r => r.status === 'FAIL').length
+  const warnCount = tcResults.filter(r => r.status === 'WARN').length
+  const directIPStr = directIP.find(r => r.ok)?.ip || 'N/A'
+  const proxyIPStr = proxyIP?.find(r => r.ok)?.ip || 'N/A'
+
+  summary('## 🔍 浏览器端探测测试报告')
+  summary('')
+  summary('| 项目 | 值 |')
+  summary('|------|----|')
+  summary(`| **直连 IP** | ${directIPStr} |`)
+  summary(`| **代理出口 IP** | ${proxyIPStr} |`)
+  summary(`| **代理地址** | ${PROXY_URL || '无'} |`)
+  summary('')
+  if (failCount === 0) {
+    summary('### ✅ 浏览器端探测全部通过')
+  } else {
+    summary(`### ❌ 存在失败用例 (${failCount} 个)`)
+  }
+  summary('')
+  summary('| 结果 | 数量 |')
+  summary('|------|------|')
+  summary(`| ✅ 通过 | ${passCount} |`)
+  summary(`| ❌ 失败 | ${failCount} |`)
+  summary(`| ⚠️ 警告 | ${warnCount} |`)
+  summary(`| **合计** | **${tcResults.length}** |`)
+  summary('')
+  summary('---')
+  summary('')
+  summary('### 详细用例结果')
+  summary('')
+  summary('| 编号 | 用例名称 | 操作 | 预期结果 | 实际结果 | 状态 |')
+  summary('|------|----------|------|----------|----------|------|')
+  for (const r of tcResults) {
+    const icon = r.status === 'PASS' ? '✅' : r.status === 'FAIL' ? '❌' : '⚠️'
+    summary(`| ${r.tc} | ${r.name} | ${r.op} | ${r.expected} | ${r.actual} | ${icon} ${r.status} |`)
+  }
+  flushSummary()
+
+  // 控制台总结
   section('测试结果')
-  const totalChecks = PROXY_URL
-    ? IP_PROVIDERS.length * 2 + ACCESS_TARGETS.length * 2
-    : IP_PROVIDERS.length + ACCESS_TARGETS.length
+  const totalChecks = tcResults.length
   console.log(`\n${B}总计:${X} ${totalChecks} 项检查，${FAILED} 个失败\n`)
 
   if (FAILED === 0) {

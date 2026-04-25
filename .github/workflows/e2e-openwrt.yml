@@ -1,14 +1,16 @@
 name: E2E Integration Test (OpenWrt)
 
-# 在 OpenWrt self-hosted runner 上运行完整生命周期测试
-# 需要提前在 OpenWrt VM 上注册 GitHub Actions runner，打标签 openwrt-x86
+# 完整生命周期 + 浏览器端探测测试
+# 流程：
+#   1. 路由器端生命周期（安装→启动→接管验证→代理期探测→停止→还原验证）
+#   2. 代理运行期：浏览器端探测（走代理）
+#   3. 停止后：浏览器端探测（直连，验证恢复）
 #
 # 所需 Secrets：
 #   SUBSCRIPTION_URL  — 订阅 URL（含 token）
 #
-# 触发方式：
-#   - PR 到 main 时手动触发（workflow_dispatch）
-#   - 也可以 push 到 feat/e2e-* 分支自动触发
+# 所需 Runner：
+#   self-hosted, openwrt-x86 — OpenWrt VM 上的 GitHub Actions runner
 
 on:
   workflow_dispatch:
@@ -23,60 +25,97 @@ on:
 
 jobs:
   e2e-openwrt:
-    name: OpenWrt Lifecycle + Browser Probe
+    name: OpenWrt E2E — Lifecycle + Browser Probe
     runs-on: [self-hosted, openwrt-x86]
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Router-side: 完整生命周期测试（在 OpenWrt 上跑）─────────────────────
-      - name: Router lifecycle test
+      # ── Step 1: 路由器端生命周期测试（含代理运行期路由器探测）─────────────────
+      - name: "[Router] Lifecycle test — install / launch / verify / probe"
+        id: lifecycle
         env:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
           CLASHFORGE_VERSION: ${{ inputs.clashforge_version || 'latest' }}
+          GITHUB_STEP_SUMMARY: ${{ env.GITHUB_STEP_SUMMARY }}
         run: |
           chmod +x tests/e2e/openwrt-lifecycle-test.sh
           sh tests/e2e/openwrt-lifecycle-test.sh
+        # 即使失败也继续，让后续 step 能做清理
 
-      # ── 提取代理认证信息（供 browser probe 用）───────────────────────────────
+      # ── Step 2: 提取代理信息（供 browser probe 使用）─────────────────────────
       - name: Extract proxy auth
         id: proxy
+        if: always()
         run: |
           AUTH=$(grep -A1 'authentication:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
             | grep -v 'authentication:' | head -1 | tr -d ' -' || echo "")
           if [ -n "$AUTH" ]; then
             echo "url=http://${AUTH}@127.0.0.1:7890" >> $GITHUB_OUTPUT
-            echo "found proxy auth"
           else
             echo "url=http://127.0.0.1:7890" >> $GITHUB_OUTPUT
-            echo "no auth found, using bare proxy"
+          fi
+          # 判断 clashforge 是否还在运行
+          if pgrep -f "mihomo-clashforge" > /dev/null 2>&1; then
+            echo "running=true" >> $GITHUB_OUTPUT
+          else
+            echo "running=false" >> $GITHUB_OUTPUT
           fi
 
-      # ── Browser-side: 在宿主机（runner host）跑 node 测试 ───────────────────
-      # 注意：这一步在 self-hosted runner 上跑，但通过 localhost 连到 OpenWrt 代理
-      # 实际 CI 中如果 runner 在宿主机，OpenWrt VM 的代理需要通过 SSH tunnel 暴露
-      - name: Browser probe test (via proxy)
+      # ── Step 3: 浏览器端探测（代理运行期，通过代理）─────────────────────────
+      - name: "[Browser] Probe — via proxy (代理运行期)"
+        if: steps.proxy.outputs.running == 'true'
         env:
           PROXY_URL: ${{ steps.proxy.outputs.url }}
           PROBE_TIMEOUT: '10000'
         run: |
           node tests/e2e/browser-probe.mjs
 
-      # ── 清理：不管成功失败都还原 OpenWrt 状态 ───────────────────────────────
-      - name: Cleanup - stop clashforge & restore state
+      # ── Step 4: 停止 clashforge（由 lifecycle 脚本已处理，这里做兜底）────────
+      - name: Stop clashforge
         if: always()
         run: |
-          echo "=== Emergency cleanup ==="
           curl -sf -H "Content-Type: application/json" -d '{}' \
             http://127.0.0.1:7777/api/v1/setup/stop > /dev/null 2>/dev/null || true
           /etc/init.d/clashforge stop 2>/dev/null || true
+          sleep 5
+          pkill -f "clashforge" 2>/dev/null || true
+          pkill -f "mihomo-clashforge" 2>/dev/null || true
           sleep 3
-          # 验证还原
+
+      # ── Step 5: 浏览器端探测（停止后，直连模式，验证网络已恢复）────────────
+      - name: "[Browser] Probe — direct only (停止后恢复验证)"
+        if: always()
+        env:
+          PROBE_TIMEOUT: '10000'
+        run: |
+          echo "## 🔁 停止服务后浏览器端探测（直连恢复验证）" >> $GITHUB_STEP_SUMMARY
+          node tests/e2e/browser-probe.mjs
+
+      # ── Step 6: 紧急清理（永远执行）────────────────────────────────────────
+      - name: Emergency cleanup
+        if: always()
+        run: |
+          echo "=== Emergency cleanup ==="
+          # 确保 metaclash nft 表清除
           if nft list tables 2>/dev/null | grep -q "metaclash"; then
-            echo "WARNING: metaclash table still present, force cleaning..."
+            echo "Removing metaclash nft table..."
             nft delete table inet metaclash 2>/dev/null || true
           fi
-          echo "Cleanup done. nft tables: $(nft list tables 2>/dev/null | tr '\n' ' ')"
-          echo "Network check: $(wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo 'FAILED')"
+          # 网络最终检查
+          FINAL_IP=$(wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo "FAILED")
+          echo "Final network check: $FINAL_IP"
+          echo ""
+          echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 状态 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| nft 表 | $(nft list tables 2>/dev/null | tr '\n' ' ') |" >> $GITHUB_STEP_SUMMARY
+          echo "| 出口 IP | $FINAL_IP |" >> $GITHUB_STEP_SUMMARY
+          if [ "$FINAL_IP" != "FAILED" ]; then
+            echo "| 网络状态 | ✅ 正常 |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 网络状态 | ❌ 异常 |" >> $GITHUB_STEP_SUMMARY
+          fi

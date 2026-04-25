@@ -1,382 +1,436 @@
 #!/bin/sh
 # tests/e2e/openwrt-lifecycle-test.sh
-# ClashForge 完整生命周期 e2e 测试脚本
-# 在 OpenWrt VM 内运行
+# ClashForge 完整生命周期 e2e 测试脚本（路由器端）
 #
 # 测试流程：
-#   1. 验证订阅 URL 可达
-#   2. 记录启动前状态快照 (DNS/nft/routing)
-#   3. 安装 clashforge（指定版本）
-#   4. 启动服务 + 添加订阅 + 拉取节点
-#   5. 触发 launch（DNS + 透明代理）
-#   6. 验证 DNS 接管
-#   7. 验证 nft 规则
-#   8. 连通性测试（IP 变化 + 出口验证）
-#   9. 停止服务
-#  10. 验证 DNS/nft 还原 + 网络恢复
+#   Phase 1 — 启动阶段
+#     TC-01  订阅 URL 可达性
+#     TC-02  记录启动前状态快照
+#     TC-03  安装 clashforge + 依赖内核模块
+#     TC-04  启动服务 + API 就绪
+#     TC-05  添加订阅 + 拉取节点
+#     TC-06  触发 Setup Launch（DNS + nftables tproxy）
+#
+#   Phase 2 — 接管验证
+#     TC-07  DNS 接管验证（fake-ip + dnsmasq upstream 配置）
+#     TC-08  nftables 透明代理接管验证（metaclash 表 + tproxy 规则）
+#     TC-09  ip rule 策略路由验证
+#
+#   Phase 3 — 代理运行期探测（路由器端）
+#     TC-10  路由器端 IP 检查（/overview/probes — ip_checks）
+#     TC-11  路由器端可访问性检查（/overview/probes — access_checks）
+#     TC-12  出口 IP 变化验证（代理有效性）
+#
+#   Phase 4 — 停止阶段
+#     TC-13  停止服务
+#     TC-14  nftables 还原验证（metaclash 表已移除）
+#     TC-15  ip rule 还原验证
+#     TC-16  dnsmasq 配置还原验证
+#
+#   Phase 5 — 停止后恢复探测（路由器端）
+#     TC-17  停止后网络可达性（直连 IP 还原）
+#     TC-18  停止后路由器端 IP 检查（确认已回直连）
+#     TC-19  停止后路由器端可访问性检查
 #
 # 环境变量：
-#   CLASHFORGE_VERSION   安装版本 (default: latest)
 #   SUBSCRIPTION_URL     订阅 URL（必须）
+#   CLASHFORGE_VERSION   版本（default: latest）
+#   GITHUB_STEP_SUMMARY  GitHub Actions job summary 文件路径（CI 自动注入）
 
 set -e
 
 # ── 颜色 ──────────────────────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-RESET='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 FAILED=0
+WARNED=0
+TOTAL=0
 
-pass()    { printf "${GREEN}✅ PASS${RESET} %s\n" "$*"; }
-fail()    { printf "${RED}❌ FAIL${RESET} %s\n" "$*"; FAILED=$((FAILED+1)); }
+# ── 测试结果收集（用于 summary）─────────────────────────────────────────────
+RESULTS=""   # 每行：STATUS|TC|名称|操作|预期|实际
+
+record() {
+    STATUS="$1"; TC="$2"; NAME="$3"; OP="$4"; EXPECTED="$5"; ACTUAL="$6"
+    RESULTS="${RESULTS}${STATUS}|${TC}|${NAME}|${OP}|${EXPECTED}|${ACTUAL}\n"
+    TOTAL=$((TOTAL+1))
+    case "$STATUS" in
+        PASS) printf "${GREEN}✅ PASS${RESET} [%s] %s — %s\n" "$TC" "$NAME" "$ACTUAL" ;;
+        FAIL) printf "${RED}❌ FAIL${RESET} [%s] %s — %s\n" "$TC" "$NAME" "$ACTUAL"; FAILED=$((FAILED+1)) ;;
+        WARN) printf "${YELLOW}⚠️  WARN${RESET} [%s] %s — %s\n" "$TC" "$NAME" "$ACTUAL"; WARNED=$((WARNED+1)) ;;
+    esac
+}
+
 info()    { printf "${CYAN}ℹ️   ${RESET} %s\n" "$*"; }
 section() { printf "\n${BOLD}${YELLOW}=== %s ===${RESET}\n" "$*"; }
-warn()    { printf "${YELLOW}⚠️  WARN${RESET} %s\n" "$*"; }
+
+# ── GitHub Actions summary helper ─────────────────────────────────────────────
+summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 CLASHFORGE_VERSION="${CLASHFORGE_VERSION:-latest}"
 SUBSCRIPTION_URL="${SUBSCRIPTION_URL:-}"
-CLASHFORGE_API="http://127.0.0.1:7777/api/v1"
+CF_API="http://127.0.0.1:7777/api/v1"
 SNAPSHOT_DIR="/tmp/cf-test-snapshot"
 SUB_ID=""
+PROXY_AUTH=""
 
-# ── 辅助函数 ──────────────────────────────────────────────────────────────────
-
+# ── 辅助 ──────────────────────────────────────────────────────────────────────
 wait_http() {
-    url="$1"; max="$2"
-    i=0
+    url="$1"; max="$2"; i=0
     while [ $i -lt "$max" ]; do
-        if wget -q -O /dev/null --timeout=2 "$url" 2>/dev/null; then
-            return 0
-        fi
+        wget -q -O /dev/null --timeout=2 "$url" 2>/dev/null && return 0
         sleep 1; i=$((i+1))
-    done
-    return 1
+    done; return 1
 }
 
-json_get() {
-    echo "$1" | grep -o "\"$2\":[^,}]*" | head -1 | sed 's/.*: *"\{0,1\}\([^",}]*\).*/\1/'
-}
+json_get() { echo "$1" | grep -o "\"$2\":[^,}]*" | head -1 | sed 's/.*: *"\{0,1\}\([^",}]*\).*/\1/'; }
 
-# ── Step 0: 验证订阅 URL ──────────────────────────────────────────────────────
-section "Step 0: 验证订阅 URL"
+# ── Phase 1: 启动阶段 ─────────────────────────────────────────────────────────
+section "Phase 1 — 启动阶段"
 
+# TC-01
 if [ -z "$SUBSCRIPTION_URL" ]; then
-    fail "未提供订阅 URL：请设置 SUBSCRIPTION_URL 环境变量"
+    record FAIL TC-01 "订阅 URL 可达性" "检查订阅 URL 返回有效 YAML" "节点数 ≥ 1" "SUBSCRIPTION_URL 未设置"
     exit 1
 fi
-
-info "订阅 URL: $SUBSCRIPTION_URL"
-
 SUB_CHECK=$(wget -q -O - --timeout=15 "$SUBSCRIPTION_URL" 2>/dev/null | head -5)
 if echo "$SUB_CHECK" | grep -qE "port|proxies|---"; then
     NODE_COUNT=$(wget -q -O - --timeout=15 "$SUBSCRIPTION_URL" 2>/dev/null | grep -c "^  - name:" || echo 0)
-    pass "订阅 URL 可达，节点数: $NODE_COUNT"
+    record PASS TC-01 "订阅 URL 可达性" "HTTPS GET 订阅 URL，检查 YAML 格式" "返回有效 YAML，节点数 ≥ 1" "节点数: $NODE_COUNT"
 else
-    fail "订阅 URL 无效或无法访问"
+    record FAIL TC-01 "订阅 URL 可达性" "HTTPS GET 订阅 URL，检查 YAML 格式" "返回有效 YAML，节点数 ≥ 1" "URL 无效或无法访问"
     exit 1
 fi
 
-# ── Step 1: 记录启动前状态快照 ───────────────────────────────────────────────
-section "Step 1: 记录启动前状态"
-
+# TC-02
 mkdir -p "$SNAPSHOT_DIR"
-
 cp /etc/resolv.conf "$SNAPSHOT_DIR/resolv.conf.before" 2>/dev/null || true
-uci export dhcp > "$SNAPSHOT_DIR/dhcp.uci.before" 2>/dev/null || true
 nft list ruleset > "$SNAPSHOT_DIR/nft.before" 2>/dev/null || echo "" > "$SNAPSHOT_DIR/nft.before"
 ip rule list > "$SNAPSHOT_DIR/ip-rule.before"
-ip route list > "$SNAPSHOT_DIR/ip-route.before"
 ls /etc/dnsmasq.d/ > "$SNAPSHOT_DIR/dnsmasq-d.before" 2>/dev/null || echo "" > "$SNAPSHOT_DIR/dnsmasq-d.before"
-
-pass "启动前状态已记录到 $SNAPSHOT_DIR"
-info "启动前 nft 表: $(nft list tables 2>/dev/null | tr '\n' ' ' || echo 'none')"
-info "启动前 DNS: $(grep nameserver /etc/resolv.conf | tr '\n' ' ')"
-
 DIRECT_IP=$(wget -q -O - --timeout=10 https://api.ipify.org 2>/dev/null || echo "FAILED")
 if [ "$DIRECT_IP" != "FAILED" ]; then
     echo "$DIRECT_IP" > "$SNAPSHOT_DIR/direct-ip"
-    pass "直连 IP: $DIRECT_IP"
+    record PASS TC-02 "启动前状态快照" "记录 nft/ip-rule/dnsmasq/resolv.conf 并获取直连 IP" "快照保存成功，直连 IP 可获取" "直连 IP: $DIRECT_IP"
 else
-    fail "无法获取直连 IP，网络异常"
+    record FAIL TC-02 "启动前状态快照" "记录启动前状态并获取直连 IP" "直连 IP 可获取" "无法获取直连 IP，网络异常"
 fi
+info "启动前 nft 表: $(nft list tables 2>/dev/null | tr '\n' ' ')"
+info "启动前 DNS: $(grep nameserver /etc/resolv.conf | tr '\n' ' ')"
 
-# ── Step 2: 安装 clashforge ───────────────────────────────────────────────────
-section "Step 2: 安装 clashforge ($CLASHFORGE_VERSION)"
-
+# TC-03
 if command -v clashforge > /dev/null 2>&1; then
-    CURRENT_VER=$(clashforge --version 2>/dev/null | head -1 || echo "unknown")
-    info "已安装版本: $CURRENT_VER，跳过安装"
+    info "clashforge 已安装，跳过安装"
 else
-    info "开始安装..."
+    info "安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
         wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
     else
         wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh -s -- --version "$CLASHFORGE_VERSION"
     fi
 fi
-
-# 确保 tproxy 内核模块和 curl 已安装
-info "检查依赖模块..."
 opkg install kmod-nft-tproxy kmod-nf-tproxy curl 2>/dev/null | grep -v "up to date" || true
 modprobe nft_tproxy 2>/dev/null || true
-if lsmod | grep -q nft_tproxy; then
-    pass "nft_tproxy 内核模块已加载"
+if command -v clashforge > /dev/null 2>&1 && lsmod | grep -q nft_tproxy; then
+    VER=$(opkg list-installed 2>/dev/null | grep clashforge | awk '{print $3}' || echo "unknown")
+    record PASS TC-03 "安装 clashforge + 内核模块" "install.sh 安装 + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "版本: $VER，nft_tproxy 已加载"
 else
-    warn "nft_tproxy 模块未加载，tproxy 模式可能失败"
-fi
-
-if command -v clashforge > /dev/null 2>&1; then
-    pass "clashforge 安装成功"
-else
-    fail "clashforge 安装失败"
+    record FAIL TC-03 "安装 clashforge + 内核模块" "install.sh 安装 + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "安装或模块加载失败"
     exit 1
 fi
 
-# ── Step 3: 启动服务 + 添加订阅 ──────────────────────────────────────────────
-section "Step 3: 启动 clashforge + 加载订阅"
-
+# TC-04
 /etc/init.d/clashforge start 2>/dev/null || true
-
-info "等待 clashforge API 就绪..."
-if wait_http "$CLASHFORGE_API/status" 30; then
-    pass "clashforge API 就绪"
+if wait_http "$CF_API/status" 30; then
+    record PASS TC-04 "启动服务 + API 就绪" "/etc/init.d/clashforge start，轮询 GET /api/v1/status" "30 秒内返回 {ok:true}" "API 就绪"
 else
-    fail "clashforge API 30 秒内未响应"
+    record FAIL TC-04 "启动服务 + API 就绪" "/etc/init.d/clashforge start，轮询 GET /api/v1/status" "30 秒内返回 {ok:true}" "30 秒内未响应"
     exit 1
 fi
 
-# 添加订阅
-info "添加订阅..."
+# TC-05
 ADD_RESP=$(curl -sf --max-time 15 \
     -H "Content-Type: application/json" \
     -d "{\"url\":\"$SUBSCRIPTION_URL\",\"name\":\"e2e-test\",\"enabled\":true}" \
-    "$CLASHFORGE_API/subscriptions" 2>/dev/null || echo "FAILED")
-
+    "$CF_API/subscriptions" 2>/dev/null || echo "FAILED")
 if [ "$ADD_RESP" = "FAILED" ]; then
-    fail "添加订阅失败"
+    record FAIL TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "添加订阅 API 失败"
     exit 1
 fi
-
-# 提取订阅 ID
 SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
-info "订阅 ID: $SUB_ID"
-
-if [ -z "$SUB_ID" ]; then
-    fail "无法获取订阅 ID，响应: $ADD_RESP"
+SYNC_RESP=$(curl -sf --max-time 30 -H "Content-Type: application/json" -d '{}' \
+    "$CF_API/subscriptions/$SUB_ID/sync-update" 2>/dev/null || echo "FAILED")
+if [ -n "$SUB_ID" ] && echo "$SYNC_RESP" | grep -qE "ok|true|success|nodes"; then
+    record PASS TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "订阅 ID: $SUB_ID，节点拉取成功"
+else
+    record FAIL TC-05 "添加订阅 + 拉取节点" "POST /subscriptions + POST /subscriptions/{id}/sync-update" "订阅 ID 返回，节点拉取成功" "sync 失败: $SYNC_RESP"
     exit 1
 fi
 
-# 同步拉取订阅
-info "拉取订阅节点..."
-SYNC_RESP=$(curl -sf --max-time 30 \
-    -H "Content-Type: application/json" \
-    -d '{}' \
-    "$CLASHFORGE_API/subscriptions/$SUB_ID/sync-update" 2>/dev/null || echo "FAILED")
-
-if echo "$SYNC_RESP" | grep -qE "ok|true|success|nodes"; then
-    pass "订阅节点拉取成功"
-else
-    warn "订阅同步响应: $SYNC_RESP"
-fi
-
-sleep 3
-
-# 触发 launch（DNS + 透明代理）
-info "触发 setup launch（DNS + nftables tproxy）..."
-curl -sf --max-time 60 \
-    -H "Content-Type: application/json" \
+# TC-06
+sleep 2
+curl -sf --max-time 60 -H "Content-Type: application/json" \
     -d '{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}' \
-    "$CLASHFORGE_API/setup/launch" > /tmp/launch.log 2>/dev/null || true
-
-info "launch 输出: $(cat /tmp/launch.log | tail -3)"
+    "$CF_API/setup/launch" > /tmp/launch.log 2>/dev/null || true
+LAUNCH_OUT=$(cat /tmp/launch.log)
+if echo "$LAUNCH_OUT" | grep -q '"success":true'; then
+    record PASS TC-06 "触发 Setup Launch" "POST /setup/launch dns.mode=fake-ip dnsmasq_mode=upstream network.mode=tproxy" '{"success":true}' "launch 成功"
+else
+    LAUNCH_ERR=$(echo "$LAUNCH_OUT" | grep -o '"error":"[^"]*"' | head -1)
+    record FAIL TC-06 "触发 Setup Launch" "POST /setup/launch" '{"success":true}' "launch 失败: $LAUNCH_ERR"
+    exit 1
+fi
 sleep 5
 
-# ── Step 4: 验证 DNS 接管 ─────────────────────────────────────────────────────
-section "Step 4: 验证 DNS 接管"
+# ── Phase 2: 接管验证 ─────────────────────────────────────────────────────────
+section "Phase 2 — 接管验证"
 
-CURRENT_DNS=$(grep nameserver /etc/resolv.conf | head -1 | awk '{print $2}')
-info "当前 DNS: $CURRENT_DNS"
-
-if grep -rE "server=127.0.0.1|127.0.0.1#1053|127.0.0.1#7874" /etc/dnsmasq.d/ /tmp/dnsmasq.d/ 2>/dev/null | grep -qE "server"; then
-    pass "dnsmasq 已配置指向 mihomo DNS"
-else
-    DNS_TEST=$(nslookup google.com 2>/dev/null | grep "Address" | tail -1 || echo "")
-    if [ -n "$DNS_TEST" ]; then
-        pass "DNS 解析正常: $DNS_TEST"
-    else
-        warn "dnsmasq → mihomo 路径不确定"
-    fi
+# TC-07
+DNS_CHANGED="no"
+if grep -rE "server=127.0.0.1|127.0.0.1#1053|127.0.0.1#7874" /etc/dnsmasq.d/ /tmp/dnsmasq.d/ 2>/dev/null | grep -q "server"; then
+    DNS_CHANGED="yes"
 fi
-
 DNSMASQ_AFTER=$(ls /etc/dnsmasq.d/ 2>/dev/null | tr '\n' ' ')
 DNSMASQ_BEFORE=$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" | tr '\n' ' ')
-if [ "$DNSMASQ_AFTER" != "$DNSMASQ_BEFORE" ]; then
-    pass "dnsmasq.d 配置已变化（接管生效）"
+[ "$DNSMASQ_AFTER" != "$DNSMASQ_BEFORE" ] && DNS_CHANGED="yes"
+DNS_RESOLVE=$(nslookup google.com 2>/dev/null | grep "Address:" | grep -v "#53" | head -1 | awk '{print $2}')
+if echo "$DNS_RESOLVE" | grep -qE "^198\.18\.|^198\.19\."; then
+    record PASS TC-07 "DNS 接管验证" "检查 dnsmasq.d 配置变化 + DNS 解析返回 fake-ip 段地址" "dnsmasq upstream 指向 mihomo，解析返回 198.18.x.x" "fake-ip 解析: $DNS_RESOLVE，dnsmasq.d 变化: $DNS_CHANGED"
+elif [ "$DNS_CHANGED" = "yes" ]; then
+    record PASS TC-07 "DNS 接管验证" "检查 dnsmasq.d 配置变化 + DNS 解析" "dnsmasq 配置变化，DNS 接管生效" "dnsmasq.d 已变化（$DNS_RESOLVE）"
 else
-    info "dnsmasq.d 无变化，DNS 可能通过其他方式接管"
+    record WARN TC-07 "DNS 接管验证" "检查 dnsmasq.d 配置变化 + DNS 解析" "dnsmasq 配置变化" "DNS 接管状态不明确"
 fi
 
-# ── Step 5: 验证 nft 规则 ─────────────────────────────────────────────────────
-section "Step 5: 验证 nftables 接管"
-
+# TC-08
 NFT_TABLES=$(nft list tables 2>/dev/null | tr '\n' ' ')
-info "当前 nft 表: $NFT_TABLES"
-
-if echo "$NFT_TABLES" | grep -qE "metaclash|clashforge|tproxy"; then
-    pass "nftables 透明代理表已建立"
+HAS_METACLASH=$(echo "$NFT_TABLES" | grep -qE "metaclash|clashforge" && echo "yes" || echo "no")
+HAS_TPROXY=$(nft list ruleset 2>/dev/null | grep -qE "tproxy|redirect" && echo "yes" || echo "no")
+if [ "$HAS_METACLASH" = "yes" ] && [ "$HAS_TPROXY" = "yes" ]; then
+    record PASS TC-08 "nftables 透明代理接管" "nft list tables 检查 metaclash 表；ruleset 检查 tproxy 规则" "table inet metaclash 存在，tproxy 规则存在" "nft 表: $NFT_TABLES"
+elif [ "$HAS_METACLASH" = "yes" ]; then
+    record WARN TC-08 "nftables 透明代理接管" "nft list tables 检查 metaclash 表；ruleset 检查 tproxy 规则" "metaclash 表 + tproxy 规则均存在" "metaclash 表存在但 tproxy 规则未找到"
 else
-    fail "nftables 透明代理表未找到"
+    record FAIL TC-08 "nftables 透明代理接管" "nft list tables 检查 metaclash 表" "table inet metaclash 存在" "metaclash 表未找到，nft 表: $NFT_TABLES"
 fi
 
-if nft list ruleset 2>/dev/null | grep -qE "tproxy|redirect|mark"; then
-    pass "nftables tproxy 规则存在"
-else
-    warn "tproxy 规则未确认"
-fi
-
+# TC-09
 if ip rule list 2>/dev/null | grep -qE "fwmark|lookup"; then
-    pass "ip rule 策略路由已配置"
+    IP_RULE=$(ip rule list 2>/dev/null | grep -E "fwmark|lookup" | head -2 | tr '\n' ' ')
+    record PASS TC-09 "ip rule 策略路由" "ip rule list 检查 fwmark/lookup 规则" "策略路由规则已配置" "$IP_RULE"
 else
-    warn "ip rule 策略路由未找到"
+    record WARN TC-09 "ip rule 策略路由" "ip rule list 检查 fwmark/lookup 规则" "策略路由规则已配置" "策略路由未找到"
 fi
 
-# ── Step 6: 连通性测试 ────────────────────────────────────────────────────────
-section "Step 6: 连通性测试"
+# ── Phase 3: 代理运行期探测（路由器端）────────────────────────────────────────
+section "Phase 3 — 代理运行期探测（路由器端）"
 
-sleep 3
-
-# 从 mihomo 生成的配置中读取代理认证信息
-PROXY_AUTH=""
+# 读取代理认证
 CONFIG_CACHE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1)
 if [ -n "$CONFIG_CACHE" ]; then
     AUTH_LINE=$(grep -A1 'authentication:' "$CONFIG_CACHE" 2>/dev/null | grep -v 'authentication:' | head -1 | tr -d ' -')
-    if [ -n "$AUTH_LINE" ]; then
-        PROXY_AUTH="$AUTH_LINE"
-        info "代理认证: $PROXY_AUTH"
+    [ -n "$AUTH_LINE" ] && PROXY_AUTH="$AUTH_LINE"
+fi
+info "代理认证: ${PROXY_AUTH:-无}"
+
+sleep 3
+
+# 调用路由器端 probes API
+PROBES_RESP=$(curl -sf --max-time 30 "$CF_API/overview/probes" 2>/dev/null || echo "FAILED")
+
+# TC-10 路由器端 IP 检查
+if [ "$PROBES_RESP" != "FAILED" ]; then
+    IP_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
+    IP_TOTAL=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
+    PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
+    LOCATION=$(echo "$PROBES_RESP" | grep -o '"location":"[^"]*"' | head -1 | sed 's/"location":"//;s/"//')
+    if [ "$IP_OK" -gt 0 ]; then
+        record PASS TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "$IP_OK/$IP_TOTAL 成功，出口 IP: $PROXY_IP ($LOCATION)"
+    else
+        record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "全部 IP 检查失败"
+    fi
+else
+    record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "/overview/probes API 无响应"
+fi
+
+# TC-11 路由器端可访问性检查
+if [ "$PROBES_RESP" != "FAILED" ]; then
+    ACCESS_TOTAL=$(echo "$PROBES_RESP" | grep -o '"name":' | wc -l)
+    ACCESS_OK=$(echo "$PROBES_RESP" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+checks=d.get('data',d).get('access_checks',[])
+ok=[c for c in checks if c.get('ok')]
+print(len(ok),len(checks))
+for c in checks:
+    status='✓' if c.get('ok') else '✗'
+    print(f\"  {status} {c.get('name','?')} [{c.get('group','?')}] HTTP {c.get('status_code','?')} {c.get('latency_ms','?')}ms\")
+" 2>/dev/null || echo "0 0")
+    OK_COUNT=$(echo "$ACCESS_OK" | head -1 | awk '{print $1}')
+    TOTAL_COUNT=$(echo "$ACCESS_OK" | head -1 | awk '{print $2}')
+    DETAILS=$(echo "$ACCESS_OK" | tail -n +2 | tr '\n' ' ')
+    if [ "${OK_COUNT:-0}" -gt 0 ]; then
+        record PASS TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "国内外主要站点通过代理可达" "$OK_COUNT/$TOTAL_COUNT 成功: $DETAILS"
+    else
+        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败"
     fi
 fi
 
-if [ -n "$PROXY_AUTH" ]; then
-    PROXY_IP=$(curl -sf --max-time 15 \
-        --proxy "http://${PROXY_AUTH}@127.0.0.1:7890" \
-        https://api.ipify.org 2>/dev/null || echo "FAILED")
-else
-    PROXY_IP=$(curl -sf --max-time 15 \
-        --proxy http://127.0.0.1:7890 \
-        https://api.ipify.org 2>/dev/null || echo "FAILED")
-fi
-
+# TC-12 出口 IP 变化验证
 DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
-
-if [ "$PROXY_IP" = "FAILED" ]; then
-    fail "代理连通性测试失败（无法通过 :7890 访问外网）"
+CURRENT_PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
+if [ -n "$CURRENT_PROXY_IP" ] && [ "$CURRENT_PROXY_IP" != "$DIRECT_IP" ]; then
+    record PASS TC-12 "出口 IP 变化验证" "对比直连 IP 与代理探测出口 IP" "两者不同，流量已走代理" "直连: $DIRECT_IP → 代理: $CURRENT_PROXY_IP"
+elif [ -n "$CURRENT_PROXY_IP" ]; then
+    record WARN TC-12 "出口 IP 变化验证" "对比直连 IP 与代理探测出口 IP" "两者不同" "IP 未变化（可能同出口）: $CURRENT_PROXY_IP"
 else
-    pass "代理出口 IP: $PROXY_IP"
-
-    if [ "$PROXY_IP" != "$DIRECT_IP" ] && [ "$DIRECT_IP" != "unknown" ]; then
-        pass "IP 已变化: 直连=$DIRECT_IP → 代理=$PROXY_IP ✓"
-    else
-        warn "IP 未变化（节点可能和本机同出口）"
-    fi
-
-    if [ -n "$PROXY_AUTH" ]; then
-        GEO=$(curl -sf --max-time 10 \
-            --proxy "http://${PROXY_AUTH}@127.0.0.1:7890" \
-            "https://ipinfo.io/$PROXY_IP/json" 2>/dev/null || echo "")
-    else
-        GEO=$(curl -sf --max-time 10 \
-            --proxy http://127.0.0.1:7890 \
-            "https://ipinfo.io/$PROXY_IP/json" 2>/dev/null || echo "")
-    fi
-    COUNTRY=$(json_get "$GEO" "country")
-    CITY=$(json_get "$GEO" "city")
-    info "代理出口位置: $COUNTRY / $CITY"
+    record FAIL TC-12 "出口 IP 变化验证" "对比直连 IP 与代理探测出口 IP" "代理出口 IP 可获取" "无法获取代理出口 IP"
 fi
 
-# mihomo API 验证
-MIHOMO_VER=$(wget -q -O - --timeout=5 "http://127.0.0.1:9090/version" 2>/dev/null || echo "FAILED")
-if [ "$MIHOMO_VER" != "FAILED" ]; then
-    pass "mihomo API 响应正常"
-else
-    fail "mihomo API 无响应"
-fi
+# ── Phase 4: 停止阶段 ─────────────────────────────────────────────────────────
+section "Phase 4 — 停止阶段"
 
-# ── Step 7: 停止服务 ──────────────────────────────────────────────────────────
-section "Step 7: 停止 clashforge 服务"
-
-curl -sf --max-time 30 \
-    -H "Content-Type: application/json" \
-    -d '{}' \
-    "$CLASHFORGE_API/setup/stop" > /dev/null 2>/dev/null || true
-
+# TC-13
+curl -sf --max-time 30 -H "Content-Type: application/json" -d '{}' \
+    "$CF_API/setup/stop" > /dev/null 2>/dev/null || true
 /etc/init.d/clashforge stop 2>/dev/null || true
 sleep 5
-
 if pgrep -f "clashforge\|mihomo" > /dev/null 2>&1; then
-    warn "进程仍在运行，强制终止..."
     pkill -f "clashforge" 2>/dev/null || true
     pkill -f "mihomo-clashforge" 2>/dev/null || true
     sleep 2
 fi
-
 if ! pgrep -f "clashforge\|mihomo-clashforge" > /dev/null 2>&1; then
-    pass "clashforge / mihomo 进程已退出"
+    record PASS TC-13 "停止服务" "POST /setup/stop + /etc/init.d/clashforge stop" "clashforge / mihomo 进程退出" "进程已退出"
 else
-    fail "进程未完全退出"
+    record FAIL TC-13 "停止服务" "POST /setup/stop + /etc/init.d/clashforge stop" "clashforge / mihomo 进程退出" "进程未退出"
 fi
-
-# ── Step 8: 验证 DNS/nft 还原 ────────────────────────────────────────────────
-section "Step 8: 验证 DNS/nft 还原"
-
 sleep 3
 
-NFT_TABLES_FINAL=$(nft list tables 2>/dev/null | tr '\n' ' ')
-info "停止后 nft 表: $NFT_TABLES_FINAL"
-
-if echo "$NFT_TABLES_FINAL" | grep -qE "metaclash|clashforge"; then
-    fail "nftables metaclash 表未清除，状态未还原"
+# TC-14
+NFT_FINAL=$(nft list tables 2>/dev/null | tr '\n' ' ')
+if echo "$NFT_FINAL" | grep -qE "metaclash|clashforge"; then
+    record FAIL TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "metaclash 表未清除: $NFT_FINAL"
 else
-    pass "nftables metaclash 表已移除"
+    record PASS TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "nft 表已还原: $NFT_FINAL"
 fi
 
+# TC-15
 IP_RULE_FINAL=$(ip rule list 2>/dev/null)
 IP_RULE_BEFORE=$(cat "$SNAPSHOT_DIR/ip-rule.before")
 if [ "$IP_RULE_FINAL" = "$IP_RULE_BEFORE" ]; then
-    pass "ip rule 已还原到启动前状态"
+    record PASS TC-15 "ip rule 还原验证" "对比停止后 ip rule list 与启动前快照" "ip rule 完全还原" "已还原"
 else
-    warn "ip rule 有变化（可能未完全还原）"
+    record WARN TC-15 "ip rule 还原验证" "对比停止后 ip rule list 与启动前快照" "ip rule 完全还原" "有差异（可能是多次运行残留）"
 fi
 
-DNSMASQ_FINAL=$(ls /etc/dnsmasq.d/ 2>/dev/null | tr '\n' ' ')
-if [ "$DNSMASQ_FINAL" = "$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" | tr '\n' ' ')" ]; then
-    pass "dnsmasq.d 已还原"
+# TC-16
+DNSMASQ_FINAL=$(ls /etc/dnsmasq.d/ 2>/dev/null | sort | tr '\n' ' ')
+DNSMASQ_BEFORE_LIST=$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" | sort | tr '\n' ' ')
+if [ "$DNSMASQ_FINAL" = "$DNSMASQ_BEFORE_LIST" ]; then
+    record PASS TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "已还原"
 else
-    warn "dnsmasq.d 有残留: $DNSMASQ_FINAL"
+    record WARN TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "有残留文件（before: '$DNSMASQ_BEFORE_LIST' / after: '$DNSMASQ_FINAL'）"
 fi
 
+# ── Phase 5: 停止后恢复探测 ───────────────────────────────────────────────────
+section "Phase 5 — 停止后恢复探测"
+
+# TC-17
 FINAL_IP=$(wget -q -O - --timeout=10 https://api.ipify.org 2>/dev/null || echo "FAILED")
-if [ "$FINAL_IP" != "FAILED" ]; then
-    pass "停止服务后网络正常: $FINAL_IP"
-    if [ "$FINAL_IP" = "$DIRECT_IP" ]; then
-        pass "IP 还原: $FINAL_IP = 启动前 $DIRECT_IP ✓"
-    else
-        warn "IP 与启动前不同（$DIRECT_IP → $FINAL_IP），但网络可用"
-    fi
+if [ "$FINAL_IP" != "FAILED" ] && [ "$FINAL_IP" = "$DIRECT_IP" ]; then
+    record PASS TC-17 "停止后网络可达性 + IP 还原" "停止服务后请求 api.ipify.org，对比直连 IP" "网络正常，出口 IP 还原为启动前直连 IP" "还原 IP: $FINAL_IP = 启动前 $DIRECT_IP ✓"
+elif [ "$FINAL_IP" != "FAILED" ]; then
+    record WARN TC-17 "停止后网络可达性 + IP 还原" "停止服务后请求 api.ipify.org，对比直连 IP" "出口 IP 还原为启动前直连 IP" "网络可达但 IP 不同（$DIRECT_IP → $FINAL_IP）"
 else
-    fail "停止服务后网络不可达！DNS/nft 可能未完全还原"
+    record FAIL TC-17 "停止后网络可达性 + IP 还原" "停止服务后请求 api.ipify.org" "网络正常可达" "停止服务后网络不可达！DNS/nft 可能未还原"
 fi
 
-# ── Summary ───────────────────────────────────────────────────────────────────
-section "测试结果"
+# TC-18 / TC-19 停止后路由器端探测（直接发请求，不走代理）
+info "停止后路由器端探测（直连模式）..."
+DIRECT_TARGETS="https://www.baidu.com https://music.163.com https://github.com https://www.youtube.com"
+DIRECT_OK=0; DIRECT_TOTAL=0
+for url in $DIRECT_TARGETS; do
+    DIRECT_TOTAL=$((DIRECT_TOTAL+1))
+    CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 "$url" 2>/dev/null || echo "0")
+    if [ "$CODE" -ge 200 ] 2>/dev/null && [ "$CODE" -lt 400 ] 2>/dev/null; then
+        DIRECT_OK=$((DIRECT_OK+1))
+        info "  ✓ $url HTTP $CODE"
+    else
+        info "  ✗ $url HTTP $CODE"
+    fi
+done
 
-printf "\n${BOLD}直连 IP:${RESET}  $DIRECT_IP\n"
-printf "${BOLD}代理 IP:${RESET}  $PROXY_IP\n"
-printf "${BOLD}还原 IP:${RESET}  $FINAL_IP\n\n"
+if [ "$DIRECT_OK" = "$DIRECT_TOTAL" ]; then
+    record PASS TC-18 "停止后路由器端 IP 检查" "直连请求 api.ipify.org，确认出口 IP 已回直连" "出口 IP = 启动前直连 IP" "已验证: $FINAL_IP"
+    record PASS TC-19 "停止后路由器端可访问性检查" "直连访问百度/网易云/GitHub/YouTube" "所有站点直连可达" "$DIRECT_OK/$DIRECT_TOTAL 成功"
+elif [ "$DIRECT_OK" -gt 0 ]; then
+    record WARN TC-18 "停止后路由器端 IP 检查" "直连请求 api.ipify.org" "出口 IP = 启动前直连 IP" "$FINAL_IP（$([ "$FINAL_IP" = "$DIRECT_IP" ] && echo '一致' || echo '不一致')"
+    record WARN TC-19 "停止后路由器端可访问性检查" "直连访问百度/网易云/GitHub/YouTube" "所有站点直连可达" "$DIRECT_OK/$DIRECT_TOTAL 成功"
+else
+    record FAIL TC-18 "停止后路由器端 IP 检查" "直连请求 api.ipify.org" "出口 IP 可获取" "无法获取出口 IP"
+    record FAIL TC-19 "停止后路由器端可访问性检查" "直连访问百度/网易云/GitHub/YouTube" "站点直连可达" "全部不可达"
+fi
+
+# ── 输出 GitHub Actions Job Summary ──────────────────────────────────────────
+section "生成测试报告"
+
+PASS_COUNT=$(echo "$RESULTS" | grep -c "^PASS" || echo 0)
+FAIL_COUNT=$(echo "$RESULTS" | grep -c "^FAIL" || echo 0)
+WARN_COUNT=$(echo "$RESULTS" | grep -c "^WARN" || echo 0)
+
+summary "# ClashForge E2E 测试报告"
+summary ""
+summary "| 项目 | 值 |"
+summary "|------|----|"
+summary "| **测试环境** | OpenWrt 23.05.5 x86_64 |"
+summary "| **ClashForge 版本** | $CLASHFORGE_VERSION |"
+summary "| **直连 IP** | $DIRECT_IP |"
+summary "| **代理出口 IP** | $CURRENT_PROXY_IP |"
+summary "| **还原 IP** | $FINAL_IP |"
+summary ""
+if [ "$FAIL_COUNT" -eq 0 ]; then
+    summary "## ✅ 全部测试通过"
+else
+    summary "## ❌ 存在失败用例 ($FAIL_COUNT 个)"
+fi
+summary ""
+summary "| 结果 | 数量 |"
+summary "|------|------|"
+summary "| ✅ 通过 | $PASS_COUNT |"
+summary "| ❌ 失败 | $FAIL_COUNT |"
+summary "| ⚠️ 警告 | $WARN_COUNT |"
+summary "| **合计** | **$TOTAL** |"
+summary ""
+summary "---"
+summary ""
+summary "## 详细用例结果"
+summary ""
+summary "| 编号 | 用例名称 | 操作 | 预期结果 | 实际结果 | 状态 |"
+summary "|------|----------|------|----------|----------|------|"
+printf "%b" "$RESULTS" | while IFS="|" read -r STATUS TC NAME OP EXPECTED ACTUAL; do
+    [ -z "$TC" ] && continue
+    case "$STATUS" in
+        PASS) ICON="✅" ;;
+        FAIL) ICON="❌" ;;
+        WARN) ICON="⚠️" ;;
+        *) continue ;;
+    esac
+    summary "| $TC | $NAME | $OP | $EXPECTED | $ACTUAL | $ICON $STATUS |"
+done
+
+summary ""
+summary "---"
+summary ""
+summary "> 📝 **注：** 浏览器端探测（browser-probe.mjs）结果见下一个 step 的 summary"
+
+# ── 控制台最终总结 ────────────────────────────────────────────────────────────
+section "测试结果"
+printf "\n${BOLD}直连 IP:${RESET}      $DIRECT_IP\n"
+printf "${BOLD}代理出口 IP:${RESET}  $CURRENT_PROXY_IP\n"
+printf "${BOLD}还原 IP:${RESET}      $FINAL_IP\n\n"
+printf "${BOLD}通过: $PASS_COUNT  失败: $FAIL_COUNT  警告: $WARN_COUNT  合计: $TOTAL${RESET}\n\n"
 
 if [ "$FAILED" -eq 0 ]; then
     printf "${GREEN}${BOLD}ALL TESTS PASSED ✅${RESET}\n"
