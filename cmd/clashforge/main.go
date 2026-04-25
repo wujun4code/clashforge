@@ -72,6 +72,7 @@ func main() {
 	coreManager := core.NewManager(core.CoreManagerConfig{
 		Binary:      cfg.Core.Binary,
 		ConfigFile:  cfg.Core.RuntimeDir + "/mihomo-config.yaml",
+		HomeDir:     cfg.Core.DataDir, // persistent dir so GeoIP.dat survives reboots
 		APIPort:     cfg.Ports.MihomoAPI,
 		MaxRestarts: cfg.Core.MaxRestarts,
 	})

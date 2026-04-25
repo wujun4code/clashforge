@@ -37,6 +37,11 @@ var (
 type CoreManagerConfig struct {
 	Binary      string
 	ConfigFile  string
+	// HomeDir is the mihomo home directory (-d flag), used for geodata files
+	// (GeoIP.dat, GeoSite.dat, etc.). It should point to persistent storage so
+	// downloaded geodata survives reboots. Falls back to filepath.Dir(ConfigFile)
+	// if empty.
+	HomeDir     string
 	APIPort     int
 	MaxRestarts int
 }
@@ -115,7 +120,11 @@ func (m *CoreManager) startLocked(ctx context.Context) error {
 	// The caller context only scopes readiness waiting, not mihomo's lifetime.
 	// Using CommandContext here would kill the long-running child as soon as an
 	// HTTP request context is canceled or times out.
-	cmd := exec.Command(m.cfg.Binary, "-d", filepath.Dir(m.cfg.ConfigFile), "-f", m.cfg.ConfigFile)
+	homeDir := m.cfg.HomeDir
+	if homeDir == "" {
+		homeDir = filepath.Dir(m.cfg.ConfigFile)
+	}
+	cmd := exec.Command(m.cfg.Binary, "-d", homeDir, "-f", m.cfg.ConfigFile)
 	cmd.Stdout = newCoreLogWriter("stdout")
 	cmd.Stderr = newCoreLogWriter("stderr")
 	if err := cmd.Start(); err != nil {
