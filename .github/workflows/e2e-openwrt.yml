@@ -1,0 +1,177 @@
+name: E2E Integration Test (OpenWrt)
+
+# 完整生命周期 + 浏览器端探测测试
+#
+# 关键设计原则（防误判）：
+#   浏览器端探测使用 iptables 封锁宿主机直连，
+#   强制测试流量只能通过 mihomo 代理端口（:7890）出站，
+#   消除宿主机有全球直连能力导致的误判。
+#
+# 流程：
+#   1. 路由器端生命周期（安装→启动→接管验证→代理期探测→停止→还原验证）
+#   2. 代理运行期：封锁宿主机直连 → 浏览器端探测（通过 :7890）→ 解封
+#   3. 停止服务
+#   4. 停止后：浏览器端探测（验证网络恢复）
+#   5. 紧急清理
+#
+# 所需 Secrets：
+#   SUBSCRIPTION_URL  — 订阅 URL（含 token）
+#
+# 所需 Runner：
+#   self-hosted, openwrt-x86
+
+on:
+  workflow_dispatch:
+    inputs:
+      clashforge_version:
+        description: 'ClashForge 版本（留空用 latest）'
+        required: false
+        default: 'latest'
+  push:
+    branches:
+      - 'feat/e2e-*'
+
+jobs:
+  e2e-openwrt:
+    name: OpenWrt E2E — Lifecycle + Browser Probe
+    runs-on: [self-hosted, openwrt-x86]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Step 1: 路由器端生命周期测试 ──────────────────────────────────────────
+      - name: "[Router] Lifecycle — install / launch / verify / probe"
+        id: lifecycle
+        env:
+          SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
+          CLASHFORGE_VERSION: ${{ inputs.clashforge_version || 'latest' }}
+        run: |
+          chmod +x tests/e2e/openwrt-lifecycle-test.sh
+          # lifecycle 脚本必须在 OpenWrt VM 内运行（opkg/nft 等工具在 VM 内）
+          cat tests/e2e/openwrt-lifecycle-test.sh | \
+            ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "cat > /tmp/lifecycle-test.sh && chmod +x /tmp/lifecycle-test.sh"
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' CLASHFORGE_VERSION='$CLASHFORGE_VERSION' sh /tmp/lifecycle-test.sh"
+
+      # ── Step 2: 提取代理信息 ──────────────────────────────────────────────────
+      - name: Extract proxy info
+        id: proxy
+        if: always()
+        run: |
+          # 从 VM 内读取代理信息
+          AUTH=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "grep -A1 'authentication:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+             | grep -v 'authentication:' | head -1 | tr -d ' -'" 2>/dev/null || echo "")
+          [ -n "$AUTH" ] && echo "url=http://${AUTH}@127.0.0.1:7890" >> $GITHUB_OUTPUT \
+                         || echo "url=http://127.0.0.1:7890" >> $GITHUB_OUTPUT
+
+          NODE_INFO=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "CACHE=\$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1); \
+             [ -n \"\$CACHE\" ] && echo \"name:\$(grep -m1 'name:' \"\$CACHE\" | sed 's/.*name: *//' | tr -d ' ') server:\$(grep -m1 'server:' \"\$CACHE\" | awk '{print \$2}' | tr -d ' ')\"" 2>/dev/null || echo "")
+          NODE_NAME=$(echo "$NODE_INFO" | grep -o 'name:[^ ]*' | sed 's/name://')
+          SERVER=$(echo "$NODE_INFO" | grep -o 'server:[^ ]*' | sed 's/server://')
+          [ -n "$NODE_NAME" ] && echo "node_name=$NODE_NAME" >> $GITHUB_OUTPUT
+          [ -n "$SERVER" ] && echo "server_host=$SERVER" >> $GITHUB_OUTPUT
+
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "pgrep -f 'mihomo-clashforge' > /dev/null 2>&1" 2>/dev/null \
+            && echo "running=true" >> $GITHUB_OUTPUT \
+            || echo "running=false" >> $GITHUB_OUTPUT
+
+          DIRECT_IP=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null" 2>/dev/null || echo "unknown")
+          echo "direct_ip=$DIRECT_IP" >> $GITHUB_OUTPUT
+
+      # ── Step 3: 浏览器端探测（代理运行期）────────────────────────────────────
+      # 关键：用 iptables 封锁宿主机直连 443/80，强制流量只走 mihomo 代理端口
+      # 如果代理未生效，测试就会失败（不会被宿主机直连救场）
+      - name: "[Browser] Probe — 代理运行期（iptables 封锁直连 + 强制走代理）"
+        if: steps.proxy.outputs.running == 'true'
+        run: |
+          SERVER_HOST="${{ steps.proxy.outputs.server_host }}"
+          NODE_NAME="${{ steps.proxy.outputs.node_name }}"
+          PROXY_URL="${{ steps.proxy.outputs.url }}"
+
+          # DoH 解析节点服务器真实 IP
+          SERVER_IP=$(curl -sf --max-time 8 \
+            "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
+            | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//') || ""
+          echo "节点: $NODE_NAME / $SERVER_HOST / $SERVER_IP"
+
+          # 获取 mihomo 进程 UID（允许 mihomo 自身出站，否则代理无法工作）
+          MIHOMO_UID=$(ps -eo uid,comm 2>/dev/null | grep mihomo | head -1 | awk '{print $1}' || echo "")
+          echo "mihomo UID: $MIHOMO_UID"
+
+          # 封锁宿主机直连出站（非 mihomo 进程的 443/80）
+          if [ -n "$MIHOMO_UID" ]; then
+            iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null && echo "已封锁直连 443" || true
+            iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null && echo "已封锁直连 80" || true
+          fi
+
+          # 运行浏览器端探测（强制通过代理）
+          set +e
+          PROXY_URL="$PROXY_URL" \
+          PROXY_SERVER_HOST="$SERVER_HOST" \
+          PROXY_NODE_NAME="$NODE_NAME" \
+          PROBE_TIMEOUT=12000 \
+          node tests/e2e/browser-probe.mjs | tee /tmp/browser-probe-running.log
+          PROBE_EXIT=$?
+          set -e
+
+          # 立即清除 iptables 封锁规则
+          if [ -n "$MIHOMO_UID" ]; then
+            iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
+            iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
+            echo "iptables 封锁规则已清除"
+          fi
+
+          exit $PROBE_EXIT
+
+      # ── Step 4: 停止 clashforge ───────────────────────────────────────────────
+      - name: Stop clashforge
+        if: always()
+        run: |
+          # 将停止命令发送到 VM 内执行（仅通过用户 API）
+          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "curl -sN --max-time 60 -H 'Content-Type: application/json' -d '{}' \
+             http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null | tail -2" 2>/dev/null || true
+          sleep 3
+
+      # ── Step 5: 浏览器端探测（停止后，验证网络恢复）─────────────────────────
+      # 停止后不封锁直连，这里的目的是验证停止后网络正常（不需要防误判）
+      - name: "[Browser] Probe — 停止后恢复验证（直连模式）"
+        if: always()
+        env:
+          PROBE_TIMEOUT: '10000'
+        run: |
+          echo "## 🔁 浏览器端探测（停止后恢复验证）" >> $GITHUB_STEP_SUMMARY
+          node tests/e2e/browser-probe.mjs
+
+      # ── Step 6: 紧急清理 ──────────────────────────────────────────────────────
+      - name: Emergency cleanup
+        if: always()
+        run: |
+          # 清理工作在 VM 内执行
+          FINAL_IP=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "nft list tables 2>/dev/null | grep -q 'metaclash' && \
+             nft delete table inet metaclash 2>/dev/null || true; \
+             wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo 'FAILED'" 2>/dev/null || echo "FAILED")
+          NFT_TABLES=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "nft list tables 2>/dev/null | tr '\n' ' '" 2>/dev/null || echo "unknown")
+          echo "Final IP: $FINAL_IP"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 状态 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| nft 表 | $NFT_TABLES |" >> $GITHUB_STEP_SUMMARY
+          echo "| 出口 IP | $FINAL_IP |" >> $GITHUB_STEP_SUMMARY
+          [ "$FINAL_IP" != "FAILED" ] \
+            && echo "| 网络状态 | ✅ 正常 |" >> $GITHUB_STEP_SUMMARY \
+            || echo "| 网络状态 | ❌ 异常 |" >> $GITHUB_STEP_SUMMARY
