@@ -21,6 +21,9 @@ name: E2E Integration Test (OpenWrt)
 #   self-hosted, openwrt-x86
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       clashforge_version:
