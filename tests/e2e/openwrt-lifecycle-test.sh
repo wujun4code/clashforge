@@ -208,10 +208,15 @@ info "启动前 nft 表: $(nft list tables 2>/dev/null | tr '\n' ' ')"
 info "启动前 DNS: $(grep nameserver /etc/resolv.conf | tr '\n' ' ')"
 
 # TC-03
+# 优先使用 workflow 构建的本地 IPK（使用触发分支源码），如果没有才 fallback 到最新 release
+LOCAL_IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
 if command -v clashforge > /dev/null 2>&1; then
     info "clashforge 已安装，跳过安装"
+elif [ -n "$LOCAL_IPK" ]; then
+    info "使用本地构建的 IPK 安装: $LOCAL_IPK"
+    opkg install "$LOCAL_IPK" 2>&1 | tail -5
 else
-    info "安装 clashforge $CLASHFORGE_VERSION ..."
+    info "内本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
         wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
     else
@@ -222,9 +227,10 @@ opkg install kmod-nft-tproxy kmod-nf-tproxy curl 2>/dev/null | grep -v "up to da
 modprobe nft_tproxy 2>/dev/null || true
 if command -v clashforge > /dev/null 2>&1 && lsmod | grep -q nft_tproxy; then
     VER=$(opkg list-installed 2>/dev/null | grep clashforge | awk '{print $3}' || echo "unknown")
-    record PASS TC-03 "安装 clashforge + 内核模块" "install.sh 安装 + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "版本: $VER，nft_tproxy 已加载"
+    IPK_SRC=$([ -n "$LOCAL_IPK" ] && echo "本地构建" || echo "release")
+    record PASS TC-03 "安装 clashforge + 内核模块" "opkg 安装 ($IPK_SRC) + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "版本: $VER（$IPK_SRC），nft_tproxy 已加载"
 else
-    record FAIL TC-03 "安装 clashforge + 内核模块" "install.sh 安装 + opkg kmod-nft-tproxy + modprobe" "clashforge 可用，nft_tproxy 模块加载" "安装或模块加载失败"
+    record FAIL TC-03 "安装 clashforge + 内核模块" "opkg 安装 + kmod-nft-tproxy" "clashforge 可用，nft_tproxy 模块加载" "安装或模块加载失败"
     exit 1
 fi
 

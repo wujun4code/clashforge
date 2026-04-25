@@ -32,14 +32,116 @@ on:
       - 'feat/e2e-*'
 
 jobs:
+  # ── Job 1: 用触发分支源码构建 IPK ──────────────────────────────────────────
+  build-ipk:
+    name: Build IPK from branch source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Compute version
+        id: version
+        run: |
+          VERSION="e2e-$(git rev-parse --short HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Build version: $VERSION"
+
+      - name: Build UI
+        run: cd ui && npm ci && npm run build
+
+      - name: Copy UI dist
+        run: mkdir -p internal/api/ui_dist && cp -r ui/dist/* internal/api/ui_dist/
+
+      - name: Build Go binary (linux/amd64)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -ldflags="-s -w -X main.buildVersion=${{ steps.version.outputs.version }}" \
+            -o dist/clashforge-linux-amd64 \
+            ./cmd/clashforge
+
+      - name: Download mihomo binary
+        run: |
+          MIHOMO_VERSION=v1.19.24
+          wget -q -O /tmp/mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz"
+          gunzip /tmp/mihomo.gz
+          chmod +x /tmp/mihomo
+
+      - name: Package IPK
+        run: |
+          mkdir -p ipk/CONTROL ipk/usr/bin ipk/etc/init.d
+          mkdir -p ipk/usr/share/metaclash ipk/usr/share/luci/menu.d
+          mkdir -p ipk/www/luci-static/resources/view/clashforge
+          mkdir -p ipk/usr/share/rpcd/acl.d
+
+          cp dist/clashforge-linux-amd64 ipk/usr/bin/clashforge && chmod 755 ipk/usr/bin/clashforge
+          cp /tmp/mihomo ipk/usr/bin/mihomo-clashforge && chmod 755 ipk/usr/bin/mihomo-clashforge
+          cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json ipk/usr/share/luci/menu.d/
+          cp openwrt/files/www/luci-static/resources/view/clashforge/main.js ipk/www/luci-static/resources/view/clashforge/
+          cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json ipk/usr/share/rpcd/acl.d/
+          cp openwrt/files/etc/init.d/clashforge ipk/etc/init.d/clashforge && chmod 755 ipk/etc/init.d/clashforge
+
+          VERSION=${{ steps.version.outputs.version }}
+          cat > ipk/CONTROL/control << EOF
+          Package: clashforge
+          Version: ${VERSION}
+          Architecture: x86_64
+          Maintainer: ClashForge
+          Description: ClashForge proxy manager for OpenWrt
+          EOF
+
+          PKG_NAME="clashforge_${VERSION}_x86_64.ipk" python3 scripts/build_ipk.py
+          echo "ipk_name=clashforge_${VERSION}_x86_64.ipk" >> $GITHUB_OUTPUT
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clashforge-ipk
+          path: "*.ipk"
+          retention-days: 1
+
+  # ── Job 2: E2E 测试（使用上面构建的 IPK）────────────────────────────────────
   e2e-openwrt:
     name: OpenWrt E2E — Lifecycle + Browser Probe
     runs-on: [self-hosted, openwrt-x86]
+    needs: build-ipk
     timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download IPK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: clashforge-ipk
+          path: /tmp/e2e-ipk/
+
+      - name: Upload IPK to OpenWrt VM
+        run: |
+          IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
+          if [ -n "$IPK" ]; then
+            ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "mkdir -p /tmp/e2e-ipk"
+            cat "$IPK" | ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+              "cat > /tmp/e2e-ipk/$(basename $IPK)"
+            echo "已上传 IPK 到 VM: $(basename $IPK)"
+          else
+            echo "警告: 未找到 IPK 文件，将使用 release 版本安装"
+          fi
 
       # ── Step 1: 路由器端生命周期测试 ──────────────────────────────────────────
       - name: "[Router] Lifecycle — install / launch / verify / probe"
