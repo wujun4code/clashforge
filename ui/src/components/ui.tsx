@@ -21,7 +21,7 @@ export function PageHeader({
   return (
     <section className="hero-panel relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(167,139,250,0.26),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(249,115,22,0.16),transparent_32%)]" />
-      <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+      <div className="relative flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="max-w-3xl space-y-3">
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-brand-light">
             <Sparkles size={12} className="text-cta" />
@@ -59,7 +59,7 @@ export function SectionCard({
   className,
 }: {
   title?: string
-  description?: string
+  description?: string | ReactNode
   actions?: ReactNode
   children: ReactNode
   className?: string

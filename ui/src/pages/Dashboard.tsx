@@ -229,37 +229,6 @@ function Pill({ tone, label }: { tone: 'success' | 'warning' | 'danger' | 'muted
   return <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium backdrop-blur-sm ${className}`}>{label}</span>
 }
 
-function ModuleRow({ module }: { module: OverviewModule }) {
-  const managed = module.managed_by_clashforge
-  const statusTone: 'success' | 'warning' | 'danger' | 'muted' = managed
-    ? 'success'
-    : module.status === 'conflict'
-      ? 'warning'
-      : module.status === 'inactive'
-        ? 'danger'
-        : 'muted'
-
-  const statusLabel = managed
-    ? '已接管'
-    : module.status === 'conflict'
-      ? '有占用'
-      : module.status === 'inactive'
-        ? '未运行'
-        : '待接管'
-
-  return (
-    <div className="rounded-xl border border-white/8 bg-black/10 px-3 py-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-slate-100 truncate">{module.title}</p>
-          <p className="text-[11px] text-muted mt-0.5 truncate">{module.current_owner}</p>
-        </div>
-        <Pill tone={statusTone} label={statusLabel} />
-      </div>
-    </div>
-  )
-}
-
 // ── Proxy switcher helpers ──────────────────────────────────────────────────
 
 function LatencyBar({ ms }: { ms: number }) {
@@ -564,6 +533,95 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
 
 const SKIP_VERSION_KEY = 'cf_skip_version'
 
+function ResourceDrawer({
+  data,
+  loading,
+  onRefresh,
+  onClose,
+}: {
+  data: OverviewResourceData | null
+  loading: boolean
+  onRefresh: () => void
+  onClose: () => void
+}) {
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-[480px] flex-col overflow-hidden shadow-2xl"
+        style={{ background: 'linear-gradient(to bottom, #0d0d1f, #090914)', borderLeft: '1px solid rgba(255,255,255,0.08)' }}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-white/8 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <HardDrive size={15} className="text-brand-light" />
+            <h2 className="text-sm font-semibold text-white">系统资源</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost flex items-center gap-1.5 text-xs" onClick={onRefresh} disabled={loading}>
+              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+              {loading ? '采样中…' : '刷新'}
+            </button>
+            <button className="btn-ghost p-1.5" onClick={onClose}><X size={14} /></button>
+          </div>
+        </div>
+        <div className="flex-1 space-y-4 overflow-y-auto p-4">
+          {!data ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-muted">
+              {loading
+                ? <><Loader2 size={22} className="animate-spin text-brand/50" /><span>正在采样系统资源…</span></>
+                : <><Activity size={22} className="text-muted/30" /><span>点击"刷新"开始加载资源信息</span></>}
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                <MetricTile icon={<Cpu size={14} />} label="CPU" value={formatPercent(data.resources.system.cpu_percent)} />
+                <MetricTile icon={<Activity size={14} />} label="内存" value={formatMB(data.resources.system.memory_used_mb)} hint={formatPercent(data.resources.system.memory_percent)} />
+                <MetricTile icon={<HardDrive size={14} />} label="磁盘" value={formatGB(data.resources.system.disk_used_gb)} hint={formatPercent(data.resources.system.disk_percent)} />
+              </div>
+              {data.resources.processes.length > 0 && (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {data.resources.processes.map((item) => (
+                    <ProcessCard key={item.id} name={item.name} pid={item.pid} cpu={item.cpu_percent}
+                      memory={item.memory_rss_mb} uptime={item.uptime} running={item.running} command={item.command} />
+                  ))}
+                </div>
+              )}
+              <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+                <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
+                <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+                  {[
+                    { label: '运行目录', val: formatMB(data.resources.app.runtime_mb) },
+                    { label: '数据目录', val: formatMB(data.resources.app.data_mb) },
+                    { label: '程序文件', val: formatMB(data.resources.app.binary_mb) },
+                    { label: '规则文件', val: formatMB(data.resources.app.rules_mb) },
+                    { label: '总占用',   val: formatMB(data.resources.app.total_mb) },
+                  ].map(({ label, val }) => (
+                    <div key={label}>
+                      <p className="text-[11px] uppercase tracking-[0.16em] text-muted">{label}</p>
+                      <p className="mt-1 text-slate-200">{val}</p>
+                    </div>
+                  ))}
+                </div>
+                {!!data.resources.app.rule_assets?.length && (
+                  <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
+                    <p className="text-xs uppercase tracking-[0.16em] text-muted">规则文件明细</p>
+                    {data.resources.app.rule_assets.map((asset) => (
+                      <div key={`${asset.name}-${asset.path}`} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="truncate text-slate-200">{asset.name}</span>
+                        <span className="shrink-0 text-muted">{formatMB(asset.size_mb)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
 function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: () => void }) {
   return (
     <div className="hero-panel border-warning/20 bg-[linear-gradient(145deg,rgba(245,158,11,0.16),rgba(255,255,255,0.03))]">
@@ -619,6 +677,11 @@ export function Dashboard() {
   // proxy switcher state
   const [proxies, setProxies] = useState<ProxyMap>({})
   const [testingLatency, setTestingLatency] = useState(false)
+
+  // resource drawer + probe tab + last-switched-proxy tracking
+  const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
+  const [probeTab, setProbeTab] = useState<'router' | 'browser'>('router')
+  const [lastSwitchedProxy, setLastSwitchedProxy] = useState<{ group: string; proxy: string } | null>(null)
 
   // prevents auto-running probes more than once per mount
   const probesAutoRanRef = useRef(false)
@@ -709,6 +772,7 @@ export function Dashboard() {
   }, [])
 
   const handleSelectProxy = async (group: string, proxy: string) => {
+    setLastSwitchedProxy({ group, proxy })
     await selectProxy(group, proxy).catch(() => null)
     await refreshProxies()
     // auto-run probes to verify the switch
@@ -750,11 +814,13 @@ export function Dashboard() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+
+      {/* ── Hero ──────────────────────────────────────────────────────────── */}
       <PageHeader
         eyebrow="Dashboard"
         title="ClashForge 控制总台"
-        description="统一查看核心状态、模块健康、连通性诊断与代理节点选择。"
+        description="核心状态、连通性诊断与代理节点切换一览。"
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -763,7 +829,7 @@ export function Dashboard() {
               disabled={queryingCore}
             >
               <RefreshCw size={14} className={queryingCore ? 'animate-spin' : ''} />
-              刷新全局状态
+              刷新
             </button>
             <button
               className="btn-ghost flex items-center gap-2"
@@ -778,10 +844,19 @@ export function Dashboard() {
               {loadingAction === 'restart' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
               重启核心
             </button>
+            <button
+              className="btn-ghost flex items-center gap-2"
+              onClick={() => {
+                setResourceDrawerOpen(true)
+                if (!resourceData) void refreshResources()
+              }}
+            >
+              <HardDrive size={14} />
+              系统资源
+            </button>
           </div>
         }
         metrics={[
-          { label: '核心状态', value: coreRunning ? '运行中' : '未运行' },
           { label: '活跃连接', value: `${connCount}` },
           { label: '运行时长', value: coreData ? formatUptime(coreData.core.uptime) : '--' },
           { label: '上行速率', value: formatBytes(currentUp) },
@@ -789,6 +864,32 @@ export function Dashboard() {
         ]}
       />
 
+      {/* ── 子模块状态 (compact chips strip) ─────────────────────────────── */}
+      {visibleModules.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-2.5">
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted/60">子模块</span>
+          {visibleModules.map((m) => {
+            const managed = m.managed_by_clashforge
+            const dot = managed ? 'bg-success' : m.status === 'conflict' ? 'bg-warning' : m.status === 'inactive' ? 'bg-danger' : 'bg-white/20'
+            const labelColor = managed ? 'text-success' : m.status === 'conflict' ? 'text-warning' : m.status === 'inactive' ? 'text-danger/80' : 'text-muted'
+            const label = managed ? '已接管' : m.status === 'conflict' ? '占用' : m.status === 'inactive' ? '未运行' : '--'
+            return (
+              <div key={m.id} className="flex items-center gap-1.5">
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}${managed ? ' animate-pulse' : ''}`} />
+                <span className="text-xs text-slate-300">{m.title}</span>
+                <span className={`text-[11px] ${labelColor}`}>{label}</span>
+              </div>
+            )
+          })}
+          {coreData?.checked_at && (
+            <span className="ml-auto text-[10px] text-muted/50">
+              {new Date(coreData.checked_at).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── UpdateBanner ──────────────────────────────────────────────────── */}
       {showBanner && versionData && (
         <UpdateBanner
           data={versionData}
@@ -799,170 +900,122 @@ export function Dashboard() {
         />
       )}
 
-      {/* ── 子模块状态 (compact) ─────────────────────────────────────────── */}
+      {/* ── 连通性 & 节点切换 (combined) ──────────────────────────────────── */}
       <SectionCard
-        title="子模块状态"
-        description={coreData?.checked_at ? `更新于 ${new Date(coreData.checked_at).toLocaleTimeString()}` : '等待查询'}
-      >
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-          {visibleModules.map((module) => (
-            <ModuleRow key={module.id} module={module} />
-          ))}
-          {!visibleModules.length && (
-            <div className="col-span-5 rounded-xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-muted">
-              正在查询模块状态...
-            </div>
-          )}
-        </div>
-      </SectionCard>
-
-      {/* ── 连通性检测 (elevated, auto-runs) ─────────────────────────────── */}
-      <SectionCard
-        title="连通性检测"
-        description="路由器侧经代理转发，浏览器侧由客户端直连发起。对比两侧快速判断代理出口工作状态。"
-        actions={
-          <button
-            className="btn-ghost flex items-center gap-2"
-            onClick={() => { void refreshProbes() }}
-            disabled={loadingProbes}
-          >
-            <RefreshCw size={14} className={loadingProbes ? 'animate-spin' : ''} />
-            重新检测
-          </button>
-        }
-      >
-        {!probeData && !loadingProbes ? (
-          <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
-            {coreRunning ? '正在准备首次检测…' : '内核未运行，无法执行连通性检测。启动服务后将自动检测。'}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <ProbePane
-              title="路由器侧"
-              subtitle="经 ClashForge mixed 端口转发"
-              health={routerProbeHealth}
-              ipChecks={probeData?.ip_checks ?? []}
-              accessChecks={probeData?.access_checks ?? []}
-              loading={loadingProbes}
-            />
-            <ProbePane
-              title="浏览器侧"
-              subtitle="由当前浏览器客户端直连，不经过代理"
-              health={browserProbeHealth}
-              ipChecks={browserProbeData?.ip_checks ?? []}
-              accessChecks={browserProbeData?.access_checks ?? []}
-              loading={loadingBrowserProbe}
-            />
-          </div>
-        )}
-      </SectionCard>
-
-      {/* ── 节点切换 ──────────────────────────────────────────────────────── */}
-      <SectionCard
-        title="节点切换"
-        description="快速浏览代理组、当前选中节点与最近测速结果。"
+        title="连通性 & 节点切换"
+        description="切换节点后将自动重新执行连通性检测"
         actions={
           <div className="flex items-center gap-2">
             <button className="btn-ghost flex items-center gap-2" onClick={refreshProxies}>
-              <RefreshCw size={14} /> 刷新
+              <RefreshCw size={14} /> 刷新节点
             </button>
             <button className="btn-ghost flex items-center gap-2" onClick={handleTestLatency} disabled={testingLatency}>
               <Zap size={14} className={testingLatency ? 'animate-pulse' : ''} />
-              {testingLatency ? '测试中…' : '测速'}
+              {testingLatency ? '测速中…' : '测速'}
+            </button>
+            <button
+              className="btn-ghost flex items-center gap-2"
+              onClick={() => { setLastSwitchedProxy(null); void refreshProbes() }}
+              disabled={loadingProbes}
+            >
+              <RefreshCw size={14} className={loadingProbes ? 'animate-spin' : ''} />
+              重新检测
             </button>
           </div>
         }
       >
-        {proxyGroups.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
-            {coreRunning ? '未找到代理组，请先添加订阅并更新节点。' : '内核未运行，无法获取节点列表。'}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {proxyGroups.map(([name, group]) => (
-              <ProxyGroup
-                key={name}
-                name={name}
-                group={group}
-                allProxies={proxies}
-                onSelect={handleSelectProxy}
-              />
-            ))}
+        {/* Node-switch trigger status */}
+        {lastSwitchedProxy && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-brand/20 bg-brand/[0.06] px-3 py-2 text-xs text-brand/90">
+            <Zap size={11} className="shrink-0" />
+            <span>已切换至 <span className="font-semibold">{lastSwitchedProxy.group}</span> → <span className="font-semibold">{lastSwitchedProxy.proxy}</span></span>
+            {loadingProbes
+              ? <><span className="ml-1 text-muted">· 正在重新检测…</span><Loader2 size={11} className="ml-auto animate-spin text-muted" /></>
+              : <span className="ml-1 text-success">· 检测已更新</span>}
           </div>
         )}
-      </SectionCard>
 
-      {/* ── 系统资源 ──────────────────────────────────────────────────────── */}
-      <SectionCard
-        title="系统资源"
-        description="系统负载与 ClashForge 进程占用详情。"
-        actions={
-          <button
-            className="btn-ghost flex items-center gap-2"
-            onClick={() => { void refreshResources() }}
-            disabled={loadingResources}
-          >
-            <RefreshCw size={14} className={loadingResources ? 'animate-spin' : ''} />
-            刷新资源
-          </button>
-        }
-      >
-        {!resourceData ? (
-          <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
-            {loadingResources ? '正在采样…' : '点击"刷新资源"开始加载。'}
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <MetricTile icon={<Cpu size={16} />} label="系统 CPU" value={formatPercent(resourceData.resources.system.cpu_percent)} />
-              <MetricTile icon={<Activity size={16} />} label="系统内存" value={`${formatMB(resourceData.resources.system.memory_used_mb)} / ${formatMB(resourceData.resources.system.memory_total_mb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.memory_percent)}`} />
-              <MetricTile icon={<HardDrive size={16} />} label="系统磁盘" value={`${formatGB(resourceData.resources.system.disk_used_gb)} / ${formatGB(resourceData.resources.system.disk_total_gb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.disk_percent)}`} />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+          {/* Left (3/5): connectivity probe */}
+          <div className="space-y-0 xl:col-span-3">
+            {/* Tab bar */}
+            <div className="-mx-px flex items-center border-b border-white/8 pb-0">
+              {(['router', 'browser'] as const).map((tab) => {
+                const isRouter = tab === 'router'
+                const health = isRouter ? routerProbeHealth : browserProbeHealth
+                const isLoading = isRouter ? loadingProbes : loadingBrowserProbe
+                const isActive = probeTab === tab
+                return (
+                  <button
+                    key={tab}
+                    onClick={() => setProbeTab(tab)}
+                    className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
+                      isActive ? 'border-brand text-white' : 'border-transparent text-muted hover:text-slate-300'
+                    }`}
+                  >
+                    {isRouter ? '路由器侧' : '浏览器侧'}
+                    {isLoading
+                      ? <Loader2 size={10} className="animate-spin text-muted" />
+                      : health.hasData
+                        ? <span className={`h-1.5 w-1.5 rounded-full ${health.healthy ? 'bg-success' : 'bg-warning'}`} />
+                        : null}
+                  </button>
+                )
+              })}
             </div>
-            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-              {resourceData.resources.processes.map((item) => (
-                <ProcessCard
-                  key={item.id}
-                  name={item.name}
-                  pid={item.pid}
-                  cpu={item.cpu_percent}
-                  memory={item.memory_rss_mb}
-                  uptime={item.uptime}
-                  running={item.running}
-                  command={item.command}
-                />
-              ))}
-            </div>
-            <div className="mt-3 rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
-              <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
-              <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
-                {[
-                  { label: '运行目录', val: formatMB(resourceData.resources.app.runtime_mb) },
-                  { label: '数据目录', val: formatMB(resourceData.resources.app.data_mb) },
-                  { label: '程序文件', val: formatMB(resourceData.resources.app.binary_mb) },
-                  { label: '规则文件', val: formatMB(resourceData.resources.app.rules_mb) },
-                  { label: '总占用', val: formatMB(resourceData.resources.app.total_mb) },
-                ].map(({ label, val }) => (
-                  <div key={label}>
-                    <p className="text-[11px] uppercase tracking-[0.16em] text-muted">{label}</p>
-                    <p className="mt-1 text-slate-200">{val}</p>
-                  </div>
-                ))}
-              </div>
-              {!!resourceData.resources.app.rule_assets?.length && (
-                <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
-                  <p className="text-xs uppercase tracking-[0.16em] text-muted">规则文件明细</p>
-                  {resourceData.resources.app.rule_assets.map((asset) => (
-                    <div key={`${asset.name}-${asset.path}`} className="flex items-center justify-between gap-3 text-xs">
-                      <span className="text-slate-200">{asset.name}</span>
-                      <span className="text-muted">{formatMB(asset.size_mb)} · {asset.path}</span>
-                    </div>
-                  ))}
+
+            <div className="pt-3">
+              {!probeData && !loadingProbes ? (
+                <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
+                  {coreRunning ? '正在准备首次检测…' : '内核未运行，启动服务后将自动检测。'}
                 </div>
+              ) : probeTab === 'router' ? (
+                <ProbePane
+                  title="路由器侧"
+                  subtitle="经 ClashForge mixed 端口转发"
+                  health={routerProbeHealth}
+                  ipChecks={probeData?.ip_checks ?? []}
+                  accessChecks={probeData?.access_checks ?? []}
+                  loading={loadingProbes}
+                />
+              ) : (
+                <ProbePane
+                  title="浏览器侧"
+                  subtitle="由当前浏览器客户端直连，不经过代理"
+                  health={browserProbeHealth}
+                  ipChecks={browserProbeData?.ip_checks ?? []}
+                  accessChecks={browserProbeData?.access_checks ?? []}
+                  loading={loadingBrowserProbe}
+                />
               )}
             </div>
-          </>
-        )}
+          </div>
+
+          {/* Right (2/5): proxy switcher */}
+          <div className="space-y-3 xl:col-span-2">
+            <p className="-mb-1 border-b border-white/8 pb-2.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">节点切换</p>
+            {proxyGroups.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
+                {coreRunning ? '未找到代理组，请先添加订阅并更新节点。' : '内核未运行，无法获取节点列表。'}
+              </div>
+            ) : (
+              proxyGroups.map(([name, group]) => (
+                <ProxyGroup key={name} name={name} group={group} allProxies={proxies} onSelect={handleSelectProxy} />
+              ))
+            )}
+          </div>
+        </div>
       </SectionCard>
+
+      {/* ── Resource Drawer ───────────────────────────────────────────────── */}
+      {resourceDrawerOpen && (
+        <ResourceDrawer
+          data={resourceData}
+          loading={loadingResources}
+          onRefresh={() => { void refreshResources() }}
+          onClose={() => setResourceDrawerOpen(false)}
+        />
+      )}
     </div>
   )
 }
