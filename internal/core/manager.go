@@ -312,6 +312,7 @@ func (m *CoreManager) handleDeath(err error, runID uint64, deadPID int) {
 		case <-stopCh:
 			return
 		}
+		log.Info().Int("recent_restarts", recent).Msg("attempting mihomo auto-restart")
 		if err := m.Start(context.Background()); err != nil && err != ErrAlreadyRunning {
 			log.Error().Err(err).Msg("auto-restart failed")
 			return
