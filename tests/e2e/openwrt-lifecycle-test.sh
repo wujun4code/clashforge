@@ -233,7 +233,18 @@ if [ -n "$LOCAL_IPK" ]; then
     # 先卸载旧版本（忽略错误）
     opkg remove clashforge 2>/dev/null || true
     info "使用本地构建的 IPK 安装: $LOCAL_IPK"
-    opkg install --force-reinstall "$LOCAL_IPK" 2>&1 | tail -5
+    opkg install --force-reinstall --force-overwrite "$LOCAL_IPK" 2>&1 | tail -5
+    # 验证 init.d 是否就位，如果尚未就位则从 IPK 直接提取
+    if [ ! -f /etc/init.d/clashforge ]; then
+        info "init.d 未就位，从 IPK 直接提取..."
+        mkdir -p /tmp/ipk_extract && cd /tmp/ipk_extract && \
+        tar xzf "$LOCAL_IPK" 2>/dev/null && \
+        tar xzf data.tar.gz etc/init.d/ 2>/dev/null || tar xzf data.tar.gz && \
+        cp etc/init.d/clashforge /etc/init.d/clashforge 2>/dev/null && \
+        chmod 755 /etc/init.d/clashforge && \
+        cd / && rm -rf /tmp/ipk_extract
+        info "/etc/init.d/clashforge 已直接提取: $(ls -la /etc/init.d/clashforge 2>/dev/null || echo 'FAILED')"
+    fi
 else
     info "无本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
