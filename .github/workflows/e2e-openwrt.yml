@@ -222,6 +222,12 @@ jobs:
 
           # 推送 IPK 到 VM 并安装
           scp -o StrictHostKeyChecking=no -P 2222 "$IPK_LOCAL" root@127.0.0.1:/tmp/clashforge.ipk
+
+          # 先停掉旧服务（上次 run 残留），再重装
+          _ssh "/etc/init.d/clashforge stop 2>/dev/null || true"
+          _ssh "pkill -f 'clashforge' 2>/dev/null || true"
+          sleep 2
+
           _ssh "opkg install --force-reinstall /tmp/clashforge.ipk"
 
           # 安装内核模块
@@ -323,7 +329,9 @@ jobs:
                     http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null || true; \
                 nft list tables 2>/dev/null | grep -qE 'metaclash|clashforge' && \
                   nft delete table inet metaclash 2>/dev/null || true; \
-                pkill -f mihomo-clashforge 2>/dev/null || true"
+                pkill -f mihomo-clashforge 2>/dev/null || true; \
+                /etc/init.d/clashforge stop 2>/dev/null || true; \
+                pkill -f 'clashforge' 2>/dev/null || true"
 
           # 清理宿主机 iptables 残留
           iptables -D OUTPUT -p tcp --dport 443 -j REJECT 2>/dev/null || true
