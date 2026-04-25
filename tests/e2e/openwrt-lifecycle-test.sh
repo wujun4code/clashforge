@@ -279,6 +279,8 @@ fi
 # TC-12 出口 IP 变化验证 + 与代理节点对应验证
 DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 CURRENT_PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
+# 保存代理出口 IP 到文件（workflow 主机层用来 mask）
+[ -n "$CURRENT_PROXY_IP" ] && echo "$CURRENT_PROXY_IP" > "$SNAPSHOT_DIR/proxy-ip" || true
 
 # 从订阅缓存读取代理节点的服务器地址
 # BusyBox grep 支持 -A N（短选项形式）
@@ -305,7 +307,7 @@ if [ -n "$PROXY_SERVER" ]; then
     fi
 fi
 info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → 真实 IP: $PROXY_SERVER_IP)"
-info "代理出口 IP: $CURRENT_PROXY_IP"
+info "代理出口 IP: ***（已屏蔽）"
 
 # 验证逻辑：IP 变化 + 出口与节点对应
 IP_CHANGED=$([ -n "$CURRENT_PROXY_IP" ] && [ "$CURRENT_PROXY_IP" != "$DIRECT_IP" ] && echo "yes" || echo "no")
@@ -315,22 +317,22 @@ if [ "$IP_CHANGED" = "yes" ] && [ "$IP_MATCHES_NODE" = "yes" ]; then
     record PASS TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连，且与使用的代理节点地址匹配" \
-        "直连:$DIRECT_IP → 代理:$CURRENT_PROXY_IP = 节点[$PROXY_NODE_NAME] $PROXY_SERVER→$PROXY_SERVER_IP ✓"
+        "直连:*** → 代理:*** = 节点[$PROXY_NODE_NAME] $PROXY_SERVER→*** ✓"
 elif [ "$IP_CHANGED" = "yes" ] && [ -z "$PROXY_SERVER_IP" ]; then
     record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连，且与使用的代理节点地址匹配" \
-        "IP 已变化 ($DIRECT_IP → $CURRENT_PROXY_IP)，但无法解析节点服务器 DNS 做二次确认"
+        "IP 已变化 (*** → ***)，但无法解析节点服务器 DNS 做二次确认"
 elif [ "$IP_CHANGED" = "yes" ]; then
     record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连，且与节点匹配" \
-        "IP 已变化 ($DIRECT_IP → $CURRENT_PROXY_IP)，但节点服务器 IP ($PROXY_SERVER_IP) 不匹配"
+        "IP 已变化 (*** → ***)，但节点服务器 IP (***) 不匹配"
 elif [ -n "$CURRENT_PROXY_IP" ]; then
     record WARN TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
         "出口 IP 不同于直连" \
-        "IP 未变化（可能同出口）: $CURRENT_PROXY_IP"
+        "IP 未变化（可能同出口）"
 else
     record FAIL TC-12 "出口 IP 变化 + 节点对应验证" \
         "对比直连 IP、代理出口 IP、订阅节点服务器 DNS 解析地址" \
@@ -419,12 +421,12 @@ if [ "$FINAL_IP" != "FAILED" ] && [ "$FINAL_IP" = "$DIRECT_IP" ]; then
     record PASS TC-17 "停止后出口 IP 还原验证" \
         "停止服务后请求 api.ipify.org，对比启动前直连 IP" \
         "出口 IP 还原为启动前直连 IP（非代理节点 IP）" \
-        "还原 IP: $FINAL_IP = 启动前 $DIRECT_IP ✓"
+        "还原 IP: *** = 启动前 *** ✓"
 elif [ "$FINAL_IP" != "FAILED" ]; then
     record WARN TC-17 "停止后出口 IP 还原验证" \
         "停止服务后请求 api.ipify.org，对比启动前直连 IP" \
         "出口 IP 还原为启动前直连 IP" \
-        "网络可达但 IP 不同（$DIRECT_IP → $FINAL_IP）"
+        "网络可达但 IP 不同"
 else
     record FAIL TC-17 "停止后出口 IP 还原验证" \
         "停止服务后请求 api.ipify.org" \
@@ -481,12 +483,12 @@ if [ "$AFTER_PROBES" != "FAILED" ]; then
         record PASS TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
             "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
             "出口 IP 还原为直连 IP（非代理节点 IP）" \
-            "probes 出口 IP: $AFTER_IP = 直连 $DIRECT_IP ✓"
+            "probes 出口 IP: *** = 直连 *** ✓"
     elif [ -n "$AFTER_IP" ]; then
         record WARN TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
             "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
             "出口 IP 还原为直连 IP" \
-            "出口 IP: $AFTER_IP（直连基准: $DIRECT_IP）"
+            "出口 IP: ***（直连基准: ***）"
     else
         record FAIL TC-18 "停止后路由器端 IP 检查（/overview/probes）" \
             "停止 ClashForge 后调用 GET /overview/probes — ip_checks" \
@@ -544,9 +546,9 @@ summary "| 项目 | 值 |"
 summary "|------|----|"
 summary "| **测试环境** | OpenWrt 23.05.5 x86_64 |"
 summary "| **ClashForge 版本** | $CLASHFORGE_VERSION |"
-summary "| **直连 IP** | $DIRECT_IP |"
-summary "| **代理出口 IP** | $CURRENT_PROXY_IP |"
-summary "| **还原 IP** | $FINAL_IP |"
+summary "| **直连 IP** | ***MASKED*** |"
+summary "| **代理出口 IP** | ***MASKED*** |"
+summary "| **还原 IP** | ***MASKED*** |"
 summary ""
 if [ "$FAIL_COUNT" -eq 0 ]; then
     summary "## ✅ 全部测试通过"
@@ -585,9 +587,9 @@ summary "> 📝 **注：** 浏览器端探测（browser-probe.mjs）结果见下
 
 # ── 控制台最终总结 ────────────────────────────────────────────────────────────
 section "测试结果"
-printf "\n${BOLD}直连 IP:${RESET}      $DIRECT_IP\n"
-printf "${BOLD}代理出口 IP:${RESET}  $CURRENT_PROXY_IP\n"
-printf "${BOLD}还原 IP:${RESET}      $FINAL_IP\n\n"
+printf "\n${BOLD}直连 IP:${RESET}      ***MASKED***\n"
+printf "${BOLD}代理出口 IP:${RESET}  ***MASKED***\n"
+printf "${BOLD}还原 IP:${RESET}      ***MASKED***\n\n"
 printf "${BOLD}通过: $PASS_COUNT  失败: $FAIL_COUNT  警告: $WARN_COUNT  合计: $TOTAL${RESET}\n\n"
 
 if [ "$FAILED" -eq 0 ]; then

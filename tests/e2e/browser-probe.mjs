@@ -224,7 +224,7 @@ async function runIPChecks(label, proxyUrl) {
       const latency = Date.now() - started
       if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`)
       const { ip, location } = p.parse(res.body)
-      pass(`${p.name} [${p.group}] — IP: ${ip}${location ? ' · ' + location : ''} (${latency}ms)`)
+      pass(`${p.name} [${p.group}] — IP: ${redact(ip)}${location ? ' · ' + location : ''} (${latency}ms)`)
       results.push({ provider: p.name, ok: true, ip, location })
     } catch (e) {
       warn(`${p.name} [${p.group}] — 失败: ${e.message}`)
@@ -329,12 +329,12 @@ async function main() {
     const directIPStr2 = directIPOK[0]?.ip || 'N/A'
     const proxyIPStr2 = proxyIP.find(r => r.ok)?.ip || 'N/A'
     const proxyLoc = proxyIP.find(r => r.ok)?.location || ''
-    info(`直连 IP:   ${directIPStr2}`)
-    info(`代理出口:  ${proxyIPStr2} ${proxyLoc}`)
+    info(`直连 IP:   ***MASKED***`)
+    info(`代理出口:  ***MASKED*** ${proxyLoc}`)
 
     // BC-03 代理 IP 检查
     if (proxyIPStr2 !== 'N/A') {
-      recordTC('PASS', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务，获取代理出口 IP', '返回有效出口 IP', `出口 IP: ${proxyIPStr2} (${proxyLoc})`)
+      recordTC('PASS', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务，获取代理出口 IP', '返回有效出口 IP', `出口 IP: ${redact(proxyIPStr2)} (${proxyLoc})`)
     } else {
       recordTC('FAIL', 'BC-03', '代理模式 IP 检查', '通过代理请求 IP 检查服务', '返回有效出口 IP', '代理模式下 IP 检查全部失败')
     }
@@ -413,8 +413,8 @@ async function main() {
   summary('')
   summary('| 项目 | 值 |')
   summary('|------|----|')
-  summary(`| **直连 IP** | ${directIPStr} |`)
-  summary(`| **代理出口 IP** | ${proxyIPStr} |`)
+  summary(`| **直连 IP** | ***MASKED*** |`)
+  summary(`| **代理出口 IP** | ***MASKED*** |`)
   summary(`| **代理地址** | ${PROXY_URL || '无'} |`)
   summary('')
   if (failCount === 0) {

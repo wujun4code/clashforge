@@ -51,6 +51,12 @@ jobs:
           # 屏蔽 SUBSCRIPTION_URL 中的 token 防止泄漏
           SUB_TOKEN=$(echo "$SUBSCRIPTION_URL" | grep -oE 'token=[^&]+' | cut -d= -f2 || echo "")
           [ -n "$SUB_TOKEN" ] && echo "::add-mask::$SUB_TOKEN" || true
+
+          # 预先取得 VM 的当前出口 IP 并屏蔽（mask 必须在打印前执行）
+          DIRECT_IP_PRE=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo ''" 2>/dev/null || echo "")
+          [ -n "$DIRECT_IP_PRE" ] && echo "::add-mask::$DIRECT_IP_PRE" || true
+
           chmod +x tests/e2e/openwrt-lifecycle-test.sh
           # lifecycle 脚本必须在 OpenWrt VM 内运行（opkg/nft 等工具在 VM 内）
           cat tests/e2e/openwrt-lifecycle-test.sh | \
@@ -87,6 +93,13 @@ jobs:
           DIRECT_IP=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null" 2>/dev/null || echo "unknown")
           echo "direct_ip=$DIRECT_IP" >> $GITHUB_OUTPUT
+          # 屏蔽直连 IP
+          [ -n "$DIRECT_IP" ] && [ "$DIRECT_IP" != "unknown" ] && echo "::add-mask::$DIRECT_IP" || true
+
+          # 获取代理出口 IP 并屏蔽
+          PROXY_IP_CURRENT=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "cat /tmp/cf-test-snapshot/proxy-ip 2>/dev/null" 2>/dev/null || echo "")
+          [ -n "$PROXY_IP_CURRENT" ] && echo "::add-mask::$PROXY_IP_CURRENT" || true
 
       # ── Step 3: 浏览器端探测（代理运行期）────────────────────────────────────
       # 关键：用 iptables 封锁宿主机直连 443/80，强制流量只走 mihomo 代理端口
@@ -169,6 +182,8 @@ jobs:
           NFT_TABLES=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "nft list tables 2>/dev/null | tr '\n' ' '" 2>/dev/null || echo "unknown")
           echo "Final IP: $FINAL_IP"
+          # mask final IP
+          [ -n "$FINAL_IP" ] && [ "$FINAL_IP" != "FAILED" ] && echo "::add-mask::$FINAL_IP" || true
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🏁 最终环境状态" >> $GITHUB_STEP_SUMMARY
           echo "| 项目 | 状态 |" >> $GITHUB_STEP_SUMMARY
