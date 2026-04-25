@@ -233,6 +233,8 @@ ip route flush table 100 2>/dev/null || true
 
 log "Restoring dnsmasq..."
 rm -f /etc/dnsmasq.d/clashforge.conf 2>/dev/null || true
+uci -q delete dhcp.@dnsmasq[0].port 2>/dev/null || true
+uci -q commit dhcp 2>/dev/null || true
 /etc/init.d/dnsmasq restart 2>/dev/null || true
 
 log "Cleaning pid file..."
@@ -266,7 +268,9 @@ func handleResetClashForge(deps Dependencies) http.HandlerFunc {
 				"  ip rule del fwmark 0x1a3 lookup 100 2>/dev/null || break; done; "+
 				"ip route flush table 100 2>/dev/null; "+
 				"rm -f /etc/dnsmasq.d/clashforge.conf; "+
-				"/etc/init.d/dnsmasq reload 2>/dev/null || true").Run()
+				"uci -q delete dhcp.@dnsmasq[0].port 2>/dev/null || true; "+
+				"uci -q commit dhcp 2>/dev/null || true; "+
+				"/etc/init.d/dnsmasq restart 2>/dev/null || true").Run()
 
 		dataDir := deps.Config.Core.DataDir
 		runtimeDir := deps.Config.Core.RuntimeDir
