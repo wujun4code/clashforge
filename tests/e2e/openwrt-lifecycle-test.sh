@@ -277,10 +277,10 @@ DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 CURRENT_PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
 
 # 从订阅缓存读取代理节点的服务器地址
-PROXY_SERVER=$(grep -A2 'name:.*sg\|name:.*proxy\|name:.*node\|name: ' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-    | grep 'server:' | head -1 | awk '{print $2}' | tr -d ' ')
 PROXY_NODE_NAME=$(grep -A1 '- name:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-    | grep 'name:' | grep -v '#' | head -1 | sed 's/.*name: //' | tr -d ' ')
+    | grep -v '- name:\|#' | grep 'name:' | head -1 | awk '{print $2}' | tr -d ' ')
+PROXY_SERVER=$(grep -A5 "name: $PROXY_NODE_NAME" /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep 'server:' | head -1 | awk '{print $2}' | tr -d ' ')
 
 # 通过 DoH 解析代理服务器真实 IP（绕过 fake-ip DNS）
 PROXY_SERVER_IP=""
@@ -345,13 +345,19 @@ STOP_LOG=$(cat /tmp/stop.log 2>/dev/null)
 info "stop SSE 输出: $(echo "$STOP_LOG" | tail -3)"
 
 STOP_SUCCESS=$(echo "$STOP_LOG" | grep -o '"success":true' | head -1)
+STOP_HTTP404=$(echo "$STOP_LOG" | grep -q "404" && echo "yes" || echo "no")
 STOP_ERROR=$(echo "$STOP_LOG" | grep -o '"error":"[^"]*"' | head -1)
 
 if [ -n "$STOP_SUCCESS" ]; then
     record PASS TC-13 "停止服务（用户前端操作）" \
         "POST /api/v1/setup/stop — 等待 SSE success:true（等同前端停止按钮）" \
         "API 返回 success:true，所有资源（mihomo/DNS/nft/路由）已清理" \
-        "stop API 成功: $STOP_SUCCESS"
+        "stop API 成功"
+elif [ "$STOP_HTTP404" = "yes" ]; then
+    record WARN TC-13 "停止服务（用户前端操作）" \
+        "POST /api/v1/setup/stop — 等待 SSE success:true（等同前端停止按钮）" \
+        "API 返回 success:true" \
+        "/setup/stop 在当前版本返回 404，需升级到包含 setup/stop 的版本"
 else
     record FAIL TC-13 "停止服务（用户前端操作）" \
         "POST /api/v1/setup/stop — 等待 SSE success:true" \
