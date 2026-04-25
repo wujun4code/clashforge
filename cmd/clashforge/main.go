@@ -227,7 +227,9 @@ func shouldRedirectDNSOnStartup(cfg *config.MetaclashConfig, dnsMode dns.Dnsmasq
 	if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart {
 		return false
 	}
-	return dnsMode != dns.ModeNone
+	// Only redirect port-53 via nftables/iptables in replace mode.
+	// In upstream mode dnsmasq stays on port 53 and forwards to mihomo itself.
+	return dnsMode == dns.ModeReplace
 }
 
 func shouldBypassFakeIPOnStartup(cfg *config.MetaclashConfig) bool {

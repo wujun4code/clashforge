@@ -328,17 +328,24 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		// ── Step 7: DNS takeover ──────────────────────────────────────────────
 
 		if req.DNS.Enable && req.DNS.ApplyOnStart && req.DNS.DnsmasqMode != "none" {
+			dnsMode := req.DNS.DnsmasqMode
+			dnsPort := deps.Config.Ports.DNS
+			var dnsDetail string
+			switch dnsMode {
+			case "replace":
+				dnsDetail = fmt.Sprintf("dnsmasq port=0 → nft redirect :53→:%d → mihomo", dnsPort)
+			case "upstream":
+				dnsDetail = fmt.Sprintf("dnsmasq server=127.0.0.1#%d (UCI), LAN :53 → dnsmasq → mihomo :%d", dnsPort, dnsPort)
+			}
 			emitStep("dns-takeover", "running",
-				fmt.Sprintf("正在接管 DNS 入口 (dnsmasq 模式: %s, DNS 端口: %d)…",
-					req.DNS.DnsmasqMode, deps.Config.Ports.DNS), "")
-			if err := dns.Setup(dns.DnsmasqMode(req.DNS.DnsmasqMode), deps.Config.Ports.DNS); err != nil {
+				fmt.Sprintf("正在接管 DNS 入口 (dnsmasq 模式: %s, DNS 端口: %d)…", dnsMode, dnsPort), dnsDetail)
+			if err := dns.Setup(dns.DnsmasqMode(dnsMode), dnsPort); err != nil {
 				emitStep("dns-takeover", "error", "DNS 接管失败", err.Error())
 				emitDone(false, err.Error())
 				return
 			}
 			emitStep("dns-takeover", "ok",
-				fmt.Sprintf("DNS 已接管 ✓ — dnsmasq %s 模式，流量 :53 → mihomo :%d",
-					req.DNS.DnsmasqMode, deps.Config.Ports.DNS), "")
+				fmt.Sprintf("DNS 已接管 ✓ — dnsmasq %s 模式，流量 :53 → mihomo :%d", dnsMode, dnsPort), dnsDetail)
 		} else {
 			reason := "dns.enable=false"
 			if req.DNS.Enable && !req.DNS.ApplyOnStart {

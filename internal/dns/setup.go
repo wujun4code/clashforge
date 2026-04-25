@@ -116,7 +116,12 @@ func restoreReplaceUCI() error {
 }
 
 // setupUpstream configures dnsmasq to forward DNS queries to mihomo's DNS port.
+// On OpenWrt, uses UCI so the setting survives dnsmasq restarts (the UCI-generated
+// config is what dnsmasq actually reads, not /etc/dnsmasq.d which may be ignored).
 func setupUpstream(port int) error {
+	if _, err := exec.LookPath("uci"); err == nil {
+		return setupUpstreamUCI(port)
+	}
 	content := fmt.Sprintf(
 		"# clashforge: forward all DNS to mihomo\nserver=127.0.0.1#%d\nno-resolv\n",
 		port,
@@ -124,15 +129,48 @@ func setupUpstream(port int) error {
 	if err := writeManagedDNSMasqConfig(content); err != nil {
 		return err
 	}
-	log.Info().Int("port", port).Msg("dns: dnsmasq upstream set to mihomo")
+	log.Info().Int("port", port).Msg("dns: dnsmasq upstream set to mihomo (conf-file)")
 	return reloadDnsmasq()
 }
 
+func setupUpstreamUCI(port int) error {
+	// Clear any existing server overrides before adding ours.
+	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].server").Run()   //nolint:errcheck
+	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].noresolv").Run() //nolint:errcheck
+
+	uciServer := fmt.Sprintf("127.0.0.1#%d", port)
+	if out, err := exec.Command("uci", "add_list", "dhcp.@dnsmasq[0].server="+uciServer).CombinedOutput(); err != nil {
+		return fmt.Errorf("uci add_list dnsmasq.server: %w: %s", err, out)
+	}
+	if out, err := exec.Command("uci", "set", "dhcp.@dnsmasq[0].noresolv=1").CombinedOutput(); err != nil {
+		return fmt.Errorf("uci set dnsmasq.noresolv: %w: %s", err, out)
+	}
+	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
+		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
+	}
+	log.Info().Int("port", port).Msg("dns: dnsmasq upstream set to mihomo via UCI")
+	// Full restart so UCI-regenerated config takes effect immediately.
+	return restartDnsmasqFull()
+}
+
 func restoreUpstream() error {
+	if _, err := exec.LookPath("uci"); err == nil {
+		return restoreUpstreamUCI()
+	}
 	if err := removeManagedDNSMasqConfig(); err != nil {
 		return err
 	}
 	return reloadDnsmasq()
+}
+
+func restoreUpstreamUCI() error {
+	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].server").Run()   //nolint:errcheck
+	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].noresolv").Run() //nolint:errcheck
+	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
+		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
+	}
+	log.Info().Msg("dns: dnsmasq upstream restored via UCI")
+	return restartDnsmasqFull()
 }
 
 func writeManagedDNSMasqConfig(content string) error {

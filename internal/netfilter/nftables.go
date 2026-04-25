@@ -51,7 +51,6 @@ table inet metaclash {
         type nat hook prerouting priority dstnat; policy accept;
         meta mark {{ .FWMark }} return
         fib saddr type local return
-        ip daddr @bypass_ipv4 return
         udp dport 53 redirect to :{{ .DNSPort }}
         tcp dport 53 redirect to :{{ .DNSPort }}
     }
