@@ -784,7 +784,7 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 		}) {
 			defer wg.Done()
 			log.Info().Str("batch", batch).Str("side", "router").Str("provider", spec.Name).Str("url", spec.URL).Msg("ip_check start")
-			logResolveResult(resolveForDebug(spec.URL), batch, "router")
+			logResolveResult(resolveForDebug(spec.URL, deps.Config.Ports.DNS), batch, "router")
 			start := time.Now()
 			check, err := fetchIPCheck(deps, spec.Name, spec.URL, spec.GBK)
 			latency := time.Since(start)
@@ -823,7 +823,7 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 	checks := make([]overviewAccessCheck, 0, len(targets))
 	for _, target := range targets {
 		log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("group", target.Group).Str("url", target.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
-		logResolveResult(resolveForDebug(target.URL), batch, "router")
+		logResolveResult(resolveForDebug(target.URL, deps.Config.Ports.DNS), batch, "router")
 		start := time.Now()
 		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
 		latency := time.Since(start)
@@ -1994,10 +1994,12 @@ func logDNSSnapshot(snap dnsSnapshot, batch, side string) {
 		Msg("dns_snapshot")
 }
 
-// resolveForDebug resolves the hostname extracted from rawURL using the default
-// system resolver (dnsmasq on OpenWrt), and checks whether any returned address
-// falls in the mihomo fake-IP range 198.18.0.0/15.
-func resolveForDebug(rawURL string) dnsResolveResult {
+// resolveForDebug resolves the hostname extracted from rawURL by querying
+// mihomo's DNS port directly (127.0.0.1:dnsPort). This avoids false "connection
+// refused" errors in replace mode where the system resolver at [::1]:53 has
+// nothing listening (dnsmasq disabled, nft redirect only covers non-loopback).
+// Checks whether any returned address falls in the mihomo fake-IP range 198.18.0.0/15.
+func resolveForDebug(rawURL string, dnsPort int) dnsResolveResult {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return dnsResolveResult{Host: rawURL, Err: "url parse: " + err.Error()}
@@ -2010,10 +2012,22 @@ func resolveForDebug(rawURL string) dnsResolveResult {
 	if net.ParseIP(host) != nil {
 		return dnsResolveResult{Host: host, Addrs: []string{host}}
 	}
+	var resolver *net.Resolver
+	if dnsPort > 0 {
+		dnsAddr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
+		resolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "udp", dnsAddr)
+			},
+		}
+	} else {
+		resolver = net.DefaultResolver
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	start := time.Now()
-	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	addrs, err := resolver.LookupHost(ctx, host)
 	latency := time.Since(start)
 	if err != nil {
 		return dnsResolveResult{Host: host, LatencyMS: latency.Milliseconds(), Err: err.Error()}

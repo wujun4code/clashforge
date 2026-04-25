@@ -15,12 +15,14 @@ func renderNFTTemplate(t *testing.T, enableDNSRedirect, bypassFakeIP bool) strin
 		TProxyPort         int
 		DNSPort            int
 		EnableDNSRedirect  bool
+		EnableIPv6         bool
 		BypassIPv4Elements string
 	}{
 		FWMark:             fwMark,
 		TProxyPort:         7895,
 		DNSPort:            7874,
 		EnableDNSRedirect:  enableDNSRedirect,
+		EnableIPv6:         false,
 		BypassIPv4Elements: buildBypassIPv4Elements(bypassFakeIP, bypassCIDR),
 	}
 

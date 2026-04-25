@@ -110,11 +110,12 @@ func main() {
 		_ = (&netfilter.IptablesBackend{DNSPort: cfg.Ports.DNS}).Cleanup()
 	})
 	coreManager.SetRestartSuccessCallback(func() {
-		if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart || dnsMode == dns.ModeNone {
+		currentDNSMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
+		if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart || currentDNSMode == dns.ModeNone {
 			return
 		}
-		log.Info().Msg("mihomo restarted, re-applying DNS/nft rules")
-		if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
+		log.Info().Str("dnsmasq_mode", string(currentDNSMode)).Msg("mihomo restarted, re-applying DNS/nft rules")
+		if err := dns.Setup(currentDNSMode, cfg.Ports.DNS); err != nil {
 			log.Warn().Err(err).Msg("dns re-apply after restart failed")
 		}
 		if cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
@@ -202,9 +203,12 @@ func main() {
 	if err := coreManager.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
 		log.Error().Err(err).Msg("stop core")
 	}
-	if dnsManaged {
-		if err := dns.Restore(dnsMode); err != nil {
-			log.Error().Err(err).Msg("dns restore failed")
+	if dnsManaged || (cfg.DNS.Enable && cfg.DNS.ApplyOnStart) {
+		currentDNSMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
+		if currentDNSMode != dns.ModeNone {
+			if err := dns.Restore(currentDNSMode); err != nil {
+				log.Error().Err(err).Msg("dns restore failed")
+			}
 		}
 	}
 	if err := nfManager.Cleanup(); err != nil {
