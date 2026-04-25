@@ -245,6 +245,13 @@ if [ -n "$LOCAL_IPK" ]; then
         cd / && rm -rf /tmp/ipk_extract
         info "/etc/init.d/clashforge 已直接提取: $(ls -la /etc/init.d/clashforge 2>/dev/null || echo 'FAILED')"
     fi
+    # mihomo 二进制很大(35MB)，移到 tmpfs 防止根分区磁盘满
+    if [ -f /usr/bin/mihomo-clashforge ] && [ ! -L /usr/bin/mihomo-clashforge ]; then
+        info "将 mihomo-clashforge (35MB) 移到 tmpfs 节省根分区空间..."
+        mv /usr/bin/mihomo-clashforge /tmp/mihomo-clashforge && \
+        ln -sf /tmp/mihomo-clashforge /usr/bin/mihomo-clashforge && \
+        info "mihomo 已迁移到 /tmp，根分区空间: $(df -h / | tail -1 | awk '{print $4}' )"
+    fi
 else
     info "无本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
