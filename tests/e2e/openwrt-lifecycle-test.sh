@@ -112,7 +112,9 @@ ls /etc/dnsmasq.d/ > "$SNAPSHOT_DIR/dnsmasq-d.before" 2>/dev/null || echo "" > "
 DIRECT_IP=$(wget -q -O - --timeout=10 https://api.ipify.org 2>/dev/null || echo "FAILED")
 if [ "$DIRECT_IP" != "FAILED" ]; then
     echo "$DIRECT_IP" > "$SNAPSHOT_DIR/direct-ip"
-    record PASS TC-02 "启动前状态快照" "记录 nft/ip-rule/dnsmasq/resolv.conf 并获取直连 IP" "快照保存成功，直连 IP 可获取" "直连 IP: $DIRECT_IP"
+    # mask 直连 IP，防止明文出现在 CI 日志
+    [ -n "${GITHUB_ACTIONS:-}" ] && echo "::add-mask::$DIRECT_IP" || true
+    record PASS TC-02 "启动前状态快照" "记录 nft/ip-rule/dnsmasq/resolv.conf 并获取直连 IP" "快照保存成功，直连 IP 可获取" "直连 IP: ***MASKED***"
 else
     record FAIL TC-02 "启动前状态快照" "记录启动前状态并获取直连 IP" "直连 IP 可获取" "无法获取直连 IP，网络异常"
 fi
@@ -248,8 +250,11 @@ if [ "$PROBES_RESP" != "FAILED" ]; then
     [ "$IP_TOTAL" -eq 0 ] && IP_TOTAL=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
     PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.a-f:]*"' | grep -v "fake\|198\.18" | head -1 | sed 's/"ip":"//;s/"//')
     LOCATION=$(echo "$PROBES_RESP" | grep -o '"location":"[^"]*"' | head -1 | sed 's/"location":"//;s/"//')
+    # mask 代理出口 IP
+    [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "$PROXY_IP" ] && echo "::add-mask::$PROXY_IP" || true
+    CURRENT_PROXY_IP="$PROXY_IP"
     if [ "$IP_OK" -gt 0 ] && [ -n "$PROXY_IP" ]; then
-        record PASS TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "$IP_OK/$IP_TOTAL 成功，出口 IP: $PROXY_IP ($LOCATION)"
+        record PASS TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "$IP_OK/$IP_TOTAL 成功，出口 IP: ***MASKED*** ($LOCATION)"
     else
         record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "全部 IP 检查失败（IP_OK=$IP_OK PROXY_IP=$PROXY_IP）"
     fi

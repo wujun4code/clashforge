@@ -36,6 +36,18 @@ const section = (msg) => console.log(`\n${B}${Y}=== ${msg} ===${X}`)
 
 let FAILED = 0
 
+// ── GitHub Actions IP mask helper ────────────────────────────────────────────
+function maskIP(ip) {
+  if (ip && process.env.GITHUB_ACTIONS) {
+    process.stdout.write(`::add-mask::${ip}\n`)
+  }
+  return ip
+}
+function redact(ip) {
+  return process.env.GITHUB_ACTIONS && ip ? '***MASKED***' : ip
+}
+
+
 // ── 参数解析 ──────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2)
 let PROXY_URL = process.env.PROXY_URL || ''
@@ -278,7 +290,7 @@ async function main() {
   const directIP = await runIPChecks('浏览器直连', null)
   const directIPOK = directIP.filter(r => r.ok)
   if (directIPOK.length > 0) {
-    recordTC('PASS', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', `${directIPOK.length}/${IP_PROVIDERS.length} 成功，IP: ${directIPOK[0]?.ip}`)
+    recordTC('PASS', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', `${directIPOK.length}/${IP_PROVIDERS.length} 成功，IP: ${redact(directIPOK[0]?.ip)}`)
   } else {
     recordTC('FAIL', 'BC-01', '直连 IP 检查', '不走代理，请求 IP.SB / IPInfo / IPIFY', '至少 1 个服务返回有效 IP', '全部失败')
   }
@@ -353,7 +365,7 @@ async function main() {
         recordTC('PASS', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
           '对比直连 IP、代理出口 IP、DoH 解析代理服务器 IP',
           '三者匹配：出口 IP 已变且等于节点服务器真实 IP',
-          `${directIPStr2} → ${proxyIPStr2} = ${nodeNote} ✓`)
+          `${redact(directIPStr2)} → ${redact(proxyIPStr2)} = ${nodeNote} ✓`)
       } else {
         recordTC('WARN', 'BC-04', '代理出口 IP 变化 + 节点匹配验证',
           '对比直连 IP、代理出口 IP、DoH 解析代理服务器 IP',

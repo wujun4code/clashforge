@@ -48,6 +48,9 @@ jobs:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
           CLASHFORGE_VERSION: ${{ inputs.clashforge_version || 'latest' }}
         run: |
+          # 屏蔽 SUBSCRIPTION_URL 中的 token 防止泄漏
+          SUB_TOKEN=$(echo "$SUBSCRIPTION_URL" | grep -oE 'token=[^&]+' | cut -d= -f2 || echo "")
+          [ -n "$SUB_TOKEN" ] && echo "::add-mask::$SUB_TOKEN" || true
           chmod +x tests/e2e/openwrt-lifecycle-test.sh
           # lifecycle 脚本必须在 OpenWrt VM 内运行（opkg/nft 等工具在 VM 内）
           cat tests/e2e/openwrt-lifecycle-test.sh | \
