@@ -228,7 +228,7 @@ jobs:
           _ssh "pkill -f 'clashforge' 2>/dev/null || true"
           sleep 2
 
-          _ssh "opkg install --force-reinstall /tmp/clashforge.ipk"
+          _ssh "opkg install --nodeps --force-reinstall /tmp/clashforge.ipk"
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
