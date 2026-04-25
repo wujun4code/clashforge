@@ -228,23 +228,11 @@ jobs:
           echo "IPK 传输完成，大小: ${IPK_SIZE} bytes"
           [ "$IPK_SIZE" -gt 1000 ] || (echo 'IPK 传输失败，文件过小' && exit 1)
 
-          # 先停掉旧服务（上次 run 残留）
-          _ssh "/etc/init.d/clashforge stop 2>/dev/null || true"
-          _ssh "pkill -f 'clashforge' 2>/dev/null || true"
-          sleep 2
-
-          # 绕过 opkg，手动解压 IPK（OpenWrt IPK = tar.gz 包含 data.tar.gz + control.tar.gz）
-          _ssh "
-            set -e
-            mkdir -p /tmp/ipk-unpack && cd /tmp/ipk-unpack
-            rm -rf ./*
-            tar xzf /tmp/clashforge.ipk
-            tar xzf data.tar.gz -C /
-            tar xzf control.tar.gz
-            [ -f postinst ] && sh postinst || true
-            cd / && rm -rf /tmp/ipk-unpack
-            echo 'IPK 解压安装完成'
-          "
+          # 先用 uninstall-clashforge 彻底清除旧版（清除 opkg 注册 + 停止服务 + 清理接管状态）
+          # 然后 opkg install 把它当全新包处理，不会触发下载逻辑
+          _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
+          sleep 1
+          _ssh "opkg install --nodeps /tmp/clashforge.ipk"
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
