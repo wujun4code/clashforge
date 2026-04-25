@@ -194,3 +194,57 @@ func TestGenerate_LogLevelFallback(t *testing.T) {
 		t.Fatalf("expected log-level=info, got %v", result["log-level"])
 	}
 }
+
+func TestGenerateFromBase_PatchesIPCIDRNoResolve(t *testing.T) {
+	// A minimal subscription YAML with an ipcidr rule-provider ("lancidr") referenced
+	// by a RULE-SET rule without no-resolve.  GenerateFromBase must add no-resolve.
+	rawYAML := []byte(`
+proxies: []
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies: [DIRECT]
+rule-providers:
+  lancidr:
+    type: http
+    behavior: ipcidr
+    url: "https://example.com/lancidr.txt"
+    path: ./lancidr.yaml
+    interval: 86400
+  gfw:
+    type: http
+    behavior: domain
+    url: "https://example.com/gfw.txt"
+    path: ./gfw.yaml
+    interval: 86400
+rules:
+  - RULE-SET,gfw,Proxy
+  - RULE-SET,lancidr,DIRECT
+  - MATCH,DIRECT
+`)
+
+	cfg := config.Default()
+	result, err := config.GenerateFromBase(cfg, rawYAML, nil)
+	if err != nil {
+		t.Fatalf("GenerateFromBase: %v", err)
+	}
+
+	rules, _ := result["rules"].([]interface{})
+	foundLancidrNoResolve := false
+	gfwHasNoResolve := false
+	for _, r := range rules {
+		rStr, _ := r.(string)
+		if rStr == "RULE-SET,lancidr,DIRECT,no-resolve" {
+			foundLancidrNoResolve = true
+		}
+		if rStr == "RULE-SET,gfw,Proxy,no-resolve" {
+			gfwHasNoResolve = true
+		}
+	}
+	if !foundLancidrNoResolve {
+		t.Error("expected RULE-SET,lancidr,DIRECT,no-resolve — ipcidr provider must have no-resolve")
+	}
+	if gfwHasNoResolve {
+		t.Error("domain-type provider rule should NOT have no-resolve appended")
+	}
+}

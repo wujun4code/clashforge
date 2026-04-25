@@ -209,7 +209,78 @@ func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscri
 		}
 	}
 
+	// Patch RULE-SET rules that reference ipcidr rule-providers: add no-resolve so
+	// mihomo does NOT perform DNS resolution for IP-based rule matching.  Without
+	// this, domain connections (e.g. via HTTP CONNECT or transparent proxy) get their
+	// target domains resolved to real IPs which may collide with domestic CDN ranges
+	// (Azure East Asia, Alibaba, Cloudflare) causing foreign sites to incorrectly match
+	// a domestic-CIDR rule set (e.g. "lancidr") and go DIRECT instead of through proxy.
+	patchIPCIDRRulesNoResolve(base)
+
 	return base, nil
+}
+
+// patchIPCIDRRulesNoResolve finds rule-providers with behavior "ipcidr" and ensures
+// every RULE-SET rule referencing them has the ",no-resolve" suffix.
+func patchIPCIDRRulesNoResolve(base map[string]interface{}) {
+	rpRaw, ok := base["rule-providers"]
+	if !ok || rpRaw == nil {
+		return
+	}
+	ruleProviders, ok := rpRaw.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	// Collect names of ipcidr-type rule providers.
+	ipcidrNames := map[string]bool{}
+	for name, v := range ruleProviders {
+		pMap, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if beh, _ := pMap["behavior"].(string); strings.EqualFold(beh, "ipcidr") {
+			ipcidrNames[name] = true
+		}
+	}
+	if len(ipcidrNames) == 0 {
+		return
+	}
+
+	rulesRaw, ok := base["rules"]
+	if !ok || rulesRaw == nil {
+		return
+	}
+	rules, ok := rulesRaw.([]interface{})
+	if !ok {
+		return
+	}
+
+	for i, r := range rules {
+		rStr, ok := r.(string)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rStr, ",")
+		if len(parts) < 3 || !strings.EqualFold(parts[0], "RULE-SET") {
+			continue
+		}
+		if !ipcidrNames[parts[1]] {
+			continue
+		}
+		// Check if no-resolve is already present.
+		hasNoResolve := false
+		for _, p := range parts {
+			if strings.EqualFold(strings.TrimSpace(p), "no-resolve") {
+				hasNoResolve = true
+				break
+			}
+		}
+		if !hasNoResolve {
+			rules[i] = rStr + ",no-resolve"
+		}
+	}
+	base["rules"] = rules
 }
 
 func normalizeMihomoLogLevel(level string) string {
