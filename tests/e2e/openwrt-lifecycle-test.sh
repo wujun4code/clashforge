@@ -500,8 +500,10 @@ if [ -n "$PROXY_SERVER" ]; then
             | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//')
     fi
 fi
-info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → 真实 IP: $PROXY_SERVER_IP)"
+info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → DoH解析 IP: $PROXY_SERVER_IP)"
 info "代理出口 IP: ***（已屏蔽）"
+info "IP变化检查: DIRECT=$DIRECT_IP PROXY=$CURRENT_PROXY_IP CHANGED=$IP_CHANGED"
+info "节点匹配检查: PROXY_SERVER_IP=$PROXY_SERVER_IP MATCHES=$IP_MATCHES_NODE"
 
 # 验证逻辑：IP 变化 + 出口与节点对应
 IP_CHANGED=$([ -n "$CURRENT_PROXY_IP" ] && [ "$CURRENT_PROXY_IP" != "$DIRECT_IP" ] && echo "yes" || echo "no")
@@ -612,10 +614,14 @@ fi
 # TC-16
 DNSMASQ_FINAL=$(ls /etc/dnsmasq.d/ 2>/dev/null | sort | tr '\n' ' ')
 DNSMASQ_BEFORE_LIST=$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" | sort | tr '\n' ' ')
+info "dnsmasq.d 启动前快照: '${DNSMASQ_BEFORE_LIST:-空}'"
+info "dnsmasq.d 当前状态: '${DNSMASQ_FINAL:-空}'"
+info "dnsmasq.d 实际文件内容:"
+ls -la /etc/dnsmasq.d/ 2>/dev/null | while read f; do info "  $f"; done || info "  (空)"
 if [ "$DNSMASQ_FINAL" = "$DNSMASQ_BEFORE_LIST" ]; then
     record PASS TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "已还原"
 else
-    record WARN TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "有残留文件（before: '$DNSMASQ_BEFORE_LIST' / after: '$DNSMASQ_FINAL'）"
+    record WARN TC-16 "dnsmasq 配置还原验证" "对比停止后 /etc/dnsmasq.d/ 与启动前快照" "dnsmasq.d 文件列表还原" "有残留文件（before: '${DNSMASQ_BEFORE_LIST:-空}' / after: '${DNSMASQ_FINAL:-空}'）"
 fi
 
 # ── Phase 5: 停止后恢复探测 ───────────────────────────────────────────────────
