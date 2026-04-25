@@ -2,23 +2,23 @@ name: E2E Integration Test (OpenWrt)
 
 # 完整生命周期 + 浏览器端探测测试
 #
-# 关键设计原则：
-#   浏览器端探测在 OpenWrt VM 内部运行（通过 SSH），
-#   流量被 tproxy 透明拦截，消除宿主机直连能力导致的误判。
+# 关键设计原则（防误判）：
+#   浏览器端探测使用 iptables 封锁宿主机直连，
+#   强制测试流量只能通过 mihomo 代理端口（:7890）出站，
+#   消除宿主机有全球直连能力导致的误判。
 #
 # 流程：
 #   1. 路由器端生命周期（安装→启动→接管验证→代理期探测→停止→还原验证）
-#   2. 代理运行期：浏览器端探测（在 VM 内运行，流量被 tproxy 拦截）
+#   2. 代理运行期：封锁宿主机直连 → 浏览器端探测（通过 :7890）→ 解封
 #   3. 停止服务
-#   4. 停止后：浏览器端探测（在 VM 内运行，验证网络恢复 + IP 还原）
+#   4. 停止后：浏览器端探测（验证网络恢复）
 #   5. 紧急清理
 #
 # 所需 Secrets：
 #   SUBSCRIPTION_URL  — 订阅 URL（含 token）
 #
 # 所需 Runner：
-#   self-hosted, openwrt-x86 — 宿主机上的 GitHub Actions runner
-#   （可通过 SSH 连接 OpenWrt VM：ssh -p 2222 root@127.0.0.1）
+#   self-hosted, openwrt-x86
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ on:
 
 jobs:
   e2e-openwrt:
-    name: OpenWrt E2E — Lifecycle + Browser Probe (VM-internal)
+    name: OpenWrt E2E — Lifecycle + Browser Probe
     runs-on: [self-hosted, openwrt-x86]
     timeout-minutes: 20
 
@@ -41,7 +41,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Step 1: 路由器端生命周期测试（含代理运行期路由器探测）─────────────────
+      # ── Step 1: 路由器端生命周期测试 ──────────────────────────────────────────
       - name: "[Router] Lifecycle — install / launch / verify / probe"
         id: lifecycle
         env:
@@ -76,37 +76,54 @@ jobs:
           DIRECT_IP=$(cat /tmp/cf-test-snapshot/direct-ip 2>/dev/null || echo "unknown")
           echo "direct_ip=$DIRECT_IP" >> $GITHUB_OUTPUT
 
-      # ── Step 3: 浏览器端探测（代理运行期，在 VM 内跑）────────────────────────
-      # 流量被 tproxy 透明拦截 → 消除宿主机直连能力的干扰
-      - name: "[Browser-VM] Probe — 代理运行期（VM 内 tproxy 拦截）"
+      # ── Step 3: 浏览器端探测（代理运行期）────────────────────────────────────
+      # 关键：用 iptables 封锁宿主机直连 443/80，强制流量只走 mihomo 代理端口
+      # 如果代理未生效，测试就会失败（不会被宿主机直连救场）
+      - name: "[Browser] Probe — 代理运行期（iptables 封锁直连 + 强制走代理）"
         if: steps.proxy.outputs.running == 'true'
         run: |
-          # 通过 DoH 解析代理节点服务器真实 IP（绕过 fake-ip DNS）
           SERVER_HOST="${{ steps.proxy.outputs.server_host }}"
+          NODE_NAME="${{ steps.proxy.outputs.node_name }}"
+          PROXY_URL="${{ steps.proxy.outputs.url }}"
+
+          # DoH 解析节点服务器真实 IP
           SERVER_IP=$(curl -sf --max-time 8 \
             "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
             | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//') || ""
-          echo "节点: ${{ steps.proxy.outputs.node_name }} / $SERVER_HOST / $SERVER_IP"
+          echo "节点: $NODE_NAME / $SERVER_HOST / $SERVER_IP"
 
-          # 上传脚本到 VM
-          cat tests/e2e/browser-probe-router.sh | \
-            ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "cat > /tmp/browser-probe-router.sh && chmod +x /tmp/browser-probe-router.sh"
+          # 获取 mihomo 进程 UID（允许 mihomo 自身出站，否则代理无法工作）
+          MIHOMO_UID=$(ps -eo uid,comm 2>/dev/null | grep mihomo | head -1 | awk '{print $1}' || echo "")
+          echo "mihomo UID: $MIHOMO_UID"
 
-          # 在 VM 内运行（流量被 tproxy 透明拦截，不设置代理）
-          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "PHASE=running \
-             DIRECT_IP='${{ steps.proxy.outputs.direct_ip }}' \
-             PROXY_SERVER_IP='$SERVER_IP' \
-             PROXY_NODE_NAME='${{ steps.proxy.outputs.node_name }}' \
-             sh /tmp/browser-probe-router.sh" | tee /tmp/browser-probe-running.log
+          # 封锁宿主机直连出站（非 mihomo 进程的 443/80）
+          if [ -n "$MIHOMO_UID" ]; then
+            iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null && echo "已封锁直连 443" || true
+            iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null && echo "已封锁直连 80" || true
+          fi
 
-          # 写入 job summary
-          echo "## 🖥️ 浏览器端探测（VM 内 · 代理运行期）" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat /tmp/browser-probe-running.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          # 运行浏览器端探测（强制通过代理）
+          set +e
+          PROXY_URL="$PROXY_URL" \
+          PROXY_SERVER_HOST="$SERVER_HOST" \
+          PROXY_NODE_NAME="$NODE_NAME" \
+          PROBE_TIMEOUT=12000 \
+          node tests/e2e/browser-probe.mjs | tee /tmp/browser-probe-running.log
+          PROBE_EXIT=$?
+          set -e
+
+          # 立即清除 iptables 封锁规则
+          if [ -n "$MIHOMO_UID" ]; then
+            iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
+            iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
+              -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
+            echo "iptables 封锁规则已清除"
+          fi
+
+          exit $PROBE_EXIT
 
       # ── Step 4: 停止 clashforge ───────────────────────────────────────────────
       - name: Stop clashforge
@@ -120,25 +137,23 @@ jobs:
           pkill -f "mihomo-clashforge" 2>/dev/null || true
           sleep 3
 
-      # ── Step 5: 浏览器端探测（停止后，在 VM 内跑，验证网络恢复）────────────
-      - name: "[Browser-VM] Probe — 停止后恢复验证（VM 内直连）"
+      # ── Step 5: 浏览器端探测（停止后，验证网络恢复）─────────────────────────
+      # 停止后不封锁直连，这里的目的是验证停止后网络正常（不需要防误判）
+      - name: "[Browser] Probe — 停止后恢复验证（直连模式）"
         if: always()
+        env:
+          PROBE_TIMEOUT: '10000'
         run: |
-          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "PHASE=stopped \
-             DIRECT_IP='${{ steps.proxy.outputs.direct_ip }}' \
-             sh /tmp/browser-probe-router.sh" | tee /tmp/browser-probe-stopped.log
-
-          echo "## 🔁 浏览器端探测（VM 内 · 停止后恢复验证）" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat /tmp/browser-probe-stopped.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "## 🔁 浏览器端探测（停止后恢复验证）" >> $GITHUB_STEP_SUMMARY
+          node tests/e2e/browser-probe.mjs
 
       # ── Step 6: 紧急清理 ──────────────────────────────────────────────────────
       - name: Emergency cleanup
         if: always()
         run: |
+          # 确保 iptables 封锁规则已清除（防止 Step 3 异常退出残留）
+          iptables -F OUTPUT 2>/dev/null || true
+          # 清除 nft metaclash 表
           nft list tables 2>/dev/null | grep -q "metaclash" && \
             nft delete table inet metaclash 2>/dev/null || true
           FINAL_IP=$(wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || echo "FAILED")
