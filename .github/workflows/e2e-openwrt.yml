@@ -229,7 +229,7 @@ jobs:
           sleep 2
 
           _ssh "opkg remove clashforge 2>/dev/null || true"
-          _ssh "opkg install --nodeps --force-depends /tmp/clashforge.ipk"
+          _ssh "opkg install --nodeps --force-depends --force-downgrade /tmp/clashforge.ipk"
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
