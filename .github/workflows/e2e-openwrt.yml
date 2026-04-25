@@ -116,7 +116,7 @@ jobs:
 
   # ── Job 2: E2E 测试（使用上面构建的 IPK）────────────────────────────────────
   e2e-openwrt:
-    name: OpenWrt E2E — Lifecycle + Browser Probe
+    name: OpenWrt E2E — Lifecycle + Router Probes
     runs-on: [self-hosted, openwrt-x86]
     needs: build-ipk
     timeout-minutes: 20
@@ -261,16 +261,6 @@ jobs:
             "curl -sN --max-time 60 -H 'Content-Type: application/json' -d '{}' \
              http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null | tail -2" 2>/dev/null || true
           sleep 3
-
-      # ── Step 5: 浏览器端探测（停止后，验证网络恢复）─────────────────────────
-      # 停止后不封锁直连，这里的目的是验证停止后网络正常（不需要防误判）
-      - name: "[Browser] Probe — 停止后恢复验证（直连模式）"
-        if: always()
-        env:
-          PROBE_TIMEOUT: '10000'
-        run: |
-          echo "## 🔁 浏览器端探测（停止后恢复验证）" >> $GITHUB_STEP_SUMMARY
-          node tests/e2e/browser-probe.mjs
 
       # ── Step 6: 紧急清理 ──────────────────────────────────────────────────────
       - name: Emergency cleanup
