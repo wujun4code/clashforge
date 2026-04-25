@@ -109,7 +109,10 @@ func restoreReplaceUCI() error {
 		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
 	}
 	log.Info().Msg("dns: dnsmasq port restored via UCI (replace mode)")
-	return reloadDnsmasq()
+	// Full restart (not just SIGHUP) so the UCI port deletion takes effect.
+	// On OpenWrt, dnsmasq config is regenerated from UCI by the init script;
+	// SIGHUP only re-reads the existing config file which still has port=0.
+	return restartDnsmasqFull()
 }
 
 // setupUpstream configures dnsmasq to forward DNS queries to mihomo's DNS port.
