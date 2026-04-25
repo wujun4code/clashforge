@@ -135,6 +135,9 @@ type overviewAccessCheck struct {
 	StatusCode  int    `json:"status_code,omitempty"`
 	LatencyMS   int64  `json:"latency_ms,omitempty"`
 	Error       string `json:"error,omitempty"`
+	// Diagnostic fields for UI display
+	Stage     string `json:"stage,omitempty"`      // failed stage: "proxy_port" | "dns" | "timeout" | "connect"
+	DNSResult string `json:"dns_result,omitempty"` // resolved IP(s) for the domain, or error summary
 }
 
 type overviewProcessRef struct {
@@ -825,14 +828,43 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 	checks := make([]overviewAccessCheck, 0, len(targets))
 	for _, target := range targets {
 		log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("group", target.Group).Str("url", target.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
-		logResolveResult(resolveForDebug(target.URL, deps.Config.Ports.DNS), batch, "router")
+
+		// Resolve DNS first for diagnostic info
+		dnsResult := resolveForDebug(target.URL, deps.Config.Ports.DNS)
+		logResolveResult(dnsResult, batch, "router")
+		dnsStr := ""
+		if len(dnsResult.Addrs) > 0 {
+			dnsStr = strings.Join(dnsResult.Addrs, ", ")
+			if dnsResult.IsFakeIP {
+				dnsStr += " (fake-ip)"
+			}
+		} else if dnsResult.Err != "" {
+			dnsStr = "解析失败: " + dnsResult.Err
+		}
+
 		start := time.Now()
 		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
 		latency := time.Since(start)
+
+		// Determine which stage failed for UI diagnostics
+		stage := ""
+		if !probe.OK {
+			errLower := strings.ToLower(probe.Error)
+			if !probe.Listening {
+				stage = "proxy_port"
+			} else if strings.Contains(errLower, "no such host") || strings.Contains(errLower, "name resolution") || strings.Contains(errLower, "dns") || (dnsResult.Err != "" && !dnsResult.IsFakeIP) {
+				stage = "dns"
+			} else if strings.Contains(errLower, "deadline exceeded") || strings.Contains(errLower, "timeout") || strings.Contains(errLower, "i/o timeout") {
+				stage = "timeout"
+			} else {
+				stage = "connect"
+			}
+		}
+
 		if probe.OK {
-			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Msg("access_check ok")
+			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("dns", dnsStr).Msg("access_check ok")
 		} else {
-			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Msg("access_check failed")
+			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Str("stage", stage).Str("dns", dnsStr).Msg("access_check failed")
 		}
 		checks = append(checks, overviewAccessCheck{
 			Name:        target.Name,
@@ -844,6 +876,8 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 			StatusCode:  probe.StatusCode,
 			LatencyMS:   probe.DurationMS,
 			Error:       probe.Error,
+			Stage:       stage,
+			DNSResult:   dnsStr,
 		})
 	}
 	return checks

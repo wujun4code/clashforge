@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Activity,
-  CheckCircle2,
   Cpu,
   ExternalLink,
   HardDrive,
@@ -31,12 +30,10 @@ import type {
   OverviewResourceData,
 } from '../api/client'
 import type { ProxyNode } from '../api/client'
-import { PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
+import { PageHeader, SectionCard } from '../components/ui'
 import { useSSE } from '../hooks/useSSE'
 import { useStore } from '../store'
 import { formatBytes, formatGB, formatMB, formatPercent, formatUptime, latencyColor, latencyBarColor, latencyBarWidth } from '../utils/format'
-
-type SectionKey = 'probes' | 'resources'
 
 type ProxyMap = Record<string, ProxyNode>
 
@@ -61,6 +58,7 @@ interface BrowserAccessCheck {
   ok: boolean
   latency_ms?: number
   error?: string
+  stage?: string // 'timeout' | 'connect' | 'dns'
 }
 
 interface BrowserProbeData {
@@ -113,6 +111,24 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   } finally {
     window.clearTimeout(timer)
   }
+}
+
+function categorizeBrowserFetchError(error: unknown, elapsedMs: number): { stage: string; message: string } {
+  if (error instanceof Error) {
+    const name = error.name
+    const msg = error.message.toLowerCase()
+    if (name === 'AbortError' || msg.includes('abort')) {
+      return {
+        stage: 'timeout',
+        message: `请求超时（超过 ${Math.round(elapsedMs / 1000)}s 无响应）— 可能是 DNS 解析失败或代理服务未响应`,
+      }
+    }
+    if (msg.includes('failed to fetch') || msg.includes('load failed') || msg.includes('networkerror') || msg.includes('network error')) {
+      return { stage: 'connect', message: 'DNS 解析失败或网络连接被拒绝，请确认 DNS 入口和透明代理已接管' }
+    }
+    return { stage: 'connect', message: error.message }
+  }
+  return { stage: 'connect', message: '访问失败' }
 }
 
 async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<BrowserProbeData> {
@@ -181,6 +197,8 @@ async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<Brow
         latency_ms: Math.max(1, Math.round(performance.now() - started)),
       } satisfies BrowserAccessCheck
     } catch (error) {
+      const elapsed = Math.max(1, Math.round(performance.now() - started))
+      const { stage, message } = categorizeBrowserFetchError(error, elapsed)
       return {
         name: target.name,
         group: target.group,
@@ -188,7 +206,8 @@ async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<Brow
         description: target.description,
         via: '由当前浏览器客户端直连发起检测',
         ok: false,
-        error: error instanceof Error ? error.message : '浏览器访问失败',
+        error: message,
+        stage,
       } satisfies BrowserAccessCheck
     }
   }))
@@ -229,11 +248,11 @@ function ModuleRow({ module }: { module: OverviewModule }) {
         : '待接管'
 
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
+    <div className="rounded-xl border border-white/8 bg-black/10 px-3 py-3">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-100 truncate">{module.title}</p>
-          <p className="text-xs text-muted mt-1 leading-5">{module.current_owner}</p>
+          <p className="text-xs font-semibold text-slate-100 truncate">{module.title}</p>
+          <p className="text-[11px] text-muted mt-0.5 truncate">{module.current_owner}</p>
         </div>
         <Pill tone={statusTone} label={statusLabel} />
       </div>
@@ -386,18 +405,37 @@ function IPCard({ item }: { item: OverviewIPCheck }) {
   )
 }
 
-function AccessCard({ item }: { item: OverviewAccessCheck }) {
+const STAGE_LABELS: Record<string, string> = {
+  proxy_port: '代理端口未就绪',
+  dns:        'DNS 解析失败',
+  timeout:    '连接超时',
+  connect:    '连接失败',
+}
+
+function AccessCard({ item }: { item: PaneAccessCheck }) {
+  const stageLabel = item.stage ? (STAGE_LABELS[item.stage] ?? item.stage) : null
   return (
     <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-100">{item.name}</p>
-          <p className="text-xs text-muted mt-1">{item.description}</p>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-100 truncate">{item.name}</p>
+          <p className="text-xs text-muted mt-0.5 truncate">{item.description}</p>
         </div>
         <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? '正常' : '失败'} />
       </div>
-      <p className="text-sm text-slate-200 mt-3">{item.ok ? `${item.latency_ms ?? 0} ms` : (item.error || '请求失败')}</p>
-      <p className="text-xs text-muted mt-2 break-all">{item.url}</p>
+      {item.ok ? (
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-sm font-mono text-slate-200">{item.latency_ms ?? 0} ms</span>
+          {item.dns_result && <span className="text-xs text-muted truncate">DNS → {item.dns_result}</span>}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-1">
+          {stageLabel && <p className="text-xs font-semibold text-danger">↳ {stageLabel}</p>}
+          <p className="text-xs text-muted break-all leading-5">{item.error || '请求失败'}</p>
+          {item.dns_result && <p className="text-xs text-muted/70">DNS → {item.dns_result}</p>}
+        </div>
+      )}
+      <p className="text-[11px] text-muted/50 mt-2 break-all">{item.url}</p>
     </div>
   )
 }
@@ -446,7 +484,7 @@ function ProcessCard({ name, pid, cpu, memory, uptime, running, command }: {
 // ── Probe pane ─────────────────────────────────────────────────────────────
 
 type PaneIPCheck = { provider: string; group?: string; ok: boolean; ip?: string; location?: string; error?: string }
-type PaneAccessCheck = { name: string; group?: string; url: string; description: string; via: string; ok: boolean; latency_ms?: number; error?: string }
+type PaneAccessCheck = { name: string; group?: string; url: string; description: string; via: string; ok: boolean; latency_ms?: number; error?: string; stage?: string; dns_result?: string }
 
 function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }: {
   title: string
@@ -570,9 +608,9 @@ export function Dashboard() {
   const [resourceData, setResourceData] = useState<OverviewResourceData | null>(null)
 
   const [queryingCore, setQueryingCore] = useState(true)
-  const [section, setSection] = useState<SectionKey | null>(null)
-  const [loadingSection, setLoadingSection] = useState<SectionKey | null>(null)
+  const [loadingProbes, setLoadingProbes] = useState(false)
   const [loadingBrowserProbe, setLoadingBrowserProbe] = useState(false)
+  const [loadingResources, setLoadingResources] = useState(false)
   const [loadingAction, setLoadingAction] = useState<string | null>(null)
 
   const [versionData, setVersionData] = useState<ClashforgeVersionData | null>(null)
@@ -581,6 +619,9 @@ export function Dashboard() {
   // proxy switcher state
   const [proxies, setProxies] = useState<ProxyMap>({})
   const [testingLatency, setTestingLatency] = useState(false)
+
+  // prevents auto-running probes more than once per mount
+  const probesAutoRanRef = useRef(false)
 
   useSSE({
     onCoreState: (data) => setCoreState(data.state, data.pid),
@@ -606,8 +647,8 @@ export function Dashboard() {
     if (data) setProxies(data.proxies ?? {})
   }, [])
 
-  const refreshProbes = async (): Promise<ProbeSnapshot> => {
-    setLoadingSection('probes')
+  const refreshProbes = useCallback(async (): Promise<ProbeSnapshot> => {
+    setLoadingProbes(true)
     try {
       const next = await getOverviewProbes().catch(() => null)
       if (!next) {
@@ -622,16 +663,16 @@ export function Dashboard() {
       return { router: next, browser }
     } finally {
       setLoadingBrowserProbe(false)
-      setLoadingSection(null)
+      setLoadingProbes(false)
     }
-  }
+  }, [])
 
-  const refreshResources = async () => {
-    setLoadingSection('resources')
+  const refreshResources = useCallback(async () => {
+    setLoadingResources(true)
     const next = await getOverviewResources().catch(() => null)
     if (next) setResourceData(next)
-    setLoadingSection(null)
-  }
+    setLoadingResources(false)
+  }, [])
 
   useEffect(() => {
     const bootstrap = setTimeout(() => { void refreshCore(false) }, 0)
@@ -646,6 +687,14 @@ export function Dashboard() {
     return () => clearTimeout(t)
   }, [coreData, refreshProxies])
 
+  // Auto-run connectivity probes once when core is confirmed running
+  useEffect(() => {
+    if (!coreData || coreData.core.state !== 'running') return
+    if (probesAutoRanRef.current) return
+    probesAutoRanRef.current = true
+    void refreshProbes()
+  }, [coreData, refreshProbes])
+
   // Version check once on mount
   useEffect(() => {
     const t = setTimeout(async () => {
@@ -659,18 +708,11 @@ export function Dashboard() {
     return () => clearTimeout(t)
   }, [])
 
-  const openSection = async (target: SectionKey) => {
-    setSection(target)
-    if (target === 'probes' && !probeData) { await refreshProbes(); return }
-    if (target === 'resources' && !resourceData) { await refreshResources() }
-  }
-
   const handleSelectProxy = async (group: string, proxy: string) => {
     await selectProxy(group, proxy).catch(() => null)
     await refreshProxies()
     // auto-run probes to verify the switch
-    setSection('probes')
-    await refreshProbes()
+    void refreshProbes()
   }
 
   const handleTestLatency = async () => {
@@ -712,7 +754,7 @@ export function Dashboard() {
       <PageHeader
         eyebrow="Dashboard"
         title="ClashForge 控制总台"
-        description="在一个更现代、更亮眼的控制面板里统一查看核心状态、模块健康、代理选择与连通性诊断。"
+        description="统一查看核心状态、模块健康、连通性诊断与代理节点选择。"
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -741,6 +783,7 @@ export function Dashboard() {
         metrics={[
           { label: '核心状态', value: coreRunning ? '运行中' : '未运行' },
           { label: '活跃连接', value: `${connCount}` },
+          { label: '运行时长', value: coreData ? formatUptime(coreData.core.uptime) : '--' },
           { label: '上行速率', value: formatBytes(currentUp) },
           { label: '下行速率', value: formatBytes(currentDown) },
         ]}
@@ -756,34 +799,65 @@ export function Dashboard() {
         />
       )}
 
-      <SectionCard
-        title="核心运行态"
-        description={coreData ? `PID ${coreData.core.pid} · 已运行 ${formatUptime(coreData.core.uptime)}` : '等待状态同步'}
-      >
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <MetricTile icon={<Activity size={16} />} label="上传速率" value={formatBytes(currentUp)} hint="实时上行" />
-          <MetricTile icon={<Activity size={16} />} label="下载速率" value={formatBytes(currentDown)} hint="实时下行" />
-          <MetricTile icon={<CheckCircle2 size={16} />} label="活跃连接" value={`${connCount}`} hint="当前连接数" />
-          <MetricTile icon={<Cpu size={16} />} label="核心运行时长" value={coreData ? formatUptime(coreData.core.uptime) : '--'} hint={`PID ${coreData?.core.pid || '--'}`} />
-        </div>
-      </SectionCard>
-
+      {/* ── 子模块状态 (compact) ─────────────────────────────────────────── */}
       <SectionCard
         title="子模块状态"
         description={coreData?.checked_at ? `更新于 ${new Date(coreData.checked_at).toLocaleTimeString()}` : '等待查询'}
       >
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
           {visibleModules.map((module) => (
             <ModuleRow key={module.id} module={module} />
           ))}
           {!visibleModules.length && (
-            <div className="col-span-3 rounded-2xl border border-white/8 bg-black/10 px-4 py-4 text-sm text-muted">
+            <div className="col-span-5 rounded-xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-muted">
               正在查询模块状态...
             </div>
           )}
         </div>
       </SectionCard>
 
+      {/* ── 连通性检测 (elevated, auto-runs) ─────────────────────────────── */}
+      <SectionCard
+        title="连通性检测"
+        description="路由器侧经代理转发，浏览器侧由客户端直连发起。对比两侧快速判断代理出口工作状态。"
+        actions={
+          <button
+            className="btn-ghost flex items-center gap-2"
+            onClick={() => { void refreshProbes() }}
+            disabled={loadingProbes}
+          >
+            <RefreshCw size={14} className={loadingProbes ? 'animate-spin' : ''} />
+            重新检测
+          </button>
+        }
+      >
+        {!probeData && !loadingProbes ? (
+          <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
+            {coreRunning ? '正在准备首次检测…' : '内核未运行，无法执行连通性检测。启动服务后将自动检测。'}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <ProbePane
+              title="路由器侧"
+              subtitle="经 ClashForge mixed 端口转发"
+              health={routerProbeHealth}
+              ipChecks={probeData?.ip_checks ?? []}
+              accessChecks={probeData?.access_checks ?? []}
+              loading={loadingProbes}
+            />
+            <ProbePane
+              title="浏览器侧"
+              subtitle="由当前浏览器客户端直连，不经过代理"
+              health={browserProbeHealth}
+              ipChecks={browserProbeData?.ip_checks ?? []}
+              accessChecks={browserProbeData?.access_checks ?? []}
+              loading={loadingBrowserProbe}
+            />
+          </div>
+        )}
+      </SectionCard>
+
+      {/* ── 节点切换 ──────────────────────────────────────────────────────── */}
       <SectionCard
         title="节点切换"
         description="快速浏览代理组、当前选中节点与最近测速结果。"
@@ -818,128 +892,78 @@ export function Dashboard() {
         )}
       </SectionCard>
 
-      <SectionCard title="连通性与资源诊断" description="在 IP 检查和资源占用之间切换，快速确认出口工作状态与系统压力。">
-        <div className="space-y-4">
-          <SegmentedTabs
-            items={[
-              { value: 'probes', label: 'IP 检查' },
-              { value: 'resources', label: '资源占用' },
-            ]}
-            value={section ?? 'probes'}
-            onChange={(value) => { void openSection(value) }}
-          />
-
-          {!section ? (
-            <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
-              切换节点后会自动执行 IP 检查，也可手动点击上方按钮。
+      {/* ── 系统资源 ──────────────────────────────────────────────────────── */}
+      <SectionCard
+        title="系统资源"
+        description="系统负载与 ClashForge 进程占用详情。"
+        actions={
+          <button
+            className="btn-ghost flex items-center gap-2"
+            onClick={() => { void refreshResources() }}
+            disabled={loadingResources}
+          >
+            <RefreshCw size={14} className={loadingResources ? 'animate-spin' : ''} />
+            刷新资源
+          </button>
+        }
+      >
+        {!resourceData ? (
+          <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
+            {loadingResources ? '正在采样…' : '点击"刷新资源"开始加载。'}
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <MetricTile icon={<Cpu size={16} />} label="系统 CPU" value={formatPercent(resourceData.resources.system.cpu_percent)} />
+              <MetricTile icon={<Activity size={16} />} label="系统内存" value={`${formatMB(resourceData.resources.system.memory_used_mb)} / ${formatMB(resourceData.resources.system.memory_total_mb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.memory_percent)}`} />
+              <MetricTile icon={<HardDrive size={16} />} label="系统磁盘" value={`${formatGB(resourceData.resources.system.disk_used_gb)} / ${formatGB(resourceData.resources.system.disk_total_gb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.disk_percent)}`} />
             </div>
-          ) : null}
-
-          {section === 'probes' ? (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-muted">路由器侧经代理转发，浏览器侧由客户端直连。对比两侧可快速判断代理出口是否工作正常。</p>
-                <button className="btn-ghost flex items-center gap-2" onClick={() => { void refreshProbes() }} disabled={loadingSection === 'probes'}>
-                  <RefreshCw size={14} className={loadingSection === 'probes' ? 'animate-spin' : ''} />
-                  重新检测
-                </button>
-              </div>
-
-              {!probeData ? (
-                <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
-                  {loadingSection === 'probes' ? '正在进行联网检测…' : '点击“重新检测”开始。'}
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  <ProbePane
-                    title="路由器侧"
-                    subtitle="经 ClashForge mixed 端口转发"
-                    health={routerProbeHealth}
-                    ipChecks={probeData.ip_checks}
-                    accessChecks={probeData.access_checks}
-                    loading={loadingSection === 'probes'}
-                  />
-                  <ProbePane
-                    title="浏览器侧"
-                    subtitle="由当前浏览器客户端直连，不经过代理"
-                    health={browserProbeHealth}
-                    ipChecks={browserProbeData?.ip_checks ?? []}
-                    accessChecks={browserProbeData?.access_checks ?? []}
-                    loading={loadingBrowserProbe}
-                  />
-                </div>
-              )}
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              {resourceData.resources.processes.map((item) => (
+                <ProcessCard
+                  key={item.id}
+                  name={item.name}
+                  pid={item.pid}
+                  cpu={item.cpu_percent}
+                  memory={item.memory_rss_mb}
+                  uptime={item.uptime}
+                  running={item.running}
+                  command={item.command}
+                />
+              ))}
             </div>
-          ) : null}
-
-          {section === 'resources' ? (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-muted">系统资源与 ClashForge 占用。</p>
-                <button className="btn-ghost flex items-center gap-2" onClick={() => { void refreshResources() }} disabled={loadingSection === 'resources'}>
-                  <RefreshCw size={14} className={loadingSection === 'resources' ? 'animate-spin' : ''} />
-                  刷新资源
-                </button>
+            <div className="mt-3 rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+              <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+                {[
+                  { label: '运行目录', val: formatMB(resourceData.resources.app.runtime_mb) },
+                  { label: '数据目录', val: formatMB(resourceData.resources.app.data_mb) },
+                  { label: '程序文件', val: formatMB(resourceData.resources.app.binary_mb) },
+                  { label: '规则文件', val: formatMB(resourceData.resources.app.rules_mb) },
+                  { label: '总占用', val: formatMB(resourceData.resources.app.total_mb) },
+                ].map(({ label, val }) => (
+                  <div key={label}>
+                    <p className="text-[11px] uppercase tracking-[0.16em] text-muted">{label}</p>
+                    <p className="mt-1 text-slate-200">{val}</p>
+                  </div>
+                ))}
               </div>
-              {!resourceData ? (
-                <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-5 text-sm text-muted">
-                  {loadingSection === 'resources' ? '正在采样…' : '点击“刷新资源”开始加载。'}
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                    <MetricTile icon={<Cpu size={16} />} label="系统 CPU" value={formatPercent(resourceData.resources.system.cpu_percent)} />
-                    <MetricTile icon={<Activity size={16} />} label="系统内存" value={`${formatMB(resourceData.resources.system.memory_used_mb)} / ${formatMB(resourceData.resources.system.memory_total_mb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.memory_percent)}`} />
-                    <MetricTile icon={<HardDrive size={16} />} label="系统磁盘" value={`${formatGB(resourceData.resources.system.disk_used_gb)} / ${formatGB(resourceData.resources.system.disk_total_gb)}`} hint={`已用 ${formatPercent(resourceData.resources.system.disk_percent)}`} />
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {resourceData.resources.processes.map((item) => (
-                      <ProcessCard
-                        key={item.id}
-                        name={item.name}
-                        pid={item.pid}
-                        cpu={item.cpu_percent}
-                        memory={item.memory_rss_mb}
-                        uptime={item.uptime}
-                        running={item.running}
-                        command={item.command}
-                      />
-                    ))}
-                  </div>
-                  <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
-                    <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
-                    <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
-                      {[
-                        { label: '运行目录', val: formatMB(resourceData.resources.app.runtime_mb) },
-                        { label: '数据目录', val: formatMB(resourceData.resources.app.data_mb) },
-                        { label: '程序文件', val: formatMB(resourceData.resources.app.binary_mb) },
-                        { label: '规则文件', val: formatMB(resourceData.resources.app.rules_mb) },
-                        { label: '总占用', val: formatMB(resourceData.resources.app.total_mb) },
-                      ].map(({ label, val }) => (
-                        <div key={label}>
-                          <p className="text-[11px] uppercase tracking-[0.16em] text-muted">{label}</p>
-                          <p className="mt-1 text-slate-200">{val}</p>
-                        </div>
-                      ))}
+              {!!resourceData.resources.app.rule_assets?.length && (
+                <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-muted">规则文件明细</p>
+                  {resourceData.resources.app.rule_assets.map((asset) => (
+                    <div key={`${asset.name}-${asset.path}`} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-slate-200">{asset.name}</span>
+                      <span className="text-muted">{formatMB(asset.size_mb)} · {asset.path}</span>
                     </div>
-                    {!!resourceData.resources.app.rule_assets?.length && (
-                      <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
-                        <p className="text-xs uppercase tracking-[0.16em] text-muted">规则文件明细</p>
-                        {resourceData.resources.app.rule_assets.map((asset) => (
-                          <div key={`${asset.name}-${asset.path}`} className="flex items-center justify-between gap-3 text-xs">
-                            <span className="text-slate-200">{asset.name}</span>
-                            <span className="text-muted">{formatMB(asset.size_mb)} · {asset.path}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
+                  ))}
+                </div>
               )}
             </div>
-          ) : null}
-        </div>
+          </>
+        )}
       </SectionCard>
     </div>
   )
 }
+
