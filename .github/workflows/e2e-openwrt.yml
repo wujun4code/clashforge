@@ -98,7 +98,7 @@ jobs:
           echo "Downloading mihomo $MIHOMO_VER (amd64-compatible)"
           curl -fsSL -o /tmp/mihomo.gz \
             "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-compatible-${MIHOMO_VER}.gz"
-          gunzip /tmp/mihomo.gz
+          gunzip -f /tmp/mihomo.gz
           chmod +x /tmp/mihomo
           echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
 
@@ -309,6 +309,7 @@ jobs:
 
           _ssh "cat > /tmp/e2e-stop-verify.sh && chmod +x /tmp/e2e-stop-verify.sh" \
             < tests/e2e/vm/stop-verify.sh
+            < tests/e2e/vm/stop-verify.sh
 
           _ssh "sh /tmp/e2e-stop-verify.sh"
 
@@ -317,8 +318,13 @@ jobs:
         id: probe_stopped
         if: always()
         run: |
-          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "PHASE=stopped sh /tmp/e2e-probe.sh"
+          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+
+          # 重传 probe.sh（Step 1 失败时 VM 内可能没有此文件）
+          _ssh "cat > /tmp/e2e-probe.sh && chmod +x /tmp/e2e-probe.sh" \
+            < tests/e2e/vm/probe.sh
+
+          _ssh "PHASE=stopped sh /tmp/e2e-probe.sh"
 
       # ── Step 9: 紧急清理 ──────────────────────────────────────────────────────
       - name: "[Cleanup] Emergency cleanup"
