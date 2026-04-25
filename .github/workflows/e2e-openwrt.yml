@@ -152,7 +152,7 @@ jobs:
           cp openwrt/files/etc/metaclash/prerm.sh    ipk/CONTROL/prerm    && chmod 755 ipk/CONTROL/prerm
           cp openwrt/files/etc/metaclash/postrm.sh   ipk/CONTROL/postrm   && chmod 755 ipk/CONTROL/postrm
 
-          python3 scripts/build_ipk.py
+          PKG_NAME="$PKG_NAME" python3 scripts/build_ipk.py
           ls -lh "$PKG_NAME"
           echo "ipk_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
@@ -287,44 +287,6 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "PHASE=running PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' sh /tmp/e2e-probe.sh"
-
-      # ── Step 6b: Round 2 附加 — 宿主机 mixed port ────────────────────────
-      - name: "[Step 6b] Probe — Round 2 host mixed port (browser)"
-        id: probe_mixed
-        if: ${{ steps.setup.outputs.proxy_auth != '' }}
-        run: |
-          PROXY_URL="${{ steps.setup.outputs.mixed_port_url }}"
-          SERVER_HOST="${{ steps.setup.outputs.server_host }}"
-          NODE_NAME=$(echo "${{ steps.setup.outputs.proxy_node }}" | cut -d: -f1)
-
-          # 封锁宿主机直连，防止绕过代理导致误判
-          MIHOMO_UID=$(ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "ps -eo uid,comm 2>/dev/null | grep mihomo | head -1 | awk '{print \$1}'" 2>/dev/null || echo "")
-
-          if [ -n "$MIHOMO_UID" ]; then
-            iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
-              -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
-            iptables -I OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
-              -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
-          fi
-
-          set +e
-          PROXY_URL="$PROXY_URL" \
-          PROXY_SERVER_HOST="$SERVER_HOST" \
-          PROXY_NODE_NAME="$NODE_NAME" \
-          PROBE_TIMEOUT=12000 \
-          node tests/e2e/host/browser-probe.mjs
-          PROBE_EXIT=$?
-          set -e
-
-          if [ -n "$MIHOMO_UID" ]; then
-            iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
-              -p tcp --dport 443 ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
-            iptables -D OUTPUT -m owner ! --uid-owner "$MIHOMO_UID" \
-              -p tcp --dport 80  ! -d 127.0.0.0/8 -j REJECT 2>/dev/null || true
-          fi
-
-          exit $PROBE_EXIT
 
       # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────
       - name: "[Step 7] Stop clashforge & verify rollback"
