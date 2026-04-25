@@ -160,6 +160,8 @@ export interface OverviewAccessCheck {
   status_code?: number
   latency_ms?: number
   error?: string
+  stage?: string      // 'proxy_port' | 'dns' | 'timeout' | 'connect'
+  dns_result?: string // resolved IP(s) from router-side probe
 }
 
 export interface OverviewProcessRef {
