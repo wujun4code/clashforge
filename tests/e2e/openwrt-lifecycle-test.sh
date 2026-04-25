@@ -86,6 +86,92 @@ wait_http() {
 
 json_get() { echo "$1" | grep -o "\"$2\":[^,}]*" | head -1 | sed 's/.*: *"\{0,1\}\([^",}]*\).*/\1/'; }
 
+# ── connectivity_check 函数（三轮通用）────────────────────────────────────────
+# 参数: $1=文件前缀  $2=代理 URL（可选）
+run_connectivity_check() {
+    PREFIX="$1"
+    PROXY_ARG=""
+    [ -n "$2" ] && PROXY_ARG="-x $2"
+
+    # IP 检测（依次尝试多个服务商）
+    OUTIP=""
+    for ipurl in https://api.ipify.org https://api.ip.sb/ip https://ipinfo.io/ip; do
+        OUTIP=$(curl -sf --max-time 8 $PROXY_ARG "$ipurl" 2>/dev/null | tr -d ' \n' | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
+        [ -n "$OUTIP" ] && break
+    done
+    [ -z "$OUTIP" ] && OUTIP="FAILED"
+    printf "ip=%s\n" "$OUTIP" > "${SNAPSHOT_DIR}/${PREFIX}.txt"
+
+    # 可访问性检测（与 /overview/probes 保持一致）
+    for entry in "baidu:https://www.baidu.com" "cloud163:https://music.163.com" "github:https://github.com" "youtube:https://www.youtube.com" "google:https://www.google.com" "openai:https://chat.openai.com"; do
+        NAME=$(echo "$entry" | cut -d: -f1)
+        URL=$(echo "$entry" | cut -d: -f2-)
+        CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 $PROXY_ARG "$URL" 2>/dev/null || echo "0")
+        printf "%s=%s\n" "$NAME" "$CODE" >> "${SNAPSHOT_DIR}/${PREFIX}.txt"
+    done
+    info "[$PREFIX] IP: $(grep '^ip=' "${SNAPSHOT_DIR}/${PREFIX}.txt" | cut -d= -f2 | head -c 3)***"
+}
+
+# 比对两轮检测结果，逐项对比
+compare_connectivity() {
+    PREFIX_A="$1"
+    PREFIX_B="$2"
+    LABEL_A="$3"
+    LABEL_B="$4"
+    TC="$5"
+
+    FILE_A="${SNAPSHOT_DIR}/${PREFIX_A}.txt"
+    FILE_B="${SNAPSHOT_DIR}/${PREFIX_B}.txt"
+
+    if [ ! -f "$FILE_A" ] || [ ! -f "$FILE_B" ]; then
+        record FAIL "$TC" "连通性检测比对（$LABEL_A vs $LABEL_B）" \
+            "两轮检测结果逐项一致" "检测文件缺失"
+        return
+    fi
+
+    MISMATCH=""
+    MATCH_COUNT=0
+    TOTAL=0
+
+    while IFS='=' read -r KEY VAL_A; do
+        VAL_B=$(grep "^${KEY}=" "$FILE_B" | cut -d= -f2)
+        TOTAL=$((TOTAL+1))
+        if [ "$VAL_A" = "$VAL_B" ]; then
+            MATCH_COUNT=$((MATCH_COUNT+1))
+        else
+            if [ "$KEY" = "ip" ]; then
+                MISMATCH="$MISMATCH IP:***→***"
+            else
+                MISMATCH="$MISMATCH $KEY:${VAL_A}→${VAL_B}"
+            fi
+        fi
+    done < "$FILE_A"
+
+    if [ -z "$MISMATCH" ]; then
+        record PASS "$TC" "连通性检测比对（$LABEL_A vs $LABEL_B）" \
+            "$LABEL_A 和 $LABEL_B 每项结果完全一致（IP + 所有站点状态码）" \
+            "$MATCH_COUNT/$TOTAL 项一致 ✓"
+    else
+        record FAIL "$TC" "连通性检测比对（$LABEL_A vs $LABEL_B）" \
+            "$LABEL_A 和 $LABEL_B 每项结果完全一致（IP + 所有站点状态码）" \
+            "$MATCH_COUNT/$TOTAL 项一致，差异: $MISMATCH"
+    fi
+}
+
+# ── Phase 0: 安装前基线检测（第一轮）────────────────────────────────────────────
+section "Phase 0 — 安装前基线检测（第一轮）"
+mkdir -p "$SNAPSHOT_DIR"
+info "在 VM 内直连测试（不走任何代理），记录原始状态..."
+run_connectivity_check "round1"
+ROUND1_IP=$(grep '^ip=' "${SNAPSHOT_DIR}/round1.txt" | cut -d= -f2)
+info "第一轮出口 IP: ***（已记录）"
+info "第一轮可访问性:"
+grep -v '^ip=' "${SNAPSHOT_DIR}/round1.txt" | while IFS='=' read k v; do
+    [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
+        && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
+        || printf "  ✗ %s HTTP %s\n" "$k" "$v"
+done
+
 # ── Phase 1: 启动阶段 ─────────────────────────────────────────────────────────
 section "Phase 1 — 启动阶段"
 
@@ -341,6 +427,22 @@ else
 fi
 
 # ── Phase 4: 停止阶段 ─────────────────────────────────────────────────────────
+# 第二轮连通性检测（代理运行期）
+info "第二轮连通性检测（通过代理）..."
+if [ -n "$PROXY_AUTH" ]; then
+    run_connectivity_check "round2" "http://$PROXY_AUTH@127.0.0.1:7890"
+else
+    run_connectivity_check "round2" "http://127.0.0.1:7890"
+fi
+ROUND2_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round2.txt" | cut -d= -f2)
+info "第二轮出口 IP: ***（已记录）"
+info "第二轮可访问性:"
+grep -v "^ip=" "${SNAPSHOT_DIR}/round2.txt" | while IFS="=" read k v; do
+    [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
+        && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
+        || printf "  ✗ %s HTTP %s\n" "$k" "$v"
+done
+
 section "Phase 4 — 停止阶段（仅通过用户前端 API）"
 
 # TC-13 — 严格只通过 POST /api/v1/setup/stop，等待 SSE 返回 success:true
@@ -534,6 +636,41 @@ else
 fi
 
 # ── 输出 GitHub Actions Job Summary ──────────────────────────────────────────
+# 第三轮连通性检测（停止后）+ 与第一轮比对
+section "Phase 5b — 第三轮连通性检测 + 与第一轮比对"
+info "第三轮连通性检测（停止后直连，不走代理）..."
+run_connectivity_check "round3"
+ROUND3_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round3.txt" | cut -d= -f2)
+info "第三轮出口 IP: ***（已记录）"
+info "第三轮可访问性:"
+grep -v "^ip=" "${SNAPSHOT_DIR}/round3.txt" | while IFS="=" read k v; do
+    [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
+        && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
+        || printf "  ✗ %s HTTP %s\n" "$k" "$v"
+done
+
+# 核心比对：第一轮（安装前）vs 第三轮（停止后）
+# 预期：完全一一对应，证明 ClashForge 停止后完全还原
+compare_connectivity "round1" "round3" "第一轮（安装前）" "第三轮（停止后）" "TC-21"
+
+# TC-22: 第一轮 vs 第二轮 IP 对比（代理有效性验证）
+# 预期：IP 不同（代理改变了出口），其他站点可达性可能变化
+R1_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round1.txt" 2>/dev/null | cut -d= -f2)
+R2_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round2.txt" 2>/dev/null | cut -d= -f2)
+if [ -n "$R1_IP" ] && [ -n "$R2_IP" ] && [ "$R1_IP" != "$R2_IP" ]; then
+    record PASS TC-22 "代理有效性验证（第一轮 vs 第二轮 IP）" \
+        "第二轮出口 IP 与第一轮不同（代理改变了出口）" \
+        "IP 已变化 ✓（***→***）"
+elif [ "$R1_IP" = "$R2_IP" ] && [ -n "$R1_IP" ]; then
+    record WARN TC-22 "代理有效性验证（第一轮 vs 第二轮 IP）" \
+        "第二轮出口 IP 与第一轮不同" \
+        "IP 未变化（代理节点可能与直连同出口）"
+else
+    record FAIL TC-22 "代理有效性验证（第一轮 vs 第二轮 IP）" \
+        "第二轮出口 IP 可获取且与第一轮不同" \
+        "无法获取 IP 进行比对"
+fi
+
 section "生成测试报告"
 
 PASS_COUNT=$(echo "$RESULTS" | grep -c "^PASS" || echo 0)
