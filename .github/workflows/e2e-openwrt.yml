@@ -223,13 +223,28 @@ jobs:
           # 推送 IPK 到 VM（OpenWrt 无 sftp-server，用 ssh + cat 传输）
           _ssh "cat > /tmp/clashforge.ipk" < "$IPK_LOCAL"
 
-          # 先停掉旧服务（上次 run 残留），再重装
+          # 验证传输成功
+          IPK_SIZE=$(_ssh "wc -c < /tmp/clashforge.ipk")
+          echo "IPK 传输完成，大小: ${IPK_SIZE} bytes"
+          [ "$IPK_SIZE" -gt 1000 ] || (echo 'IPK 传输失败，文件过小' && exit 1)
+
+          # 先停掉旧服务（上次 run 残留）
           _ssh "/etc/init.d/clashforge stop 2>/dev/null || true"
           _ssh "pkill -f 'clashforge' 2>/dev/null || true"
           sleep 2
 
-          _ssh "opkg remove clashforge 2>/dev/null || true"
-          _ssh "opkg install --nodeps --force-depends --force-downgrade /tmp/clashforge.ipk"
+          # 绕过 opkg，手动解压 IPK（OpenWrt IPK = tar.gz 包含 data.tar.gz + control.tar.gz）
+          _ssh "
+            set -e
+            mkdir -p /tmp/ipk-unpack && cd /tmp/ipk-unpack
+            rm -rf ./*
+            tar xzf /tmp/clashforge.ipk
+            tar xzf data.tar.gz -C /
+            tar xzf control.tar.gz
+            [ -f postinst ] && sh postinst || true
+            cd / && rm -rf /tmp/ipk-unpack
+            echo 'IPK 解压安装完成'
+          "
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
