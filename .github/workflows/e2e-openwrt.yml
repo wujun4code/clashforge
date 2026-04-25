@@ -93,7 +93,8 @@ jobs:
           cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json ipk/usr/share/luci/menu.d/
           cp openwrt/files/www/luci-static/resources/view/clashforge/main.js ipk/www/luci-static/resources/view/clashforge/
           cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json ipk/usr/share/rpcd/acl.d/
-          cp openwrt/files/etc/init.d/clashforge ipk/etc/init.d/clashforge && chmod 755 ipk/etc/init.d/clashforge
+          # init.d 脚本存在于 metaclash，安装到 clashforge
+          cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge && chmod 755 ipk/etc/init.d/clashforge
 
           VERSION=${{ steps.version.outputs.version }}
           cat > ipk/CONTROL/control << EOF
