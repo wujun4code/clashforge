@@ -323,8 +323,8 @@ export function Setup() {
           // Auto-stop when switching config via activate
           setStopping(true)
           try {
-            await stopCore()
-            await releaseOverviewTakeover().catch(() => null)
+            await stopCore().catch(() => null)   // idempotent: ignore "already stopped"
+            await releaseOverviewTakeover()      // always release DNS/nft
             setInitStatus('ready')
           } catch (e) {
             setStopError(e instanceof Error ? e.message : '停止失败')
@@ -344,8 +344,8 @@ export function Setup() {
   const handleStopAll = async () => {
     setStopping(true); setStopError('')
     try {
-      await stopCore()
-      await releaseOverviewTakeover().catch(() => null)
+      await stopCore().catch(() => null)   // idempotent: ignore "already stopped" / OOM crash
+      await releaseOverviewTakeover()      // always release DNS/nft regardless of core state
       setInitStatus('ready')
     } catch (e) {
       setStopError(e instanceof Error ? e.message : '操作失败')

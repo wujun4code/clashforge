@@ -96,6 +96,33 @@ func main() {
 		BypassFakeIP:      shouldBypassFakeIPOnStartup(cfg),
 		BypassCIDR:        cfg.Network.BypassCIDR,
 	})
+
+	// Crash watchdog: when mihomo exits unexpectedly (e.g. OOM kill), immediately
+	// release DNS/nft so clients can still resolve DNS via plain dnsmasq.
+	// If auto-restart succeeds, re-apply the rules automatically.
+	coreManager.SetCrashCallback(func() {
+		log.Warn().Msg("mihomo crashed, releasing DNS/nft to prevent DNS blackout")
+		for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
+			_ = dns.Restore(mode)
+		}
+		_ = (&netfilter.NftablesBackend{}).Cleanup()
+		_ = (&netfilter.IptablesBackend{DNSPort: cfg.Ports.DNS}).Cleanup()
+	})
+	coreManager.SetRestartSuccessCallback(func() {
+		if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart || dnsMode == dns.ModeNone {
+			return
+		}
+		log.Info().Msg("mihomo restarted, re-applying DNS/nft rules")
+		if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
+			log.Warn().Err(err).Msg("dns re-apply after restart failed")
+		}
+		if cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
+			if err := nfManager.Apply(); err != nil {
+				log.Warn().Err(err).Msg("netfilter re-apply after restart failed")
+			}
+		}
+	})
+
 	coreStarted := false
 	if cfg.Core.AutoStartCore {
 		if err := coreManager.Start(context.Background()); err != nil {

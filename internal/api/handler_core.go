@@ -39,11 +39,7 @@ func handleCoreStart(deps Dependencies) http.HandlerFunc {
 
 func handleCoreStop(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := deps.Core.Stop(); err != nil {
-			if errors.Is(err, core.ErrNotRunning) {
-				Err(w, http.StatusNotFound, "CORE_NOT_RUNNING", err.Error())
-				return
-			}
+		if err := deps.Core.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
 			Err(w, http.StatusInternalServerError, "CORE_STOP_FAILED", err.Error())
 			return
 		}

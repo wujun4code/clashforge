@@ -56,23 +56,42 @@ type Status struct {
 }
 
 type CoreManager struct {
-	mu            sync.Mutex
-	cmd           *exec.Cmd
-	state         CoreState
-	pid           int
-	runID         uint64
-	startTime     time.Time
-	restartCount  int
-	restartTimes  []time.Time
-	cfg           CoreManagerConfig
-	onStateChange func(state CoreState, pid int)
-	deathCh       chan error
-	stopCh        chan struct{}
-	lastError     string
+	mu               sync.Mutex
+	cmd              *exec.Cmd
+	state            CoreState
+	pid              int
+	runID            uint64
+	startTime        time.Time
+	restartCount     int
+	restartTimes     []time.Time
+	cfg              CoreManagerConfig
+	onStateChange    func(state CoreState, pid int)
+	onCrash          func()
+	onRestartSuccess func()
+	deathCh          chan error
+	stopCh           chan struct{}
+	lastError        string
 }
 
 func NewManager(cfg CoreManagerConfig) *CoreManager {
 	return &CoreManager{cfg: cfg, state: StateStopped}
+}
+
+// SetCrashCallback registers a function called (in a goroutine) each time mihomo
+// exits unexpectedly. Use it to restore DNS and clean up nft rules so clients
+// keep working even when the core is down.
+func (m *CoreManager) SetCrashCallback(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onCrash = fn
+}
+
+// SetRestartSuccessCallback registers a function called (in a goroutine) each
+// time the auto-restart of mihomo succeeds. Use it to re-apply DNS and nft rules.
+func (m *CoreManager) SetRestartSuccessCallback(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRestartSuccess = fn
 }
 
 func (m *CoreManager) Start(ctx context.Context) error {
@@ -257,6 +276,13 @@ func (m *CoreManager) handleDeath(err error, runID uint64, deadPID int) {
 	m.pid = 0
 	m.deathCh = nil
 	m.setState(StateError, 0)
+
+	// Restore DNS and nft so clients aren't stuck with broken DNS while the core is down.
+	onCrash := m.onCrash
+	if onCrash != nil {
+		go onCrash()
+	}
+
 	m.restartTimes = append(m.restartTimes, time.Now())
 	cutoff := time.Now().Add(-60 * time.Second)
 	recent := 0
@@ -270,6 +296,7 @@ func (m *CoreManager) handleDeath(err error, runID uint64, deadPID int) {
 		return
 	}
 	stopCh := m.stopCh
+	onRestartSuccess := m.onRestartSuccess
 	go func() {
 		select {
 		case <-time.After(2 * time.Second):
@@ -278,6 +305,10 @@ func (m *CoreManager) handleDeath(err error, runID uint64, deadPID int) {
 		}
 		if err := m.Start(context.Background()); err != nil && err != ErrAlreadyRunning {
 			log.Error().Err(err).Msg("auto-restart failed")
+			return
+		}
+		if onRestartSuccess != nil {
+			go onRestartSuccess()
 		}
 	}()
 }
