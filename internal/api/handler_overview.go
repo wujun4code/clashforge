@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -888,7 +889,15 @@ func fetchIPCheck(deps Dependencies, provider, rawURL string, gbk bool) (overvie
 	if isTCPPortListening(deps.Config.Ports.Mixed) {
 		client = overviewProxyClient(deps.Config.Ports.Mixed, deps.Config.Core.RuntimeDir, 6*time.Second)
 	} else {
-		client = &http.Client{Timeout: 6 * time.Second}
+		// Mihomo is stopped; use a direct client. TLS verification is skipped because
+		// OpenWrt may not have a CA bundle accessible to Go's x509 pool, and these
+		// requests only check the router's exit IP — no sensitive data is at risk.
+		client = &http.Client{
+			Timeout: 6 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+			},
+		}
 	}
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
