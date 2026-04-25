@@ -241,39 +241,34 @@ PROBES_RESP=$(curl -sf --max-time 30 "$CF_API/overview/probes" 2>/dev/null || ec
 
 # TC-10 路由器端 IP 检查
 if [ "$PROBES_RESP" != "FAILED" ]; then
-    IP_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
-    IP_TOTAL=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
-    PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
+    # 只从 ip_checks 数组里计数
+    IP_SECTION=$(echo "$PROBES_RESP" | grep -o '"ip_checks":\[[^]]*\]' | head -1)
+    IP_OK=$(echo "$IP_SECTION" | grep -o '"ok":true' | wc -l)
+    IP_TOTAL=$(echo "$IP_SECTION" | grep -o '"provider":' | wc -l)
+    [ "$IP_TOTAL" -eq 0 ] && IP_TOTAL=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
+    PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.a-f:]*"' | grep -v "fake\|198\.18" | head -1 | sed 's/"ip":"//;s/"//')
     LOCATION=$(echo "$PROBES_RESP" | grep -o '"location":"[^"]*"' | head -1 | sed 's/"location":"//;s/"//')
-    if [ "$IP_OK" -gt 0 ]; then
+    if [ "$IP_OK" -gt 0 ] && [ -n "$PROXY_IP" ]; then
         record PASS TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "$IP_OK/$IP_TOTAL 成功，出口 IP: $PROXY_IP ($LOCATION)"
     else
-        record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "全部 IP 检查失败"
+        record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "全部 IP 检查失败（IP_OK=$IP_OK PROXY_IP=$PROXY_IP）"
     fi
 else
     record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "/overview/probes API 无响应"
 fi
 
-# TC-11 路由器端可访问性检查
+# TC-11 路由器端可访问性检查（纯 shell 解析，不依赖 python3）
 if [ "$PROBES_RESP" != "FAILED" ]; then
-    ACCESS_TOTAL=$(echo "$PROBES_RESP" | grep -o '"name":' | wc -l)
-    ACCESS_OK=$(echo "$PROBES_RESP" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-checks=d.get('data',d).get('access_checks',[])
-ok=[c for c in checks if c.get('ok')]
-print(len(ok),len(checks))
-for c in checks:
-    status='✓' if c.get('ok') else '✗'
-    print(f\"  {status} {c.get('name','?')} [{c.get('group','?')}] HTTP {c.get('status_code','?')} {c.get('latency_ms','?')}ms\")
-" 2>/dev/null || echo "0 0")
-    OK_COUNT=$(echo "$ACCESS_OK" | head -1 | awk '{print $1}')
-    TOTAL_COUNT=$(echo "$ACCESS_OK" | head -1 | awk '{print $2}')
-    DETAILS=$(echo "$ACCESS_OK" | tail -n +2 | tr '\n' ' ')
-    if [ "${OK_COUNT:-0}" -gt 0 ]; then
-        record PASS TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "国内外主要站点通过代理可达" "$OK_COUNT/$TOTAL_COUNT 成功: $DETAILS"
+    # 提取 access_checks 段落后计数
+    ACCESS_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
+    ACCESS_TOTAL=$(echo "$PROBES_RESP" | grep -o '"url":"http' | wc -l)
+    IP_OK_COUNT=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
+    # access_checks 的 ok:true 数量 = 总 ok:true - ip_checks 的 ok:true 数量
+    ACCESS_OK=$((ACCESS_OK - IP_OK_COUNT < 0 ? 0 : ACCESS_OK - IP_OK_COUNT))
+    if [ "${ACCESS_OK:-0}" -gt 0 ]; then
+        record PASS TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "国内外主要站点通过代理可达" "$ACCESS_OK/$ACCESS_TOTAL 成功"
     else
-        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败"
+        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败（access_ok=$ACCESS_OK total=$ACCESS_TOTAL）"
     fi
 fi
 
@@ -290,9 +285,19 @@ PROXY_NODE_NAME=$(grep -A1 '- name:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null
 # 通过 DoH 解析代理服务器真实 IP（绕过 fake-ip DNS）
 PROXY_SERVER_IP=""
 if [ -n "$PROXY_SERVER" ]; then
-    PROXY_SERVER_IP=$(wget -q -O - --timeout=10 \
+    # 使用 --resolve 强制 DNS 请求到 8.8.8.8，绕过 fake-ip
+    PROXY_SERVER_IP=$(curl -sf --max-time 10 \
+        --resolve "dns.google:443:8.8.8.8" \
         "https://dns.google/resolve?name=${PROXY_SERVER}&type=A" 2>/dev/null \
         | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//')
+    # 备用：直接 HTTP 到 8.8.8.8
+    if [ -z "$PROXY_SERVER_IP" ]; then
+        PROXY_SERVER_IP=$(curl -sf --max-time 10 \
+            -H "Host: dns.google" \
+            "https://8.8.8.8/resolve?name=${PROXY_SERVER}&type=A" \
+            --insecure 2>/dev/null \
+            | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//')
+    fi
 fi
 info "代理节点: $PROXY_NODE_NAME (服务器: $PROXY_SERVER → 真实 IP: $PROXY_SERVER_IP)"
 info "代理出口 IP: $CURRENT_PROXY_IP"
@@ -334,8 +339,9 @@ section "Phase 4 — 停止阶段（仅通过用户前端 API）"
 # TC-13 — 严格只通过 POST /api/v1/setup/stop，等待 SSE 返回 success:true
 # 这等同于用户在前端点击「停止服务」按钮，不使用任何脚本/命令强制停止
 info "调用 POST /api/v1/setup/stop（等同于用户前端操作）..."
-STOP_LOG=$(curl -sN --max-time 60 -H "Content-Type: application/json" -d '{}' \
-    "$CF_API/setup/stop" 2>/dev/null)
+curl -sN --max-time 60 -H "Content-Type: application/json" -d '{}' \
+    "$CF_API/setup/stop" > /tmp/stop.log 2>/dev/null || true
+STOP_LOG=$(cat /tmp/stop.log 2>/dev/null)
 info "stop SSE 输出: $(echo "$STOP_LOG" | tail -3)"
 
 STOP_SUCCESS=$(echo "$STOP_LOG" | grep -o '"success":true' | head -1)
