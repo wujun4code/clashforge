@@ -1379,14 +1379,9 @@ func takeoverAll(deps Dependencies) (string, bool, error) {
 }
 
 func releaseAllTakeover(deps Dependencies) (string, error) {
-	// Keep core running and only release system-level takeover modules.
-	if deps.Config != nil {
-		deps.Config.Network.ApplyOnStart = false
-		deps.Config.DNS.ApplyOnStart = false
-		if err := saveRuntimeConfig(deps); err != nil {
-			return "", err
-		}
-	}
+	// Release system-level takeover modules.
+	// Do NOT touch ApplyOnStart flags — they represent the user's intent and
+	// must remain sticky so that restarting the core re-applies the same setup.
 
 	if deps.Netfilter != nil {
 		_ = deps.Netfilter.Cleanup()
