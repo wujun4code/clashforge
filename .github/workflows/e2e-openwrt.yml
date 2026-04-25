@@ -220,8 +220,8 @@ jobs:
           IPK_LOCAL="/tmp/e2e-ipk/${IPK_NAME}"
           echo "安装 IPK: $IPK_NAME"
 
-          # 推送 IPK 到 VM 并安装
-          scp -o StrictHostKeyChecking=no -P 2222 "$IPK_LOCAL" root@127.0.0.1:/tmp/clashforge.ipk
+          # 推送 IPK 到 VM（OpenWrt 无 sftp-server，用 ssh + cat 传输）
+          _ssh "cat > /tmp/clashforge.ipk" < "$IPK_LOCAL"
 
           # 先停掉旧服务（上次 run 残留），再重装
           _ssh "/etc/init.d/clashforge stop 2>/dev/null || true"
