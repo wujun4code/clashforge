@@ -224,7 +224,10 @@ info "启动前 DNS: $(grep nameserver /etc/resolv.conf | tr '\n' ' ')"
 # TC-03
 # 始终使用 workflow 构建的本地 IPK 安装（确保测试的是当前分支代码）
 # 即使已安装也强制重装，确保版本正确
-LOCAL_IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
+# 优先使用固定名 clashforge-e2e-latest.ipk，其次任意 *.ipk
+LOCAL_IPK=""
+[ -f /tmp/e2e-ipk/clashforge-e2e-latest.ipk ] && LOCAL_IPK="/tmp/e2e-ipk/clashforge-e2e-latest.ipk"
+[ -z "$LOCAL_IPK" ] && LOCAL_IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
 if [ -n "$LOCAL_IPK" ]; then
     info "强制重新安装本地构建 IPK: $(basename $LOCAL_IPK)"
     # 先卸载旧版本（忽略错误）

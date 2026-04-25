@@ -136,12 +136,12 @@ jobs:
         run: |
           IPK=$(ls /tmp/e2e-ipk/*.ipk 2>/dev/null | head -1)
           if [ -n "$IPK" ]; then
-            # 先清空 VM 内旧 IPK，确保安装的是本次构建版本
+            # 使用固定文件名，确保 lifecycle 脚本拿到的是本次构建的 IPK
             ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
               "rm -f /tmp/e2e-ipk/*.ipk && mkdir -p /tmp/e2e-ipk"
             cat "$IPK" | ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-              "cat > /tmp/e2e-ipk/$(basename $IPK)"
-            echo "已上传 IPK 到 VM: $(basename $IPK)"
+              "cat > /tmp/e2e-ipk/clashforge-e2e-latest.ipk"
+            echo "已上传 IPK 到 VM: clashforge-e2e-latest.ipk (原名: $(basename $IPK))"
           else
             echo "警告: 未找到 IPK 文件，将使用 release 版本安装"
           fi
