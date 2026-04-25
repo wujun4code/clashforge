@@ -1474,8 +1474,11 @@ func shouldRedirectDNS(cfg *config.MetaclashConfig) bool {
 	if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart {
 		return false
 	}
+	// Only redirect port-53 via nftables/iptables in replace mode.
+	// In upstream mode dnsmasq stays on port 53 and forwards to mihomo itself;
+	// adding an NFT redirect would bypass dnsmasq's local-hostname resolution.
 	mode := strings.ToLower(strings.TrimSpace(cfg.DNS.DnsmasqMode))
-	return mode != "none"
+	return mode == "replace"
 }
 
 func shouldBypassFakeIP(cfg *config.MetaclashConfig) bool {
