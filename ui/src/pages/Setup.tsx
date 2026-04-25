@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
-  Sparkles, RotateCw, Link2, Square, ShieldOff, Database, Radio,
+  Sparkles, RotateCw, Link2, PowerOff, ShieldOff, Database, Radio,
   Minus, Terminal,
 } from 'lucide-react'
 import yaml from 'js-yaml'
@@ -804,13 +804,15 @@ export function Setup() {
             )}
 
             <button
-              className="btn-danger w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
+              className="w-full flex items-center justify-center gap-2.5 py-4 text-sm font-bold rounded-xl
+                         bg-danger/90 hover:bg-danger text-white border border-danger/60 hover:border-danger
+                         shadow-lg shadow-danger/30 transition-all active:scale-[0.98] disabled:opacity-60"
               onClick={handleStopAll}
               disabled={stopping}
             >
               {stopping
-                ? <><Loader2 size={15} className="animate-spin" />停止中…</>
-                : <><Square size={15} />停止内核 + 退出所有接管</>}
+                ? <><Loader2 size={16} className="animate-spin" />停止中…</>
+                : <><PowerOff size={16} />停止内核 + 退出所有接管</>}
             </button>
           </div>
         </div>

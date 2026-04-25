@@ -81,6 +81,10 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
 		api.Post("/subscriptions/{id}/sync-update", handleSyncSubscriptionUpdate(deps))
 		api.Get("/logs", handleGetLogs(deps))
+		api.Delete("/logs", handleClearLogs(deps))
+		api.Post("/logs/pause", handlePauseLogs(deps))
+		api.Post("/logs/resume", handleResumeLogs(deps))
+		api.Get("/logs/status", handleLogsStatus(deps))
 		// Proxy pass-through to mihomo API
 		api.Get("/proxies", proxyToMihomo(deps, "/proxies"))
 		api.Put("/proxies/{group}/select", proxyMihomoWithParam(deps, "/proxies/", "", "group"))

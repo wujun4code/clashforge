@@ -15,7 +15,6 @@ import {
   getOverviewProbes,
   getOverviewResources,
   getClashforgeVersion,
-  restartCore,
   getProxies,
   selectProxy,
   testLatency,
@@ -669,7 +668,6 @@ export function Dashboard() {
   const [loadingProbes, setLoadingProbes] = useState(false)
   const [loadingBrowserProbe, setLoadingBrowserProbe] = useState(false)
   const [loadingResources, setLoadingResources] = useState(false)
-  const [loadingAction, setLoadingAction] = useState<string | null>(null)
 
   const [versionData, setVersionData] = useState<ClashforgeVersionData | null>(null)
   const [showBanner, setShowBanner] = useState(false)
@@ -823,27 +821,6 @@ export function Dashboard() {
         description="核心状态、连通性诊断与代理节点切换一览。"
         actions={
           <div className="flex items-center gap-2">
-            <button
-              className="btn-ghost flex items-center gap-2"
-              onClick={() => { void refreshCore(false) }}
-              disabled={queryingCore}
-            >
-              <RefreshCw size={14} className={queryingCore ? 'animate-spin' : ''} />
-              刷新
-            </button>
-            <button
-              className="btn-ghost flex items-center gap-2"
-              onClick={async () => {
-                setLoadingAction('restart')
-                await restartCore().catch(() => null)
-                setLoadingAction(null)
-                await refreshCore(true)
-              }}
-              disabled={!!loadingAction}
-            >
-              {loadingAction === 'restart' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              重启核心
-            </button>
             <button
               className="btn-ghost flex items-center gap-2"
               onClick={() => {

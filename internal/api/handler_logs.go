@@ -23,3 +23,40 @@ func handleGetLogs(deps Dependencies) http.HandlerFunc {
 		JSON(w, http.StatusOK, map[string]any{"logs": logs})
 	}
 }
+
+func handleClearLogs(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.LogBuffer != nil {
+			deps.LogBuffer.Clear()
+		}
+		JSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func handlePauseLogs(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.LogBuffer != nil {
+			deps.LogBuffer.Pause()
+		}
+		JSON(w, http.StatusOK, map[string]any{"ok": true, "paused": true})
+	}
+}
+
+func handleResumeLogs(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.LogBuffer != nil {
+			deps.LogBuffer.Resume()
+		}
+		JSON(w, http.StatusOK, map[string]any{"ok": true, "paused": false})
+	}
+}
+
+func handleLogsStatus(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		paused := false
+		if deps.LogBuffer != nil {
+			paused = deps.LogBuffer.Paused()
+		}
+		JSON(w, http.StatusOK, map[string]any{"paused": paused})
+	}
+}

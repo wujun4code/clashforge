@@ -347,6 +347,10 @@ export const updateOverrides  = (content: string) => request('PUT', '/config/ove
 export const generateConfig   = () => request<{generated: boolean; config_file: string}>('POST', '/config/generate')
 export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/mihomo')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
+export const clearLogs        = () => request<{ok: boolean}>('DELETE', '/logs')
+export const pauseLogs        = () => request<{ok: boolean; paused: boolean}>('POST', '/logs/pause')
+export const resumeLogs       = () => request<{ok: boolean; paused: boolean}>('POST', '/logs/resume')
+export const getLogsStatus    = () => request<{paused: boolean}>('GET', '/logs/status')
 export const enableService    = () => request<{enabled: boolean}>('POST', '/service/enable')
 export const stopService      = (target: 'openclash' | 'clashforge-full') => request<{ok: boolean; target: string; output: string}>('POST', '/system/stop-service', { target })
 export interface ConflictService { name: string; label: string; running: boolean; pids?: number[] }

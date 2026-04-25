@@ -18,11 +18,12 @@ type LogEntry struct {
 
 // LogBuffer is a fixed-size ring buffer that captures zerolog output.
 type LogBuffer struct {
-	mu   sync.Mutex
-	buf  []LogEntry
-	cap_ int
-	head int
-	size int
+	mu     sync.Mutex
+	buf    []LogEntry
+	cap_   int
+	head   int
+	size   int
+	paused bool
 }
 
 func NewLogBuffer(capacity int) *LogBuffer {
@@ -93,11 +94,42 @@ func (b *LogBuffer) WriteLevel(l zerolog.Level, p []byte) (int, error) {
 
 func (b *LogBuffer) add(entry LogEntry) {
 	b.mu.Lock()
-	b.buf[b.head] = entry
-	b.head = (b.head + 1) % b.cap_
-	if b.size < b.cap_ {
-		b.size++
+	if !b.paused {
+		b.buf[b.head] = entry
+		b.head = (b.head + 1) % b.cap_
+		if b.size < b.cap_ {
+			b.size++
+		}
 	}
+	b.mu.Unlock()
+}
+
+// Clear discards all buffered entries and resets the ring buffer.
+func (b *LogBuffer) Clear() {
+	b.mu.Lock()
+	b.head = 0
+	b.size = 0
+	b.mu.Unlock()
+}
+
+// Paused returns true if the buffer is currently not accepting new entries.
+func (b *LogBuffer) Paused() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.paused
+}
+
+// Pause stops the buffer from accepting new log entries.
+func (b *LogBuffer) Pause() {
+	b.mu.Lock()
+	b.paused = true
+	b.mu.Unlock()
+}
+
+// Resume allows the buffer to accept new log entries again.
+func (b *LogBuffer) Resume() {
+	b.mu.Lock()
+	b.paused = false
 	b.mu.Unlock()
 }
 

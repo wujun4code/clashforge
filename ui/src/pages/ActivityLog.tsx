@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { getConnections, closeAllConns, getLogs } from '../api/client'
+import { getConnections, closeAllConns, getLogs, clearLogs, pauseLogs, resumeLogs } from '../api/client'
 import type { Connection } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { formatBytes } from '../utils/format'
-import { Activity, Copy, ListTree, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import { Activity, Copy, ListTree, PauseCircle, PlayCircle, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { EmptyState, PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
 
 // ── Connections panel ─────────────────────────────────────────────────────────
@@ -227,6 +227,7 @@ function LogsPanel() {
   const [lines, setLines] = useState<LogLine[]>([])
   const [filter, setFilter] = useState<string>('all')
   const [autoScroll, setAutoScroll] = useState(true)
+  const [paused, setPaused] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const idRef = useRef(0)
 
@@ -239,11 +240,12 @@ function LogsPanel() {
   })
 
   const fetchLogs = useCallback(() => {
+    if (paused) return
     getLogs('info', 200).then(data => {
       if (!data?.logs?.length) return
       setLines(data.logs.map(toLine))
     }).catch(() => null)
-  }, [])
+  }, [paused])
 
   useEffect(() => {
     fetchLogs()
@@ -253,7 +255,7 @@ function LogsPanel() {
 
   useSSE({
     onLog: (d) => {
-      setLines(prev => [...prev, toLine(d)].slice(-500))
+      if (!paused) setLines(prev => [...prev, toLine(d)].slice(-500))
     },
   })
 
@@ -271,6 +273,21 @@ function LogsPanel() {
     }).join('\n')
     navigator.clipboard.writeText(text).catch(() => null)
   }, [filtered])
+
+  const handleClear = useCallback(async () => {
+    await clearLogs().catch(() => null)
+    setLines([])
+  }, [])
+
+  const togglePause = useCallback(async () => {
+    if (paused) {
+      await resumeLogs().catch(() => null)
+      setPaused(false)
+    } else {
+      await pauseLogs().catch(() => null)
+      setPaused(true)
+    }
+  }, [paused])
 
   // Build rows with batch-group separators
   const rows: React.ReactNode[] = []
@@ -296,7 +313,12 @@ function LogsPanel() {
     <div className="space-y-4" style={{ minHeight: '60vh' }}>
       <SectionCard
         title="实时日志流"
-        description="每 3 秒轮询 · SSE 推送叠加 · 路由器侧诊断请求含完整链路字段与 batch 分组"
+        description={
+          <span className="flex items-center gap-2 flex-wrap">
+            <span>每 3 秒轮询 · SSE 推送叠加 · 最新 500 条内存缓冲（无磁盘文件）</span>
+            {paused && <span className="inline-flex items-center gap-1 text-warning text-[11px] font-semibold"><PauseCircle size={11} />已暂停</span>}
+          </span>
+        }
         actions={
           <div className="flex items-center gap-2 flex-wrap">
             {['all', 'info', 'warning', 'error'].map(l => (
@@ -315,10 +337,17 @@ function LogsPanel() {
             <button className="btn-ghost flex items-center gap-2 py-1.5" onClick={fetchLogs}>
               <RefreshCw size={13} /> 刷新
             </button>
+            <button
+              className={`flex items-center gap-2 py-1.5 btn-ghost text-xs ${paused ? 'text-warning border-warning/40' : ''}`}
+              onClick={togglePause}
+              title={paused ? '恢复日志收集' : '暂停日志收集'}
+            >
+              {paused ? <><PlayCircle size={13} /> 恢复</> : <><PauseCircle size={13} /> 暂停</>}
+            </button>
             <button className="btn-ghost flex items-center gap-2 py-1.5" onClick={handleCopyAll} title="复制全部可见日志">
               <Copy size={13} /> 复制全部
             </button>
-            <button className="btn-ghost flex items-center gap-2 py-1.5" onClick={() => setLines([])}>
+            <button className="btn-ghost flex items-center gap-2 py-1.5 text-danger/80 hover:text-danger" onClick={handleClear}>
               <Trash2 size={13} /> 清空
             </button>
           </div>
