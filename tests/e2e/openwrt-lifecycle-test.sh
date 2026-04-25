@@ -230,7 +230,7 @@ if [ -n "$LOCAL_IPK" ]; then
     # 先卸载旧版本（忽略错误）
     opkg remove clashforge 2>/dev/null || true
     info "使用本地构建的 IPK 安装: $LOCAL_IPK"
-    opkg install "$LOCAL_IPK" 2>&1 | tail -5
+    opkg install --force-reinstall "$LOCAL_IPK" 2>&1 | tail -5
 else
     info "无本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
