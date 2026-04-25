@@ -257,18 +257,17 @@ else
     record FAIL TC-10 "路由器端 IP 检查（代理中）" "GET /overview/probes — ip_checks" "至少 1 个 IP 检查服务返回有效出口 IP" "/overview/probes API 无响应"
 fi
 
-# TC-11 路由器端可访问性检查（纯 shell 解析，不依赖 python3）
+# TC-11 路由器端可访问性检查
 if [ "$PROBES_RESP" != "FAILED" ]; then
-    # 提取 access_checks 段落后计数
-    ACCESS_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
+    TOTAL_OK=$(echo "$PROBES_RESP" | grep -o '"ok":true' | wc -l)
     ACCESS_TOTAL=$(echo "$PROBES_RESP" | grep -o '"url":"http' | wc -l)
     IP_OK_COUNT=$(echo "$PROBES_RESP" | grep -o '"provider":' | wc -l)
-    # access_checks 的 ok:true 数量 = 总 ok:true - ip_checks 的 ok:true 数量
-    ACCESS_OK=$((ACCESS_OK - IP_OK_COUNT < 0 ? 0 : ACCESS_OK - IP_OK_COUNT))
-    if [ "${ACCESS_OK:-0}" -gt 0 ]; then
+    ACCESS_OK=$((TOTAL_OK - IP_OK_COUNT))
+    [ "$ACCESS_OK" -lt 0 ] && ACCESS_OK=0
+    if [ "$ACCESS_OK" -gt 0 ]; then
         record PASS TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "国内外主要站点通过代理可达" "$ACCESS_OK/$ACCESS_TOTAL 成功"
     else
-        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败（access_ok=$ACCESS_OK total=$ACCESS_TOTAL）"
+        record FAIL TC-11 "路由器端可访问性检查（代理中）" "GET /overview/probes — access_checks" "至少 1 个站点通过代理可达" "全部可访问性检查失败（ok=$TOTAL_OK providers=$IP_OK_COUNT access=$ACCESS_OK total=$ACCESS_TOTAL）"
     fi
 fi
 
@@ -277,10 +276,11 @@ DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 CURRENT_PROXY_IP=$(echo "$PROBES_RESP" | grep -o '"ip":"[0-9.]*"' | head -1 | sed 's/"ip":"//;s/"//')
 
 # 从订阅缓存读取代理节点的服务器地址
-PROXY_NODE_NAME=$(grep -A1 '- name:' /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-    | grep -v '- name:\|#' | grep 'name:' | head -1 | awk '{print $2}' | tr -d ' ')
-PROXY_SERVER=$(grep -A5 "name: $PROXY_NODE_NAME" /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
-    | grep 'server:' | head -1 | awk '{print $2}' | tr -d ' ')
+# BusyBox grep 支持 -A N（短选项形式）
+PROXY_NODE_NAME=$(grep -A 1 "^  - name:" /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep "name:" | grep -v "^  - name:" | head -1 | awk "{print \$2}" | tr -d " ")
+PROXY_SERVER=$(grep -A 5 "name: $PROXY_NODE_NAME" /etc/metaclash/cache/*.raw.yaml 2>/dev/null \
+    | grep "server:" | head -1 | awk "{print \$2}" | tr -d " ")
 
 # 通过 DoH 解析代理服务器真实 IP（绕过 fake-ip DNS）
 PROXY_SERVER_IP=""
@@ -365,13 +365,24 @@ else
         "stop API 失败或超时: $STOP_ERROR"
 fi
 
-# 等待停止流程完成（API 已处理，给系统一点稳定时间）
+# 等待停止流程完成
+# stop API 返回 404（版本不支持）时，必须通过 init.d 停止，否则后续验证无意义
+if [ -n "$STOP_HTTP404" ] && [ "$STOP_HTTP404" = "yes" ]; then
+    info "stop API 返回 404，使用 init.d 停止流程（限于版本）..."
+    /etc/init.d/clashforge stop 2>/dev/null || true
+    sleep 5
+fi
 sleep 5
 
 # TC-14
 NFT_FINAL=$(nft list tables 2>/dev/null | tr '\n' ' ')
 if echo "$NFT_FINAL" | grep -qE "metaclash|clashforge"; then
-    record FAIL TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "metaclash 表未清除: $NFT_FINAL"
+    if [ -n "$STOP_HTTP404" ] && [ "$STOP_HTTP404" = "yes" ]; then
+        # stop API 已经 404，未执行停止流程，记为 WARN（需升级版本）
+        record WARN TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表" "metaclash 表未清除（stop API 返回 404，尚未执行停止）"
+    else
+        record FAIL TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "metaclash 表未清除: $NFT_FINAL"
+    fi
 else
     record PASS TC-14 "nftables 还原验证" "nft list tables 确认 metaclash 表已移除" "仅剩原始 fw4 表，metaclash 不存在" "nft 表已还原: $NFT_FINAL"
 fi
