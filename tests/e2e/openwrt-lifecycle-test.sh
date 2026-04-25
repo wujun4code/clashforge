@@ -180,7 +180,7 @@ run_connectivity_check "round1"
 ROUND1_IP=$(grep '^ip=' "${SNAPSHOT_DIR}/round1.txt" | cut -d= -f2)
 info "第一轮出口 IP: ***（已记录）"
 info "第一轮可访问性:"
-grep -v '^ip=' "${SNAPSHOT_DIR}/round1.txt" | while IFS='=' read k v; do
+grep -vE '^ip' "${SNAPSHOT_DIR}/round1.txt" | while IFS='=' read k v; do
     [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
         && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
         || printf "  ✗ %s HTTP %s\n" "$k" "$v"
@@ -229,12 +229,10 @@ if [ -n "$LOCAL_IPK" ]; then
     info "强制重新安装本地构建 IPK: $(basename $LOCAL_IPK)"
     # 先卸载旧版本（忽略错误）
     opkg remove clashforge 2>/dev/null || true
-elif false; then
-    : # placeholder
     info "使用本地构建的 IPK 安装: $LOCAL_IPK"
     opkg install "$LOCAL_IPK" 2>&1 | tail -5
 else
-    info "内本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
+    info "无本地 IPK，安装 clashforge $CLASHFORGE_VERSION ..."
     if [ "$CLASHFORGE_VERSION" = "latest" ]; then
         wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
     else
@@ -532,7 +530,7 @@ fi
 ROUND2_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round2.txt" | cut -d= -f2)
 info "第二轮出口 IP: ***（已记录）"
 info "第二轮可访问性:"
-grep -v "^ip=" "${SNAPSHOT_DIR}/round2.txt" | while IFS="=" read k v; do
+grep -vE "^ip" "${SNAPSHOT_DIR}/round2.txt" | while IFS="=" read k v; do
     [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
         && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
         || printf "  ✗ %s HTTP %s\n" "$k" "$v"
@@ -734,7 +732,7 @@ run_connectivity_check "round3"
 ROUND3_IP=$(grep "^ip=" "${SNAPSHOT_DIR}/round3.txt" | cut -d= -f2)
 info "第三轮出口 IP: ***（已记录）"
 info "第三轮可访问性:"
-grep -v "^ip=" "${SNAPSHOT_DIR}/round3.txt" | while IFS="=" read k v; do
+grep -vE "^ip" "${SNAPSHOT_DIR}/round3.txt" | while IFS="=" read k v; do
     [ "$v" -ge 200 ] 2>/dev/null && [ "$v" -lt 400 ] 2>/dev/null \
         && printf "  ✓ %s HTTP %s\n" "$k" "$v" \
         || printf "  ✗ %s HTTP %s\n" "$k" "$v"
