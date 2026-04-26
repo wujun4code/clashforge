@@ -19,21 +19,25 @@ export function ThemeSwitcher() {
     <div className="relative">
       {/* Trigger */}
       <button
+        type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 transition-all duration-200 hover:border-white/[0.12] hover:bg-white/[0.05]"
+        className="glass-card flex w-full cursor-pointer items-center justify-between px-[var(--space-md)] py-[var(--space-sm)] transition-all"
+        style={{ borderRadius: 'var(--radius-lg)' }}
       >
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-[var(--space-sm)]">
+          <div className="flex items-center gap-[var(--space-xs)]">
             <span
-              className="block h-3.5 w-3.5 rounded-full shadow-sm"
-              style={{ background: active.preview }}
+              className="block h-3 w-3 flex-shrink-0 shadow-sm"
+              style={{ background: active.preview, borderRadius: 'var(--radius-full)' }}
             />
-            <active.icon size={14} className="text-muted" />
+            <active.icon size={13} className="text-muted" />
           </div>
-          <span className="text-xs font-medium text-muted">{active.name}</span>
+          <span style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-sans)' }} className="font-medium text-muted">
+            {active.name}
+          </span>
         </div>
         <ChevronUp
-          size={14}
+          size={13}
           className={`text-muted transition-transform duration-200 ${open ? 'rotate-0' : 'rotate-180'}`}
         />
       </button>
@@ -42,35 +46,52 @@ export function ThemeSwitcher() {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-0 right-0 z-50 mb-2 animate-scale-in rounded-2xl border border-white/[0.08] bg-surface-2/95 p-2 shadow-glass-lg backdrop-blur-2xl">
+          <div
+            className="absolute bottom-full left-0 right-0 z-50 mb-2 animate-scale-in border bg-surface-2/95 p-[var(--space-xs)] shadow-glass-lg"
+            style={{
+              borderRadius: 'var(--radius-xl)',
+              borderColor: 'rgb(var(--border-color) / var(--border-alpha))',
+              backdropFilter: 'blur(24px)',
+            }}
+          >
             {THEMES.map((t) => {
               const isActive = t.id === theme
               const Icon = t.icon
               return (
                 <button
                   key={t.id}
+                  type="button"
                   onClick={() => handleSelect(t.id)}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all duration-150 ${
+                  className={`flex w-full cursor-pointer items-center gap-[var(--space-sm)] text-left transition-all ${
                     isActive
-                      ? 'bg-brand-subtle text-white'
+                      ? 'btn-ghost-active'
                       : 'text-muted hover:bg-white/[0.05] hover:text-white'
                   }`}
+                  style={{
+                    borderRadius: 'var(--radius-md)',
+                    padding: 'var(--space-sm) var(--space-sm)',
+                  }}
                 >
                   <span
-                    className="block h-4 w-4 flex-shrink-0 rounded-full shadow-sm"
-                    style={{ background: t.preview }}
+                    className="block h-4 w-4 flex-shrink-0 shadow-sm"
+                    style={{ background: t.preview, borderRadius: 'var(--radius-full)' }}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <Icon size={13} className={isActive ? 'text-brand-light' : 'text-muted'} />
-                      <span className="text-xs font-semibold">{t.name}</span>
+                    <div className="flex items-center gap-[var(--space-xs)]">
+                      <Icon size={12} className={isActive ? 'text-brand-light' : 'text-muted'} />
+                      <span style={{ fontSize: 'var(--text-xs)' }} className="font-semibold">
+                        {t.name}
+                      </span>
                     </div>
-                    <p className="mt-0.5 text-[10px] leading-tight text-muted">
+                    <p className="mt-0.5 leading-tight text-muted" style={{ fontSize: '0.65rem' }}>
                       {t.description}
                     </p>
                   </div>
                   {isActive && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-brand-light" />
+                    <span
+                      className="ml-auto h-1.5 w-1.5 bg-brand-light flex-shrink-0"
+                      style={{ borderRadius: 'var(--radius-full)' }}
+                    />
                   )}
                 </button>
               )
