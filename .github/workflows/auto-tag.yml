@@ -1,19 +1,16 @@
-name: CI Pass → Merge, Tag, Release
+name: Auto Tag & Release on main push
 
-# 触发条件：PR 被合并到 main 分支时才执行
-# 不在 PR review 期间的每次 CI 更新时触发
+# 触发条件：有 commit 推送到 main 分支时
+# 不使用 pull_request.closed，因为 GitHub auto-merge 有时不触发该事件
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches:
       - main
 
 jobs:
   tag-release:
     name: Bump tag, trigger release
-    # 只有真正 merge（不是 close）时才运行
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -54,7 +51,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "${{ steps.next.outputs.tag }}" \
-            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ github.event.pull_request.number }})"
+            -m "Release ${{ steps.next.outputs.tag }}"
           git push origin "${{ steps.next.outputs.tag }}"
 
       - name: Trigger release build
