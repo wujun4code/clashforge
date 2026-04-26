@@ -4,10 +4,14 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 jobs:
   ui-build:
     name: UI Build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +38,7 @@ jobs:
 
   go-build:
     name: Go Build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     needs: ui-build
     steps:
@@ -51,3 +56,49 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+  tag-release:
+    name: Bump & push tag
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag
+        id: next
+        run: |
+          LATEST=$(git tag --list 'v*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$' \
+            | head -1)
+          echo "Latest: $LATEST"
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.1.0-alpha.1"
+          else
+            BASE=$(echo "$LATEST" | sed 's/\.[0-9]*$//')
+            N=$(echo "$LATEST" | grep -oE '[0-9]+$')
+            NEXT="${BASE}.$((N + 1))"
+          fi
+          echo "Next: $NEXT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.next.outputs.tag }}" \
+            -m "Release ${{ steps.next.outputs.tag }}"
+          git push origin "${{ steps.next.outputs.tag }}"
+
+      - name: Trigger release build
+        run: |
+          gh workflow run release.yml \
+            --ref "${{ steps.next.outputs.tag }}" \
+            --field version="${{ steps.next.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
