@@ -296,7 +296,6 @@ async function runBrowserProbe(): Promise<BrowserProbeResult> {
     { name: 'Google',    group: '国外', url: 'https://www.google.com' },
     { name: 'GitHub',    group: '国外', url: 'https://github.com' },
     { name: 'OpenAI',    group: 'AI',   url: 'https://chat.openai.com' },
-    { name: 'Claude',    group: 'AI',   url: 'https://api.anthropic.com' },
     { name: 'Gemini',    group: 'AI',   url: 'https://gemini.google.com' },
   ]
   const accessChecks = await Promise.all(targets.map(async t => {
