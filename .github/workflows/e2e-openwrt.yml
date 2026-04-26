@@ -273,6 +273,7 @@ jobs:
           # 读出代理信息供 Step 6 使用
           PROXY_AUTH=$(_ssh "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
           PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
+          NODE_NAME=$(echo "$PROXY_NODE" | cut -d: -f1)
           SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
 
           # 读取 Step 5 中检测到的实际端口（来自 clashforge API）
@@ -285,7 +286,7 @@ jobs:
           if [ -n "$SERVER_HOST" ]; then
             SERVER_IP=$(curl -sf --max-time 8 \
               "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
-              | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"/' || echo "")
+              | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//' || echo "")
           fi
 
           echo "proxy_auth=$PROXY_AUTH"   >> "$GITHUB_OUTPUT"
@@ -298,7 +299,8 @@ jobs:
             echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT" || \
             echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}"               >> "$GITHUB_OUTPUT"
 
-          echo "节点: $PROXY_NODE / 节点 IP: $(echo "$SERVER_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')"
+          MASKED_IP=$(echo "$SERVER_IP" | awk -F. '{print $1".*.*."$NF}' 2>/dev/null || echo "?")
+          echo "节点: ${NODE_NAME:-?} / 节点 IP: ${MASKED_IP:-?}"
 
       # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────
       - name: "[Step 6] Probe — Round 2 running (tproxy + router diagnostic)"
