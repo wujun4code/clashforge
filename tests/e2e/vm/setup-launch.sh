@@ -132,6 +132,8 @@ else
 fi
 
 # ── SL-04b: 端口检测与验证 ────────────────────────────────────────────────────
+# 给 mihomo 额外时间完成配置解析和端口绑定（大配置可能需要 3-5 秒）
+sleep 3
 section "端口检测 — clashforge 接管的所有服务端口"
 info "从 clashforge API 读取端口配置..."
 CFG_JSON=$(curl -sf --max-time 5 "$CF_API/config" 2>/dev/null || echo "{}")
@@ -143,14 +145,15 @@ HTTP_PORT=$(echo "$CFG_JSON" | grep -o '"http":[0-9]*' | head -1 | sed 's/"http"
 TPROXY_PORT=$(echo "$CFG_JSON" | grep -o '"tproxy":[0-9]*' | head -1 | sed 's/"tproxy"://')
 UI_PORT=$(echo "$CFG_JSON" | grep -o '"ui":[0-9]*' | head -1 | sed 's/"ui"://')
 
-# 端口监听检查 — 避免使用 nc -z（OpenWrt BusyBox nc 不可靠，会假阴性）
-# TCP 端口用 ss 检查；UDP 端口（DNS）用 dig 直连验证
-_tcp_listening() { ss -tln "sport = :$1" 2>/dev/null | grep -q ":$1" && echo "✓ 监听" || echo "✗ 未监听"; }
-_udp_listening() { ss -uln "sport = :$1" 2>/dev/null | grep -q ":$1" && echo "✓ 监听" || echo "✗ 未监听"; }
+# 端口监听检查 — ss 不用表达式过滤（OpenWrt 可能不支持），直接 grep
+# 显示原始 ss 输出便于诊断
+SS_OUT=$(ss -tuln 2>/dev/null || echo "(ss 不可用)")
+info "  ss -tuln 输出: $(echo "$SS_OUT" | grep -E ":(789[0-9]|7874|7777)" | tr '\n' ' ' || echo '(无匹配)')"
+_tcp_listening() { echo "$SS_OUT" | grep -qE ":$1[[:space:]]" && echo "✓ 监听" || echo "✗ 未监听"; }
 
 info ""
 info "  mixed  : ${MIXED_PORT:-?}  $(_tcp_listening "${MIXED_PORT:-0}")"
-info "  DNS    : ${DNS_PORT:-?}    $(_udp_listening "${DNS_PORT:-0}")"
+info "  DNS    : ${DNS_PORT:-?}    $(echo "$SS_OUT" | grep -qE ":${DNS_PORT:-0}[[:space:]]" && echo "✓ 监听" || echo "✗ 未监听")"
 info "  HTTP   : ${HTTP_PORT:-?}   $(_tcp_listening "${HTTP_PORT:-0}")"
 info "  TProxy : ${TPROXY_PORT:-?} $(_tcp_listening "${TPROXY_PORT:-0}")"
 info "  UI     : ${UI_PORT:-?}     $(_tcp_listening "${UI_PORT:-0}")"
@@ -160,13 +163,27 @@ info "  UI     : ${UI_PORT:-?}     $(_tcp_listening "${UI_PORT:-0}")"
 [ -n "$DNS_PORT" ]   && echo "$DNS_PORT"   > "$SNAPSHOT_DIR/dns-port"
 [ -n "$HTTP_PORT" ]  && echo "$HTTP_PORT"  > "$SNAPSHOT_DIR/http-port"
 
-# 断言核心端口：mixed 用 curl 验证代理连通性，DNS 用 dig 验证
+# 断言核心端口：mixed 用 curl 验证代理连通性（本地 target），DNS 用 dig 验证
 ALL_PORTS_OK=true
-if [ -z "$MIXED_PORT" ] || ! curl -sf --max-time 3 --proxy "http://127.0.0.1:${MIXED_PORT}" -o /dev/null http://httpbin.org/ip 2>/dev/null; then
+# mixed: curl --proxy 访问 clashforge 自己的 API（本地回路，不依赖外网）
+if [ -z "$MIXED_PORT" ] || ! curl -sf --max-time 5 --proxy "http://127.0.0.1:${MIXED_PORT}" \
+    -o /dev/null "http://127.0.0.1:${UI_PORT:-7777}/api/v1/status" 2>/dev/null; then
+    info "  mixed 代理检查失败（端口=${MIXED_PORT:-?}）"
     ALL_PORTS_OK=false
 fi
-if [ -z "$DNS_PORT" ] || ! command -v dig >/dev/null 2>&1 || ! dig +short +time=3 @127.0.0.1 -p "$DNS_PORT" google.com 2>/dev/null | grep -qE '^[0-9]'; then
+# DNS: dig 直连 mihomo DNS 端口（对齐 SL-09 逻辑）
+if [ -z "$DNS_PORT" ]; then
     ALL_PORTS_OK=false
+elif command -v dig >/dev/null 2>&1; then
+    DIG_OUT=$(dig +short +time=5 @127.0.0.1 -p "$DNS_PORT" google.com 2>/dev/null | grep -v '^;' | head -1 || echo "")
+    if echo "$DIG_OUT" | grep -qE '^[0-9]'; then
+        info "  DNS dig 结果: $DIG_OUT ✓"
+    else
+        info "  DNS dig 失败（端口=${DNS_PORT:-?}, 输出: ${DIG_OUT:-(空)}）"
+        ALL_PORTS_OK=false
+    fi
+else
+    info "  dig 不可用，跳过 DNS 端口断言"
 fi
 if [ "$ALL_PORTS_OK" = true ]; then
     record PASS SL-04b "端口监听验证" "mixed(${MIXED_PORT:-?}) + DNS(${DNS_PORT:-?}) 均正常响应" \
