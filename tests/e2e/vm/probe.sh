@@ -41,6 +41,7 @@ summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMM
 
 PHASE="${PHASE:-baseline}"
 PROXY_NODE_IP="${PROXY_NODE_IP:-}"
+MIXED_PORT_URL="${MIXED_PORT_URL:-}"
 SNAPSHOT_DIR="/tmp/cf-snapshot"
 
 case "$PHASE" in
@@ -57,8 +58,15 @@ info "直连基准 IP: $DIRECT_IP"
 [ -n "$PROXY_NODE_IP" ] && info "代理节点 IP: $PROXY_NODE_IP"
 
 # ── PR-01: 出口 IP 检查 ────────────────────────────────────────────────────────
-CURRENT_IP=$(curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
-info "当前出口 IP: $CURRENT_IP"
+# tproxy 只拦截 PREROUTING（LAN 客户端入流量），不拦截路由器本机进程（OUTPUT）。
+# running 阶段用混合端口（HTTP/SOCKS）显式代理，确保出口 IP 经过代理节点。
+if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
+    CURRENT_IP=$(curl -sf --max-time 10 --proxy "$MIXED_PORT_URL" https://api.ipify.org 2>/dev/null || echo "FAILED")
+    info "当前出口 IP（via 混合端口 $MIXED_PORT_URL）: $CURRENT_IP"
+else
+    CURRENT_IP=$(curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
+    info "当前出口 IP: $CURRENT_IP"
+fi
 
 case "$PHASE" in
     baseline)
@@ -132,7 +140,11 @@ for entry in $TARGETS; do
     GROUP=$(echo "$entry" | cut -d: -f4)
     TOTAL_ACCESS=$((TOTAL_ACCESS+1))
     STARTED=$(date +%s%3N 2>/dev/null || date +%s)
-    CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 12 "$URL" 2>/dev/null || echo "0")
+    if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
+        CODE=$(curl -sf -o /dev/null -w "%{http_code}" --proxy "$MIXED_PORT_URL" --max-time 12 "$URL" 2>/dev/null || echo "0")
+    else
+        CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 12 "$URL" 2>/dev/null || echo "0")
+    fi
     ENDED=$(date +%s%3N 2>/dev/null || date +%s)
     LATENCY=$((ENDED - STARTED))
     if [ "$CODE" -ge 200 ] 2>/dev/null && [ "$CODE" -lt 400 ] 2>/dev/null; then

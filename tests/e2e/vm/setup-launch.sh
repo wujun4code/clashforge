@@ -98,10 +98,14 @@ else
 fi
 
 # ── SL-03: setup/launch ───────────────────────────────────────────────────────
+LAUNCH_PAYLOAD='{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}'
 info "触发 setup/launch..."
+info "DNS  选项: enable=true  mode=fake-ip  dnsmasq_mode=upstream  apply_on_start=true"
+info "网络选项: mode=tproxy  firewall_backend=nftables  bypass_lan=true  bypass_china=false  apply_on_start=true"
+info "完整 payload: $LAUNCH_PAYLOAD"
 LAUNCH_RESP=$(curl -sf --max-time 90 \
     -H "Content-Type: application/json" \
-    -d '{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}' \
+    -d "$LAUNCH_PAYLOAD" \
     "$CF_API/setup/launch" 2>/dev/null || echo "FAILED")
 
 if echo "$LAUNCH_RESP" | grep -q '"success":true'; then
@@ -162,7 +166,7 @@ fi
 
 # ── SL-09: DNS 解析返回 fake-ip ───────────────────────────────────────────────
 sleep 2
-DNS_RESULT=$(nslookup google.com 2>/dev/null | grep "Address:" | grep -v "#53" | head -1 | awk '{print $2}' || echo "")
+DNS_RESULT=$(nslookup google.com 2>/dev/null | grep "Address:" | grep -vE "#53|^127\." | head -1 | awk '{print $2}' || echo "")
 info "DNS 解析 google.com → $DNS_RESULT"
 
 if echo "$DNS_RESULT" | grep -qE "^198\.18\.|^198\.19\."; then
