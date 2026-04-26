@@ -29,7 +29,7 @@ export function PageHeader({
           </div>
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">{title}</h1>
-            {description ? <p className="max-w-2xl text-sm leading-6 text-[#B9B6D3] md:text-[15px]">{description}</p> : null}
+            {description ? <p className="max-w-2xl text-sm leading-6 text-muted md:text-[15px]">{description}</p> : null}
           </div>
         </div>
 
@@ -148,10 +148,10 @@ export function InlineNotice({
   action?: ReactNode
 }) {
   const toneClass = {
-    info: 'border-brand/25 bg-brand-subtle/35 text-[#E9E3FF]',
-    success: 'border-success/25 bg-success-subtle/30 text-[#DCFCE7]',
-    warning: 'border-warning/25 bg-warning-subtle/30 text-[#FEF3C7]',
-    danger: 'border-danger/25 bg-danger-subtle/30 text-[#FECACA]',
+    info: 'border-brand/25 bg-brand-subtle/35 text-[var(--callout-info-text)]',
+    success: 'border-success/25 bg-success-subtle/30 text-[var(--callout-success-text)]',
+    warning: 'border-warning/25 bg-warning-subtle/30 text-[var(--callout-warning-text)]',
+    danger: 'border-danger/25 bg-danger-subtle/30 text-[var(--callout-danger-text)]',
   }[tone]
 
   return (
@@ -188,7 +188,8 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#05030d]/70 p-4 backdrop-blur-md"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md"
+      style={{ background: 'var(--modal-backdrop)' }}
       onClick={dismissible ? onClose : undefined}
     >
       <div

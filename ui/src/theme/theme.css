@@ -1,0 +1,194 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ClashForge Theme System — CSS Custom Properties
+   
+   All colors use space-separated RGB channels so Tailwind's alpha-value
+   modifier works natively: bg-brand/50 → rgb(var(--brand) / 0.5)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Default: Nebula (glassmorphism dark) ─────────────────────────────────── */
+:root,
+[data-theme="nebula"] {
+  /* Brand */
+  --brand: 124 58 237;
+  --brand-light: 167 139 250;
+  --brand-subtle-rgb: 124 58 237;
+  --brand-subtle-alpha: 0.12;
+  /* CTA */
+  --cta: 249 115 22;
+  --cta-subtle-rgb: 249 115 22;
+  --cta-subtle-alpha: 0.12;
+  /* Surface */
+  --surface-0: 11 10 26;
+  --surface-1: 19 18 45;
+  --surface-2: 28 27 59;
+  --surface-3: 38 37 74;
+  --surface-4: 48 47 90;
+  /* Feedback */
+  --muted: 148 146 176;
+  --success: 34 197 94;
+  --success-subtle-rgb: 34 197 94;
+  --success-subtle-alpha: 0.12;
+  --warning: 245 158 11;
+  --warning-subtle-rgb: 245 158 11;
+  --warning-subtle-alpha: 0.12;
+  --danger: 239 68 68;
+  --danger-subtle-rgb: 239 68 68;
+  --danger-subtle-alpha: 0.12;
+  /* Text */
+  --text-primary: 240 239 248;
+  --text-dim: 185 182 211;
+  --callout-info-text: #E9E3FF;
+  --callout-success-text: #DCFCE7;
+  --callout-warning-text: #FEF3C7;
+  --callout-danger-text: #FECACA;
+  /* Modal */
+  --modal-backdrop: rgba(5, 3, 13, 0.7);
+  /* Glass */
+  --glass-border: 255 255 255;
+  --glass-border-alpha: 0.06;
+  --glass-bg: 255 255 255;
+  --glass-bg-alpha: 0.03;
+  --glass-bg-hover-alpha: 0.05;
+  --glass-border-hover-alpha: 0.10;
+  /* Shadow */
+  --shadow-glass: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-glass-lg: 0 8px 40px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-glow-brand: 0 0 20px rgba(124, 58, 237, 0.3);
+  --shadow-glow-cta: 0 0 20px rgba(249, 115, 22, 0.3);
+  --shadow-glow-success: 0 0 20px rgba(34, 197, 94, 0.2);
+  /* Radius */
+  --radius-card: 16px;
+  --radius-lg: 20px;
+  --radius-btn: 12px;
+  --radius-input: 12px;
+  --radius-modal: 28px;
+  /* Font */
+  --font-sans: 'Fira Sans', system-ui, sans-serif;
+  --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Fira Code', monospace;
+  /* Scrollbar */
+  --scrollbar-thumb: rgba(124, 58, 237, 0.25);
+  --scrollbar-thumb-hover: rgba(124, 58, 237, 0.4);
+  /* Selection */
+  --selection-bg: rgba(124, 58, 237, 0.3);
+  --selection-text: #F8FAFC;
+  /* App background radial gradients */
+  --app-glow-top-left: rgba(124, 58, 237, 0.18);
+  --app-glow-bottom-right: rgba(249, 115, 22, 0.14);
+}
+
+/* ── ClashCat (warm orange + feline energy) ──────────────────────────────── */
+[data-theme="clashcat"] {
+  --brand: 249 115 22;
+  --brand-light: 251 191 36;
+  --brand-subtle-rgb: 249 115 22;
+  --brand-subtle-alpha: 0.14;
+  --cta: 236 72 153;
+  --cta-subtle-rgb: 236 72 153;
+  --cta-subtle-alpha: 0.12;
+  --surface-0: 28 25 23;
+  --surface-1: 38 34 31;
+  --surface-2: 48 43 40;
+  --surface-3: 58 52 49;
+  --surface-4: 69 62 58;
+  --muted: 168 162 158;
+  --success: 34 197 94;
+  --success-subtle-rgb: 34 197 94;
+  --success-subtle-alpha: 0.12;
+  --warning: 251 191 36;
+  --warning-subtle-rgb: 251 191 36;
+  --warning-subtle-alpha: 0.12;
+  --danger: 239 68 68;
+  --danger-subtle-rgb: 239 68 68;
+  --danger-subtle-alpha: 0.12;
+  --text-primary: 245 240 235;
+  --text-dim: 184 178 170;
+  --callout-info-text: #FFE0D0;
+  --callout-success-text: #DCFCE7;
+  --callout-warning-text: #FFF8E0;
+  --callout-danger-text: #FECACA;
+  --modal-backdrop: rgba(10, 8, 6, 0.7);
+  --glass-border: 255 255 255;
+  --glass-border-alpha: 0.06;
+  --glass-bg: 255 255 255;
+  --glass-bg-alpha: 0.03;
+  --glass-bg-hover-alpha: 0.05;
+  --glass-border-hover-alpha: 0.10;
+  --shadow-glass: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-glass-lg: 0 8px 40px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-glow-brand: 0 0 22px rgba(249, 115, 22, 0.35);
+  --shadow-glow-cta: 0 0 22px rgba(236, 72, 153, 0.3);
+  --shadow-glow-success: 0 0 20px rgba(34, 197, 94, 0.2);
+  --radius-card: 18px;
+  --radius-lg: 24px;
+  --radius-btn: 14px;
+  --radius-input: 14px;
+  --radius-modal: 32px;
+  --font-sans: 'Fira Sans', system-ui, sans-serif;
+  --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Fira Code', monospace;
+  --scrollbar-thumb: rgba(249, 115, 22, 0.25);
+  --scrollbar-thumb-hover: rgba(249, 115, 22, 0.4);
+  --selection-bg: rgba(249, 115, 22, 0.3);
+  --selection-text: #FFF7ED;
+  --app-glow-top-left: rgba(249, 115, 22, 0.18);
+  --app-glow-bottom-right: rgba(236, 72, 153, 0.14);
+}
+
+/* ── Enterprise (professional slate-blue) ────────────────────────────────── */
+[data-theme="enterprise"] {
+  --brand: 37 99 235;
+  --brand-light: 96 165 250;
+  --brand-subtle-rgb: 37 99 235;
+  --brand-subtle-alpha: 0.10;
+  --cta: 16 185 129;
+  --cta-subtle-rgb: 16 185 129;
+  --cta-subtle-alpha: 0.10;
+  --surface-0: 15 23 42;
+  --surface-1: 30 41 59;
+  --surface-2: 51 65 85;
+  --surface-3: 71 85 105;
+  --surface-4: 100 116 139;
+  --muted: 148 163 184;
+  --success: 16 185 129;
+  --success-subtle-rgb: 16 185 129;
+  --success-subtle-alpha: 0.10;
+  --warning: 245 158 11;
+  --warning-subtle-rgb: 245 158 11;
+  --warning-subtle-alpha: 0.10;
+  --danger: 239 68 68;
+  --danger-subtle-rgb: 239 68 68;
+  --danger-subtle-alpha: 0.10;
+  --text-primary: 241 245 249;
+  --text-dim: 148 163 184;
+  --callout-info-text: #DBEAFE;
+  --callout-success-text: #D1FAE5;
+  --callout-warning-text: #FEF3C7;
+  --callout-danger-text: #FEE2E2;
+  --modal-backdrop: rgba(2, 6, 12, 0.7);
+  --glass-border: 255 255 255;
+  --glass-border-alpha: 0.06;
+  --glass-bg: 255 255 255;
+  --glass-bg-alpha: 0.03;
+  --glass-bg-hover-alpha: 0.04;
+  --glass-border-hover-alpha: 0.08;
+  --shadow-glass: 0 2px 12px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-glass-lg: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-glow-brand: 0 0 12px rgba(37, 99, 235, 0.2);
+  --shadow-glow-cta: 0 0 12px rgba(16, 185, 129, 0.2);
+  --shadow-glow-success: 0 0 12px rgba(16, 185, 129, 0.15);
+  --radius-card: 12px;
+  --radius-lg: 16px;
+  --radius-btn: 10px;
+  --radius-input: 10px;
+  --radius-modal: 20px;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-heading: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --scrollbar-thumb: rgba(37, 99, 235, 0.2);
+  --scrollbar-thumb-hover: rgba(37, 99, 235, 0.35);
+  --selection-bg: rgba(37, 99, 235, 0.25);
+  --selection-text: #F1F5F9;
+  --app-glow-top-left: rgba(37, 99, 235, 0.10);
+  --app-glow-bottom-right: rgba(16, 185, 129, 0.08);
+}
