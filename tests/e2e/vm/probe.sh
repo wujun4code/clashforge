@@ -39,6 +39,10 @@ info()    { printf "${CYAN}ℹ️   ${RESET} %s\n" "$*"; }
 section() { printf "\n${BOLD}${YELLOW}=== %s ===${RESET}\n" "$*"; }
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
 
+# ── 敏感信息脂敏 ──────────────────────────────────────────────────────────────
+mask_ip()     { echo "$1" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/'; }
+mask_domain() { echo "$1" | awk -F. '{ if (NF<=2) {print $0} else {print $1".***"."$NF"} }'; }
+
 PHASE="${PHASE:-baseline}"
 PROXY_NODE_IP="${PROXY_NODE_IP:-}"
 MIXED_PORT_URL="${MIXED_PORT_URL:-}"
@@ -54,18 +58,18 @@ esac
 DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 
 section "VM 内网络探测 — $PHASE_LABEL"
-info "直连基准 IP: $DIRECT_IP"
-[ -n "$PROXY_NODE_IP" ] && info "代理节点 IP: $PROXY_NODE_IP"
+info "直连基准 IP: $(mask_ip "$DIRECT_IP")"
+[ -n "$PROXY_NODE_IP" ] && info "代理节点 IP: $(mask_ip "$PROXY_NODE_IP")"
 
 # ── PR-01: 出口 IP 检查 ────────────────────────────────────────────────────────
 # tproxy 只拦截 PREROUTING（LAN 客户端入流量），不拦截路由器本机进程（OUTPUT）。
 # running 阶段用混合端口（HTTP/SOCKS）显式代理，确保出口 IP 经过代理节点。
 if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
     CURRENT_IP=$(curl -sf --max-time 10 --proxy "$MIXED_PORT_URL" https://api.ipify.org 2>/dev/null || echo "FAILED")
-    info "当前出口 IP（via 混合端口 $MIXED_PORT_URL）: $CURRENT_IP"
+    info "当前出口 IP（via 混合端口）: $(mask_ip "$CURRENT_IP")"
 else
     CURRENT_IP=$(curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
-    info "当前出口 IP: $CURRENT_IP"
+    info "当前出口 IP: $(mask_ip "$CURRENT_IP")"
 fi
 
 case "$PHASE" in
@@ -76,7 +80,7 @@ case "$PHASE" in
             record PASS PR-01 "出口 IP（基准）" \
                 "curl api.ipify.org（无代理）" \
                 "可获取直连出口 IP" \
-                "基准 IP: $CURRENT_IP"
+                "基准 IP: $(mask_ip "$CURRENT_IP")"
         else
             record FAIL PR-01 "出口 IP（基准）" \
                 "curl api.ipify.org（无代理）" \
@@ -93,18 +97,18 @@ case "$PHASE" in
         elif [ -n "$PROXY_NODE_IP" ] && [ "$CURRENT_IP" = "$PROXY_NODE_IP" ]; then
             record PASS PR-01 "出口 IP（代理运行期）" \
                 "curl api.ipify.org（tproxy 透明拦截）" \
-                "出口 IP = 代理节点 IP ($PROXY_NODE_IP)" \
-                "✓ $DIRECT_IP → $CURRENT_IP = 节点 IP"
+                "出口 IP = 代理节点 IP ($(mask_ip "$PROXY_NODE_IP"))" \
+                "✓ $(mask_ip "$DIRECT_IP") → $(mask_ip "$CURRENT_IP") = 节点 IP"
         elif [ "$CURRENT_IP" != "$DIRECT_IP" ]; then
             record PASS PR-01 "出口 IP（代理运行期）" \
                 "curl api.ipify.org（tproxy 透明拦截）" \
                 "出口 IP ≠ 直连 IP（流量走代理）" \
-                "IP 已变化: $DIRECT_IP → $CURRENT_IP（代理节点 IP 未配置，以 IP 变化作为代理生效依据）"
+                "IP 已变化: $(mask_ip "$DIRECT_IP") → $(mask_ip "$CURRENT_IP")（代理节点 IP 未配置，以 IP 变化作为代理生效依据）"
         else
             record FAIL PR-01 "出口 IP（代理运行期）" \
                 "curl api.ipify.org（tproxy 透明拦截）" \
                 "出口 IP ≠ 直连 IP（代理应已生效）" \
-                "IP 未变化: $CURRENT_IP = $DIRECT_IP（tproxy 未生效）"
+                "IP 未变化: $(mask_ip "$CURRENT_IP") = $(mask_ip "$DIRECT_IP")（tproxy 未生效）"
         fi
         ;;
     stopped)
@@ -112,7 +116,7 @@ case "$PHASE" in
             record PASS PR-01 "出口 IP（停止后恢复）" \
                 "curl api.ipify.org（无代理直连）" \
                 "出口 IP 还原为直连基准 IP" \
-                "✓ IP 已还原: $CURRENT_IP = $DIRECT_IP"
+                "✓ IP 已还原: $(mask_ip "$CURRENT_IP") = $(mask_ip "$DIRECT_IP")"
         elif [ "$CURRENT_IP" = "FAILED" ]; then
             record FAIL PR-01 "出口 IP（停止后恢复）" \
                 "curl api.ipify.org（无代理直连）" \
@@ -122,7 +126,7 @@ case "$PHASE" in
             record WARN PR-01 "出口 IP（停止后恢复）" \
                 "curl api.ipify.org（无代理直连）" \
                 "出口 IP 还原为直连基准 IP" \
-                "IP 未还原: $CURRENT_IP ≠ $DIRECT_IP"
+                "IP 未还原: $(mask_ip "$CURRENT_IP") ≠ $(mask_ip "$DIRECT_IP")"
         fi
         ;;
 esac
@@ -212,9 +216,9 @@ summary "## 🌐 VM 网络探测 — $PHASE_LABEL"
 summary ""
 summary "| 项目 | 值 |"
 summary "|------|----|"
-summary "| **当前出口 IP** | $CURRENT_IP |"
-summary "| **直连基准 IP** | $DIRECT_IP |"
-[ -n "$PROXY_NODE_IP" ] && summary "| **代理节点 IP** | $PROXY_NODE_IP |"
+summary "| **当前出口 IP** | $(mask_ip "$CURRENT_IP") |"
+summary "| **直连基准 IP** | $(mask_ip "$DIRECT_IP") |"
+[ -n "$PROXY_NODE_IP" ] && summary "| **代理节点 IP** | $(mask_ip "$PROXY_NODE_IP") |"
 summary "| **连通性** | $OK_COUNT/$TOTAL_ACCESS |"
 summary ""
 summary "| 编号 | 用例 | 操作 | 预期 | 实际 | 状态 |"

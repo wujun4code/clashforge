@@ -39,6 +39,10 @@ info()    { printf "${CYAN}ℹ️   ${RESET} %s\n" "$*"; }
 section() { printf "\n${BOLD}${YELLOW}=== %s ===${RESET}\n" "$*"; }
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
 
+# ── 敏感信息脂敏 ──────────────────────────────────────────────────────────────
+mask_ip()     { echo "$1" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/'; }
+mask_domain() { echo "$1" | awk -F. '{ if (NF<=2) {print $0} else {print $1".***"."$NF"} }'; }
+
 SNAPSHOT_DIR="/tmp/cf-snapshot"
 mkdir -p "$SNAPSHOT_DIR"
 
@@ -69,7 +73,7 @@ record PASS SN-04 "resolv.conf 快照" "当前 DNS: ${DNS_SERVERS:-(未配置)}"
 DIRECT_IP=$(curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
 if [ "$DIRECT_IP" != "FAILED" ] && [ -n "$DIRECT_IP" ]; then
     echo "$DIRECT_IP" > "$SNAPSHOT_DIR/direct-ip"
-    record PASS SN-05 "直连出口 IP 基准" "直连 IP: $DIRECT_IP"
+    record PASS SN-05 "直连出口 IP 基准" "直连 IP: $(mask_ip "$DIRECT_IP")"
 else
     record FAIL SN-05 "直连出口 IP 基准" "无法获取直连 IP，网络异常"
 fi
@@ -82,7 +86,7 @@ summary "## 📸 Step 2 — 基准状态快照"
 summary ""
 summary "| 项目 | 值 |"
 summary "|------|----|"
-summary "| **直连 IP** | ${DIRECT_IP:-未知} |"
+summary "| **直连 IP** | $(mask_ip "${DIRECT_IP:-未知}") |"
 summary "| **nft 表** | $NFT_TABLES |"
 summary "| **DNS** | ${DNS_SERVERS:-(未配置)} |"
 summary ""

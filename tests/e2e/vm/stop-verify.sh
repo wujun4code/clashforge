@@ -42,6 +42,10 @@ info()    { printf "${CYAN}ℹ️   ${RESET} %s\n" "$*"; }
 section() { printf "\n${BOLD}${YELLOW}=== %s ===${RESET}\n" "$*"; }
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
 
+# ── 敏感信息脱敏 ──────────────────────────────────────────────────────────────
+mask_ip()     { echo "$1" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/'; }
+mask_domain() { echo "$1" | awk -F. '{ if (NF<=2) {print $0} else {print $1".***"."$NF"} }'; }
+
 CF_API="http://127.0.0.1:7777/api/v1"
 CF_UI="http://127.0.0.1:7777"
 SNAPSHOT_DIR="/tmp/cf-snapshot"
