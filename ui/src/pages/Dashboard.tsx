@@ -250,7 +250,7 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
   const members = (group.all ?? []).filter(n => !IGNORED.includes(n))
 
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 overflow-hidden">
+    <div className="glass-card overflow-hidden">
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-white/5 transition-all"
@@ -309,7 +309,7 @@ function ProxyGroup({ name, group, allProxies, onSelect }: {
 
 function MetricTile({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="dashboard-card">
       <div className="flex items-center gap-2 text-slate-300">
         {icon}
         <p className="text-xs uppercase tracking-[0.16em] text-muted">{label}</p>
@@ -356,7 +356,7 @@ function GroupTag({ label }: { label: string }) {
 
 function IPCard({ item }: { item: OverviewIPCheck }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="dashboard-card">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-semibold text-slate-100">{item.provider}</p>
         <Pill tone={item.ok ? 'success' : 'danger'} label={item.ok ? '已解析' : '失败'} />
@@ -383,7 +383,7 @@ const STAGE_LABELS: Record<string, string> = {
 function AccessCard({ item }: { item: PaneAccessCheck }) {
   const stageLabel = item.stage ? (STAGE_LABELS[item.stage] ?? item.stage) : null
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="dashboard-card">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-100 truncate">{item.name}</p>
@@ -418,7 +418,7 @@ function ProcessCard({ name, pid, cpu, memory, uptime, running, command }: {
   command?: string
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+    <div className="dashboard-card">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <StatusDot online={running} />
@@ -466,7 +466,7 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
   const accessGroups = groupBy(accessChecks)
   const hasContent = ipChecks.length > 0 || accessChecks.length > 0
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/15 overflow-hidden">
+    <div className="glass-card overflow-hidden">
       {/* Panel header */}
       <div className="flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/8 bg-white/[0.02]">
         <div>
@@ -585,7 +585,7 @@ function ResourceDrawer({
                   ))}
                 </div>
               )}
-              <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-4">
+              <div className="dashboard-card">
                 <p className="text-sm font-semibold text-slate-100">ClashForge 磁盘占用</p>
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
                   {[
