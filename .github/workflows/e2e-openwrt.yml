@@ -11,10 +11,16 @@ name: E2E Integration Test (OpenWrt)
 #   Step 2  基准状态快照（nft / ip-rule / dnsmasq / resolv.conf / 直连 IP）
 #   Step 3  Round 1 网络探测基准（VM 内 curl，无代理）
 #   Step 4  安装 IPK + 完备性检测
-#   Step 5  Setup Wizard（添加订阅→导入节点→DNS→网络→launch）+ 接管断言
-#   Step 6  Round 2 网络探测（VM 内 curl，tproxy 透明拦截；附加：宿主机 mixed port）
-#   Step 7  停止服务 + 状态还原断言（与 Step 2 快照对比）
-#   Step 8  Round 3 网络探测（VM 内 curl，恢复直连；对比 Round 1 基准）
+#   Steps 5-8  [Scenario 1/2] dnsmasq_mode=upstream
+#               Step 5  Setup Wizard + 接管断言
+#               Step 6  Round 2 网络探测（代理运行期）
+#               Step 7  停止服务 + 状态还原断言
+#               Step 8  Round 3 网络探测（停止后恢复直连）
+#   Steps 5-8  [Scenario 2/2] dnsmasq_mode=replace（复用 Scenario 1 的订阅）
+#               Step 5  Setup Wizard + 接管断言（replace 模式：UCI port=0 + OUTPUT hook）
+#               Step 6  Round 2 网络探测
+#               Step 7  停止服务 + 状态还原断言
+#               Step 8  Round 3 网络探测
 #   Step 9  紧急清理
 #
 # 所需 Secrets：
@@ -257,89 +263,23 @@ jobs:
 
           _ssh "sh /tmp/e2e-install-verify.sh"
 
-      # ── Step 5: Setup Wizard + 接管断言 ──────────────────────────────────
-      - name: "[Step 5] Setup launch & verify takeover"
-        id: setup
-        env:
-          SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
-        run: |
-          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+      # ── Scenario 1/2: dnsmasq_mode=upstream ──────────────────────────────────
+      - name: "[Scenario 1/2] dnsmasq_mode=upstream"
+        uses: ./.github/actions/e2e-scenario
+        with:
+          dnsmasq_mode: upstream
+          subscription_url: ${{ secrets.SUBSCRIPTION_URL }}
+          reuse_subscription: 'false'
+          scenario_label: 'Scenario 1/2 — dnsmasq_mode=upstream'
 
-          _ssh "cat > /tmp/e2e-setup-launch.sh && chmod +x /tmp/e2e-setup-launch.sh" \
-            < tests/e2e/vm/setup-launch.sh
-
-          _ssh "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' sh /tmp/e2e-setup-launch.sh"
-
-          # 读出代理信息供 Step 6 使用
-          PROXY_AUTH=$(_ssh "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
-          PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
-          NODE_NAME=$(echo "$PROXY_NODE" | cut -d: -f1)
-          SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
-
-          # 读取 Step 5 中检测到的实际端口（来自 clashforge API）
-          MIXED_PORT=$(_ssh "cat /tmp/cf-snapshot/mixed-port 2>/dev/null" || echo "7893")
-          DNS_PORT=$(_ssh "cat /tmp/cf-snapshot/dns-port 2>/dev/null" || echo "7874")
-          echo "实际运行端口: mixed=${MIXED_PORT} dns=${DNS_PORT}"
-
-          # DoH 解析节点服务器真实 IP
-          SERVER_IP=""
-          if [ -n "$SERVER_HOST" ]; then
-            SERVER_IP=$(curl -sf --max-time 8 \
-              "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
-              | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//' || echo "")
-          fi
-
-          echo "proxy_auth=$PROXY_AUTH"   >> "$GITHUB_OUTPUT"
-          echo "proxy_node=$PROXY_NODE"   >> "$GITHUB_OUTPUT"
-          echo "server_host=$SERVER_HOST" >> "$GITHUB_OUTPUT"
-          echo "server_ip=$SERVER_IP"     >> "$GITHUB_OUTPUT"
-          echo "mixed_port=$MIXED_PORT"   >> "$GITHUB_OUTPUT"
-          echo "dns_port=$DNS_PORT"       >> "$GITHUB_OUTPUT"
-          [ -n "$PROXY_AUTH" ] && \
-            echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT" || \
-            echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}"               >> "$GITHUB_OUTPUT"
-
-          MASKED_IP=$(echo "$SERVER_IP" | awk -F. '{print $1".*.*."$NF}' 2>/dev/null || echo "?")
-          echo "节点: ${NODE_NAME:-?} / 节点 IP: ${MASKED_IP:-?}"
-
-      # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────
-      - name: "[Step 6] Probe — Round 2 running (tproxy + router diagnostic)"
-        id: probe_running
-        run: |
-          # tproxy 只拦截 PREROUTING（LAN 入流量），路由器本机进程走 OUTPUT，不经 tproxy。
-          # 传入 MIXED_PORT_URL，让 probe.sh 在 running 阶段显式经混合端口代理。
-          # MIXED_PORT / MIHOMO_DNS_PORT 来自 Step 5 从 clashforge API 读取的实际端口。
-          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "PHASE=running \
-             PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
-             MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' \
-             MIXED_PORT='${{ steps.setup.outputs.mixed_port }}' \
-             MIHOMO_DNS_PORT='${{ steps.setup.outputs.dns_port }}' \
-             sh /tmp/e2e-probe.sh"
-
-      # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────
-      - name: "[Step 7] Stop clashforge & verify rollback"
-        id: stop
-        if: always()
-        run: |
-          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
-
-          _ssh "cat > /tmp/e2e-stop-verify.sh && chmod +x /tmp/e2e-stop-verify.sh" \
-            < tests/e2e/vm/stop-verify.sh
-
-          _ssh "sh /tmp/e2e-stop-verify.sh"
-
-      # ── Step 8: Round 3 网络探测（停止后，恢复直连）──────────────────────
-      - name: "[Step 8] Probe — Round 3 stopped (direct restored)"
-        id: probe_stopped
-        if: always()
-        run: |
-          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
-
-          _ssh "cat > /tmp/e2e-probe.sh && chmod +x /tmp/e2e-probe.sh" \
-            < tests/e2e/vm/probe.sh
-
-          _ssh "PHASE=stopped sh /tmp/e2e-probe.sh"
+      # ── Scenario 2/2: dnsmasq_mode=replace ───────────────────────────────────
+      - name: "[Scenario 2/2] dnsmasq_mode=replace"
+        uses: ./.github/actions/e2e-scenario
+        with:
+          dnsmasq_mode: replace
+          subscription_url: ${{ secrets.SUBSCRIPTION_URL }}
+          reuse_subscription: 'true'
+          scenario_label: 'Scenario 2/2 — dnsmasq_mode=replace'
 
       # ── Step 9: 紧急清理 ──────────────────────────────────────────────────
       - name: "[Step 9] Emergency cleanup"
