@@ -208,6 +208,10 @@ jobs:
           cp openwrt/files/etc/metaclash/uninstall-clashforge.sh ipk/usr/bin/uninstall-clashforge
           chmod 755 ipk/usr/bin/uninstall-clashforge
 
+          # diagnostic tool
+          cp openwrt/files/usr/bin/clashforge-diag ipk/usr/bin/clashforge-diag
+          chmod 755 ipk/usr/bin/clashforge-diag
+
           # CONTROL/control — no leading whitespace, opkg is strict
           MIHOMO_VER_CLEAN="${MIHOMO_VER:-unknown}"
           cat > ipk/CONTROL/control <<EOF
