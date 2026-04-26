@@ -1,0 +1,148 @@
+name: E2E Node Server Test
+
+# 节点服务器端到端测试
+#
+# 安全模型：
+#   - build job 跑在 GitHub 托管的 ubuntu-latest，PR 代码只在沙箱里编译，不碰 self-hosted 机器
+#   - e2e job 跑在 self-hosted runner，只接收打包好的二进制 artifact，不执行任何来自 PR 的编译操作
+#
+# 测试步骤（e2e job）：
+#   Step 1  下载二进制 artifact
+#   Step 2  启动 clashforge 服务
+#   Step 3  创建节点 + SSH 连通性检测
+#   Step 4  部署 GOST 服务 + HTTPS 证书申请
+#   Step 5  验证部署结果（远程服务 + 证书文件 + 端口监听）
+#   Step 6  导出代理配置 YAML 并验证
+#   Step 7  清理（销毁节点 + 停止 clashforge）
+#
+# 所需 Secrets：
+#   NODE_TEST_HOST         — 测试服务器 IP/域名
+#   NODE_TEST_PORT         — SSH 端口（默认 22）
+#   NODE_TEST_USER         — SSH 用户名
+#   NODE_TEST_PASSWORD     — SSH 密码
+#   NODE_TEST_DOMAIN       — TLS 证书域名
+#   NODE_TEST_EMAIL        — acme.sh 注册邮箱
+#   NODE_TEST_CF_TOKEN     — Cloudflare API Token
+#   NODE_TEST_CF_ACCOUNT_ID — Cloudflare Account ID
+#   NODE_TEST_CF_ZONE_ID   — Cloudflare Zone ID
+#
+# 所需 Runner：
+#   build:    ubuntu-latest（GitHub 托管）
+#   e2e-node: self-hosted, linux-node
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: 编译打包二进制 — 在 GitHub 托管的沙箱里执行
+  # ────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build Binary (amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        run: |
+          cd ui && npm ci
+          npm run build
+          cd ..
+          mkdir -p internal/api/ui_dist
+          cp -r ui/dist/* internal/api/ui_dist/
+
+      - name: Build Go binary (amd64)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.buildVersion=e2e-$(git rev-parse --short HEAD)" \
+            -o dist/clashforge-linux-amd64 \
+            ./cmd/clashforge
+          echo "Binary: $(ls -lh dist/clashforge-linux-amd64)"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-e2e-node
+          path: dist/clashforge-linux-amd64
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: E2E 测试 — 在 self-hosted runner 上执行
+  # ────────────────────────────────────────────────────────────────────────────
+  e2e-node:
+    name: Node Server E2E — Deploy GOST + Cert
+    runs-on: [self-hosted, linux-node]
+    needs: build
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout (test scripts only)
+        uses: actions/checkout@v4
+
+      # ── Step 1: 下载二进制 artifact ──────────────────────────────────────────
+      - name: "[Step 1] Download binary artifact"
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-e2e-node
+          path: /tmp/e2e-node/
+
+      - name: Prepare binary
+        run: |
+          chmod +x /tmp/e2e-node/clashforge-linux-amd64
+          echo "Binary ready: $(ls -lh /tmp/e2e-node/clashforge-linux-amd64)"
+
+      # ── Step 2-7: 执行端到端测试 ─────────────────────────────────────────────
+      - name: "[Steps 2-7] Run Node Deploy E2E Test"
+        id: e2e
+        env:
+          NODE_TEST_HOST: ${{ secrets.NODE_TEST_HOST }}
+          NODE_TEST_PORT: ${{ secrets.NODE_TEST_PORT }}
+          NODE_TEST_USER: ${{ secrets.NODE_TEST_USER }}
+          NODE_TEST_PASSWORD: ${{ secrets.NODE_TEST_PASSWORD }}
+          NODE_TEST_DOMAIN: ${{ secrets.NODE_TEST_DOMAIN }}
+          NODE_TEST_EMAIL: ${{ secrets.NODE_TEST_EMAIL }}
+          NODE_TEST_CF_TOKEN: ${{ secrets.NODE_TEST_CF_TOKEN }}
+          NODE_TEST_CF_ACCOUNT_ID: ${{ secrets.NODE_TEST_CF_ACCOUNT_ID }}
+          NODE_TEST_CF_ZONE_ID: ${{ secrets.NODE_TEST_CF_ZONE_ID }}
+        run: |
+          export NODE_TEST_HOST NODE_TEST_PORT NODE_TEST_USER NODE_TEST_PASSWORD
+          export NODE_TEST_DOMAIN NODE_TEST_EMAIL NODE_TEST_CF_TOKEN
+          export NODE_TEST_CF_ACCOUNT_ID NODE_TEST_CF_ZONE_ID
+          bash tests/e2e/node/test-node-deploy.sh
+
+      # ── Emergency cleanup ────────────────────────────────────────────────────
+      - name: "[Cleanup] Emergency cleanup"
+        if: always()
+        run: |
+          # Stop clashforge if still running
+          if [ -f /tmp/e2e-node/cf.pid ]; then
+            PID=$(cat /tmp/e2e-node/cf.pid)
+            kill "$PID" 2>/dev/null || true
+          fi
+          pkill -f "clashforge-linux-amd64" 2>/dev/null || true
+
+          # Cleanup temp files
+          rm -rf /tmp/e2e-node/ 2>/dev/null || true
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🧹 Cleanup Complete" >> "$GITHUB_STEP_SUMMARY"
