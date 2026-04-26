@@ -299,6 +299,11 @@ jobs:
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
           _ssh "modprobe nft_tproxy 2>/dev/null || true"
+          # kmod-nf-nat is needed for dns_redirect + dns_output_redirect nat chains
+          # (dnsmasq_mode=replace).  On routers with firewall3/4 it is already loaded;
+          # on the minimal E2E VM it may not be, causing nft apply to fail.
+          _ssh "opkg install kmod-nf-nat 2>/dev/null | grep -v 'up to date' || true"
+          _ssh "modprobe nf_nat 2>/dev/null || true"
 
           # 启动服务
           _ssh "/etc/init.d/clashforge start"

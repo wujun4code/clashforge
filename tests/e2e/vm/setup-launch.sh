@@ -135,7 +135,13 @@ LAUNCH_RESP=$(curl -sf --max-time 90 \
 if echo "$LAUNCH_RESP" | grep -q '"success":true'; then
     record PASS SL-03 "setup/launch" "POST /setup/launch → {success:true}" "launch 成功"
 else
-    LAUNCH_ERR=$(echo "$LAUNCH_RESP" | grep -o '"error":"[^"]*"' | head -1 || echo "$LAUNCH_RESP")
+    # Extract the error field from any SSE data line, or fall back to the raw body.
+    LAUNCH_ERR=$(echo "$LAUNCH_RESP" \
+        | grep -o '"error":"[^"]*"' | head -1 \
+        | sed 's/"error":"//;s/"$//' 2>/dev/null || echo "")
+    [ -z "$LAUNCH_ERR" ] && LAUNCH_ERR=$(echo "$LAUNCH_RESP" | tail -3)
+    printf "${RED}SL-03 原始响应（最后5行）:${RESET}\n"
+    echo "$LAUNCH_RESP" | tail -5
     record FAIL SL-03 "setup/launch" "POST /setup/launch → {success:true}" "失败: $LAUNCH_ERR"
     exit 1
 fi
