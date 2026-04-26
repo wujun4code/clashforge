@@ -223,8 +223,6 @@ jobs:
           # 先用 uninstall-clashforge 彻底清除旧版（清除 opkg 注册 + 停止服务 + 清理接管状态）
           # 注意：uninstall 会删除 /tmp/clashforge*，必须在它之后再传 IPK
           _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
-          # opkg remove 可能静默失败，直接从 status 文件删除注册记录保证干净
-          _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
           sleep 1
 
           # 传输 IPK（OpenWrt 无 sftp-server，用 ssh + cat）
@@ -333,12 +331,11 @@ jobs:
 
           _ssh "pgrep -f 'mihomo-clashforge' > /dev/null 2>&1 && \
                   curl -sf --max-time 10 -H 'Content-Type: application/json' -d '{}' \
-                    http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null || true; \
-                nft list tables 2>/dev/null | grep -qE 'metaclash|clashforge' && \
-                  nft delete table inet metaclash 2>/dev/null || true; \
-                pkill -f mihomo-clashforge 2>/dev/null || true; \
-                /etc/init.d/clashforge stop 2>/dev/null || true; \
-                pkill -f 'clashforge' 2>/dev/null || true"
+                    http://127.0.0.1:7777/api/v1/setup/stop 2>/dev/null || true"
+
+          # 完整卸载 clashforge（清除 opkg 注册、进程、nft、dnsmasq）确保下次 run 清空进入
+          _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge || true"
+          _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
 
           # 清理宿主机 iptables 残留
           iptables -D OUTPUT -p tcp --dport 443 -j REJECT 2>/dev/null || true
