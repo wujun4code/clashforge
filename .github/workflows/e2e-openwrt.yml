@@ -34,9 +34,6 @@ on:
         description: 'ClashForge 版本（留空用 latest）'
         required: false
         default: 'latest'
-  push:
-    branches:
-      - 'feat/e2e-*'
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────

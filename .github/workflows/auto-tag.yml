@@ -1,39 +1,22 @@
 name: CI Pass → Merge, Tag, Release
 
-# This single workflow replaces auto-merge.yml + auto-tag.yml.
-#
-# Root cause of the old approach failing:
-#   GITHUB_TOKEN-triggered events (merges, pushes) do NOT cascade to other
-#   workflows — GitHub security policy. So auto-merge.yml (GITHUB_TOKEN merge)
-#   could never trigger auto-tag.yml, regardless of the event type.
-#
-# Solution: do merge + tag + release dispatch all inside ONE workflow_run job.
-#   workflow_run fires when CI completes. Since this is a native GitHub event
-#   (not a GITHUB_TOKEN cascade), it is always delivered.
-#
-# Flow:
-#   CI passes on PR branch
-#     → workflow_run fires (this workflow)
-#       → squash-merge the PR
-#       → compute + push next version tag
-#       → gh workflow run release.yml --ref <tag>   ← explicit dispatch, always works
+# 触发条件：PR 被合并到 main 分支时才执行
+# 不在 PR review 期间的每次 CI 更新时触发
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  pull_request:
+    types: [closed]
+    branches:
+      - main
 
 jobs:
-  merge-tag-release:
-    name: Merge PR, bump tag, trigger release
-    # Only run when CI passed and was triggered by a pull_request event
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'pull_request'
+  tag-release:
+    name: Bump tag, trigger release
+    # 只有真正 merge（不是 close）时才运行
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
       actions: write
 
     steps:
@@ -41,37 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve PR number
-        id: pr
-        run: |
-          PR_NUMBER=$(echo '${{ toJson(github.event.workflow_run.pull_requests) }}' \
-            | jq -r '.[0].number // empty')
-          if [ -z "$PR_NUMBER" ]; then
-            echo "No PR associated with this workflow run — skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Squash-merge PR (skip if already merged)
-        if: steps.pr.outputs.skip != 'true'
-        id: merge
-        run: |
-          STATE=$(gh pr view "${{ steps.pr.outputs.number }}" --json state -q .state)
-          echo "PR state: $STATE"
-          if [ "$STATE" = "MERGED" ] || [ "$STATE" = "CLOSED" ]; then
-            echo "PR already merged/closed — skipping merge step"
-            echo "already_merged=true" >> "$GITHUB_OUTPUT"
-          else
-            gh pr merge "${{ steps.pr.outputs.number }}" --squash --delete-branch
-            echo "already_merged=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Fetch merged main
-        if: steps.pr.outputs.skip != 'true'
         run: |
           git fetch origin main
           git checkout main
@@ -79,9 +32,7 @@ jobs:
 
       - name: Compute next tag
         id: next
-        if: steps.pr.outputs.skip != 'true'
         run: |
-          # Find the latest CLEAN tag matching v0.1.0-alpha.N (ignore any with extra suffixes)
           LATEST=$(git tag --list 'v*' --sort=-version:refname \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$' \
             | head -1)
@@ -99,18 +50,14 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Push tag
-        if: steps.pr.outputs.skip != 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "${{ steps.next.outputs.tag }}" \
-            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ steps.pr.outputs.number }})"
+            -m "Release ${{ steps.next.outputs.tag }} (PR #${{ github.event.pull_request.number }})"
           git push origin "${{ steps.next.outputs.tag }}"
 
-      # Tag push via GITHUB_TOKEN does NOT trigger release.yml's on:push:tags.
-      # Use explicit workflow_dispatch — this always works.
       - name: Trigger release build
-        if: steps.pr.outputs.skip != 'true'
         run: |
           gh workflow run release.yml \
             --ref "${{ steps.next.outputs.tag }}" \
