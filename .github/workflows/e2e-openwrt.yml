@@ -7,6 +7,7 @@ name: E2E Integration Test (OpenWrt)
 #   - e2e job 跑在 self-hosted runner，只接收打包好的 IPK artifact，不执行任何来自 PR 的编译操作
 #
 # 测试步骤（e2e job）：
+#   Step 0  OpenWrt VM 存活检测 + 按需冷启动
 #   Step 1  下载 IPK artifact
 #   Step 2  基准状态快照（nft / ip-rule / dnsmasq / resolv.conf / 直连 IP）
 #   Step 3  Round 1 网络探测基准（VM 内 curl，无代理）
@@ -178,6 +179,59 @@ jobs:
     steps:
       - name: Checkout (test scripts only)
         uses: actions/checkout@v4
+
+      # ── Step 0: OpenWrt VM 存活检测 + 按需冷启动 ──────────────────────────
+      - name: "[Step 0] Ensure OpenWrt VM is running"
+        run: |
+          VM_DISK="/home/jun/vms/openwrt/openwrt-new.qcow2"
+          VM_PID_FILE="/tmp/openwrt-vm.pid"
+          CONSOLE_LOG="/home/jun/vms/openwrt/console.log"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 2222"
+
+          vm_alive() {
+            ssh $SSH_OPTS root@127.0.0.1 "echo ok" >/dev/null 2>&1
+          }
+
+          if vm_alive; then
+            echo "✅ OpenWrt VM 已就绪，继续测试"
+            exit 0
+          fi
+
+          echo "⚠️  VM 未响应，尝试冷启动..."
+
+          # 清理可能残留的旧进程
+          if [ -f "$VM_PID_FILE" ]; then
+            OLD_PID=$(cat "$VM_PID_FILE")
+            kill "$OLD_PID" 2>/dev/null || true
+            rm -f "$VM_PID_FILE"
+          fi
+
+          # 冷启动 VM
+          qemu-system-x86_64 \
+            -name openwrt \
+            -machine type=q35,accel=kvm \
+            -cpu host -smp 2 -m 512M \
+            -drive file="$VM_DISK",if=virtio,format=qcow2 \
+            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+            -device virtio-net-pci,netdev=net0 \
+            -serial file:"$CONSOLE_LOG" \
+            -display none -daemonize -pidfile "$VM_PID_FILE"
+
+          echo "VM 已启动（PID=$(cat $VM_PID_FILE)），等待 SSH 就绪..."
+
+          # 最多等待 120 秒
+          DEADLINE=$(($(date +%s) + 120))
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            if vm_alive; then
+              echo "✅ VM SSH 已就绪"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "❌ VM 120 秒内未就绪，打印控制台日志："
+          tail -50 "$CONSOLE_LOG" 2>/dev/null || echo "(无日志)"
+          exit 1
 
       # ── Step 1: 下载 IPK artifact ──────────────────────────────────────────
       - name: "[Step 1] Download IPK artifact"
