@@ -18,7 +18,7 @@
 | 2 | Create Node data model & encrypted storage (`internal/nodes/`) | Backend | High |
 | 3 | Implement SSH connection & connectivity test | Backend | Medium |
 | 4 | Implement GOST deployment flow (SSE streaming) | Backend | High |
-| 5 | Implement TLS cert management (acme.sh) | Backend | Medium |
+| 5 | Implement remote destroy/cleanup (`internal/nodes/destroy.go`) | Backend | Medium |
 | 6 | Implement Clash proxy YAML export | Backend | Low |
 | 7 | Register API routes in server.go | Backend | Low |
 | 8 | Add API client functions to `client.ts` | Frontend | Medium |
@@ -107,6 +107,7 @@ type Node struct {
 	DeployedAt *time.Time `json:"deployed_at,omitempty"`
 	CertExpiry *time.Time `json:"cert_expiry,omitempty"`
 	Error      string     `json:"error,omitempty"`
+	DeployLog  string     `json:"deploy_log,omitempty"`  // last deployment output (shown on failure)
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
@@ -123,6 +124,7 @@ type NodeListItem struct {
 	DeployedAt *time.Time `json:"deployed_at,omitempty"`
 	CertExpiry *time.Time `json:"cert_expiry,omitempty"`
 	Error      string     `json:"error,omitempty"`
+	DeployLog  string     `json:"deploy_log,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
@@ -323,6 +325,7 @@ func (s *Store) List() []NodeListItem {
 			DeployedAt: n.DeployedAt,
 			CertExpiry: n.CertExpiry,
 			Error:      n.Error,
+			DeployLog:  n.DeployLog,
 			CreatedAt:  n.CreatedAt,
 			UpdatedAt:  n.UpdatedAt,
 		})
@@ -734,7 +737,116 @@ git commit -m "feat(nodes): add GOST deployment with SSE progress streaming"
 
 ---
 
-### Task 5: Implement Clash proxy YAML export
+### Task 5: Implement remote destroy/cleanup
+
+**Objective:** Add a function to remotely remove GOST deployment: stop systemd service, delete configs, remove certs, cleanup acme.sh, restore server to pre-deployment state.
+
+**Files:**
+- Create: `internal/nodes/destroy.go`
+
+**Step 1: Create `internal/nodes/destroy.go`**
+
+```go
+package nodes
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// DestroyResult holds the outcome of a destroy operation.
+type DestroyResult struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// DestroyProgress is a callback for streaming progress updates.
+type DestroyProgress func(step, status, message, detail string)
+
+// DestroyGOST remotely removes GOST deployment from the node.
+// It streams progress via the callback function.
+func DestroyGOST(
+	ctx context.Context,
+	node *Node,
+	progress DestroyProgress,
+) (*DestroyResult, error) {
+	// Step 1: SSH connect
+	progress("connect", "running", "正在连接远程服务器...", "")
+	client, err := NewSSHClient(node.Host, node.Port, node.Username, node.Password, 30*time.Second)
+	if err != nil {
+		progress("connect", "error", "SSH 连接失败", err.Error())
+		return &DestroyResult{Success: false, Error: err.Error()}, err
+	}
+	defer client.Close()
+	progress("connect", "ok", "SSH 连接成功", node.Host)
+
+	// Step 2: Stop and disable systemd service
+	progress("systemd-stop", "running", "正在停止 GOST 服务...", "")
+	out, err := client.Run(`systemctl stop gost 2>&1; systemctl disable gost 2>&1; rm -f /etc/systemd/system/gost.service 2>&1; systemctl daemon-reload 2>&1`)
+	if err != nil {
+		progress("systemd-stop", "error", "停止服务失败", fmt.Sprintf("%s\n%s", err.Error(), out))
+	}
+	progress("systemd-stop", "ok", "GOST 服务已停止并移除", "")
+
+	// Step 3: Remove GOST binary
+	progress("remove-gost", "running", "正在移除 GOST 程序...", "")
+	out, err = client.Run(`rm -f /usr/local/bin/gost 2>&1; rm -rf /tmp/gost 2>&1`)
+	if err != nil {
+		progress("remove-gost", "error", "移除 GOST 失败", fmt.Sprintf("%s\n%s", err.Error(), out))
+	}
+	progress("remove-gost", "ok", "GOST 程序已清理", "")
+
+	// Step 4: Remove GOST config and certs
+	progress("remove-config", "running", "正在清理配置文件...", "")
+	out, err = client.Run(`rm -rf /etc/gost 2>&1`)
+	if err != nil {
+		progress("remove-config", "error", "清理配置失败", fmt.Sprintf("%s\n%s", err.Error(), out))
+	}
+	progress("remove-config", "ok", "GOST 配置和证书已清理", "")
+
+	// Step 5: Remove acme.sh certificates
+	progress("remove-certs", "running", "正在吊销 TLS 证书...", "")
+	certDir := fmt.Sprintf("/etc/gost/certs/%s", node.Domain)
+	out, err = client.Run(fmt.Sprintf(`
+if [ -f ~/.acme.sh/acme.sh ]; then
+  ~/.acme.sh/acme.sh --remove -d %s 2>&1 || true
+  rm -rf %s 2>&1 || true
+fi
+`, node.Domain, certDir))
+	if err != nil {
+		progress("remove-certs", "warning", "证书清理有警告", fmt.Sprintf("%s\n%s", err.Error(), out))
+	}
+	progress("remove-certs", "ok", "TLS 证书已吊销并清理", "")
+
+	// Step 6: Optional - remove acme.sh itself
+	progress("cleanup-acme", "running", "正在清理 acme.sh...", "")
+	out, err = client.Run(`rm -rf ~/.acme.sh 2>&1 || true`)
+	if err != nil {
+		progress("cleanup-acme", "warning", "acme.sh 清理有警告", err.Error())
+	}
+	progress("cleanup-acme", "ok", "acme.sh 已清理", "")
+
+	return &DestroyResult{Success: true}, nil
+}
+```
+
+**Step 2: Verify compilation**
+
+```bash
+go build ./internal/nodes/...
+```
+
+**Step 3: Commit**
+
+```bash
+git add internal/nodes/destroy.go
+git commit -m "feat(nodes): add remote GOST destroy/cleanup"
+```
+
+---
+
+### Task 6: Implement Clash proxy YAML export
 
 **Objective:** Generate a Clash-compatible proxy YAML entry from deployed node data.
 
@@ -804,7 +916,7 @@ git commit -m "feat(nodes): add Clash proxy YAML export"
 
 ---
 
-### Task 6: Register API routes
+### Task 7: Register API routes
 
 **Objective:** Add node management REST endpoints to the chi router.
 
@@ -1034,6 +1146,74 @@ func handleDeployNode(store *nodes.Store) http.HandlerFunc {
 		if err != nil || !result.Success {
 			node.Status = nodes.StatusError
 			if err != nil {
+			node.Error = err.Error()
+		} else {
+			node.Error = result.Error
+		}
+		node.DeployLog = deployLogBuf.String()
+		store.Update(id, node)
+		errData, _ := json.Marshal(map[string]interface{}{
+			"type":    "done",
+			"success": false,
+			"error":   node.Error,
+			"deploy_log": node.DeployLog,
+		})
+			fmt.Fprintf(w, "data: %s\n\n", errData)
+			flusher.Flush()
+			return
+		}
+
+		now := time.Now()
+		node.Status = nodes.StatusDeployed
+		node.DeployedAt = &now
+		node.ProxyUser = result.ProxyUser
+		node.ProxyPassword = result.ProxyPass
+		store.Update(id, node)
+
+		doneData, _ := json.Marshal(map[string]interface{}{
+			"type":    "done",
+			"success": true,
+		})
+		fmt.Fprintf(w, "data: %s\n\n", doneData)
+		flusher.Flush()
+	}
+}
+
+func handleDestroyNode(store *nodes.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		node, ok := store.Get(id)
+		if !ok {
+			Err(w, http.StatusNotFound, "NODE_NOT_FOUND", "节点不存在")
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			Err(w, http.StatusInternalServerError, "SSE_UNSUPPORTED", "SSE not supported")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		sendSSE := func(step, status, message, detail string) {
+			data, _ := json.Marshal(map[string]string{
+				"step":    step,
+				"status":  status,
+				"message": message,
+				"detail":  detail,
+			})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		result, err := nodes.DestroyGOST(r.Context(), node, sendSSE)
+		if err != nil || !result.Success {
+			node.Status = nodes.StatusError
+			if err != nil {
 				node.Error = err.Error()
 			} else {
 				node.Error = result.Error
@@ -1049,11 +1229,14 @@ func handleDeployNode(store *nodes.Store) http.HandlerFunc {
 			return
 		}
 
-		now := time.Now()
-		node.Status = nodes.StatusDeployed
-		node.DeployedAt = &now
-		node.ProxyUser = result.ProxyUser
-		node.ProxyPassword = result.ProxyPass
+		// Clear deployment state after successful destroy
+		node.Status = nodes.StatusPending
+		node.DeployedAt = nil
+		node.CertExpiry = nil
+		node.ProxyUser = ""
+		node.ProxyPassword = ""
+		node.Error = ""
+		node.DeployLog = ""
 		store.Update(id, node)
 
 		doneData, _ := json.Marshal(map[string]interface{}{
@@ -1097,6 +1280,7 @@ func nodeListItem(n *nodes.Node) nodes.NodeListItem {
 		DeployedAt: n.DeployedAt,
 		CertExpiry: n.CertExpiry,
 		Error:      n.Error,
+		DeployLog:  n.DeployLog,
 		CreatedAt:  n.CreatedAt,
 		UpdatedAt:  n.UpdatedAt,
 	}
@@ -1122,6 +1306,7 @@ api.Put("/nodes/{id}", handleUpdateNode(deps.NodeStore))
 api.Delete("/nodes/{id}", handleDeleteNode(deps.NodeStore))
 api.Post("/nodes/{id}/test", handleTestNode(deps.NodeStore))
 api.Post("/nodes/{id}/deploy", handleDeployNode(deps.NodeStore))
+api.Post("/nodes/{id}/destroy", handleDestroyNode(deps.NodeStore))
 api.Get("/nodes/{id}/proxy-config", handleExportProxyConfig(deps.NodeStore))
 ```
 
@@ -1153,7 +1338,7 @@ git commit -m "feat(api): add node management REST endpoints"
 
 ---
 
-### Task 7: Add API client functions to frontend
+### Task 8: Add API client functions to frontend
 
 **Objective:** Add TypeScript API functions and types for node management to `client.ts`.
 
@@ -1175,6 +1360,7 @@ export interface NodeListItem {
   deployed_at?: string
   cert_expiry?: string
   error?: string
+  deploy_log?: string
   created_at: string
   updated_at: string
 }
@@ -1215,7 +1401,7 @@ git commit -m "feat(ui): add node management API client functions"
 
 ---
 
-### Task 8: Create Nodes page UI
+### Task 9: Create Nodes page UI
 
 **Objective:** Build the main `Nodes.tsx` page with: list view, add/edit modal, test connectivity, deploy with progress, export proxy YAML.
 
@@ -1228,9 +1414,11 @@ The page follows the existing glassmorphism pattern used in `Setup.tsx` and `Das
 
 - **PageHeader** with eyebrow "节点管理" and metrics (total, connected, deployed counts)
 - **SectionCard** with a table-shell listing all nodes
-- Each node row shows: name, host, domain, status badge, actions (test, deploy, export, delete)
+- Each node row shows: name, host, domain, status badge, actions (test, edit, deploy, destroy, export, delete)
 - **Add Node button** opens a ModalShell form with fields: name, host, port, username, password, domain, email, CF Token, CF Account ID, CF Zone ID
-- **Deploy button** opens a modal showing SSE progress stream
+- **Edit button** reopens the same form pre-filled
+- **Deploy button** opens a modal showing SSE progress stream; on failure shows deploy_log with a "重新部署" button
+- **Destroy button** opens confirmation dialog, then streams SSE destroy progress
 - **Export button** fetches and displays YAML in a copyable code block
 
 Complete component code (see the full file for details — approximately 400-500 lines following the existing patterns).
@@ -1244,7 +1432,7 @@ git commit -m "feat(ui): add Nodes server management page"
 
 ---
 
-### Task 9: Update Sidebar + App routes
+### Task 10: Update Sidebar + App routes
 
 **Objective:** Add "节点管理" to sidebar navigation and register the route.
 
@@ -1260,7 +1448,7 @@ Add to `navLinks` array:
   to: '/nodes',
   icon: Server,       // from lucide-react
   label: '节点管理',
-  caption: '远程服务器 · GOST 部署 · 证书管理',
+  caption: '远程服务器 · GOST 部署 · 销毁清理 · 证书管理',
 },
 ```
 
@@ -1283,7 +1471,7 @@ git commit -m "feat(ui): add Nodes route and sidebar entry"
 
 ---
 
-### Task 10: Final integration & testing
+### Task 11: Final integration & testing
 
 **Objective:** Build both frontend and backend, verify compilation, run full test suite.
 
@@ -1360,5 +1548,7 @@ POST /nodes/{id}/deploy → SSE Stream:
 - [ ] Node CRUD operations work through API
 - [ ] SSH test returns success/failure
 - [ ] Deploy SSE streams progress
+- [ ] Destroy SSE streams progress and clears deployment state
+- [ ] DeployLog shown on failure, "重新部署" button works
 - [ ] Export produces valid Clash YAML
 - [ ] Passwords are never in frontend responses
