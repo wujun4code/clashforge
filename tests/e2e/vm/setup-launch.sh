@@ -323,6 +323,28 @@ if [ -n "$CACHE_FILE" ]; then
     info "代理认证: ${AUTH_LINE:+已配置}（已脂敏）"
 fi
 
+# ── replace 模式代理连接预热 ──────────────────────────────────────────────────
+# In replace mode, dnsmasq is stopped and dns_output_redirect takes over DNS.
+# This brief DNS handoff can delay mihomo's bootstrap connections to the upstream
+# proxy node, causing the first few requests from probe.sh to fail immediately.
+# Wait here until the mixed proxy can actually forward a request.
+if [ "$DNSMASQ_MODE" = "replace" ] && [ -n "${MIXED_PORT:-}" ]; then
+    _warmup_proxy="http://127.0.0.1:$MIXED_PORT"
+    [ -n "${AUTH_LINE:-}" ] && _warmup_proxy="http://${AUTH_LINE}@127.0.0.1:$MIXED_PORT"
+    info "replace mode: 等待代理连接就绪..."
+    _warmup_ok=0
+    for _wc in 1 2 3 4 5; do
+        if curl -sf --max-time 8 --proxy "$_warmup_proxy" https://github.com >/dev/null 2>&1; then
+            info "✓ 代理连接就绪（第 ${_wc} 次探测）"
+            _warmup_ok=1
+            break
+        fi
+        info "等待代理就绪... (${_wc}/5)"
+        sleep 4
+    done
+    [ "$_warmup_ok" -eq 0 ] && info "⚠ 代理预热超时，继续"
+fi
+
 # ── Summary ────────────────────────────────────────────────────────────────────
 PASS_COUNT=$(printf "%b" "$RESULTS" | grep -c "^PASS" || echo 0)
 FAIL_COUNT=$(printf "%b" "$RESULTS" | grep -c "^FAIL" || echo 0)
