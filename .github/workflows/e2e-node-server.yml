@@ -31,9 +31,6 @@ name: E2E Node Server Test
 #   e2e-node: self-hosted, linux-node
 
 on:
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
