@@ -314,6 +314,13 @@ if [ "$PHASE" = "running" ]; then
                 "curl --proxy <mixed> -I ${URL}" \
                 "HTTP 2xx/3xx" \
                 "HTTP ${HTTP_CODE} (${HTTP_TIME}s)"
+        elif [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" -ge 500 ] 2>/dev/null; then
+            # 5xx = proxy node reached upstream but upstream is temporarily unavailable.
+            # Treat as WARN (transient network condition, not a ClashForge bug).
+            record WARN "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
+                "curl --proxy <mixed> -I ${URL}" \
+                "HTTP 2xx/3xx" \
+                "上游暂时不可用 (stage=upstream): HTTP ${HTTP_CODE} (${HTTP_TIME}s)"
         else
             # ── 错误分级（对齐 handler_overview.go stage 分类） ──────────
             STAGE=""
