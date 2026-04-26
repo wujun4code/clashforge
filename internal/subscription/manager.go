@@ -87,6 +87,26 @@ func (m *Manager) GetByID(id string) (Subscription, bool) {
 func (m *Manager) Add(sub Subscription) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// If a subscription with the same URL already exists, overwrite its metadata
+	// in-place and reuse the existing ID so cache files on disk remain a single copy.
+	if sub.URL != "" {
+		for i, s := range m.list.Subscriptions {
+			if s.URL == sub.URL {
+				m.list.Subscriptions[i].Name = sub.Name
+				if sub.UserAgent != "" {
+					m.list.Subscriptions[i].UserAgent = sub.UserAgent
+				}
+				if sub.Interval != "" {
+					m.list.Subscriptions[i].Interval = sub.Interval
+				}
+				m.list.Subscriptions[i].Filter = sub.Filter
+				m.list.Subscriptions[i].Enabled = sub.Enabled
+				return s.ID, m.saveLocked()
+			}
+		}
+	}
+
 	id, err := generateID()
 	if err != nil {
 		return "", err
