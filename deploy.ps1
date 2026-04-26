@@ -114,7 +114,7 @@ if ($Purge) {
     $purgeAction = "pre_upgrade_cleanup"
 }
 
-$deployScript = (@'
+$deployScript = ((@'
 pre_upgrade_cleanup() {
   _cf_running=0
   pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && _cf_running=1
@@ -168,8 +168,8 @@ do_purge() {
 PURGE_ACTION_PLACEHOLDER
 opkg install --nodeps --force-downgrade REMOTE_PATH_PLACEHOLDER
 rm -f REMOTE_PATH_PLACEHOLDER
-'@) -replace 'PURGE_ACTION_PLACEHOLDER', $purgeAction `
-   -replace 'REMOTE_PATH_PLACEHOLDER',   $remote
+'@) -replace '\r\n', "`n") -replace 'PURGE_ACTION_PLACEHOLDER', $purgeAction `
+                             -replace 'REMOTE_PATH_PLACEHOLDER',   $remote
 
 $deployScript | ssh "root@$Router" "sh -s"
 if ($LASTEXITCODE -ne 0) { Die "SSH install failed" }
