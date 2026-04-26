@@ -223,6 +223,8 @@ jobs:
           # 先用 uninstall-clashforge 彻底清除旧版（清除 opkg 注册 + 停止服务 + 清理接管状态）
           # 注意：uninstall 会删除 /tmp/clashforge*，必须在它之后再传 IPK
           _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
+          # opkg remove 可能静默失败，直接从 status 文件删除注册记录保证干净
+          _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
           sleep 1
 
           # 传输 IPK（OpenWrt 无 sftp-server，用 ssh + cat）
