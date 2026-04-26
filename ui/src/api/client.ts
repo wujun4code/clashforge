@@ -357,6 +357,18 @@ export interface ConflictService { name: string; label: string; running: boolean
 export const detectConflicts  = () => request<{conflicts: ConflictService[]; has_conflict: boolean}>('GET', '/system/conflicts')
 export const resetClashForge  = () => request<{ok: boolean; message: string}>('POST', '/system/reset')
 
+// ---- setup port check ----
+export interface SetupPortCheck {
+  name: string
+  description: string
+  port: number
+  required: boolean
+  ok: boolean
+  latency_ms?: number
+  error?: string
+}
+export const checkSetupPorts = () => request<{ checks: SetupPortCheck[] }>('GET', '/setup/port-check')
+
 // ---- rule providers ----
 export interface RuleProvider {
   name: string
