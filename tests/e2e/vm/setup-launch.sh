@@ -143,34 +143,37 @@ HTTP_PORT=$(echo "$CFG_JSON" | grep -o '"http":[0-9]*' | head -1 | sed 's/"http"
 TPROXY_PORT=$(echo "$CFG_JSON" | grep -o '"tproxy":[0-9]*' | head -1 | sed 's/"tproxy"://')
 UI_PORT=$(echo "$CFG_JSON" | grep -o '"ui":[0-9]*' | head -1 | sed 's/"ui"://')
 
-# 端口监听检查
-_port_listening() { nc -z -w 1 127.0.0.1 "$1" 2>/dev/null && echo "✓ 监听" || echo "✗ 未监听"; }
+# 端口监听检查 — 避免使用 nc -z（OpenWrt BusyBox nc 不可靠，会假阴性）
+# TCP 端口用 ss 检查；UDP 端口（DNS）用 dig 直连验证
+_tcp_listening() { ss -tln "sport = :$1" 2>/dev/null | grep -q ":$1" && echo "✓ 监听" || echo "✗ 未监听"; }
+_udp_listening() { ss -uln "sport = :$1" 2>/dev/null | grep -q ":$1" && echo "✓ 监听" || echo "✗ 未监听"; }
 
 info ""
-info "  mixed  : ${MIXED_PORT:-?}  $(_port_listening "${MIXED_PORT:-0}")"
-info "  DNS    : ${DNS_PORT:-?}    $(_port_listening "${DNS_PORT:-0}")"
-info "  HTTP   : ${HTTP_PORT:-?}   $(_port_listening "${HTTP_PORT:-0}")"
-info "  TProxy : ${TPROXY_PORT:-?} $(_port_listening "${TPROXY_PORT:-0}")"
-info "  UI     : ${UI_PORT:-?}     $(_port_listening "${UI_PORT:-0}")"
+info "  mixed  : ${MIXED_PORT:-?}  $(_tcp_listening "${MIXED_PORT:-0}")"
+info "  DNS    : ${DNS_PORT:-?}    $(_udp_listening "${DNS_PORT:-0}")"
+info "  HTTP   : ${HTTP_PORT:-?}   $(_tcp_listening "${HTTP_PORT:-0}")"
+info "  TProxy : ${TPROXY_PORT:-?} $(_tcp_listening "${TPROXY_PORT:-0}")"
+info "  UI     : ${UI_PORT:-?}     $(_tcp_listening "${UI_PORT:-0}")"
 
 # 保存供 Step 6 使用
 [ -n "$MIXED_PORT" ] && echo "$MIXED_PORT" > "$SNAPSHOT_DIR/mixed-port"
 [ -n "$DNS_PORT" ]   && echo "$DNS_PORT"   > "$SNAPSHOT_DIR/dns-port"
 [ -n "$HTTP_PORT" ]  && echo "$HTTP_PORT"  > "$SNAPSHOT_DIR/http-port"
 
-# 断言核心端口
+# 断言核心端口：mixed 用 curl 验证代理连通性，DNS 用 dig 验证
 ALL_PORTS_OK=true
-for _p in "$MIXED_PORT" "$DNS_PORT"; do
-    if [ -z "$_p" ] || ! nc -z -w 1 127.0.0.1 "$_p" 2>/dev/null; then
-        ALL_PORTS_OK=false; break
-    fi
-done
+if [ -z "$MIXED_PORT" ] || ! curl -sf --max-time 3 --proxy "http://127.0.0.1:${MIXED_PORT}" -o /dev/null http://httpbin.org/ip 2>/dev/null; then
+    ALL_PORTS_OK=false
+fi
+if [ -z "$DNS_PORT" ] || ! command -v dig >/dev/null 2>&1 || ! dig +short +time=3 @127.0.0.1 -p "$DNS_PORT" google.com 2>/dev/null | grep -qE '^[0-9]'; then
+    ALL_PORTS_OK=false
+fi
 if [ "$ALL_PORTS_OK" = true ]; then
-    record PASS SL-04b "端口监听验证" "mixed(${MIXED_PORT:-?}) + DNS(${DNS_PORT:-?}) 均监听" \
+    record PASS SL-04b "端口监听验证" "mixed(${MIXED_PORT:-?}) + DNS(${DNS_PORT:-?}) 均正常响应" \
         "mixed=${MIXED_PORT:-?} DNS=${DNS_PORT:-?} ✓"
 else
-    record FAIL SL-04b "端口监听验证" "mixed + DNS 端口均正常监听" \
-        "有端口未监听（mixed=${MIXED_PORT:-?} DNS=${DNS_PORT:-?}）"
+    record FAIL SL-04b "端口监听验证" "mixed 代理可达 + DNS 可解析" \
+        "端口服务未就绪（mixed=${MIXED_PORT:-?} DNS=${DNS_PORT:-?}）"
 fi
 
 # ── SL-05: nftables metaclash 表已创建 ────────────────────────────────────────
