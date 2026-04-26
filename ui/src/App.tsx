@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './pages/Dashboard'
+import { Nodes } from './pages/Nodes'
 import { ConfigManagement } from './pages/ConfigManagement'
 import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
@@ -23,6 +24,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/config" element={<ConfigManagement />} />
+              <Route path="/nodes" element={<Nodes />} />
               <Route path="/activity" element={<ActivityLog />} />
               <Route path="/setup" element={<Setup />} />
               <Route path="/settings" element={<Settings />} />

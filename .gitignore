@@ -24,3 +24,4 @@ internal/api/ui_dist/
 /control.extracted
 /dist/
 __pycache__/
+internal/api/ui_dist/

@@ -13,6 +13,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/netfilter"
+	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
@@ -30,6 +31,7 @@ type Dependencies struct {
 	Netfilter  *netfilter.Manager
 	SSEBroker  *SSEBroker
 	LogBuffer  *LogBuffer
+	NodeStore  *nodes.Store
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -97,6 +99,16 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/rules/providers/sync-all", handleSyncAllRuleProviders(deps))
 		api.Post("/rules/providers/{name}/sync", handleSyncRuleProvider(deps))
 		api.Get("/rules/search", handleSearchRules(deps))
+		// Node server management
+		api.Get("/nodes", handleListNodes(deps.NodeStore))
+		api.Post("/nodes", handleCreateNode(deps.NodeStore))
+		api.Get("/nodes/{id}", handleGetNode(deps.NodeStore))
+		api.Put("/nodes/{id}", handleUpdateNode(deps.NodeStore))
+		api.Delete("/nodes/{id}", handleDeleteNode(deps.NodeStore))
+		api.Post("/nodes/{id}/test", handleTestNode(deps.NodeStore))
+		api.Post("/nodes/{id}/deploy", handleDeployNode(deps.NodeStore))
+		api.Post("/nodes/{id}/destroy", handleDestroyNode(deps.NodeStore))
+		api.Get("/nodes/{id}/proxy-config", handleExportProxyConfig(deps.NodeStore))
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}

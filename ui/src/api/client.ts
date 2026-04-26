@@ -405,3 +405,41 @@ export const deleteSourceFile = (filename: string) => request('DELETE', `/config
 export const getActiveSource  = () => request<{active_source: ActiveSource | null}>('GET', '/config/active-source')
 export const setActiveSource  = (as: ActiveSource) => request<{updated: boolean}>('PUT', '/config/active-source', as)
 
+// ---- node server management ----
+export interface NodeListItem {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  domain: string
+  status: 'pending' | 'connected' | 'deploying' | 'deployed' | 'error'
+  deployed_at?: string
+  cert_expiry?: string
+  error?: string
+  deploy_log?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface NodeCreateRequest {
+  name: string
+  host: string
+  port: number
+  username: string
+  password: string
+  domain: string
+  email: string
+  cf_token: string
+  cf_account_id: string
+  cf_zone_id: string
+}
+
+export const getNodes = () => request<{ nodes: NodeListItem[] }>('GET', '/nodes')
+export const getNode = (id: string) => request<{ node: NodeListItem }>('GET', `/nodes/${encodeURIComponent(id)}`)
+export const createNode = (node: NodeCreateRequest) => request<{ node: NodeListItem }>('POST', '/nodes', node)
+export const updateNode = (id: string, node: Partial<NodeCreateRequest>) => request<{ node: NodeListItem }>('PUT', `/nodes/${encodeURIComponent(id)}`, node)
+export const deleteNode = (id: string) => request<{ ok: boolean }>('DELETE', `/nodes/${encodeURIComponent(id)}`)
+export const testNodeConnection = (id: string) => request<{ ok: boolean; message: string }>('POST', `/nodes/${encodeURIComponent(id)}/test`)
+
+
