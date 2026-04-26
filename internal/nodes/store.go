@@ -1,0 +1,196 @@
+package nodes
+
+import (
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Store persists encrypted node data to a JSON file.
+type Store struct {
+	mu       sync.RWMutex
+	filePath string
+	keyPath  string
+	encKey   []byte
+	nodes    map[string]*Node
+}
+
+// NewStore creates or opens a node store.
+func NewStore(dataDir string) (*Store, error) {
+	keyPath := filepath.Join(dataDir, "nodes.key")
+	filePath := filepath.Join(dataDir, "nodes.json")
+
+	// Load or generate encryption key
+	key, err := loadOrGenerateKey(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("encryption key: %w", err)
+	}
+
+	s := &Store{
+		filePath: filePath,
+		keyPath:  keyPath,
+		encKey:   key,
+		nodes:    make(map[string]*Node),
+	}
+
+	if err := s.load(); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("load nodes: %w", err)
+	}
+
+	return s, nil
+}
+
+func loadOrGenerateKey(path string) ([]byte, error) {
+	if data, err := os.ReadFile(path); err == nil && len(data) == sha256.Size {
+		return data, nil
+	}
+	key := make([]byte, sha256.Size)
+	if _, err := cryptorand.Read(key); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func (s *Store) load() error {
+	data, err := os.ReadFile(s.filePath)
+	if err != nil {
+		return err
+	}
+	var encrypted map[string]string
+	if err := json.Unmarshal(data, &encrypted); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, enc := range encrypted {
+		decrypted, err := decryptAES(enc, s.encKey)
+		if err != nil {
+			continue // skip corrupted entries
+		}
+		var node Node
+		if err := json.Unmarshal([]byte(decrypted), &node); err != nil {
+			continue
+		}
+		s.nodes[id] = &node
+	}
+	return nil
+}
+
+func (s *Store) save() error {
+	s.mu.RLock()
+	encrypted := make(map[string]string, len(s.nodes))
+	for id, node := range s.nodes {
+		data, err := json.Marshal(node)
+		if err != nil {
+			s.mu.RUnlock()
+			return err
+		}
+		enc, err := encryptAES(string(data), s.encKey)
+		if err != nil {
+			s.mu.RUnlock()
+			return err
+		}
+		encrypted[id] = enc
+	}
+	s.mu.RUnlock()
+
+	raw, err := json.MarshalIndent(encrypted, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.filePath, raw, 0o600)
+}
+
+// List returns all nodes as safe-for-frontend list items.
+func (s *Store) List() []NodeListItem {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]NodeListItem, 0, len(s.nodes))
+	for _, n := range s.nodes {
+		items = append(items, NodeListItem{
+			ID:         n.ID,
+			Name:       n.Name,
+			Host:       n.Host,
+			Port:       n.Port,
+			Username:   n.Username,
+			Domain:     n.Domain,
+			Status:     n.Status,
+			DeployedAt: n.DeployedAt,
+			CertExpiry: n.CertExpiry,
+			Error:      n.Error,
+			DeployLog:  n.DeployLog,
+			CreatedAt:  n.CreatedAt,
+			UpdatedAt:  n.UpdatedAt,
+		})
+	}
+	return items
+}
+
+// Get returns a node by ID (with decrypted secrets for internal use).
+func (s *Store) Get(id string) (*Node, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n, ok := s.nodes[id]
+	return n, ok
+}
+
+// Create adds a new node.
+func (s *Store) Create(n *Node) error {
+	s.mu.Lock()
+	n.ID = uuid.New().String()
+	n.Status = StatusPending
+	now := time.Now()
+	n.CreatedAt = now
+	n.UpdatedAt = now
+	s.nodes[n.ID] = n
+	s.mu.Unlock()
+	return s.save()
+}
+
+// Update replaces an existing node.
+func (s *Store) Update(id string, n *Node) error {
+	s.mu.Lock()
+	existing, ok := s.nodes[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("node %s not found", id)
+	}
+	// Preserve ID and creation time
+	n.ID = id
+	n.CreatedAt = existing.CreatedAt
+	n.UpdatedAt = time.Now()
+	// Preserve proxy credentials if not set in update
+	if n.ProxyPassword == "" {
+		n.ProxyPassword = existing.ProxyPassword
+	}
+	if n.Password == "" {
+		n.Password = existing.Password
+	}
+	if n.CFToken == "" {
+		n.CFToken = existing.CFToken
+	}
+	s.nodes[id] = n
+	s.mu.Unlock()
+	return s.save()
+}
+
+// Delete removes a node.
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	delete(s.nodes, id)
+	s.mu.Unlock()
+	return s.save()
+}

@@ -6,6 +6,7 @@ import {
   FolderCog,
   LayoutDashboard,
   Rocket,
+  Server,
   Settings,
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
@@ -24,6 +25,12 @@ const navLinks = [
     icon: FolderCog,
     label: '配置管理',
     caption: '订阅、规则、运行配置与文件资产',
+  },
+  {
+    to: '/nodes',
+    icon: Server,
+    label: '节点管理',
+    caption: '远程服务器 · GOST 部署 · 销毁清理 · 证书管理',
   },
   {
     to: '/activity',

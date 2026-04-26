@@ -20,6 +20,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/daemon"
 	"github.com/wujun4code/clashforge/internal/dns"
 	"github.com/wujun4code/clashforge/internal/netfilter"
+	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
@@ -160,6 +161,12 @@ func main() {
 	// SSE broker
 	sseBroker := api.NewSSEBroker()
 
+	// Node server store
+	nodeStore, err := nodes.NewStore(cfg.Core.DataDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("init node store")
+	}
+
 	// Scheduler
 	sched := scheduler.New(cfg, subManager)
 	sched.Start()
@@ -175,6 +182,7 @@ func main() {
 		Netfilter:  nfManager,
 		SSEBroker:  sseBroker,
 		LogBuffer:  logBuf,
+		NodeStore:  nodeStore,
 	})
 
 	addr := cfg.UIListenAddr()
