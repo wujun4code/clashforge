@@ -101,6 +101,10 @@ func setupReplaceUCI() error {
 	// client DNS before clashforge's own dns_redirect chain (priority dstnat),
 	// redirecting packets to port 53 where nothing is listening — breaking DNS for
 	// all LAN clients even though mihomo is up and healthy.
+	//
+	// procd starts dnsmasq asynchronously; the hijack table typically appears ~500ms
+	// after procd returns.  Wait 1.5s so we reliably see and delete it.
+	time.Sleep(1500 * time.Millisecond)
 	removeDnsmasqNftHijack()
 	return nil
 }

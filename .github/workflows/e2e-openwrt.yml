@@ -302,8 +302,10 @@ jobs:
           # kmod-nf-nat is needed for dns_redirect + dns_output_redirect nat chains
           # (dnsmasq_mode=replace).  On routers with firewall3/4 it is already loaded;
           # on the minimal E2E VM it may not be, causing nft apply to fail.
-          _ssh "opkg install kmod-nf-nat 2>/dev/null | grep -v 'up to date' || true"
-          _ssh "modprobe nf_nat 2>/dev/null || true"
+          # Show output (not suppressed) so any package errors are visible in CI logs.
+          _ssh "opkg install kmod-nf-nat 2>&1 | grep -v 'up to date' | head -8 || true"
+          _ssh "modprobe nf_nat 2>&1 && echo '✓ nf_nat loaded' || echo '⚠ nf_nat modprobe failed (may be built-in)'"
+          _ssh "lsmod 2>/dev/null | grep -E '^nf_nat' && echo '  ✓ confirmed in lsmod' || echo '  ⚠ not in lsmod (may be built-in or unavailable)'"
 
           # 启动服务
           _ssh "/etc/init.d/clashforge start"
@@ -330,6 +332,33 @@ jobs:
           subscription_url: ${{ secrets.SUBSCRIPTION_URL }}
           reuse_subscription: 'false'
           scenario_label: 'Scenario 1/2 — dnsmasq_mode=upstream'
+
+      # ── Pre-check before replace mode ────────────────────────────────────────
+      # dnsmasq_mode=replace requires nftables nat hook support (nf_nat module).
+      # This step dumps state for diagnostics AND hard-fails if nat hooks are broken,
+      # giving a clear error rather than a cryptic failure deep inside Scenario 2.
+      - name: "[Pre-check] nftables nat hook support (dnsmasq_mode=replace)"
+        run: |
+          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+          echo "=== UCI dnsmasq state after Scenario 1 ==="
+          _ssh "uci show dhcp.@dnsmasq[0] 2>&1 || echo N/A"
+          echo "=== nft tables ==="
+          _ssh "nft list tables 2>/dev/null || echo none"
+          echo "=== kernel modules (nf/nft) ==="
+          _ssh "lsmod 2>/dev/null | grep -E 'nf_nat|nft_' | head -10 || echo none"
+          echo "=== port 53 listeners ==="
+          _ssh "ss -tuln 2>/dev/null | grep ':53 ' || echo 'nothing on :53'"
+          echo "=== nat hook probe ==="
+          _ssh "nft add table inet __cfnat_test 2>/dev/null || true; \
+            if nft add chain inet __cfnat_test pre \
+                '{ type nat hook prerouting priority dstnat; policy accept; }' 2>/dev/null; then \
+              echo '✓ nat hooks supported'; \
+            else \
+              echo '✗ nat hooks NOT supported — kmod-nf-nat may not be loaded'; \
+              nft delete table inet __cfnat_test 2>/dev/null || true; \
+              exit 1; \
+            fi; \
+            nft delete table inet __cfnat_test 2>/dev/null || true"
 
       # ── Scenario 2/2: dnsmasq_mode=replace ───────────────────────────────────
       - name: "[Scenario 2/2] dnsmasq_mode=replace"

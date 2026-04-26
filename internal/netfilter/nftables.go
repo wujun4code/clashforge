@@ -66,7 +66,7 @@ table inet metaclash {
     # Only loopback destinations are matched so mihomo's own upstream DNS queries
     # (to real IPs like 119.29.29.29:53) are left untouched and do not loop back.
     chain dns_output_redirect {
-        type nat hook output priority dstnat; policy accept;
+        type nat hook output priority -100; policy accept;
         ip daddr 127.0.0.0/8 udp dport 53 redirect to :{{ .DNSPort }}
         ip daddr 127.0.0.0/8 tcp dport 53 redirect to :{{ .DNSPort }}
 {{ if .EnableIPv6 }}

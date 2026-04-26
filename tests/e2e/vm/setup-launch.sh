@@ -260,9 +260,10 @@ if [ "$DNSMASQ_MODE" = "replace" ]; then
             "dnsmasq port=0，dns_output_redirect 链存在" \
             "UCI port=0 ✓ 但 dns_output_redirect 链未找到（nft 未刷新？）"
     else
+        UCI_SHOW=$(uci show dhcp.@dnsmasq[0] 2>/dev/null | head -5 || echo "uci show failed")
         record FAIL SL-08 "DNS replace 接管已生效" \
             "dnsmasq port=0（期望 0）" \
-            "UCI port=${UCI_PORT:-未知}"
+            "UCI port=${UCI_PORT:-未知} | $(echo "$UCI_SHOW" | tr '\n' ';')"
     fi
 else
     # upstream mode: a clashforge config file should appear in /etc/dnsmasq.d/.
