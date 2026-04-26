@@ -205,7 +205,7 @@ export function Settings() {
               </div>
               <div className="flex-1">
                 <p className="text-base font-semibold text-white">重置 ClashForge</p>
-                <p className="mt-2 text-sm leading-6 text-[#E8C5C5]">
+                <p className="mt-2 text-sm leading-6 text-danger/80">
                   清除所有订阅、配置覆盖与生成文件，恢复为出厂默认设置，并自动重启进程。页面会短暂断开连接。
                 </p>
               </div>

@@ -10,6 +10,7 @@ import {
   Settings,
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
+import { ThemeSwitcher } from '../theme/ThemeSwitcher'
 
 type CoreState = 'running' | 'stopped' | 'checking'
 
@@ -132,7 +133,7 @@ export function Sidebar() {
               <p className="mt-1 text-[11px] uppercase tracking-[0.24em] text-brand-light">Network Control Studio</p>
             </div>
           </div>
-          <p className="mt-4 text-xs leading-6 text-[#B9B6D3]">
+          <p className="mt-4 text-xs leading-6 text-muted">
             更亮眼、更流畅的代理控制面板，把配置、检测与运行态统一放进一条工作流里。
           </p>
         </div>
@@ -205,7 +206,7 @@ export function Sidebar() {
                 'group relative flex items-center gap-3 rounded-[22px] border px-4 py-3.5 transition-all duration-200',
                 isActive
                   ? 'border-brand/25 bg-brand-subtle text-white shadow-glow'
-                  : 'border-transparent text-[#B6B2D2] hover:border-white/[0.08] hover:bg-white/[0.04] hover:text-white',
+                  : 'border-transparent text-muted hover:border-white/[0.08] hover:bg-white/[0.04] hover:text-white',
               ].join(' ')
             }
           >
@@ -227,7 +228,7 @@ export function Sidebar() {
                     <span className="text-sm font-semibold">{label}</span>
                     <ChevronRight size={14} className={isActive ? 'text-brand-light' : 'text-white/25 group-hover:text-white/55'} />
                   </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted group-hover:text-[#CAC7E6]">{caption}</p>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted group-hover:text-white/80">{caption}</p>
                 </div>
               </>
             )}
@@ -235,10 +236,11 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="border-t border-white/[0.05] px-5 py-4">
+      <div className="border-t border-white/[0.05] px-5 py-4 space-y-3">
+        <ThemeSwitcher />
         <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
           <p className="text-[10px] uppercase tracking-[0.24em] text-muted">Version</p>
-          <p className="mt-1 font-mono text-xs text-[#D9D7EA]">{__APP_VERSION__}</p>
+          <p className="mt-1 font-mono text-xs text-white/85">{__APP_VERSION__}</p>
         </div>
       </div>
     </aside>

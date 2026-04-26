@@ -630,7 +630,7 @@ function UpdateBanner({ data, onSkip }: { data: ClashforgeVersionData; onSkip: (
             <Zap size={12} /> 新版本提醒
           </div>
           <p className="mt-3 text-lg font-semibold text-white">发现新版本 {data.latest}</p>
-          <p className="mt-1 text-sm leading-6 text-[#E9DFC0]">当前版本 {data.current}，可前往 GitHub Releases 下载最新安装包。</p>
+          <p className="mt-1 text-sm leading-6 text-warning/80">当前版本 {data.current}，可前往 GitHub Releases 下载最新安装包。</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <a
