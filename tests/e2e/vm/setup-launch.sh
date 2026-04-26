@@ -3,20 +3,20 @@
 # Step 5 — 模拟 Setup Wizard 操作 + 接管断言
 #
 # 模拟用户在 http://192.168.10.1:7777/setup 上完成的操作：
-#   1. 添加订阅并同步节点
-#   2. 配置 DNS（fake-ip + dnsmasq upstream）
+#   1. 添加订阅并同步节点（可通过 REUSE_SUBSCRIPTION=true 跳过，复用上一 scenario 的数据）
+#   2. 配置 DNS（fake-ip + dnsmasq_mode 由环境变量控制）
 #   3. 配置网络（tproxy + nftables）
 #   4. 触发 setup/launch
 #
 # 启动后只断言"接管是否到位"，不做连通性测试（连通性在 probe.sh 里）：
-#   SL-01  添加订阅 → 返回订阅 ID
-#   SL-02  sync-update → 节点拉取成功（节点数 ≥ 1）
+#   SL-01  添加订阅 → 返回订阅 ID（REUSE_SUBSCRIPTION=true 时跳过，直接读快照）
+#   SL-02  sync-update → 节点拉取成功（REUSE_SUBSCRIPTION=true 时跳过）
 #   SL-03  setup/launch → success:true
 #   SL-04  mihomo 进程已启动
 #   SL-05  nftables metaclash 表已创建
 #   SL-06  nftables tproxy 规则已存在
 #   SL-07  ip rule 策略路由已配置
-#   SL-08  dnsmasq upstream 配置已写入
+#   SL-08  DNS 接管配置已应用（upstream: dnsmasq.d 文件；replace: UCI port=0 + output 链）
 #   SL-09  DNS 解析返回 fake-ip 地址段（198.18.x.x）
 #
 # 输出：
@@ -25,10 +25,15 @@
 #   /tmp/cf-snapshot/proxy-node    节点名:服务器域名
 #
 # 环境变量：
-#   SUBSCRIPTION_URL    订阅地址（必须）
+#   SUBSCRIPTION_URL       订阅地址（必须）
+#   DNSMASQ_MODE           dnsmasq 模式：upstream（默认）| replace
+#   REUSE_SUBSCRIPTION     true/false（默认 false）：跳过 SL-01/SL-02，复用已有订阅
 #   GITHUB_STEP_SUMMARY
 
 set -e
+
+DNSMASQ_MODE="${DNSMASQ_MODE:-upstream}"
+REUSE_SUBSCRIPTION="${REUSE_SUBSCRIPTION:-false}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -64,7 +69,20 @@ if [ -z "${SUBSCRIPTION_URL:-}" ]; then
     exit 1
 fi
 
-section "Step 5 — Setup Launch + 接管断言"
+section "Step 5 — Setup Launch + 接管断言 [dnsmasq_mode=${DNSMASQ_MODE}]"
+
+# ── SL-01/SL-02: 添加订阅 + 同步节点 ─────────────────────────────────────────
+if [ "$REUSE_SUBSCRIPTION" = "true" ]; then
+    # Second (or later) scenario in the same run: subscription already exists.
+    SUB_ID=$(cat "$SNAPSHOT_DIR/sub-id" 2>/dev/null || echo "")
+    if [ -n "$SUB_ID" ]; then
+        record PASS SL-01 "订阅复用 (skip)" "REUSE_SUBSCRIPTION=true，从快照读取 sub-id" "订阅 ID: $SUB_ID"
+        record PASS SL-02 "订阅复用 (skip)" "REUSE_SUBSCRIPTION=true，跳过同步（复用已同步节点）" "节点已同步 ✓"
+    else
+        record FAIL SL-01 "订阅复用" "REUSE_SUBSCRIPTION=true 时 $SNAPSHOT_DIR/sub-id 必须存在" "文件不存在，无法复用"
+        exit 1
+    fi
+else
 
 # ── SL-01: 添加订阅 ────────────────────────────────────────────────────────────
 info "添加订阅..."
@@ -101,10 +119,12 @@ else
     exit 1
 fi
 
+fi # end REUSE_SUBSCRIPTION
+
 # ── SL-03: setup/launch ───────────────────────────────────────────────────────
-LAUNCH_PAYLOAD='{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tproxy","firewall_backend":"nftables","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}'
+LAUNCH_PAYLOAD="{\"dns\":{\"enable\":true,\"mode\":\"fake-ip\",\"dnsmasq_mode\":\"${DNSMASQ_MODE}\",\"apply_on_start\":true},\"network\":{\"mode\":\"tproxy\",\"firewall_backend\":\"nftables\",\"bypass_lan\":true,\"bypass_china\":false,\"apply_on_start\":true}}"
 info "触发 setup/launch..."
-info "DNS  选项: enable=true  mode=fake-ip  dnsmasq_mode=upstream  apply_on_start=true"
+info "DNS  选项: enable=true  mode=fake-ip  dnsmasq_mode=${DNSMASQ_MODE}  apply_on_start=true"
 info "网络选项: mode=tproxy  firewall_backend=nftables  bypass_lan=true  bypass_china=false  apply_on_start=true"
 info "完整 payload: $LAUNCH_PAYLOAD"
 LAUNCH_RESP=$(curl -sf --max-time 90 \
@@ -115,7 +135,13 @@ LAUNCH_RESP=$(curl -sf --max-time 90 \
 if echo "$LAUNCH_RESP" | grep -q '"success":true'; then
     record PASS SL-03 "setup/launch" "POST /setup/launch → {success:true}" "launch 成功"
 else
-    LAUNCH_ERR=$(echo "$LAUNCH_RESP" | grep -o '"error":"[^"]*"' | head -1 || echo "$LAUNCH_RESP")
+    # Extract the error field from any SSE data line, or fall back to the raw body.
+    LAUNCH_ERR=$(echo "$LAUNCH_RESP" \
+        | grep -o '"error":"[^"]*"' | head -1 \
+        | sed 's/"error":"//;s/"$//' 2>/dev/null || echo "")
+    [ -z "$LAUNCH_ERR" ] && LAUNCH_ERR=$(echo "$LAUNCH_RESP" | tail -3)
+    printf "${RED}SL-03 原始响应（最后5行）:${RESET}\n"
+    echo "$LAUNCH_RESP" | tail -5
     record FAIL SL-03 "setup/launch" "POST /setup/launch → {success:true}" "失败: $LAUNCH_ERR"
     exit 1
 fi
@@ -219,17 +245,39 @@ else
     record WARN SL-07 "ip rule 策略路由已配置" "ip rule list 含 fwmark/lookup 规则" "策略路由规则未找到"
 fi
 
-# ── SL-08: dnsmasq upstream 配置已写入 ────────────────────────────────────────
-DNSMASQ_AFTER=$(ls /etc/dnsmasq.d/ 2>/dev/null | tr '\n' ' ')
-DNSMASQ_BEFORE=$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" 2>/dev/null | tr '\n' ' ')
-CF_DNS_FILE=$(ls /etc/dnsmasq.d/ 2>/dev/null | grep -iE "clash|metaclash|mihomo" | head -1 || echo "")
-
-if [ -n "$CF_DNS_FILE" ]; then
-    record PASS SL-08 "dnsmasq upstream 配置已写入" "/etc/dnsmasq.d/ 中有 clashforge 相关配置文件" "文件: $CF_DNS_FILE"
-elif [ "$DNSMASQ_AFTER" != "$DNSMASQ_BEFORE" ]; then
-    record PASS SL-08 "dnsmasq upstream 配置已写入" "dnsmasq.d 配置发生变化" "dnsmasq.d 变化: $DNSMASQ_BEFORE → $DNSMASQ_AFTER"
+# ── SL-08: DNS 接管配置已应用 ─────────────────────────────────────────────────
+if [ "$DNSMASQ_MODE" = "replace" ]; then
+    # replace mode: dnsmasq port=0 via UCI; nftables dns_output_redirect chain
+    # handles locally-generated DNS (OUTPUT hook).
+    UCI_PORT=$(uci get dhcp.@dnsmasq[0].port 2>/dev/null | tr -d '[:space:]' || echo "")
+    NFT_OUT=$(nft list chain inet metaclash dns_output_redirect 2>/dev/null | grep -c "redirect to" || echo "0")
+    if [ "$UCI_PORT" = "0" ] && [ "$NFT_OUT" -gt 0 ]; then
+        record PASS SL-08 "DNS replace 接管已生效" \
+            "dnsmasq port=0，dns_output_redirect 链存在" \
+            "UCI port=0 ✓，output redirect 规则=${NFT_OUT} ✓"
+    elif [ "$UCI_PORT" = "0" ]; then
+        record WARN SL-08 "DNS replace 接管已生效" \
+            "dnsmasq port=0，dns_output_redirect 链存在" \
+            "UCI port=0 ✓ 但 dns_output_redirect 链未找到（nft 未刷新？）"
+    else
+        UCI_SHOW=$(uci show dhcp.@dnsmasq[0] 2>/dev/null | head -5 || echo "uci show failed")
+        record FAIL SL-08 "DNS replace 接管已生效" \
+            "dnsmasq port=0（期望 0）" \
+            "UCI port=${UCI_PORT:-未知} | $(echo "$UCI_SHOW" | tr '\n' ';')"
+    fi
 else
-    record WARN SL-08 "dnsmasq upstream 配置已写入" "/etc/dnsmasq.d/ 变化或有 clashforge 配置文件" "dnsmasq.d 未变化（DNS 可能用其他方式接管）"
+    # upstream mode: a clashforge config file should appear in /etc/dnsmasq.d/.
+    DNSMASQ_AFTER=$(ls /etc/dnsmasq.d/ 2>/dev/null | tr '\n' ' ')
+    DNSMASQ_BEFORE=$(cat "$SNAPSHOT_DIR/dnsmasq-d.before" 2>/dev/null | tr '\n' ' ')
+    CF_DNS_FILE=$(ls /etc/dnsmasq.d/ 2>/dev/null | grep -iE "clash|metaclash|mihomo" | head -1 || echo "")
+
+    if [ -n "$CF_DNS_FILE" ]; then
+        record PASS SL-08 "dnsmasq upstream 配置已写入" "/etc/dnsmasq.d/ 中有 clashforge 相关配置文件" "文件: $CF_DNS_FILE"
+    elif [ "$DNSMASQ_AFTER" != "$DNSMASQ_BEFORE" ]; then
+        record PASS SL-08 "dnsmasq upstream 配置已写入" "dnsmasq.d 配置发生变化" "dnsmasq.d 变化: $DNSMASQ_BEFORE → $DNSMASQ_AFTER"
+    else
+        record WARN SL-08 "dnsmasq upstream 配置已写入" "/etc/dnsmasq.d/ 变化或有 clashforge 配置文件" "dnsmasq.d 未变化（DNS 可能用其他方式接管）"
+    fi
 fi
 
 # ── SL-09: DNS 解析返回 fake-ip ───────────────────────────────────────────────

@@ -1,0 +1,144 @@
+name: 'E2E Scenario'
+description: |
+  Runs one full ClashForge E2E scenario (Steps 5–8):
+    setup-launch → probe-running → stop-verify → probe-stopped.
+  Parameterised so the same logic can be reused for different
+  dnsmasq_mode values (upstream, replace, …) without duplicating YAML.
+
+inputs:
+  dnsmasq_mode:
+    description: 'dnsmasq integration mode: upstream | replace'
+    required: false
+    default: 'upstream'
+  subscription_url:
+    description: 'Subscription URL (passed from secret)'
+    required: true
+  reuse_subscription:
+    description: |
+      Skip SL-01/SL-02 and reuse the subscription added in a prior
+      scenario.  Set to "true" for every scenario after the first.
+    required: false
+    default: 'false'
+  scenario_label:
+    description: 'Human-readable label shown in the step summary header'
+    required: false
+    default: 'Scenario'
+
+outputs:
+  proxy_auth:
+    description: 'Proxy authentication (user:pass)'
+    value: ${{ steps.setup.outputs.proxy_auth }}
+  mixed_port:
+    description: 'Mihomo mixed port'
+    value: ${{ steps.setup.outputs.mixed_port }}
+  dns_port:
+    description: 'Mihomo DNS port'
+    value: ${{ steps.setup.outputs.dns_port }}
+  server_ip:
+    description: 'Resolved server IP of the selected proxy node'
+    value: ${{ steps.setup.outputs.server_ip }}
+
+runs:
+  using: composite
+  steps:
+    # ── Scenario header ────────────────────────────────────────────────────────
+    - name: Scenario header
+      shell: bash
+      run: |
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "---" >> "$GITHUB_STEP_SUMMARY"
+        echo "## 🧪 ${{ inputs.scenario_label }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+
+    # ── Step 5: Setup Wizard + 接管断言 ───────────────────────────────────────
+    - name: "[Step 5] Setup launch & verify takeover (${{ inputs.dnsmasq_mode }})"
+      id: setup
+      shell: bash
+      env:
+        SUBSCRIPTION_URL: ${{ inputs.subscription_url }}
+      run: |
+        _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+
+        _ssh "cat > /tmp/e2e-setup-launch.sh && chmod +x /tmp/e2e-setup-launch.sh" \
+          < tests/e2e/vm/setup-launch.sh
+
+        _ssh "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' \
+              DNSMASQ_MODE='${{ inputs.dnsmasq_mode }}' \
+              REUSE_SUBSCRIPTION='${{ inputs.reuse_subscription }}' \
+              sh /tmp/e2e-setup-launch.sh"
+
+        # 读出代理信息供 Step 6 使用
+        PROXY_AUTH=$(_ssh "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
+        PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
+        NODE_NAME=$(echo "$PROXY_NODE" | cut -d: -f1)
+        SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
+
+        # 读取实际端口（来自 clashforge API）
+        MIXED_PORT=$(_ssh "cat /tmp/cf-snapshot/mixed-port 2>/dev/null" || echo "7893")
+        DNS_PORT=$(_ssh "cat /tmp/cf-snapshot/dns-port 2>/dev/null" || echo "7874")
+        echo "实际运行端口: mixed=${MIXED_PORT} dns=${DNS_PORT}"
+
+        # DoH 解析节点服务器真实 IP
+        SERVER_IP=""
+        if [ -n "$SERVER_HOST" ]; then
+          SERVER_IP=$(curl -sf --max-time 8 \
+            "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
+            | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//' || echo "")
+        fi
+
+        echo "proxy_auth=$PROXY_AUTH"   >> "$GITHUB_OUTPUT"
+        echo "proxy_node=$PROXY_NODE"   >> "$GITHUB_OUTPUT"
+        echo "server_host=$SERVER_HOST" >> "$GITHUB_OUTPUT"
+        echo "server_ip=$SERVER_IP"     >> "$GITHUB_OUTPUT"
+        echo "mixed_port=$MIXED_PORT"   >> "$GITHUB_OUTPUT"
+        echo "dns_port=$DNS_PORT"       >> "$GITHUB_OUTPUT"
+        [ -n "$PROXY_AUTH" ] && \
+          echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT" || \
+          echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}"               >> "$GITHUB_OUTPUT"
+
+        MASKED_IP=$(echo "$SERVER_IP" | awk -F. '{print $1".*.*."$NF}' 2>/dev/null || echo "?")
+        echo "节点: ${NODE_NAME:-?} / 节点 IP: ${MASKED_IP:-?}"
+
+    # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────────
+    - name: "[Step 6] Probe — Round 2 running (${{ inputs.dnsmasq_mode }})"
+      id: probe_running
+      shell: bash
+      run: |
+        # Re-upload probe.sh so the script is always current.
+        ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+          "cat > /tmp/e2e-probe.sh && chmod +x /tmp/e2e-probe.sh" \
+          < tests/e2e/vm/probe.sh
+
+        ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+          "PHASE=running \
+           PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
+           MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' \
+           MIXED_PORT='${{ steps.setup.outputs.mixed_port }}' \
+           MIHOMO_DNS_PORT='${{ steps.setup.outputs.dns_port }}' \
+           sh /tmp/e2e-probe.sh"
+
+    # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────────
+    - name: "[Step 7] Stop clashforge & verify rollback (${{ inputs.dnsmasq_mode }})"
+      id: stop
+      if: always()
+      shell: bash
+      run: |
+        _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+
+        _ssh "cat > /tmp/e2e-stop-verify.sh && chmod +x /tmp/e2e-stop-verify.sh" \
+          < tests/e2e/vm/stop-verify.sh
+
+        _ssh "sh /tmp/e2e-stop-verify.sh"
+
+    # ── Step 8: Round 3 网络探测（停止后，恢复直连）──────────────────────────
+    - name: "[Step 8] Probe — Round 3 stopped (${{ inputs.dnsmasq_mode }})"
+      id: probe_stopped
+      if: always()
+      shell: bash
+      run: |
+        _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+
+        _ssh "cat > /tmp/e2e-probe.sh && chmod +x /tmp/e2e-probe.sh" \
+          < tests/e2e/vm/probe.sh
+
+        _ssh "PHASE=stopped sh /tmp/e2e-probe.sh"

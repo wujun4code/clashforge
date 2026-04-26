@@ -66,7 +66,7 @@ table inet metaclash {
     # Only loopback destinations are matched so mihomo's own upstream DNS queries
     # (to real IPs like 119.29.29.29:53) are left untouched and do not loop back.
     chain dns_output_redirect {
-        type nat hook output priority dstnat; policy accept;
+        type nat hook output priority -100; policy accept;
         ip daddr 127.0.0.0/8 udp dport 53 redirect to :{{ .DNSPort }}
         ip daddr 127.0.0.0/8 tcp dport 53 redirect to :{{ .DNSPort }}
 {{ if .EnableIPv6 }}
@@ -113,6 +113,21 @@ func (n *NftablesBackend) Apply() error {
 	var buf bytes.Buffer
 	if err := nftTableTemplate.Execute(&buf, vars); err != nil {
 		return fmt.Errorf("render nft template: %w", err)
+	}
+
+	// DNS redirect chains use nat table hooks which require nf_nat. Probe-load
+	// the module so the nft apply below doesn't fail on minimal OpenWrt images
+	// that haven't loaded it yet (e.g. no firewall3/firewall4 running).
+	// nft_redir provides the "redirect to :port" expression evaluator; it is a
+	// separate module from nf_nat on kernels that compile CONFIG_NFT_REDIR=m.
+	if n.EnableDNSRedirect {
+		for _, mod := range []string{"nf_nat", "nft_redir"} {
+			out, err := exec.Command("modprobe", mod).CombinedOutput()
+			if err != nil {
+				log.Debug().Err(err).Str("module", mod).Str("output", string(out)).
+					Msg("netfilter: modprobe (may be built-in or unavailable)")
+			}
+		}
 	}
 
 	// First cleanup any existing rules

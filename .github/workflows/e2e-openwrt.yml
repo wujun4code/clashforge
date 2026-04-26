@@ -7,14 +7,21 @@ name: E2E Integration Test (OpenWrt)
 #   - e2e job 跑在 self-hosted runner，只接收打包好的 IPK artifact，不执行任何来自 PR 的编译操作
 #
 # 测试步骤（e2e job）：
+#   Step 0  OpenWrt VM 存活检测 + 按需冷启动
 #   Step 1  下载 IPK artifact
 #   Step 2  基准状态快照（nft / ip-rule / dnsmasq / resolv.conf / 直连 IP）
 #   Step 3  Round 1 网络探测基准（VM 内 curl，无代理）
 #   Step 4  安装 IPK + 完备性检测
-#   Step 5  Setup Wizard（添加订阅→导入节点→DNS→网络→launch）+ 接管断言
-#   Step 6  Round 2 网络探测（VM 内 curl，tproxy 透明拦截；附加：宿主机 mixed port）
-#   Step 7  停止服务 + 状态还原断言（与 Step 2 快照对比）
-#   Step 8  Round 3 网络探测（VM 内 curl，恢复直连；对比 Round 1 基准）
+#   Steps 5-8  [Scenario 1/2] dnsmasq_mode=upstream
+#               Step 5  Setup Wizard + 接管断言
+#               Step 6  Round 2 网络探测（代理运行期）
+#               Step 7  停止服务 + 状态还原断言
+#               Step 8  Round 3 网络探测（停止后恢复直连）
+#   Steps 5-8  [Scenario 2/2] dnsmasq_mode=replace（复用 Scenario 1 的订阅）
+#               Step 5  Setup Wizard + 接管断言（replace 模式：UCI port=0 + OUTPUT hook）
+#               Step 6  Round 2 网络探测
+#               Step 7  停止服务 + 状态还原断言
+#               Step 8  Round 3 网络探测
 #   Step 9  紧急清理
 #
 # 所需 Secrets：
@@ -173,6 +180,59 @@ jobs:
       - name: Checkout (test scripts only)
         uses: actions/checkout@v4
 
+      # ── Step 0: OpenWrt VM 存活检测 + 按需冷启动 ──────────────────────────
+      - name: "[Step 0] Ensure OpenWrt VM is running"
+        run: |
+          VM_DISK="/home/jun/vms/openwrt/openwrt-new.qcow2"
+          VM_PID_FILE="/tmp/openwrt-vm.pid"
+          CONSOLE_LOG="/home/jun/vms/openwrt/console.log"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 2222"
+
+          vm_alive() {
+            ssh $SSH_OPTS root@127.0.0.1 "echo ok" >/dev/null 2>&1
+          }
+
+          if vm_alive; then
+            echo "✅ OpenWrt VM 已就绪，继续测试"
+            exit 0
+          fi
+
+          echo "⚠️  VM 未响应，尝试冷启动..."
+
+          # 清理可能残留的旧进程
+          if [ -f "$VM_PID_FILE" ]; then
+            OLD_PID=$(cat "$VM_PID_FILE")
+            kill "$OLD_PID" 2>/dev/null || true
+            rm -f "$VM_PID_FILE"
+          fi
+
+          # 冷启动 VM
+          qemu-system-x86_64 \
+            -name openwrt \
+            -machine type=q35,accel=kvm \
+            -cpu host -smp 2 -m 512M \
+            -drive file="$VM_DISK",if=virtio,format=qcow2 \
+            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+            -device virtio-net-pci,netdev=net0 \
+            -serial file:"$CONSOLE_LOG" \
+            -display none -daemonize -pidfile "$VM_PID_FILE"
+
+          echo "VM 已启动（PID=$(cat $VM_PID_FILE)），等待 SSH 就绪..."
+
+          # 最多等待 120 秒
+          DEADLINE=$(($(date +%s) + 120))
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            if vm_alive; then
+              echo "✅ VM SSH 已就绪"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "❌ VM 120 秒内未就绪，打印控制台日志："
+          tail -50 "$CONSOLE_LOG" 2>/dev/null || echo "(无日志)"
+          exit 1
+
       # ── Step 1: 下载 IPK artifact ──────────────────────────────────────────
       - name: "[Step 1] Download IPK artifact"
         id: download
@@ -239,6 +299,13 @@ jobs:
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
           _ssh "modprobe nft_tproxy 2>/dev/null || true"
+          # nat chains with "redirect to :port" need BOTH nf_nat (hook registration)
+          # AND nft_redir ("redirect" expression evaluator, CONFIG_NFT_REDIR=m on OpenWrt).
+          # Installing kmod-nf-nat alone is NOT enough; kmod-nft-redir is also required.
+          _ssh "opkg install kmod-nf-nat kmod-nft-redir 2>&1 | grep -v 'up to date' | head -10 || true"
+          _ssh "modprobe nf_nat   2>&1 && echo '✓ nf_nat loaded'   || echo '⚠ nf_nat modprobe failed (may be built-in)'"
+          _ssh "modprobe nft_redir 2>&1 && echo '✓ nft_redir loaded' || echo '⚠ nft_redir modprobe failed (may be built-in)'"
+          _ssh "lsmod 2>/dev/null | grep -E '^nf_nat|^nft_redir' || echo '⚠ nf_nat/nft_redir not in lsmod (may be built-in)'"
 
           # 启动服务
           _ssh "/etc/init.d/clashforge start"
@@ -257,89 +324,57 @@ jobs:
 
           _ssh "sh /tmp/e2e-install-verify.sh"
 
-      # ── Step 5: Setup Wizard + 接管断言 ──────────────────────────────────
-      - name: "[Step 5] Setup launch & verify takeover"
-        id: setup
-        env:
-          SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
+      # ── Scenario 1/2: dnsmasq_mode=upstream ──────────────────────────────────
+      - name: "[Scenario 1/2] dnsmasq_mode=upstream"
+        uses: ./.github/actions/e2e-scenario
+        with:
+          dnsmasq_mode: upstream
+          subscription_url: ${{ secrets.SUBSCRIPTION_URL }}
+          reuse_subscription: 'false'
+          scenario_label: 'Scenario 1/2 — dnsmasq_mode=upstream'
+
+      # ── Pre-check before replace mode ────────────────────────────────────────
+      # dnsmasq_mode=replace requires nftables nat hook support (nf_nat module).
+      # This step dumps state for diagnostics AND hard-fails if nat hooks are broken,
+      # giving a clear error rather than a cryptic failure deep inside Scenario 2.
+      - name: "[Pre-check] nftables nat hook support (dnsmasq_mode=replace)"
         run: |
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+          echo "=== UCI dnsmasq state after Scenario 1 ==="
+          _ssh "uci show dhcp.@dnsmasq[0] 2>&1 || echo N/A"
+          echo "=== nft tables ==="
+          _ssh "nft list tables 2>/dev/null || echo none"
+          echo "=== kernel modules (nf/nft) ==="
+          _ssh "lsmod 2>/dev/null | grep -E 'nf_nat|nft_redir|nft_' | head -10 || echo none"
+          echo "=== port 53 listeners ==="
+          _ssh "ss -tuln 2>/dev/null | grep ':53 ' || echo 'nothing on :53'"
+          echo "=== nat hook + redirect probe ==="
+          # Tests BOTH requirements for dnsmasq_mode=replace:
+          #   1. type nat hook  → requires nf_nat module
+          #   2. redirect to :N → requires nft_redir module (separate from nf_nat on OpenWrt)
+          _ssh "nft add table inet __cfnat_test 2>/dev/null || true; \
+            if ! nft add chain inet __cfnat_test pre \
+                '{ type nat hook prerouting priority dstnat; policy accept; }' 2>/dev/null; then \
+              echo '✗ nat hook NOT supported (nf_nat not loaded?)'; \
+              nft delete table inet __cfnat_test 2>/dev/null || true; \
+              exit 1; \
+            fi; \
+            if ! nft add rule inet __cfnat_test pre 'udp dport 65234 redirect to :65235' 2>/dev/null; then \
+              echo '✗ nat redirect NOT supported (nft_redir not loaded?)'; \
+              nft delete table inet __cfnat_test 2>/dev/null || true; \
+              exit 1; \
+            fi; \
+            echo '✓ nat hooks + redirect supported'; \
+            nft delete table inet __cfnat_test 2>/dev/null || true"
 
-          _ssh "cat > /tmp/e2e-setup-launch.sh && chmod +x /tmp/e2e-setup-launch.sh" \
-            < tests/e2e/vm/setup-launch.sh
-
-          _ssh "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' sh /tmp/e2e-setup-launch.sh"
-
-          # 读出代理信息供 Step 6 使用
-          PROXY_AUTH=$(_ssh "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
-          PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
-          NODE_NAME=$(echo "$PROXY_NODE" | cut -d: -f1)
-          SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
-
-          # 读取 Step 5 中检测到的实际端口（来自 clashforge API）
-          MIXED_PORT=$(_ssh "cat /tmp/cf-snapshot/mixed-port 2>/dev/null" || echo "7893")
-          DNS_PORT=$(_ssh "cat /tmp/cf-snapshot/dns-port 2>/dev/null" || echo "7874")
-          echo "实际运行端口: mixed=${MIXED_PORT} dns=${DNS_PORT}"
-
-          # DoH 解析节点服务器真实 IP
-          SERVER_IP=""
-          if [ -n "$SERVER_HOST" ]; then
-            SERVER_IP=$(curl -sf --max-time 8 \
-              "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
-              | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//' || echo "")
-          fi
-
-          echo "proxy_auth=$PROXY_AUTH"   >> "$GITHUB_OUTPUT"
-          echo "proxy_node=$PROXY_NODE"   >> "$GITHUB_OUTPUT"
-          echo "server_host=$SERVER_HOST" >> "$GITHUB_OUTPUT"
-          echo "server_ip=$SERVER_IP"     >> "$GITHUB_OUTPUT"
-          echo "mixed_port=$MIXED_PORT"   >> "$GITHUB_OUTPUT"
-          echo "dns_port=$DNS_PORT"       >> "$GITHUB_OUTPUT"
-          [ -n "$PROXY_AUTH" ] && \
-            echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT" || \
-            echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}"               >> "$GITHUB_OUTPUT"
-
-          MASKED_IP=$(echo "$SERVER_IP" | awk -F. '{print $1".*.*."$NF}' 2>/dev/null || echo "?")
-          echo "节点: ${NODE_NAME:-?} / 节点 IP: ${MASKED_IP:-?}"
-
-      # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────
-      - name: "[Step 6] Probe — Round 2 running (tproxy + router diagnostic)"
-        id: probe_running
-        run: |
-          # tproxy 只拦截 PREROUTING（LAN 入流量），路由器本机进程走 OUTPUT，不经 tproxy。
-          # 传入 MIXED_PORT_URL，让 probe.sh 在 running 阶段显式经混合端口代理。
-          # MIXED_PORT / MIHOMO_DNS_PORT 来自 Step 5 从 clashforge API 读取的实际端口。
-          ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "PHASE=running \
-             PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
-             MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' \
-             MIXED_PORT='${{ steps.setup.outputs.mixed_port }}' \
-             MIHOMO_DNS_PORT='${{ steps.setup.outputs.dns_port }}' \
-             sh /tmp/e2e-probe.sh"
-
-      # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────
-      - name: "[Step 7] Stop clashforge & verify rollback"
-        id: stop
-        if: always()
-        run: |
-          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
-
-          _ssh "cat > /tmp/e2e-stop-verify.sh && chmod +x /tmp/e2e-stop-verify.sh" \
-            < tests/e2e/vm/stop-verify.sh
-
-          _ssh "sh /tmp/e2e-stop-verify.sh"
-
-      # ── Step 8: Round 3 网络探测（停止后，恢复直连）──────────────────────
-      - name: "[Step 8] Probe — Round 3 stopped (direct restored)"
-        id: probe_stopped
-        if: always()
-        run: |
-          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
-
-          _ssh "cat > /tmp/e2e-probe.sh && chmod +x /tmp/e2e-probe.sh" \
-            < tests/e2e/vm/probe.sh
-
-          _ssh "PHASE=stopped sh /tmp/e2e-probe.sh"
+      # ── Scenario 2/2: dnsmasq_mode=replace ───────────────────────────────────
+      - name: "[Scenario 2/2] dnsmasq_mode=replace"
+        uses: ./.github/actions/e2e-scenario
+        with:
+          dnsmasq_mode: replace
+          subscription_url: ${{ secrets.SUBSCRIPTION_URL }}
+          reuse_subscription: 'true'
+          scenario_label: 'Scenario 2/2 — dnsmasq_mode=replace'
 
       # ── Step 9: 紧急清理 ──────────────────────────────────────────────────
       - name: "[Step 9] Emergency cleanup"
