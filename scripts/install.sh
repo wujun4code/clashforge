@@ -20,7 +20,9 @@ set -e
 REPO="wujun4code/clashforge"
 INSTALL_VERSION="latest"
 PURGE=0
-MIRROR=""   # empty = auto-detect (try direct then mirrors)
+MIRROR=""    # empty = auto-detect (try direct then mirrors)
+BASE_URL=""  # custom base URL, e.g. https://releases.example.com
+             # files expected at: <BASE_URL>/releases/<tag>/<ipk>
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -39,10 +41,13 @@ install.sh — ClashForge installer for OpenWrt
   wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 
 Options:
-  --version <tag>   Install specific version, e.g. v1.2.0  (default: latest)
-  --purge           Full clean install: uninstall old version and wipe all config/data
-  --mirror <url>    Force a GitHub proxy prefix, e.g. --mirror https://ghproxy.com
-  --help            Show this help
+  --version <tag>     Install specific version, e.g. v1.2.0  (default: latest)
+  --purge             Full clean install: uninstall old version and wipe all config/data
+  --mirror <url>      Force a GitHub proxy prefix, e.g. --mirror https://ghproxy.com
+  --base-url <url>    Download from a custom base URL (e.g. Cloudflare R2 custom domain)
+                      Files must be at: <url>/releases/<tag>/<ipk>
+                      Example: --base-url https://releases.example.com
+  --help              Show this help
 EOF
 }
 
@@ -58,6 +63,9 @@ while [ $# -gt 0 ]; do
     --mirror)
       [ -n "$2" ] || die "--mirror requires a value"
       MIRROR="$2"; shift 2 ;;
+    --base-url)
+      [ -n "$2" ] || die "--base-url requires a value"
+      BASE_URL="${2%/}"; shift 2 ;;
     --help|-h)
       usage; exit 0 ;;
     *)
@@ -280,6 +288,16 @@ do_purge() {
 download_ipk() {
   TMP_IPK="/tmp/${IPK_NAME}"
   log "Downloading ${IPK_NAME}..."
+
+  # ── 自定义 base URL（R2 / 自建 CDN）─────────────────────────────────
+  if [ -n "$BASE_URL" ]; then
+    _url="${BASE_URL}/releases/${TAG}/${IPK_NAME}"
+    log "Using custom base URL: $BASE_URL"
+    if _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+      ok "Downloaded to $TMP_IPK"; echo "$TMP_IPK"; return 0
+    fi
+    die "Download failed from base URL: $_url"
+  fi
 
   if [ -n "$MIRROR" ]; then
     # User forced a specific mirror — try it exclusively

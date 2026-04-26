@@ -348,6 +348,26 @@ jobs:
 
             ---
 
+            ### 🌩️ 通过 Cloudflare R2 托管安装（Fork 用户）
+
+            如果你 fork 了本仓库并配置了自己的 Cloudflare R2 存储，可以使用自定义域名直接安装，无需依赖 GitHub：
+
+            ```sh
+            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | \
+              sh -s -- --base-url https://releases.example.com
+            ```
+
+            安装指定版本：
+            ```sh
+            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | \
+              sh -s -- --base-url https://releases.example.com --version ${{ steps.ver.outputs.tag }}
+            ```
+
+            > 将 `https://releases.example.com` 替换为你在 R2 bucket 上绑定的自定义域名。
+            > R2 配置方法参见：[Fork 后配置自己的 Cloudflare R2 下载加速](https://github.com/wujun4code/clashforge/blob/main/docs/guides/fork-r2-setup.md)
+
+            ---
+
             ### 手动安装 IPK
 
             先下载对应架构的 IPK，再通过 opkg 安装（`--nodeps` 跳过依赖检查，因 mihomo 已打包在内）：
