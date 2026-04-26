@@ -83,7 +83,7 @@ Ok "Upload complete."
 
 $purgeAction = if ($Purge) { "do_purge" } else { "pre_upgrade_cleanup" }
 
-$remoteScript = (@'
+$remoteScript = ((@'
 pre_upgrade_cleanup() {
   _cf_running=0
   pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && _cf_running=1
@@ -137,8 +137,8 @@ do_purge() {
 PURGE_ACTION_PLACEHOLDER
 opkg install --nodeps --force-downgrade IPK_PATH_PLACEHOLDER
 rm -f IPK_PATH_PLACEHOLDER
-'@) -replace 'PURGE_ACTION_PLACEHOLDER', $purgeAction `
-   -replace 'IPK_PATH_PLACEHOLDER',   $RemoteTmp
+'@) -replace '\r\n', "`n") -replace 'PURGE_ACTION_PLACEHOLDER', $purgeAction `
+                             -replace 'IPK_PATH_PLACEHOLDER',   $RemoteTmp
 
 # ── execute on router ─────────────────────────────────────────────────────────
 
