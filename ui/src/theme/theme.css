@@ -1,70 +1,49 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    ClashForge Theme System — Three Distinct Visual Languages
 
-   All component classes in index.css reference CSS custom properties.
-   Each theme overrides these properties to produce a completely different
-   look: not just colors, but spacing, shape, shadow, glass, and motion.
+   Design Principles:
+   · Nebula    — Glassmorphism · Deep space purples · Bouncy spring · Spacious
+   · ClashCat  — Warm dark · Orange fire · Retro-geek · Compact · Punchy
+   · Enterprise— Trust navy · Professional flat · Dense · Zero-flash
 
-   RGB values use space-separated channels: rgb(var(--brand) / 0.5)
+   All component classes reference CSS custom properties exclusively.
+   Never hardcode colors, radii, spacing, or shadows in component files.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Shared defaults (overridden per-theme) ───────────────────────────────── */
+/* ── Shared base tokens (overridden per-theme) ────────────────────────────── */
 :root {
-  /* ── Layout rhythm ────────────────────────────────────── */
-  --space-unit: 0.25rem;
-  --space-xs:   calc(var(--space-unit) * 1);
-  --space-sm:   calc(var(--space-unit) * 2);
-  --space-md:   calc(var(--space-unit) * 4);
-  --space-lg:   calc(var(--space-unit) * 6);
-  --space-xl:   calc(var(--space-unit) * 8);
-  --space-2xl:  calc(var(--space-unit) * 12);
-
-  /* ── Typography scale ─────────────────────────────────── */
+  /* Typography scale */
   --text-xs:    0.6875rem;
-  --text-sm:    0.8125rem;
-  --text-base:  0.9375rem;
+  --text-sm:    0.875rem;
+  --text-base:  1rem;
   --text-lg:    1.125rem;
   --text-xl:    1.375rem;
   --text-2xl:   1.75rem;
   --text-3xl:   2.25rem;
 
-  /* ── Radius scale ─────────────────────────────────────── */
+  /* Radius scale */
   --radius-none: 0;
-  --radius-sm:   6px;
-  --radius-md:   10px;
-  --radius-lg:   16px;
-  --radius-xl:   24px;
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
   --radius-full: 9999px;
 
-  /* ── Border system ────────────────────────────────────── */
+  /* Border */
   --border-width: 1px;
   --border-color: 255 255 255;
-  --border-alpha: 0.06;
-  --border-style: solid;
+  --border-alpha: 0.08;
 
-  /* ── Shadow system ────────────────────────────────────── */
-  --shadow-card:        0 4px 24px rgba(0,0,0,0.25);
-  --shadow-card-hover:  0 8px 40px rgba(0,0,0,0.35);
-  --shadow-button:      0 2px 8px rgba(0,0,0,0.15);
-  --shadow-inset:       inset 0 1px 0 rgba(255,255,255,0.06);
-
-  /* ── Glass / Blur ─────────────────────────────────────── */
-  --glass-blur:         12px;
-  --glass-bg:           255 255 255;
-  --glass-bg-alpha:     0.03;
-  --glass-bg-hover:     0.06;
-  --glass-border-alpha: 0.06;
-
-  /* ── Transition / Motion ──────────────────────────────── */
+  /* Transition */
   --ease-bounce:  cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-snap:    cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-instant: ease;
-  --ease-default: var(--ease-bounce);
+  --ease-instant: linear;
+  --ease-default: var(--ease-snap);
   --dur-fast:     150ms;
   --dur-normal:   250ms;
   --dur-slow:     400ms;
 
-  /* ── Feedback tokens ──────────────────────────────────── */
+  /* Feedback */
   --success: 34 197 94;
   --success-subtle-rgb: 34 197 94;
   --success-subtle-alpha: 0.12;
@@ -74,285 +53,308 @@
   --danger: 239 68 68;
   --danger-subtle-rgb: 239 68 68;
   --danger-subtle-alpha: 0.12;
+
+  /* Button min-width — prevents text wrapping */
+  --btn-min-width: 5rem;
 }
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Nebula (星云) — Playful glassmorphism · Spacious · Bouncy
+   NEBULA (星云)
+   Glassmorphism · Deep violet space · Spring bounce · Generous spacing
+   Inspired by: macOS Sequoia, Linear, Vercel
+   Font pairing: Fira Code (heading) + Fira Sans (body)
    ═══════════════════════════════════════════════════════════════════════════ */
 :root,
 [data-theme="nebula"] {
-  /* Brand */
-  --brand: 124 58 237;
-  --brand-light: 167 139 250;
+  /* ── Brand palette ─────────────────────────────────── */
+  --brand:            124 58 237;     /* violet-700 */
+  --brand-light:      167 139 250;    /* violet-400 */
   --brand-subtle-rgb: 124 58 237;
-  --brand-subtle-alpha: 0.12;
-  --cta: 249 115 22;
-  --cta-subtle-rgb: 249 115 22;
+  --brand-subtle-alpha: 0.14;
+  --cta:              249 115 22;     /* orange-500 */
+  --cta-subtle-rgb:   249 115 22;
   --cta-subtle-alpha: 0.12;
-  /* Surface */
-  --surface-0: 11 10 26;
-  --surface-1: 19 18 45;
-  --surface-2: 28 27 59;
-  --surface-3: 38 37 74;
-  --surface-4: 48 47 90;
-  --muted: 148 146 176;
-  /* Text */
-  --text-primary: 240 239 248;
-  --text-dim: 185 182 211;
-  /* Callout */
-  --callout-info-text: #E9E3FF;
+
+  /* ── Surface stack (dark violet space) ───────────── */
+  --surface-0: 8 7 20;
+  --surface-1: 15 14 35;
+  --surface-2: 23 21 50;
+  --surface-3: 32 30 66;
+  --surface-4: 44 42 82;
+  --muted:     148 145 178;
+
+  /* ── Text ─────────────────────────────────────────── */
+  --text-primary: 242 240 252;
+  --text-dim:     188 185 215;
+
+  /* ── Callout text ─────────────────────────────────── */
+  --callout-info-text:    #EDE9FF;
   --callout-success-text: #DCFCE7;
   --callout-warning-text: #FEF3C7;
-  --callout-danger-text: #FECACA;
-  --modal-backdrop: rgba(5, 3, 13, 0.7);
+  --callout-danger-text:  #FECACA;
+  --modal-backdrop:       rgba(4, 2, 12, 0.75);
 
-  /* ── Spacing: 1.25× scale ────────────────────────── */
-  --space-unit: 0.3125rem;  /* 5px */
-  --space-xs:   calc(var(--space-unit) * 1);
-  --space-sm:   calc(var(--space-unit) * 2);
-  --space-md:   calc(var(--space-unit) * 4);
-  --space-lg:   calc(var(--space-unit) * 7);
-  --space-xl:   calc(var(--space-unit) * 10);
-  --space-2xl:  calc(var(--space-unit) * 16);
+  /* ── Spacing (generous: 5px unit) ────────────────── */
+  --space-xs:  5px;
+  --space-sm:  10px;
+  --space-md:  20px;
+  --space-lg:  32px;
+  --space-xl:  48px;
+  --space-2xl: 72px;
 
-  /* ── Type: 1.05× scale ───────────────────────────── */
-  --text-xs:    0.75rem;
-  --text-sm:    0.875rem;
-  --text-base:  1rem;
-  --text-lg:    1.1875rem;
-  --text-xl:    1.5rem;
-  --text-2xl:   1.875rem;
-  --text-3xl:   2.5rem;
+  /* ── Typography (slightly larger, airy) ──────────── */
+  --text-xs:    0.6875rem;  /* 11px */
+  --text-sm:    0.875rem;   /* 14px */
+  --text-base:  1rem;       /* 16px */
+  --text-lg:    1.1875rem;  /* 19px */
+  --text-xl:    1.5rem;     /* 24px */
+  --text-2xl:   1.875rem;   /* 30px */
+  --text-3xl:   2.5rem;     /* 40px */
 
-  /* ── Radius: large / playful ─────────────────────── */
-  --radius-sm:   8px;
-  --radius-md:   14px;
-  --radius-lg:   20px;
-  --radius-xl:   28px;
+  /* ── Radius (large, playful rounded) ─────────────── */
+  --radius-sm:  8px;
+  --radius-md:  14px;
+  --radius-lg:  20px;
+  --radius-xl:  28px;
 
-  /* ── Border: glassy ──────────────────────────────── */
+  /* ── Border (glassy gossamer) ─────────────────────── */
   --border-width: 1px;
-  --border-color:  255 255 255;
-  --border-alpha:  0.06;
-  --border-style:  solid;
+  --border-color: 255 255 255;
+  --border-alpha: 0.07;
 
-  /* ── Shadow: deep + glow ─────────────────────────── */
-  --shadow-card:        0 4px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.06);
-  --shadow-card-hover:  0 8px 40px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06);
-  --shadow-button:      0 4px 12px rgba(124,58,237,0.25);
+  /* ── Shadows (deep + violet glow) ────────────────── */
+  --shadow-card:        0 4px 28px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.05);
+  --shadow-card-hover:  0 10px 44px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.07);
+  --shadow-button:      0 4px 14px rgba(124,58,237,0.35);
   --shadow-inset:       inset 0 1px 0 rgba(255,255,255,0.06);
-  --shadow-glow-brand:  0 0 24px rgba(124,58,237,0.35);
-  --shadow-glow-cta:    0 0 24px rgba(249,115,22,0.3);
+  --shadow-glow-brand:  0 0 28px rgba(124,58,237,0.40);
+  --shadow-glow-cta:    0 0 24px rgba(249,115,22,0.35);
 
-  /* ── Glass: heavy blur ───────────────────────────── */
-  --glass-blur:         16px;
+  /* ── Glass (heavy blur, subtle tint) ─────────────── */
+  --glass-blur:         18px;
   --glass-bg:           255 255 255;
-  --glass-bg-alpha:     0.03;
-  --glass-bg-hover:     0.06;
-  --glass-border-alpha: 0.06;
+  --glass-bg-alpha:     0.04;
+  --glass-bg-hover:     0.07;
+  --glass-border-alpha: 0.07;
 
-  /* ── Motion: spring bounce ───────────────────────── */
+  /* ── Motion (spring bounce) ───────────────────────── */
   --ease-default: var(--ease-bounce);
-  --dur-fast:     180ms;
-  --dur-normal:   280ms;
-  --dur-slow:     450ms;
+  --dur-fast:     200ms;
+  --dur-normal:   320ms;
+  --dur-slow:     500ms;
 
-  /* ── Misc ────────────────────────────────────────── */
+  /* ── Misc ─────────────────────────────────────────── */
   --font-sans:    'Fira Sans', system-ui, sans-serif;
   --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
   --font-heading: 'Fira Code', monospace;
-  --scrollbar-thumb:       rgba(124,58,237,0.25);
-  --scrollbar-thumb-hover: rgba(124,58,237,0.4);
-  --selection-bg:          rgba(124,58,237,0.3);
+  --sidebar-width: 288px;
+  --btn-min-width: 5.5rem;
+
+  --scrollbar-thumb:       rgba(124,58,237,0.28);
+  --scrollbar-thumb-hover: rgba(124,58,237,0.50);
+  --selection-bg:          rgba(124,58,237,0.32);
   --selection-text:        #F8FAFC;
-  --app-glow-top-left:     rgba(124,58,237,0.18);
+  --app-glow-top-left:     rgba(124,58,237,0.20);
   --app-glow-bottom-right: rgba(249,115,22,0.14);
-  --sidebar-width: 290px;
 }
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   ClashCat (萌猫) — Compact · Warm · Punchy · Paper-card aesthetic
+   CLASHCAT (萌猫)
+   Warm dark amber · Retro-geek · Compact · Punchy pop
+   Inspired by: Clash original cat UI + terminal geek aesthetic
+   Font pairing: system-ui (body) + JetBrains Mono (heading/code)
    ═══════════════════════════════════════════════════════════════════════════ */
 [data-theme="clashcat"] {
-  /* Brand */
-  --brand: 249 115 22;
-  --brand-light: 251 191 36;
+  /* ── Brand palette ─────────────────────────────────── */
+  --brand:            249 115 22;     /* orange-500 */
+  --brand-light:      251 191 36;     /* amber-400  */
   --brand-subtle-rgb: 249 115 22;
-  --brand-subtle-alpha: 0.14;
-  --cta: 236 72 153;
-  --cta-subtle-rgb: 236 72 153;
+  --brand-subtle-alpha: 0.16;
+  --cta:              236 72 153;     /* pink-500   */
+  --cta-subtle-rgb:   236 72 153;
   --cta-subtle-alpha: 0.12;
-  /* Surface */
-  --surface-0: 28 25 23;
-  --surface-1: 38 34 31;
-  --surface-2: 48 43 40;
-  --surface-3: 58 52 49;
-  --surface-4: 69 62 58;
-  --muted: 168 162 158;
-  /* Text */
-  --text-primary: 245 240 235;
-  --text-dim: 184 178 170;
-  --callout-info-text: #FFE0D0;
-  --callout-success-text: #DCFCE7;
-  --callout-warning-text: #FFF8E0;
-  --callout-danger-text: #FECACA;
-  --modal-backdrop: rgba(10,8,6,0.75);
 
-  /* ── Spacing: 0.875× scale (compact) ─────────────── */
-  --space-unit: 0.21875rem;  /* 3.5px */
-  --space-xs:   calc(var(--space-unit) * 1);
-  --space-sm:   calc(var(--space-unit) * 3);
-  --space-md:   calc(var(--space-unit) * 5);
-  --space-lg:   calc(var(--space-unit) * 8);
-  --space-xl:   calc(var(--space-unit) * 11);
-  --space-2xl:  calc(var(--space-unit) * 16);
+  /* ── Surface stack (warm dark brown) ─────────────── */
+  --surface-0: 18 14 10;
+  --surface-1: 28 22 16;
+  --surface-2: 40 32 24;
+  --surface-3: 52 42 32;
+  --surface-4: 66 54 42;
+  --muted:     172 160 148;
 
-  /* ── Type: 0.95× scale ───────────────────────────── */
-  --text-xs:    0.625rem;
-  --text-sm:    0.75rem;
-  --text-base:  0.875rem;
-  --text-lg:    1.0625rem;
-  --text-xl:    1.3125rem;
-  --text-2xl:   1.625rem;
-  --text-3xl:   2rem;
+  /* ── Text ─────────────────────────────────────────── */
+  --text-primary: 248 242 232;
+  --text-dim:     192 182 168;
 
-  /* ── Radius: medium / approachable ────────────────── */
-  --radius-sm:   6px;
-  --radius-md:   10px;
-  --radius-lg:   14px;
-  --radius-xl:   20px;
+  /* ── Callout text ─────────────────────────────────── */
+  --callout-info-text:    #FFE8D0;
+  --callout-success-text: #D4F5E0;
+  --callout-warning-text: #FFF5D0;
+  --callout-danger-text:  #FECACA;
+  --modal-backdrop:       rgba(8, 5, 2, 0.80);
 
-  /* ── Border: thicker, more solid ──────────────────── */
-  --border-width: 2px;
-  --border-color:  255 255 255;
-  --border-alpha:  0.10;
-  --border-style:  solid;
+  /* ── Spacing (compact: 3.5px unit) ───────────────── */
+  --space-xs:  4px;
+  --space-sm:  8px;
+  --space-md:  16px;
+  --space-lg:  24px;
+  --space-xl:  36px;
+  --space-2xl: 56px;
 
-  /* ── Shadow: sharp drop-shadow ────────────────────── */
-  --shadow-card:        0 2px 0 rgba(0,0,0,0.3), 0 6px 12px rgba(0,0,0,0.2);
-  --shadow-card-hover:  0 4px 0 rgba(0,0,0,0.35), 0 10px 20px rgba(0,0,0,0.3);
-  --shadow-button:      0 2px 4px rgba(0,0,0,0.2);
-  --shadow-inset:       inset 0 1px 0 rgba(255,255,255,0.04);
-  --shadow-glow-brand:  0 0 16px rgba(249,115,22,0.4);
-  --shadow-glow-cta:    0 0 16px rgba(236,72,153,0.35);
+  /* ── Typography (compact) ─────────────────────────── */
+  --text-xs:    0.625rem;   /* 10px */
+  --text-sm:    0.8125rem;  /* 13px */
+  --text-base:  0.9375rem;  /* 15px */
+  --text-lg:    1.0625rem;  /* 17px */
+  --text-xl:    1.3125rem;  /* 21px */
+  --text-2xl:   1.625rem;   /* 26px */
+  --text-3xl:   2.125rem;   /* 34px */
 
-  /* ── Glass: subtle ────────────────────────────────── */
-  --glass-blur:         4px;
-  --glass-bg:           255 255 255;
-  --glass-bg-alpha:     0.06;
-  --glass-bg-hover:     0.10;
+  /* ── Radius (medium approachable) ────────────────── */
+  --radius-sm:  5px;
+  --radius-md:  9px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+
+  /* ── Border (thicker, warm tint) ─────────────────── */
+  --border-width: 1.5px;
+  --border-color: 255 200 130;
+  --border-alpha: 0.10;
+
+  /* ── Shadows (warm drop-shadow, no blur) ─────────── */
+  --shadow-card:        0 2px 0 rgba(0,0,0,0.35), 0 4px 16px rgba(0,0,0,0.22);
+  --shadow-card-hover:  0 4px 0 rgba(0,0,0,0.40), 0 8px 24px rgba(0,0,0,0.30);
+  --shadow-button:      0 2px 0 rgba(0,0,0,0.30);
+  --shadow-inset:       inset 0 1px 0 rgba(255,180,80,0.08);
+  --shadow-glow-brand:  0 0 18px rgba(249,115,22,0.45);
+  --shadow-glow-cta:    0 0 16px rgba(236,72,153,0.38);
+
+  /* ── Glass (minimal, warm tint) ──────────────────── */
+  --glass-blur:         5px;
+  --glass-bg:           255 180 80;
+  --glass-bg-alpha:     0.05;
+  --glass-bg-hover:     0.09;
   --glass-border-alpha: 0.10;
 
-  /* ── Motion: quick snap ───────────────────────────── */
+  /* ── Motion (quick snap, geek feel) ─────────────── */
   --ease-default: var(--ease-snap);
-  --dur-fast:     120ms;
+  --dur-fast:     110ms;
   --dur-normal:   180ms;
-  --dur-slow:     250ms;
+  --dur-slow:     260ms;
 
-  /* ── Misc ────────────────────────────────────────── */
-  --font-sans:    'Fira Sans', system-ui, sans-serif;
-  --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
-  --font-heading: 'Fira Code', monospace;
-  --scrollbar-thumb:       rgba(249,115,22,0.25);
-  --scrollbar-thumb-hover: rgba(249,115,22,0.4);
-  --selection-bg:          rgba(249,115,22,0.3);
+  /* ── Misc ─────────────────────────────────────────── */
+  --font-sans:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-heading: 'JetBrains Mono', 'Fira Code', monospace;
+  --sidebar-width: 262px;
+  --btn-min-width: 5rem;
+
+  --scrollbar-thumb:       rgba(249,115,22,0.28);
+  --scrollbar-thumb-hover: rgba(249,115,22,0.50);
+  --selection-bg:          rgba(249,115,22,0.32);
   --selection-text:        #FFF7ED;
-  --app-glow-top-left:     rgba(249,115,22,0.16);
+  --app-glow-top-left:     rgba(249,115,22,0.18);
   --app-glow-bottom-right: rgba(236,72,153,0.12);
-  --sidebar-width: 260px;
 }
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Enterprise (商务) — Dense · Sharp · Flat · Professional
+   ENTERPRISE (商务)
+   Trust navy · Professional flat · Dense data · Zero-flash
+   Inspired by: Linear, GitHub, Datadog, Grafana
+   Font pairing: 'Inter' / system-ui (body + heading)
    ═══════════════════════════════════════════════════════════════════════════ */
 [data-theme="enterprise"] {
-  /* Brand */
-  --brand: 37 99 235;
-  --brand-light: 96 165 250;
-  --brand-subtle-rgb: 37 99 235;
+  /* ── Brand palette ─────────────────────────────────── */
+  --brand:            59 130 246;     /* blue-500   */
+  --brand-light:      147 197 253;    /* blue-300   */
+  --brand-subtle-rgb: 59 130 246;
   --brand-subtle-alpha: 0.10;
-  --cta: 16 185 129;
-  --cta-subtle-rgb: 16 185 129;
+  --cta:              16 185 129;     /* emerald-500 */
+  --cta-subtle-rgb:   16 185 129;
   --cta-subtle-alpha: 0.10;
-  /* Surface */
-  --surface-0: 15 23 42;
-  --surface-1: 30 41 59;
-  --surface-2: 51 65 85;
-  --surface-3: 71 85 105;
-  --surface-4: 100 116 139;
-  --muted: 148 163 184;
-  /* Text */
-  --text-primary: 241 245 249;
-  --text-dim: 148 163 184;
-  --callout-info-text: #DBEAFE;
-  --callout-success-text: #D1FAE5;
-  --callout-warning-text: #FEF3C7;
-  --callout-danger-text: #FEE2E2;
-  --modal-backdrop: rgba(2,6,12,0.75);
 
-  /* ── Spacing: 0.75× scale (dense) ────────────────── */
-  --space-unit: 0.1875rem;  /* 3px */
-  --space-xs:   calc(var(--space-unit) * 1);
-  --space-sm:   calc(var(--space-unit) * 2);
-  --space-md:   calc(var(--space-unit) * 4);
-  --space-lg:   calc(var(--space-unit) * 6);
-  --space-xl:   calc(var(--space-unit) * 8);
-  --space-2xl:  calc(var(--space-unit) * 12);
+  /* ── Surface stack (slate navy) ──────────────────── */
+  --surface-0: 10 15 28;
+  --surface-1: 17 24 39;
+  --surface-2: 26 35 52;
+  --surface-3: 36 48 66;
+  --surface-4: 51 65 85;
+  --muted:     100 116 139;
 
-  /* ── Type: 0.9× scale ────────────────────────────── */
-  --text-xs:    0.625rem;
-  --text-sm:    0.75rem;
-  --text-base:  0.8125rem;
-  --text-lg:    1rem;
-  --text-xl:    1.25rem;
-  --text-2xl:   1.5rem;
-  --text-3xl:   1.875rem;
+  /* ── Text ─────────────────────────────────────────── */
+  --text-primary: 236 242 252;
+  --text-dim:     100 116 139;
 
-  /* ── Radius: sharp / minimal ──────────────────────── */
-  --radius-sm:   3px;
-  --radius-md:   6px;
-  --radius-lg:   8px;
-  --radius-xl:   12px;
+  /* ── Callout text ─────────────────────────────────── */
+  --callout-info-text:    #BFDBFE;
+  --callout-success-text: #A7F3D0;
+  --callout-warning-text: #FDE68A;
+  --callout-danger-text:  #FECACA;
+  --modal-backdrop:       rgba(3, 6, 14, 0.80);
 
-  /* ── Border: hairline ─────────────────────────────── */
+  /* ── Spacing (dense: 3px unit) ───────────────────── */
+  --space-xs:  3px;
+  --space-sm:  6px;
+  --space-md:  12px;
+  --space-lg:  20px;
+  --space-xl:  32px;
+  --space-2xl: 48px;
+
+  /* ── Typography (tight, legible) ─────────────────── */
+  --text-xs:    0.625rem;   /* 10px */
+  --text-sm:    0.75rem;    /* 12px */
+  --text-base:  0.8125rem;  /* 13px */
+  --text-lg:    0.9375rem;  /* 15px */
+  --text-xl:    1.125rem;   /* 18px */
+  --text-2xl:   1.375rem;   /* 22px */
+  --text-3xl:   1.75rem;    /* 28px */
+
+  /* ── Radius (sharp, professional) ────────────────── */
+  --radius-sm:  3px;
+  --radius-md:  5px;
+  --radius-lg:  8px;
+  --radius-xl:  10px;
+
+  /* ── Border (hairline blue-tinted) ───────────────── */
   --border-width: 1px;
-  --border-color:  255 255 255;
-  --border-alpha:  0.04;
-  --border-style:  solid;
+  --border-color: 148 196 255;
+  --border-alpha: 0.08;
 
-  /* ── Shadow: none (flat design) ───────────────────── */
-  --shadow-card:        none;
-  --shadow-card-hover:  none;
+  /* ── Shadows (flat, no decoration) ───────────────── */
+  --shadow-card:        0 1px 3px rgba(0,0,0,0.20);
+  --shadow-card-hover:  0 2px 8px rgba(0,0,0,0.25);
   --shadow-button:      none;
   --shadow-inset:       none;
   --shadow-glow-brand:  none;
   --shadow-glow-cta:    none;
 
-  /* ── Glass: none ──────────────────────────────────── */
-  --glass-blur:         0;
+  /* ── Glass (none) ─────────────────────────────────── */
+  --glass-blur:         0px;
   --glass-bg:           255 255 255;
   --glass-bg-alpha:     0.02;
   --glass-bg-hover:     0.04;
-  --glass-border-alpha: 0.04;
+  --glass-border-alpha: 0.08;
 
-  /* ── Motion: instant (accessibility-friendly) ─────── */
+  /* ── Motion (near-instant, decisive) ─────────────── */
   --ease-default: var(--ease-instant);
   --dur-fast:     80ms;
   --dur-normal:   120ms;
-  --dur-slow:     180ms;
+  --dur-slow:     160ms;
 
-  /* ── Misc ────────────────────────────────────────── */
-  --font-sans:    system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono:    'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  --font-heading: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --scrollbar-thumb:       rgba(37,99,235,0.2);
-  --scrollbar-thumb-hover: rgba(37,99,235,0.35);
-  --selection-bg:          rgba(37,99,235,0.25);
-  --selection-text:        #F1F5F9;
-  --app-glow-top-left:     rgba(37,99,235,0.08);
-  --app-glow-bottom-right: rgba(16,185,129,0.06);
-  --sidebar-width: 230px;
+  /* ── Misc ─────────────────────────────────────────── */
+  --font-sans:    'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+  --font-heading: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sidebar-width: 232px;
+  --btn-min-width: 4.5rem;
+
+  --scrollbar-thumb:       rgba(59,130,246,0.22);
+  --scrollbar-thumb-hover: rgba(59,130,246,0.40);
+  --selection-bg:          rgba(59,130,246,0.25);
+  --selection-text:        #EFF6FF;
+  --app-glow-top-left:     rgba(59,130,246,0.06);
+  --app-glow-bottom-right: rgba(16,185,129,0.05);
 }
