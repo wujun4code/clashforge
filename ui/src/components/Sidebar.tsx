@@ -148,7 +148,7 @@ export function Sidebar() {
                       代理服务
                     </span>
                     <span
-                      className={`rounded-full px-[var(--space-xs)] py-0.5 font-semibold ring-1 ${ss.badge}`}
+                      className={`flex-shrink-0 whitespace-nowrap rounded-full px-[var(--space-xs)] py-0.5 font-semibold ring-1 ${ss.badge}`}
                       style={{ fontSize: 'var(--text-xs)' }}
                     >
                       {ss.badgeText}

@@ -517,8 +517,8 @@ export function Nodes() {
           title="暂无节点"
           description="添加一台远程 Linux 服务器，ClashForge 将自动部署 GOST 代理并签发 TLS 证书。"
           action={
-            <button className="btn-primary" onClick={() => { setEditNode(undefined); setShowForm(true) }}>
-              <Plus size={14} /> 添加第一台服务器
+            <button className="btn-primary btn-lg" style={{ gap: 'var(--space-xs)' }} onClick={() => { setEditNode(undefined); setShowForm(true) }}>
+              <Plus size={16} /> 添加第一台服务器
             </button>
           }
           icon={<Server size={18} />}

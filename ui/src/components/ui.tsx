@@ -20,27 +20,73 @@ export function PageHeader({
 }) {
   return (
     <section className="hero-panel relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(167,139,250,0.26),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(249,115,22,0.16),transparent_32%)]" />
-      <div className="relative flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-        <div className="max-w-3xl space-y-3">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-brand-light">
-            <Sparkles size={12} className="text-cta" />
+      <div className="pointer-events-none absolute inset-0"
+        style={{
+          background: 'radial-gradient(circle at top right, rgb(var(--brand) / 0.18), transparent 38%), radial-gradient(circle at bottom left, rgb(var(--cta) / 0.12), transparent 35%)'
+        }}
+      />
+      <div className="relative flex flex-col gap-[var(--space-lg)] lg:flex-row lg:items-start lg:justify-between">
+        <div className="max-w-3xl" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+          <div
+            className="inline-flex items-center gap-[var(--space-xs)] font-semibold uppercase tracking-[0.26em] text-brand-light"
+            style={{
+              alignSelf: 'flex-start',
+              borderRadius: 'var(--radius-full)',
+              border: '1px solid rgb(var(--brand) / 0.20)',
+              background: 'rgb(var(--brand-subtle-rgb) / var(--brand-subtle-alpha))',
+              padding: '3px var(--space-sm)',
+              fontSize: 'var(--text-xs)',
+            }}
+          >
+            <Sparkles size={11} className="text-cta" />
             {eyebrow}
           </div>
-          <div className="space-y-2">
-            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">{title}</h1>
-            {description ? <p className="max-w-2xl text-sm leading-6 text-muted md:text-[15px]">{description}</p> : null}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <h1
+              className="font-semibold tracking-tight text-white"
+              style={{ fontSize: 'var(--text-2xl)' }}
+            >
+              {title}
+            </h1>
+            {description ? (
+              <p style={{ fontSize: 'var(--text-sm)', lineHeight: '1.6' }} className="max-w-2xl text-muted">
+                {description}
+              </p>
+            ) : null}
           </div>
         </div>
 
-        <div className="flex w-full flex-col gap-4 lg:w-auto lg:min-w-[320px] lg:items-end">
-          {actions ? <div className="flex flex-wrap items-center gap-2 lg:justify-end">{actions}</div> : null}
+        <div
+          className="flex w-full flex-col lg:w-auto lg:min-w-[280px] lg:items-end"
+          style={{ gap: 'var(--space-md)' }}
+        >
+          {actions ? (
+            <div className="flex flex-wrap items-center lg:justify-end" style={{ gap: 'var(--space-xs)' }}>
+              {actions}
+            </div>
+          ) : null}
           {metrics?.length ? (
-            <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-4 lg:w-auto">
+            <div className="grid w-full grid-cols-2 sm:grid-cols-4 lg:w-auto" style={{ gap: 'var(--space-sm)' }}>
               {metrics.map((metric) => (
-                <div key={metric.label} className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 backdrop-blur-xl">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-muted">{metric.label}</p>
-                  <p className="mt-2 text-sm font-semibold text-white">{metric.value}</p>
+                <div
+                  key={metric.label}
+                  className="backdrop-blur-xl"
+                  style={{
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px solid rgb(var(--border-color) / var(--border-alpha))',
+                    background: 'rgb(var(--surface-1) / 0.60)',
+                    padding: 'var(--space-sm) var(--space-md)',
+                  }}
+                >
+                  <p
+                    className="uppercase text-muted"
+                    style={{ fontSize: 'var(--text-xs)', letterSpacing: '0.18em' }}
+                  >
+                    {metric.label}
+                  </p>
+                  <p className="mt-2 font-semibold text-white" style={{ fontSize: 'var(--text-sm)' }}>
+                    {metric.value}
+                  </p>
                 </div>
               ))}
             </div>
@@ -69,13 +115,33 @@ export function SectionCard({
       {title || description || actions ? (
         <div className="panel-header">
           <div>
-            {title ? <h2 className="text-base font-semibold text-white">{title}</h2> : null}
-            {description ? <p className="mt-1 text-sm leading-6 text-muted">{description}</p> : null}
+            {title ? (
+              <h2 className="font-semibold text-white" style={{ fontSize: 'var(--text-base)' }}>
+                {title}
+              </h2>
+            ) : null}
+            {description ? (
+              <p className="text-muted" style={{ marginTop: '4px', fontSize: 'var(--text-sm)', lineHeight: '1.6' }}>
+                {description}
+              </p>
+            ) : null}
           </div>
-          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+          {actions ? (
+            <div className="flex flex-wrap items-center" style={{ gap: 'var(--space-xs)' }}>
+              {actions}
+            </div>
+          ) : null}
         </div>
       ) : null}
-      <div className={title || description || actions ? 'px-5 pb-5 pt-1 md:px-6 md:pb-6' : 'p-5 md:p-6'}>{children}</div>
+      <div
+        style={
+          title || description || actions
+            ? { padding: 'var(--space-sm) var(--space-lg) var(--space-lg)' }
+            : { padding: 'var(--space-md) var(--space-lg)' }
+        }
+      >
+        {children}
+      </div>
     </section>
   )
 }
@@ -101,10 +167,10 @@ export function SegmentedTabs<T extends string>({
             aria-selected={active}
             disabled={item.disabled}
             onClick={() => onChange(item.value)}
-            className={cn('segmented-tab', active && 'segmented-tab-active')}
+            className={cn('segmented-tab cursor-pointer', active && 'segmented-tab-active')}
             title={item.hint}
           >
-            {item.icon ? <span className="text-current">{item.icon}</span> : null}
+            {item.icon ? <span className="flex-shrink-0 text-current">{item.icon}</span> : null}
             <span>{item.label}</span>
           </button>
         )
@@ -127,11 +193,17 @@ export function EmptyState({
   return (
     <div className="empty-state">
       <div className="empty-state-icon">{icon ?? <Sparkles size={18} />}</div>
-      <div className="space-y-1.5">
-        <p className="text-sm font-semibold text-white">{title}</p>
-        {description ? <p className="mx-auto max-w-xl text-xs leading-6 text-muted">{description}</p> : null}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <p className="font-semibold text-white" style={{ fontSize: 'var(--text-sm)' }}>
+          {title}
+        </p>
+        {description ? (
+          <p className="mx-auto max-w-xl text-muted" style={{ fontSize: 'var(--text-xs)', lineHeight: '1.6' }}>
+            {description}
+          </p>
+        ) : null}
       </div>
-      {action ? <div className="pt-1">{action}</div> : null}
+      {action ? <div style={{ paddingTop: 'var(--space-xs)' }}>{action}</div> : null}
     </div>
   )
 }
@@ -148,20 +220,29 @@ export function InlineNotice({
   action?: ReactNode
 }) {
   const toneClass = {
-    info: 'border-brand/25 bg-brand-subtle/35 text-[var(--callout-info-text)]',
-    success: 'border-success/25 bg-success-subtle/30 text-[var(--callout-success-text)]',
-    warning: 'border-warning/25 bg-warning-subtle/30 text-[var(--callout-warning-text)]',
-    danger: 'border-danger/25 bg-danger-subtle/30 text-[var(--callout-danger-text)]',
+    info:    'notice-info',
+    success: 'notice-success',
+    warning: 'notice-warning',
+    danger:  'notice-danger',
   }[tone]
 
   return (
-    <div className={cn('rounded-2xl border px-4 py-3', toneClass)}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className={toneClass}>
+      <div className="flex flex-wrap items-start justify-between" style={{ gap: 'var(--space-sm)' }}>
         <div>
-          {title ? <p className="text-xs font-semibold uppercase tracking-[0.18em] opacity-90">{title}</p> : null}
-          <div className="mt-1 text-sm leading-6">{children}</div>
+          {title ? (
+            <p
+              className="font-semibold uppercase opacity-90"
+              style={{ fontSize: 'var(--text-xs)', letterSpacing: '0.16em' }}
+            >
+              {title}
+            </p>
+          ) : null}
+          <div style={{ marginTop: title ? '4px' : 0, fontSize: 'var(--text-sm)', lineHeight: '1.6' }}>
+            {children}
+          </div>
         </div>
-        {action ? <div className="shrink-0">{action}</div> : null}
+        {action ? <div className="flex-shrink-0">{action}</div> : null}
       </div>
     </div>
   )
@@ -188,24 +269,51 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md"
-      style={{ background: 'var(--modal-backdrop)' }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-[var(--space-md)]"
+      style={{ background: 'var(--modal-backdrop)', backdropFilter: 'blur(8px)' }}
       onClick={dismissible ? onClose : undefined}
     >
       <div
-        className={cn('glass-card glass-modal w-full overflow-hidden border-white/12 shadow-glass-lg', maxWidth)}
+        className={cn('glass-modal w-full overflow-hidden shadow-glass-lg', maxWidth)}
+        style={{
+          border: '1px solid rgb(var(--border-color) / calc(var(--border-alpha) + 0.04))',
+        }}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="border-b border-white/8 px-5 py-4 md:px-6">
-          <div className="flex items-start gap-3">
-            {icon ? <div className="mt-0.5 rounded-2xl border border-white/10 bg-white/[0.04] p-2 text-brand-light">{icon}</div> : null}
+        <div
+          style={{
+            borderBottom: '1px solid rgb(var(--border-color) / var(--border-alpha))',
+            padding: 'var(--space-md) var(--space-lg)',
+          }}
+        >
+          <div className="flex items-start" style={{ gap: 'var(--space-sm)' }}>
+            {icon ? (
+              <div
+                className="flex-shrink-0 text-brand-light"
+                style={{
+                  marginTop: '2px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid rgb(var(--brand) / 0.20)',
+                  background: 'rgb(var(--brand-subtle-rgb) / var(--brand-subtle-alpha))',
+                  padding: 'var(--space-xs)',
+                }}
+              >
+                {icon}
+              </div>
+            ) : null}
             <div className="min-w-0 flex-1">
-              <h3 className="text-lg font-semibold text-white">{title}</h3>
-              {description ? <p className="mt-1 text-sm leading-6 text-muted">{description}</p> : null}
+              <h3 className="font-semibold text-white" style={{ fontSize: 'var(--text-lg)' }}>
+                {title}
+              </h3>
+              {description ? (
+                <p className="text-muted" style={{ marginTop: '4px', fontSize: 'var(--text-sm)', lineHeight: '1.6' }}>
+                  {description}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
-        <div className="px-5 py-5 md:px-6">{children}</div>
+        <div style={{ padding: 'var(--space-md) var(--space-lg)' }}>{children}</div>
       </div>
     </div>
   )

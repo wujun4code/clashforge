@@ -1083,7 +1083,8 @@ export function Setup() {
               )}
 
               <button
-                className="btn-primary w-full flex items-center justify-center gap-2"
+                className="btn-primary btn-lg w-full flex items-center justify-center"
+                style={{ gap: 'var(--space-xs)' }}
                 onClick={handleImport}
                 disabled={
                   importing ||
@@ -1091,13 +1092,13 @@ export function Setup() {
                 }
               >
                 {importing
-                  ? <><Loader2 size={14} className="animate-spin" />解析中…</>
-                  : <><ArrowRight size={14} />解析并继续</>}
+                  ? <><Loader2 size={16} className="animate-spin" />解析中…</>
+                  : <><ArrowRight size={16} />解析并继续</>}
               </button>
             </div>
 
-            <p className="text-xs text-muted text-center">如果还没有配置文件，可以直接跳过 →
-              <button className="ml-1 text-brand hover:underline" onClick={() => { setClashParsed({}); setStep('dns') }}>
+            <p className="text-center text-muted" style={{ fontSize: 'var(--text-sm)' }}>如果还没有配置文件，可以直接跳过 →
+              <button className="ml-1 text-brand hover:underline" style={{ fontSize: 'var(--text-sm)' }} onClick={() => { setClashParsed({}); setStep('dns') }}>
                 跳过导入，手动设置
               </button>
             </p>
