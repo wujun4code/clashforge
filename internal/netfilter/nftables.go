@@ -118,10 +118,15 @@ func (n *NftablesBackend) Apply() error {
 	// DNS redirect chains use nat table hooks which require nf_nat. Probe-load
 	// the module so the nft apply below doesn't fail on minimal OpenWrt images
 	// that haven't loaded it yet (e.g. no firewall3/firewall4 running).
+	// nft_redir provides the "redirect to :port" expression evaluator; it is a
+	// separate module from nf_nat on kernels that compile CONFIG_NFT_REDIR=m.
 	if n.EnableDNSRedirect {
-		out, err := exec.Command("modprobe", "nf_nat").CombinedOutput()
-		if err != nil {
-			log.Debug().Err(err).Str("output", string(out)).Msg("netfilter: modprobe nf_nat (may be built-in or unavailable)")
+		for _, mod := range []string{"nf_nat", "nft_redir"} {
+			out, err := exec.Command("modprobe", mod).CombinedOutput()
+			if err != nil {
+				log.Debug().Err(err).Str("module", mod).Str("output", string(out)).
+					Msg("netfilter: modprobe (may be built-in or unavailable)")
+			}
 		}
 	}
 

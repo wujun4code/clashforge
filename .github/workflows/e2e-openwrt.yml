@@ -299,13 +299,13 @@ jobs:
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
           _ssh "modprobe nft_tproxy 2>/dev/null || true"
-          # kmod-nf-nat is needed for dns_redirect + dns_output_redirect nat chains
-          # (dnsmasq_mode=replace).  On routers with firewall3/4 it is already loaded;
-          # on the minimal E2E VM it may not be, causing nft apply to fail.
-          # Show output (not suppressed) so any package errors are visible in CI logs.
-          _ssh "opkg install kmod-nf-nat 2>&1 | grep -v 'up to date' | head -8 || true"
-          _ssh "modprobe nf_nat 2>&1 && echo '✓ nf_nat loaded' || echo '⚠ nf_nat modprobe failed (may be built-in)'"
-          _ssh "lsmod 2>/dev/null | grep -E '^nf_nat' && echo '  ✓ confirmed in lsmod' || echo '  ⚠ not in lsmod (may be built-in or unavailable)'"
+          # nat chains with "redirect to :port" need BOTH nf_nat (hook registration)
+          # AND nft_redir ("redirect" expression evaluator, CONFIG_NFT_REDIR=m on OpenWrt).
+          # Installing kmod-nf-nat alone is NOT enough; kmod-nft-redir is also required.
+          _ssh "opkg install kmod-nf-nat kmod-nft-redir 2>&1 | grep -v 'up to date' | head -10 || true"
+          _ssh "modprobe nf_nat   2>&1 && echo '✓ nf_nat loaded'   || echo '⚠ nf_nat modprobe failed (may be built-in)'"
+          _ssh "modprobe nft_redir 2>&1 && echo '✓ nft_redir loaded' || echo '⚠ nft_redir modprobe failed (may be built-in)'"
+          _ssh "lsmod 2>/dev/null | grep -E '^nf_nat|^nft_redir' || echo '⚠ nf_nat/nft_redir not in lsmod (may be built-in)'"
 
           # 启动服务
           _ssh "/etc/init.d/clashforge start"
@@ -345,19 +345,26 @@ jobs:
           echo "=== nft tables ==="
           _ssh "nft list tables 2>/dev/null || echo none"
           echo "=== kernel modules (nf/nft) ==="
-          _ssh "lsmod 2>/dev/null | grep -E 'nf_nat|nft_' | head -10 || echo none"
+          _ssh "lsmod 2>/dev/null | grep -E 'nf_nat|nft_redir|nft_' | head -10 || echo none"
           echo "=== port 53 listeners ==="
           _ssh "ss -tuln 2>/dev/null | grep ':53 ' || echo 'nothing on :53'"
-          echo "=== nat hook probe ==="
+          echo "=== nat hook + redirect probe ==="
+          # Tests BOTH requirements for dnsmasq_mode=replace:
+          #   1. type nat hook  → requires nf_nat module
+          #   2. redirect to :N → requires nft_redir module (separate from nf_nat on OpenWrt)
           _ssh "nft add table inet __cfnat_test 2>/dev/null || true; \
-            if nft add chain inet __cfnat_test pre \
+            if ! nft add chain inet __cfnat_test pre \
                 '{ type nat hook prerouting priority dstnat; policy accept; }' 2>/dev/null; then \
-              echo '✓ nat hooks supported'; \
-            else \
-              echo '✗ nat hooks NOT supported — kmod-nf-nat may not be loaded'; \
+              echo '✗ nat hook NOT supported (nf_nat not loaded?)'; \
               nft delete table inet __cfnat_test 2>/dev/null || true; \
               exit 1; \
             fi; \
+            if ! nft add rule inet __cfnat_test pre 'udp dport 65234 redirect to :65235' 2>/dev/null; then \
+              echo '✗ nat redirect NOT supported (nft_redir not loaded?)'; \
+              nft delete table inet __cfnat_test 2>/dev/null || true; \
+              exit 1; \
+            fi; \
+            echo '✓ nat hooks + redirect supported'; \
             nft delete table inet __cfnat_test 2>/dev/null || true"
 
       # ── Scenario 2/2: dnsmasq_mode=replace ───────────────────────────────────
