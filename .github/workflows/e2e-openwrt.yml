@@ -271,25 +271,32 @@ jobs:
           _ssh "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' sh /tmp/e2e-setup-launch.sh"
 
           # 读出代理信息供 Step 6 使用
-          PROXY_AUTH=$(_ssh "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
+          PROXY_AUTH=*** "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
           PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
           SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
+
+          # 读取 Step 5 中检测到的实际端口（来自 clashforge API）
+          MIXED_PORT=$(_ssh "cat /tmp/cf-snapshot/mixed-port 2>/dev/null" || echo "7893")
+          DNS_PORT=$(_ssh "cat /tmp/cf-snapshot/dns-port 2>/dev/null" || echo "7874")
+          echo "实际运行端口: mixed=${MIXED_PORT} dns=${DNS_PORT}"
 
           # DoH 解析节点服务器真实 IP
           SERVER_IP=""
           if [ -n "$SERVER_HOST" ]; then
             SERVER_IP=$(curl -sf --max-time 8 \
               "https://dns.google/resolve?name=${SERVER_HOST}&type=A" 2>/dev/null \
-              | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"//' || echo "")
+              | grep -o '"data":"[0-9.]*"' | head -1 | sed 's/"data":"//;s/"/' || echo "")
           fi
 
           echo "proxy_auth=$PROXY_AUTH"   >> "$GITHUB_OUTPUT"
           echo "proxy_node=$PROXY_NODE"   >> "$GITHUB_OUTPUT"
           echo "server_host=$SERVER_HOST" >> "$GITHUB_OUTPUT"
           echo "server_ip=$SERVER_IP"     >> "$GITHUB_OUTPUT"
+          echo "mixed_port=$MIXED_PORT"   >> "$GITHUB_OUTPUT"
+          echo "dns_port=$DNS_PORT"       >> "$GITHUB_OUTPUT"
           [ -n "$PROXY_AUTH" ] && \
-            echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:7890" >> "$GITHUB_OUTPUT" || \
-            echo "mixed_port_url=http://127.0.0.1:7890"               >> "$GITHUB_OUTPUT"
+            echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT" || \
+            echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}"               >> "$GITHUB_OUTPUT"
 
           echo "节点: $PROXY_NODE / 节点 IP: $(echo "$SERVER_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')"
 
@@ -298,18 +305,14 @@ jobs:
         id: probe_running
         run: |
           # tproxy 只拦截 PREROUTING（LAN 入流量），路由器本机进程走 OUTPUT，不经 tproxy。
-          # 传入 MIXED_PORT_URL，让 probe.sh 在 running 阶段显式经混合端口代理，
-          # 保证出口 IP 切换断言和连通性断言均能通过。
-          # MIXED_PORT 从 MIXED_PORT_URL 提取实际运行端口（不是硬编码默认值）。
-          # MIHOMO_DNS_PORT / MIXED_PORT 用于路由器侧诊断探测，对齐 handler_overview.go。
-          MIXED_URL='${{ steps.setup.outputs.mixed_port_url }}'
-          MIXED_PORT="$(echo "$MIXED_URL" | sed 's|.*:||')"
-          echo "MIXED_PORT=$MIXED_PORT (from MIXED_PORT_URL=$MIXED_URL)"
+          # 传入 MIXED_PORT_URL，让 probe.sh 在 running 阶段显式经混合端口代理。
+          # MIXED_PORT / MIHOMO_DNS_PORT 来自 Step 5 从 clashforge API 读取的实际端口。
           ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "PHASE=running \
              PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
-             MIXED_PORT_URL='$MIXED_URL' \
-             MIXED_PORT='$MIXED_PORT' \
+             MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' \
+             MIXED_PORT='${{ steps.setup.outputs.mixed_port }}' \
+             MIHOMO_DNS_PORT='${{ steps.setup.outputs.dns_port }}' \
              sh /tmp/e2e-probe.sh"
 
       # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────

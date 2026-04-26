@@ -131,6 +131,48 @@ else
     record FAIL SL-04 "mihomo 进程已启动" "pgrep mihomo-clashforge → 有进程" "mihomo 未运行"
 fi
 
+# ── SL-04b: 端口检测与验证 ────────────────────────────────────────────────────
+section "端口检测 — clashforge 接管的所有服务端口"
+info "从 clashforge API 读取端口配置..."
+CFG_JSON=$(curl -sf --max-time 5 "$CF_API/config" 2>/dev/null || echo "{}")
+
+# 提取各端口
+MIXED_PORT=$(echo "$CFG_JSON" | grep -o '"mixed":[0-9]*' | head -1 | sed 's/"mixed"://')
+DNS_PORT=$(echo "$CFG_JSON" | grep -o '"dns":[0-9]*' | head -1 | sed 's/"dns"://')
+HTTP_PORT=$(echo "$CFG_JSON" | grep -o '"http":[0-9]*' | head -1 | sed 's/"http"://')
+TPROXY_PORT=$(echo "$CFG_JSON" | grep -o '"tproxy":[0-9]*' | head -1 | sed 's/"tproxy"://')
+UI_PORT=$(echo "$CFG_JSON" | grep -o '"ui":[0-9]*' | head -1 | sed 's/"ui"://')
+
+# 端口监听检查
+_port_listening() { nc -z -w 1 127.0.0.1 "$1" 2>/dev/null && echo "✓ 监听" || echo "✗ 未监听"; }
+
+info ""
+info "  mixed  : ${MIXED_PORT:-?}  $(_port_listening "${MIXED_PORT:-0}")"
+info "  DNS    : ${DNS_PORT:-?}    $(_port_listening "${DNS_PORT:-0}")"
+info "  HTTP   : ${HTTP_PORT:-?}   $(_port_listening "${HTTP_PORT:-0}")"
+info "  TProxy : ${TPROXY_PORT:-?} $(_port_listening "${TPROXY_PORT:-0}")"
+info "  UI     : ${UI_PORT:-?}     $(_port_listening "${UI_PORT:-0}")"
+
+# 保存供 Step 6 使用
+[ -n "$MIXED_PORT" ] && echo "$MIXED_PORT" > "$SNAPSHOT_DIR/mixed-port"
+[ -n "$DNS_PORT" ]   && echo "$DNS_PORT"   > "$SNAPSHOT_DIR/dns-port"
+[ -n "$HTTP_PORT" ]  && echo "$HTTP_PORT"  > "$SNAPSHOT_DIR/http-port"
+
+# 断言核心端口
+ALL_PORTS_OK=true
+for _p in "$MIXED_PORT" "$DNS_PORT"; do
+    if [ -z "$_p" ] || ! nc -z -w 1 127.0.0.1 "$_p" 2>/dev/null; then
+        ALL_PORTS_OK=false; break
+    fi
+done
+if [ "$ALL_PORTS_OK" = true ]; then
+    record PASS SL-04b "端口监听验证" "mixed(${MIXED_PORT:-?}) + DNS(${DNS_PORT:-?}) 均监听" \
+        "mixed=${MIXED_PORT:-?} DNS=${DNS_PORT:-?} ✓"
+else
+    record FAIL SL-04b "端口监听验证" "mixed + DNS 端口均正常监听" \
+        "有端口未监听（mixed=${MIXED_PORT:-?} DNS=${DNS_PORT:-?}）"
+fi
+
 # ── SL-05: nftables metaclash 表已创建 ────────────────────────────────────────
 NFT_TABLES=$(nft list tables 2>/dev/null | tr '\n' ' ')
 if echo "$NFT_TABLES" | grep -qE "metaclash|clashforge"; then
@@ -169,9 +211,22 @@ else
 fi
 
 # ── SL-09: DNS 解析返回 fake-ip ───────────────────────────────────────────────
+# 直接查询 mihomo DNS 端口（对齐 handler_overview.go resolveForDebug），
+# 避免通过 dnsmasq → 127.0.0.1:53 链路受到上游转发状态影响。
 sleep 2
-DNS_RESULT=$(nslookup google.com 2>/dev/null | grep "Address:" | grep -vE "#53|^127\." | head -1 | awk '{print $2}' || echo "")
-info "DNS 解析 google.com → $DNS_RESULT"
+DNS_RESULT=""
+if [ -n "${DNS_PORT:-}" ] && [ "${DNS_PORT:-0}" -gt 0 ] 2>/dev/null; then
+    if command -v dig > /dev/null 2>&1; then
+        DNS_RESULT=$(dig +short +time=3 @127.0.0.1 -p "$DNS_PORT" google.com 2>/dev/null \
+            | grep -v '^;' | grep -E '^[0-9]' | head -1 || echo "")
+    fi
+fi
+# Fallback: system nslookup（upstream 模式下走 dnsmasq → mihomo）
+if [ -z "$DNS_RESULT" ]; then
+    DNS_RESULT=$(nslookup google.com 2>/dev/null \
+        | grep "Address:" | grep -vE "#53|^127\\.|:53" | head -1 | awk '{print $NF}' || echo "")
+fi
+info "DNS 解析 google.com → ${DNS_RESULT:-无结果}（通过 mihomo DNS :${DNS_PORT:-?}）"
 
 if echo "$DNS_RESULT" | grep -qE "^198\.18\.|^198\.19\."; then
     record PASS SL-09 "DNS 解析返回 fake-ip" "nslookup google.com → 198.18.x.x 或 198.19.x.x" "fake-ip: $DNS_RESULT ✓"
