@@ -233,7 +233,7 @@ jobs:
           echo "IPK 传输完成，大小: ${IPK_SIZE} bytes"
           [ "$IPK_SIZE" -gt 1000 ] || (echo 'IPK 传输失败，文件过小' && exit 1)
 
-          _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
+          _ssh "opkg install --nodeps --force-downgrade --force-checksum /tmp/clashforge.ipk"
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
