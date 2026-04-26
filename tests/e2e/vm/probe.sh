@@ -288,7 +288,7 @@ if [ "$PHASE" = "running" ]; then
             DNS_OK="true"
         else
             DNS_FAIL_MSG="解析失败"
-            if ! _port_listening "$MIHOMO_DNS_PORT"; then
+            if ! _tcp_ok "$MIHOMO_DNS_PORT"; then
                 DNS_FAIL_MSG="mihomo DNS 端口 ${MIHOMO_DNS_PORT} 未监听"
             fi
             record FAIL "RD-${RD_TOTAL}b" "${name} DNS 解析" \
