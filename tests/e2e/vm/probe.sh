@@ -153,18 +153,13 @@ esac
 if [ "$PHASE" = "running" ]; then
     section "路由器侧诊断探测 — 对齐 handler_overview.go"
 
-    # ── 检查 TCP 端口监听（对齐 isTCPPortListening） ──────────────────────────
-    _port_listening() {
-        # 800ms timeout, matching Go's DialTimeout
-        if command -v nc > /dev/null 2>&1; then
-            nc -z -w 1 127.0.0.1 "$1" 2>/dev/null && return 0 || return 1
-        fi
-        # Fallback: bash /dev/tcp (busybox ash also supports this via bash if installed)
-        (echo > "/dev/tcp/127.0.0.1/$1") 2>/dev/null && return 0 || return 1
+    # ── 检查端口可访问（跳过 nc -z，OpenWrt BusyBox 不可靠） ──────────────
+    _tcp_ok() {
+        curl --connect-timeout 1 --max-time 2 -o /dev/null "http://127.0.0.1:$1" 2>/dev/null
     }
 
     MIXED_LISTENING="false"
-    if _port_listening "$MIXED_PORT"; then
+    if _tcp_ok "$MIXED_PORT"; then
         MIXED_LISTENING="true"
         info "mixed 端口 $MIXED_PORT 正在监听 ✓"
     else
@@ -172,34 +167,21 @@ if [ "$PHASE" = "running" ]; then
     fi
 
     DNS_LISTENING="false"
-    if _port_listening "$MIHOMO_DNS_PORT"; then
+    # DNS 是 UDP 端口，用 nslookup 验证 DNS 链（对齐 SL-04b / SL-09）
+    if nslookup google.com >/dev/null 2>&1; then
         DNS_LISTENING="true"
-        info "mihomo DNS 端口 $MIHOMO_DNS_PORT 正在监听 ✓"
+        info "mihomo DNS 端口 $MIHOMO_DNS_PORT 解析正常 ✓"
     else
-        info "mihomo DNS 端口 $MIHOMO_DNS_PORT 未监听 ✗"
+        info "mihomo DNS 端口 $MIHOMO_DNS_PORT DNS 不通 ✗"
     fi
 
-    # ── DNS 解析（对齐 resolveForDebug — 直连 mihomo DNS 端口） ──────────────
+    # ── DNS 解析（对齐 resolveForDebug） ──────────────────────────────────
+    # 此时 DNS 已接管，直接 nslookup 走 dnsmasq → mihomo 链路即可
     _dns_resolve() {
         _host="$1"
-        _dns_port="${2:-$MIHOMO_DNS_PORT}"
-        # Try nslookup with explicit server and port
-        # OpenWrt busybox nslookup doesn't support -port, use dig if available
-        if command -v dig > /dev/null 2>&1; then
-            dig +short +time=3 @"127.0.0.1" -p "$_dns_port" "$_host" 2>/dev/null \
-                | grep -v '^;' | grep -E '^[0-9]' | head -3 | tr '\n' ',' | sed 's/,$//'
-        elif command -v nslookup > /dev/null 2>&1; then
-            # OpenWrt nslookup uses /etc/resolv.conf; for direct mihomo DNS we
-            # override resolv.conf temporarily
-            _tmp_resolv="/tmp/e2e-resolv-$$.conf"
-            echo "nameserver 127.0.0.1" > "$_tmp_resolv"
-            RESOLV_HOST_CONF="$_tmp_resolv" nslookup "$_host" 2>/dev/null \
-                | grep -A5 'Name:' | grep 'Address' | awk '{print $NF}' | grep -v '127.0.0.1' \
-                | head -3 | tr '\n' ',' | sed 's/,$//'
-            rm -f "$_tmp_resolv"
-        else
-            echo ""
-        fi
+        nslookup "$_host" 2>/dev/null \
+            | grep "Address" | grep -vE '#53|127\.0\.|::1' \
+            | awk '{print $NF}' | head -3 | tr '\n' ',' | sed 's/,$//'
     }
 
     # ── HTTP HEAD via proxy（对齐 testHTTPProxyEndpoint） ──────────────────────
