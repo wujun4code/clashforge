@@ -300,13 +300,16 @@ jobs:
           # tproxy 只拦截 PREROUTING（LAN 入流量），路由器本机进程走 OUTPUT，不经 tproxy。
           # 传入 MIXED_PORT_URL，让 probe.sh 在 running 阶段显式经混合端口代理，
           # 保证出口 IP 切换断言和连通性断言均能通过。
+          # MIXED_PORT 从 MIXED_PORT_URL 提取实际运行端口（不是硬编码默认值）。
           # MIHOMO_DNS_PORT / MIXED_PORT 用于路由器侧诊断探测，对齐 handler_overview.go。
+          MIXED_URL='${{ steps.setup.outputs.mixed_port_url }}'
+          MIXED_PORT="$(echo "$MIXED_URL" | sed 's|.*:||')"
+          echo "MIXED_PORT=$MIXED_PORT (from MIXED_PORT_URL=$MIXED_URL)"
           ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
             "PHASE=running \
              PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
-             MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' \
-             MIHOMO_DNS_PORT=17874 \
-             MIXED_PORT=17893 \
+             MIXED_PORT_URL='$MIXED_URL' \
+             MIXED_PORT='$MIXED_PORT' \
              sh /tmp/e2e-probe.sh"
 
       # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────
