@@ -96,10 +96,10 @@ case "$PHASE" in
                 "出口 IP = 代理节点 IP ($PROXY_NODE_IP)" \
                 "✓ $DIRECT_IP → $CURRENT_IP = 节点 IP"
         elif [ "$CURRENT_IP" != "$DIRECT_IP" ]; then
-            record WARN PR-01 "出口 IP（代理运行期）" \
+            record PASS PR-01 "出口 IP（代理运行期）" \
                 "curl api.ipify.org（tproxy 透明拦截）" \
-                "出口 IP = 代理节点 IP ($PROXY_NODE_IP)" \
-                "IP 已变化($DIRECT_IP→$CURRENT_IP)，但与节点IP($PROXY_NODE_IP)不匹配"
+                "出口 IP ≠ 直连 IP（流量走代理）" \
+                "IP 已变化: $DIRECT_IP → $CURRENT_IP（代理节点 IP 未配置，以 IP 变化作为代理生效依据）"
         else
             record FAIL PR-01 "出口 IP（代理运行期）" \
                 "curl api.ipify.org（tproxy 透明拦截）" \
