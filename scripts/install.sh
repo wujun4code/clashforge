@@ -232,16 +232,20 @@ pre_upgrade_cleanup() {
     log "  table inet dnsmasq not present, skipping"
   fi
 
-  # 4. Clean up policy routing rules and route table (IPv4 + IPv6)
-  log "  [4/5] cleaning up policy routing fwmark 0x1a3 / table 100..."
+  # 4. Clean up policy routing rules and route tables (IPv4 + IPv6)
+  log "  [4/5] cleaning up policy routing fwmark 0x1a3 / table 100 and fwmark 0x1a4 / table 101..."
   _removed=0
   while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do _removed=$((_removed+1)); done
-  [ "$_removed" -gt 0 ] && log "  removed $_removed IPv4 ip rule(s)" || log "  no IPv4 ip rules to remove"
+  [ "$_removed" -gt 0 ] && log "  removed $_removed IPv4 ip rule(s) (0x1a3)" || log "  no IPv4 ip rules to remove (0x1a3)"
   ip route flush table 100 2>/dev/null || true
   _removed6=0
   while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do _removed6=$((_removed6+1)); done
-  [ "$_removed6" -gt 0 ] && log "  removed $_removed6 IPv6 ip rule(s)" || log "  no IPv6 ip rules to remove"
+  [ "$_removed6" -gt 0 ] && log "  removed $_removed6 IPv6 ip rule(s) (0x1a3)" || log "  no IPv6 ip rules to remove (0x1a3)"
   ip -6 route flush table 100 2>/dev/null || true
+  _removed_out=0
+  while ip rule del fwmark 0x1a4 table 101 2>/dev/null; do _removed_out=$((_removed_out+1)); done
+  [ "$_removed_out" -gt 0 ] && log "  removed $_removed_out output tproxy ip rule(s) (0x1a4)" || log "  no output tproxy ip rules to remove (0x1a4)"
+  ip route flush table 101 2>/dev/null || true
 
   # 5. Stop clashforge service and kill any remaining processes
   log "  [5/5] stopping clashforge service and processes..."

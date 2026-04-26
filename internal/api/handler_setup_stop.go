@@ -148,6 +148,8 @@ func handleSetupStop(deps Dependencies) http.HandlerFunc {
 			emitInfo("nft-metaclash", fmt.Sprintf("执行: ip route flush table %s", netfilter.RouteTable))
 			emitInfo("nft-metaclash", fmt.Sprintf("执行: ip -6 rule del fwmark %s table %s", netfilter.FWMark, netfilter.RouteTable))
 			emitInfo("nft-metaclash", fmt.Sprintf("执行: ip -6 route flush table %s", netfilter.RouteTable))
+			emitInfo("nft-metaclash", fmt.Sprintf("执行: ip rule del fwmark %s table %s", netfilter.FWMarkOutput, netfilter.RouteTableOutput))
+			emitInfo("nft-metaclash", fmt.Sprintf("执行: ip route flush table %s", netfilter.RouteTableOutput))
 			emitStep("nft-metaclash", "ok", "table inet metaclash 已删除，策略路由已清除 ✓",
 				"透明代理 TProxy 规则、DNS 劫持链、fwmark 路由全部还原")
 		}
@@ -210,6 +212,11 @@ func handleSetupStop(deps Dependencies) http.HandlerFunc {
 			issues = append(issues, "⚠ ip rule fwmark 0x1a3 仍然存在")
 		} else {
 			emitInfo("verify", "✓ 策略路由规则 fwmark 0x1a3 已清除")
+		}
+		if ipRule, _ := exec.Command("sh", "-c", "ip rule show 2>/dev/null | grep 'fwmark 0x1a4'").Output(); len(ipRule) > 0 {
+			issues = append(issues, "⚠ ip rule fwmark 0x1a4 (output tproxy) 仍然存在")
+		} else {
+			emitInfo("verify", "✓ 策略路由规则 fwmark 0x1a4 已清除")
 		}
 
 		if len(issues) > 0 {
