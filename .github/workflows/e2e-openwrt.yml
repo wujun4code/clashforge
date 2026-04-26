@@ -294,14 +294,20 @@ jobs:
           echo "节点: $PROXY_NODE / 节点 IP: $(echo "$SERVER_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')"
 
       # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────
-      - name: "[Step 6] Probe — Round 2 running (tproxy)"
+      - name: "[Step 6] Probe — Round 2 running (tproxy + router diagnostic)"
         id: probe_running
         run: |
           # tproxy 只拦截 PREROUTING（LAN 入流量），路由器本机进程走 OUTPUT，不经 tproxy。
           # 传入 MIXED_PORT_URL，让 probe.sh 在 running 阶段显式经混合端口代理，
           # 保证出口 IP 切换断言和连通性断言均能通过。
+          # MIHOMO_DNS_PORT / MIXED_PORT 用于路由器侧诊断探测，对齐 handler_overview.go。
           ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
-            "PHASE=running PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' sh /tmp/e2e-probe.sh"
+            "PHASE=running \
+             PROXY_NODE_IP='${{ steps.setup.outputs.server_ip }}' \
+             MIXED_PORT_URL='${{ steps.setup.outputs.mixed_port_url }}' \
+             MIHOMO_DNS_PORT=17874 \
+             MIXED_PORT=17893 \
+             sh /tmp/e2e-probe.sh"
 
       # ── Step 7: 停止服务 + 状态还原断言 ──────────────────────────────────
       - name: "[Step 7] Stop clashforge & verify rollback"
