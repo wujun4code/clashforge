@@ -160,7 +160,7 @@ jobs:
 
       - name: Download bundled mihomo
         run: |
-          MIHOMO_VER=$(curl -sf https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
             | grep '"tag_name"' | head -1 | cut -d'"' -f4)
           echo "Downloading mihomo $MIHOMO_VER (${{ matrix.mihomo_asset }})"
           curl -fsSL -o /tmp/mihomo.gz \
