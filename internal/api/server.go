@@ -74,6 +74,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/system/conflicts", handleDetectConflicts(deps))
 		api.Post("/system/stop-service", handleStopService(deps))
 		api.Post("/setup/launch", handleSetupLaunch(deps))
+		api.Get("/setup/port-check", handleSetupPortCheck(deps))
 		api.Post("/setup/stop", handleSetupStop(deps))
 		api.Post("/system/reset", handleResetClashForge(deps))
 		api.Get("/subscriptions", handleGetSubscriptions(deps))

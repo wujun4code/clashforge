@@ -13,8 +13,9 @@ import {
   getOverviewCore, getOverviewProbes, getLogs,
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
   saveSource, setActiveSource, getSourceFile, getSources,
+  checkSetupPorts,
 } from '../api/client'
-import type { OverviewProbeData, OverviewModule, LogEntry, SourceFile, Subscription } from '../api/client'
+import type { OverviewProbeData, OverviewModule, LogEntry, SourceFile, Subscription, SetupPortCheck } from '../api/client'
 
 type InitStatus = 'checking' | 'running' | 'ready'
 
@@ -409,6 +410,11 @@ export function Setup() {
   const [launchError, setLaunchError] = useState('')
   const [launchLog, setLaunchLog] = useState<LaunchEvent[]>([])
 
+  // ── port check step (after launch, before connectivity check) ──
+  const [portChecking, setPortChecking] = useState(false)
+  const [portChecks, setPortChecks] = useState<SetupPortCheck[] | null>(null)
+  const portCheckAllOk = portChecks !== null && portChecks.every(c => c.ok)
+
   // ── check step ──
   const [checking, setChecking] = useState(false)
   const [routerProbe, setRouterProbe] = useState<OverviewProbeData | null>(null)
@@ -616,6 +622,27 @@ export function Setup() {
     } finally { setImporting(false) }
   }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved])
 
+  // ── port check: verify each managed port after launch ──
+  const handlePortCheck = useCallback(async () => {
+    setPortChecking(true)
+    setPortChecks(null)
+    try {
+      const { checks } = await checkSetupPorts()
+      setPortChecks(checks)
+    } catch (e) {
+      setPortChecks([{
+        name: '端口检测请求失败',
+        description: e instanceof Error ? e.message : '未知错误',
+        port: 0,
+        required: true,
+        ok: false,
+        error: e instanceof Error ? e.message : '未知错误',
+      }])
+    } finally {
+      setPortChecking(false)
+    }
+  }, [])
+
   // ── launch (streaming SSE from POST /api/v1/setup/launch) ──
   const logEndRef = useRef<HTMLDivElement>(null)
   const handleLaunch = useCallback(async () => {
@@ -670,7 +697,10 @@ export function Setup() {
               setLaunchDone(ev.success ?? false)
               if (!ev.success) setLaunchError(ev.error ?? '启动失败')
               setLaunching(false)
-              if (ev.success) setTimeout(() => setStep('check'), 1800)
+              if (ev.success) {
+                // Auto-run port check after brief settle delay
+                setTimeout(() => { void handlePortCheck() }, 800)
+              }
               return
             }
           } catch { /* ignore unparseable line */ }
@@ -681,7 +711,7 @@ export function Setup() {
     } finally {
       setLaunching(false)
     }
-  }, [dns, net])
+  }, [dns, net, handlePortCheck])
 
   // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
   useEffect(() => {
@@ -1278,14 +1308,7 @@ export function Setup() {
                 </div>
               )}
 
-              {/* Final status banners */}
-              {launchDone && (
-                <div className="rounded-xl bg-success/10 border border-success/20 px-4 py-3 flex items-center gap-2">
-                  <CheckCircle2 size={15} className="text-success flex-shrink-0" />
-                  <p className="text-sm font-semibold text-success">所有服务已启动 ✓ 即将进入连通检测…</p>
-                </div>
-              )}
-
+              {/* Launch error banner */}
               {launchError && !launching && (
                 <div className="rounded-xl bg-danger/10 border border-danger/20 px-4 py-3 space-y-2">
                   <div className="flex items-start gap-2">
@@ -1318,13 +1341,98 @@ export function Setup() {
               )}
             </div>
 
+            {/* ── Port verification panel (shown after launch succeeds) ── */}
+            {launchDone && (
+              <div className="glass-card px-5 py-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Wifi size={15} className="text-brand" />
+                    <h2 className="text-sm font-semibold text-slate-200">端口服务验证</h2>
+                    {portChecking && <Loader2 size={13} className="animate-spin text-brand" />}
+                  </div>
+                  <button
+                    className="btn-ghost text-xs flex items-center gap-1.5"
+                    onClick={handlePortCheck}
+                    disabled={portChecking}
+                  >
+                    <RotateCw size={12} className={portChecking ? 'animate-spin' : ''} />
+                    {portChecking ? '检测中…' : '重新检测'}
+                  </button>
+                </div>
+
+                {portChecking && !portChecks && (
+                  <div className="flex items-center gap-3 text-sm text-muted py-2">
+                    <Loader2 size={15} className="animate-spin text-brand" />
+                    正在逐一检测各服务端口…
+                  </div>
+                )}
+
+                {portChecks && (
+                  <div className="space-y-2">
+                    {portChecks.map((c, i) => (
+                      <div
+                        key={i}
+                        className={`flex items-start gap-3 px-3 py-2.5 rounded-xl border text-xs ${
+                          portChecking
+                            ? 'border-white/10 bg-black/10'
+                            : c.ok
+                              ? 'border-success/25 bg-success/8'
+                              : 'border-danger/25 bg-danger/8'
+                        }`}
+                      >
+                        <div className="flex-shrink-0 mt-0.5">
+                          {portChecking
+                            ? <Loader2 size={13} className="animate-spin text-muted" />
+                            : c.ok
+                              ? <CheckCircle2 size={13} className="text-success" />
+                              : <XCircle size={13} className="text-danger" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-semibold ${portChecking ? 'text-slate-300' : c.ok ? 'text-success' : 'text-danger'}`}>
+                              {c.name}
+                            </span>
+                            {c.ok && c.latency_ms !== undefined && (
+                              <span className="text-muted">{c.latency_ms} ms</span>
+                            )}
+                            {c.required && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand/20 text-brand font-medium">必需</span>
+                            )}
+                          </div>
+                          <p className="text-muted mt-0.5 leading-4">{c.description}</p>
+                          {!c.ok && c.error && (
+                            <p className="text-danger/80 mt-0.5 leading-4 font-mono text-[10px]">{c.error}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {portChecks && !portChecking && (
+                  <div className={`rounded-xl px-4 py-3 flex items-center gap-2 ${portCheckAllOk ? 'bg-success/10 border border-success/20' : 'bg-warning/10 border border-warning/20'}`}>
+                    {portCheckAllOk
+                      ? <><CheckCircle2 size={14} className="text-success flex-shrink-0" /><p className="text-sm font-semibold text-success">所有端口验证通过 ✓ 可以进入连通检测</p></>
+                      : <><AlertCircle size={14} className="text-warning flex-shrink-0" /><p className="text-sm font-semibold text-warning">部分端口未响应，请重新检测或检查配置</p></>}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-3">
               <button className="btn-ghost flex-1" onClick={() => setStep('network')} disabled={launching}>← 返回</button>
-              {launchDone && (
-                <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('check')}>
-                  开始连通检测 <ChevronRight size={14} />
-                </button>
-              )}
+              <button
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-xl border transition-all ${
+                  portCheckAllOk
+                    ? 'btn-primary'
+                    : 'bg-surface-2 border-white/10 text-muted cursor-not-allowed opacity-50'
+                }`}
+                onClick={() => setStep('check')}
+                disabled={!portCheckAllOk}
+                title={portCheckAllOk ? undefined : '请等待所有端口检测通过后再继续'}
+              >
+                开始连通检测 <ChevronRight size={14} />
+              </button>
             </div>
           </div>
         )}

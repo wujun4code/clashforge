@@ -59,6 +59,21 @@ table inet metaclash {
         udp dport 53 redirect to :{{ .DNSPort }}
         tcp dport 53 redirect to :{{ .DNSPort }}
     }
+
+    # Redirect DNS originating from the router itself (resolv.conf → 127.0.0.1:53).
+    # The prerouting chain only handles forwarded traffic; locally-generated packets
+    # go through the output hook and bypass prerouting entirely.
+    # Only loopback destinations are matched so mihomo's own upstream DNS queries
+    # (to real IPs like 119.29.29.29:53) are left untouched and do not loop back.
+    chain dns_output_redirect {
+        type nat hook output priority dstnat; policy accept;
+        ip daddr 127.0.0.0/8 udp dport 53 redirect to :{{ .DNSPort }}
+        ip daddr 127.0.0.0/8 tcp dport 53 redirect to :{{ .DNSPort }}
+{{ if .EnableIPv6 }}
+        ip6 daddr ::1/128 udp dport 53 redirect to :{{ .DNSPort }}
+        ip6 daddr ::1/128 tcp dport 53 redirect to :{{ .DNSPort }}
+{{ end }}
+    }
 {{ end }}
 
     chain tproxy_prerouting {
