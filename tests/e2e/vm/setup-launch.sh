@@ -145,9 +145,9 @@ HTTP_PORT=$(echo "$CFG_JSON" | grep -o '"http":[0-9]*' | head -1 | sed 's/"http"
 TPROXY_PORT=$(echo "$CFG_JSON" | grep -o '"tproxy":[0-9]*' | head -1 | sed 's/"tproxy"://')
 UI_PORT=$(echo "$CFG_JSON" | grep -o '"ui":[0-9]*' | head -1 | sed 's/"ui"://')
 
-# 端口监听检查 — nc connect 最通用（不用 -z，OpenWrt BusyBox 兼容）
+# 端口监听检查 — curl TCP connect（不用 nc，BusyBox nc stdin=/dev/null 会直接退出）
 _tcp_ok() {
-    (timeout 2 nc 127.0.0.1 "$1" < /dev/null > /dev/null 2>&1) 2>/dev/null
+    curl --connect-timeout 2 --max-time 3 -o /dev/null "http://127.0.0.1:$1" 2>/dev/null
 }
 
 info ""
@@ -170,7 +170,7 @@ DNS_CHECK=$(nslookup google.com 2>/dev/null \
     | grep "Address:" | grep -vE "#53|127\\.0\\.|::1" | head -1 | awk '{print $NF}' || echo "")
 if echo "$DNS_CHECK" | grep -qE '^[0-9]'; then
     info "  系统 DNS 解析: google.com → $DNS_CHECK"
-    if echo "$DNS_CHECK" | grep -qE '^198\\.(1[89])\\.'; then
+    if echo "$DNS_CHECK" | grep -qE '^198\.(1[89])\.'; then
         info "  ✓ fake-ip 段 — DNS 接管 & mihomo 端口正常"
         dns_verify=1
     else
