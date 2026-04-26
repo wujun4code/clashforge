@@ -117,7 +117,7 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           PKG_VERSION="${VERSION#v}"
-          ARCH="all"
+          ARCH="x86_64"
           PKG_NAME="clashforge_${PKG_VERSION}_${ARCH}.ipk"
 
           mkdir -p ipk/CONTROL ipk/usr/bin ipk/etc/init.d \
@@ -224,6 +224,10 @@ jobs:
           # 注意：uninstall 会删除 /tmp/clashforge*，必须在它之后再传 IPK
           _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
           sleep 1
+
+          # 更新 opkg 包列表，使 ip-full / ca-bundle 等依赖进入 hash
+          # 不运行此步骤时 --nodeps 仍会因 pkg_hash_check_unresolved 失败而报"架构不兼容"
+          _ssh "opkg update 2>&1 | tail -3"
 
           # 传输 IPK（OpenWrt 无 sftp-server，用 ssh + cat）
           _ssh "cat > /tmp/clashforge.ipk" < "$IPK_LOCAL"
