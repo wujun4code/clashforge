@@ -149,12 +149,16 @@ UI_PORT=$(echo "$CFG_JSON" | grep -o '"ui":[0-9]*' | head -1 | sed 's/"ui"://')
 _tcp_ok() {
     curl --connect-timeout 2 --max-time 3 -o /dev/null "http://127.0.0.1:$1" 2>/dev/null
 }
+# DNS 是 UDP 端口，用 nslookup 验证（通过 dnsmasq → mihomo 链路）
+_dns_ok() {
+    nslookup google.com 127.0.0.1 >/dev/null 2>&1
+}
 
 info ""
 info "  mixed  : ${MIXED_PORT:-?}  $(_tcp_ok "${MIXED_PORT:-0}" && echo "✓ 监听" || echo "✗ 未监听")"
-info "  DNS    : ${DNS_PORT:-?}    $(_tcp_ok "${DNS_PORT:-0}" && echo "✓ 监听" || echo "✗ 未监听 (UDP)")"
+info "  DNS    : ${DNS_PORT:-?}    $(_dns_ok && echo "✓ 解析正常" || echo "✗ DNS 不通")"
 info "  HTTP   : ${HTTP_PORT:-?}   $(_tcp_ok "${HTTP_PORT:-0}" && echo "✓ 监听" || echo "✗ 未监听")"
-info "  TProxy : ${TPROXY_PORT:-?} $(_tcp_ok "${TPROXY_PORT:-0}" && echo "✓ 监听" || echo "✗ 未监听")"
+info "  TProxy : ${TPROXY_PORT:-?} — 内核级 TPROXY（见 SL-06 nftables 规则）"
 info "  UI     : ${UI_PORT:-?}     $(_tcp_ok "${UI_PORT:-0}" && echo "✓ 监听" || echo "✗ 未监听")"
 
 # 保存供 Step 6 使用

@@ -271,7 +271,7 @@ jobs:
           _ssh "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' sh /tmp/e2e-setup-launch.sh"
 
           # 读出代理信息供 Step 6 使用
-          PROXY_AUTH=*** "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
+          PROXY_AUTH=$(_ssh "cat /tmp/cf-snapshot/proxy-auth 2>/dev/null" || echo "")
           PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
           SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
 
