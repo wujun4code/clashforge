@@ -182,10 +182,11 @@ CACHE_FILE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1 || echo ""
 if [ -n "$CACHE_FILE" ]; then
     AUTH_LINE=$(grep -A1 'authentication:' "$CACHE_FILE" 2>/dev/null \
         | grep -v 'authentication:' | head -1 | tr -d ' -' || echo "")
-    NODE_NAME=$(grep -m1 'name:' "$CACHE_FILE" 2>/dev/null \
-        | sed 's/.*name: *//' | tr -d ' ' || echo "")
-    SERVER_HOST=$(grep -m1 'server:' "$CACHE_FILE" 2>/dev/null \
-        | awk '{print $2}' | tr -d ' ' || echo "")
+    # 从 proxies 列表中提取第一个节点的 name 和 server
+    # 找到 '- name:' 行，再向下找相邻的 server: 行
+    NODE_NAME=$(grep -m1 '^ *- *name:' "$CACHE_FILE" 2>/dev/null \
+        | sed 's/.*name: *//' | tr -d " '\"" || echo "")
+    SERVER_HOST=$(awk '/^ *- *name:/{found=1} found && /^ *server:/{print $2; exit}' "$CACHE_FILE" 2>/dev/null | tr -d " '\"" || echo "")
     [ -n "$AUTH_LINE" ] && echo "$AUTH_LINE" > "$SNAPSHOT_DIR/proxy-auth"
     [ -n "$NODE_NAME" ] && [ -n "$SERVER_HOST" ] && \
         echo "${NODE_NAME}:${SERVER_HOST}" > "$SNAPSHOT_DIR/proxy-node"
