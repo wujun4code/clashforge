@@ -52,6 +52,10 @@ info()    { printf "${CYAN}ℹ️   ${RESET} %s\n" "$*"; }
 section() { printf "\n${BOLD}${YELLOW}=== %s ===${RESET}\n" "$*"; }
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMMARY" || true; }
 
+# ── 敏感信息脂敏 ──────────────────────────────────────────────────────────────
+mask_ip()     { echo "$1" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/'; }
+mask_domain() { echo "$1" | awk -F. '{ if (NF<=2) {print $0} else {print $1".***"."$NF"} }'; }
+
 CF_API="http://127.0.0.1:7777/api/v1"
 SNAPSHOT_DIR="/tmp/cf-snapshot"
 
@@ -190,8 +194,8 @@ if [ -n "$CACHE_FILE" ]; then
     [ -n "$AUTH_LINE" ] && echo "$AUTH_LINE" > "$SNAPSHOT_DIR/proxy-auth"
     [ -n "$NODE_NAME" ] && [ -n "$SERVER_HOST" ] && \
         echo "${NODE_NAME}:${SERVER_HOST}" > "$SNAPSHOT_DIR/proxy-node"
-    info "代理节点: ${NODE_NAME:-未知} / ${SERVER_HOST:-未知}"
-    info "代理认证: ${AUTH_LINE:-(无认证)}"
+    info "代理节点: ${NODE_NAME:-未知} / $(mask_domain "${SERVER_HOST:-未知}")"
+    info "代理认证: ${AUTH_LINE:+已配置}（已脂敏）"
 fi
 
 # ── Summary ────────────────────────────────────────────────────────────────────

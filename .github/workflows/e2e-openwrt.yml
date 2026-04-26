@@ -291,7 +291,7 @@ jobs:
             echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:7890" >> "$GITHUB_OUTPUT" || \
             echo "mixed_port_url=http://127.0.0.1:7890"               >> "$GITHUB_OUTPUT"
 
-          echo "节点: $PROXY_NODE / 节点 IP: $SERVER_IP"
+          echo "节点: $PROXY_NODE / 节点 IP: $(echo "$SERVER_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')"
 
       # ── Step 6: Round 2 网络探测（代理运行期）────────────────────────────
       - name: "[Step 6] Probe — Round 2 running (tproxy)"
@@ -346,16 +346,18 @@ jobs:
           iptables -D OUTPUT -p tcp --dport 80  -j REJECT 2>/dev/null || true
 
           FINAL_IP=$(_ssh "curl -sf --max-time 8 https://api.ipify.org 2>/dev/null || echo 'FAILED'")
+          FINAL_IP_MASKED=$(echo "$FINAL_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')
           NFT_TABLES=$(_ssh "nft list tables 2>/dev/null | tr '\n' ' '" || echo "unknown")
           BASELINE="${{ steps.snapshot.outputs.direct_ip }}"
+          BASELINE_MASKED=$(echo "$BASELINE" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "## 🏁 最终环境状态" >> "$GITHUB_STEP_SUMMARY"
           echo "| 项目 | 状态 |" >> "$GITHUB_STEP_SUMMARY"
           echo "|------|------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| nft 表 | ${NFT_TABLES:-(空)} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 出口 IP | $FINAL_IP |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 直连基准 IP | $BASELINE |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 出口 IP | $FINAL_IP_MASKED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 直连基准 IP | $BASELINE_MASKED |" >> "$GITHUB_STEP_SUMMARY"
           [ "$FINAL_IP" = "$BASELINE" ] \
             && echo "| 网络状态 | ✅ 已还原 |"   >> "$GITHUB_STEP_SUMMARY" \
-            || echo "| 网络状态 | ⚠️ IP 未还原（$FINAL_IP ≠ $BASELINE）|" >> "$GITHUB_STEP_SUMMARY"
+            || echo "| 网络状态 | ⚠️ IP 未还原（$FINAL_IP_MASKED ≠ $BASELINE_MASKED）|" >> "$GITHUB_STEP_SUMMARY"
