@@ -117,7 +117,7 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           PKG_VERSION="${VERSION#v}"
-          ARCH="x86_64"
+          ARCH="all"
           PKG_NAME="clashforge_${PKG_VERSION}_${ARCH}.ipk"
 
           mkdir -p ipk/CONTROL ipk/usr/bin ipk/etc/init.d \
@@ -233,7 +233,7 @@ jobs:
           echo "IPK 传输完成，大小: ${IPK_SIZE} bytes"
           [ "$IPK_SIZE" -gt 1000 ] || (echo 'IPK 传输失败，文件过小' && exit 1)
 
-          _ssh "opkg install --nodeps --force-downgrade --force-bad-arch /tmp/clashforge.ipk"
+          _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
 
           # 安装内核模块
           _ssh "opkg install kmod-nft-tproxy kmod-nf-tproxy 2>/dev/null | grep -v 'up to date' || true"
