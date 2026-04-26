@@ -57,6 +57,12 @@ func TestNFTTemplate_DNSRedirectChainToggle(t *testing.T) {
 	if strings.Contains(withoutDNSRedirect, "chain dns_redirect") {
 		t.Fatalf("did not expect dns_redirect chain when dns redirect is disabled")
 	}
+	if !strings.Contains(withDNSRedirect, "chain dns_output_redirect") {
+		t.Fatalf("expected dns_output_redirect chain when dns redirect is enabled")
+	}
+	if strings.Contains(withoutDNSRedirect, "chain dns_output_redirect") {
+		t.Fatalf("did not expect dns_output_redirect chain when dns redirect is disabled")
+	}
 }
 
 func TestBuildBypassIPv4Elements_SkipsInvalidAndEmptyCIDR(t *testing.T) {

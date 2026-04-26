@@ -39,9 +39,15 @@ func (i *IptablesBackend) Apply() error {
 	}
 
 	if i.EnableDNSRedirect {
+		dnsPort := strconv.Itoa(i.DNSPort)
 		cmds = append(cmds,
-			[]string{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
-			[]string{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+			// Redirect LAN client DNS (forwarded traffic via PREROUTING).
+			[]string{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", dnsPort},
+			[]string{"iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", dnsPort},
+			// Redirect router-local DNS (OUTPUT). Only loopback destinations are matched
+			// so mihomo's own upstream queries to real IPs are left untouched.
+			[]string{"iptables", "-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-d", "127.0.0.0/8", "-j", "REDIRECT", "--to-port", dnsPort},
+			[]string{"iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-d", "127.0.0.0/8", "-j", "REDIRECT", "--to-port", dnsPort},
 		)
 	}
 
@@ -65,9 +71,12 @@ func (i *IptablesBackend) Cleanup() error {
 		{"iptables", "-t", "mangle", "-X", "METACLASH"},
 	}
 	if i.EnableDNSRedirect {
+		dnsPort := strconv.Itoa(i.DNSPort)
 		cmds = append(cmds,
-			[]string{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
-			[]string{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", strconv.Itoa(i.DNSPort)},
+			[]string{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", dnsPort},
+			[]string{"iptables", "-t", "nat", "-D", "PREROUTING", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", dnsPort},
+			[]string{"iptables", "-t", "nat", "-D", "OUTPUT", "-p", "udp", "--dport", "53", "-d", "127.0.0.0/8", "-j", "REDIRECT", "--to-port", dnsPort},
+			[]string{"iptables", "-t", "nat", "-D", "OUTPUT", "-p", "tcp", "--dport", "53", "-d", "127.0.0.0/8", "-j", "REDIRECT", "--to-port", dnsPort},
 		)
 	}
 	for _, cmd := range cmds {

@@ -34,13 +34,14 @@ func handleSetupPortCheck(deps Dependencies) http.HandlerFunc {
 			desc     string
 			port     int
 			required bool
-			// "tcp_listen"  — /proc/net/tcp LISTEN state only (proxy/TProxy ports: no direct connect)
-			// "tcp_connect" — /proc/net/tcp LISTEN + actual TCP connect (plain TCP services)
-			// "socks5"      — /proc/net/tcp LISTEN + SOCKS5 greeting exchange
-			// "http_api"    — /proc/net/tcp LISTEN + HTTP GET response
-			// "dns_udp"     — /proc/net/udp bind + actual UDP DNS response (mihomo DNS port)
-			// "udp_listen"  — /proc/net/udp bind only (dnsmasq :53 upstream: may not bind lo)
-			// "nft_chain"   — nftables dns_redirect chain inspection (:53 replace mode)
+			// "tcp_listen"     — /proc/net/tcp LISTEN state only (proxy/TProxy ports: no direct connect)
+			// "tcp_connect"    — /proc/net/tcp LISTEN + actual TCP connect (plain TCP services)
+			// "socks5"         — /proc/net/tcp LISTEN + SOCKS5 greeting exchange
+			// "http_api"       — /proc/net/tcp LISTEN + HTTP GET response
+			// "dns_udp"        — /proc/net/udp bind + actual UDP DNS response (mihomo DNS port)
+			// "udp_listen"     — /proc/net/udp bind only (dnsmasq :53 upstream: may not bind lo)
+			// "nft_chain"      — nftables dns_redirect prerouting chain inspection (LAN client redirect)
+			// "dns_lo_redirect"— UDP DNS query to 127.0.0.1:53 via OUTPUT nat redirect (replace mode, router itself)
 			mode string
 		}
 
@@ -110,15 +111,22 @@ func handleSetupPortCheck(deps Dependencies) http.HandlerFunc {
 		if cfg.DNS.Enable && cfg.DNS.ApplyOnStart && cfg.DNS.DnsmasqMode != "none" {
 			switch cfg.DNS.DnsmasqMode {
 			case "replace":
-				// Mihomo DNS port owns :53 via nftables redirect (dnsmasq port=0).
-				// Localhost traffic bypasses the nftables nat chain (fib saddr type local return),
-				// so we cannot send a DNS query to 127.0.0.1:53 — verify the nftables rule instead.
-				specs = append(specs, spec{
-					name: "DNS :53 接管 (replace)",
-					desc: fmt.Sprintf("nftables dns_redirect：:53 → :%d", cfg.Ports.DNS),
-					port: 53,
-					mode: "nft_chain",
-				})
+			// LAN clients: verify the prerouting nftables chain redirects :53 → dnsPort.
+			specs = append(specs, spec{
+				name: "DNS :53 接管 — LAN 客户端 (replace)",
+				desc: fmt.Sprintf("nftables dns_redirect prerouting：:53 → :%d", cfg.Ports.DNS),
+				port: 53,
+				mode: "nft_chain",
+			})
+			// Router itself: send a real DNS query to 127.0.0.1:53 via the OUTPUT nat hook.
+			// dnsmasq port=0 means nothing binds :53; the OUTPUT chain redirects loopback
+			// DNS transparently to mihomo so the router's own DNS resolution works.
+			specs = append(specs, spec{
+				name: "DNS :53 接管 — 本机 DNS (replace)",
+				desc: fmt.Sprintf("nftables dns_output_redirect output：:53 → :%d (路由器本机 DNS)", cfg.Ports.DNS),
+				port: 53,
+				mode: "dns_lo_redirect",
+			})
 			case "upstream":
 				// dnsmasq keeps port 53 and forwards queries to mihomo DNS port.
 				// dnsmasq in OpenWrt may only bind to the LAN interface, not 127.0.0.1,
@@ -157,6 +165,8 @@ func handleSetupPortCheck(deps Dependencies) http.HandlerFunc {
 				err = checkUDPListen(s.port)
 			case "nft_chain":
 				err = checkNftDNSRedirect(cfg.Ports.DNS)
+			case "dns_lo_redirect":
+				err = checkDNSLoopbackRedirect()
 			}
 			if err != nil {
 				item.Error = err.Error()
@@ -322,8 +332,40 @@ func checkUDPListen(port int) error {
 	return nil
 }
 
-// checkNftDNSRedirect verifies the nftables dns_redirect chain redirects :53 → dnsPort.
-// Used for replace mode where localhost traffic bypasses the nat chain.
+// checkDNSLoopbackRedirect sends a real DNS query to 127.0.0.1:53 without any
+// procNet pre-check. In replace mode the kernel's OUTPUT nat hook (dns_output_redirect
+// chain) transparently rewrites the destination to mihomo's DNS port, so the router's
+// own DNS resolution works even though nothing actually binds :53.
+func checkDNSLoopbackRedirect() error {
+	conn, err := net.DialTimeout("udp", "127.0.0.1:53", 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("UDP 连接 127.0.0.1:53 失败: %w", err)
+	}
+	defer conn.Close()
+	// Minimal DNS query: root (.) A IN
+	query := []byte{
+		0x12, 0x34, 0x01, 0x00, // TxID=0x1234, flags: standard query, RD
+		0x00, 0x01, 0x00, 0x00, // QDCOUNT=1
+		0x00, 0x00, 0x00, 0x00, // NSCOUNT=0, ARCOUNT=0
+		0x00,       // QNAME: root label
+		0x00, 0x01, // QTYPE: A
+		0x00, 0x01, // QCLASS: IN
+	}
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write(query); err != nil {
+		return fmt.Errorf("DNS 查询发送失败: %w", err)
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return fmt.Errorf("DNS 无响应 — OUTPUT hook 重定向未生效或 mihomo DNS 未运行: %w", err)
+	}
+	if n < 4 {
+		return fmt.Errorf("DNS 响应过短 (%d 字节)", n)
+	}
+	return nil
+}
+// Used for replace mode to confirm LAN client DNS redirect is in place.
 func checkNftDNSRedirect(dnsPort int) error {
 	out, err := exec.Command("nft", "list", "chain", "inet", "metaclash", "dns_redirect").CombinedOutput()
 	if err != nil {
