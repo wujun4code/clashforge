@@ -339,7 +339,6 @@ https://music.163.com:网易云音乐:国内
 https://github.com:GitHub:国外
 https://www.google.com:Google:国外
 https://chat.openai.com:OpenAI:AI
-https://api.anthropic.com:Claude:AI
 https://gemini.google.com:Gemini:AI
 TARGETS
 
