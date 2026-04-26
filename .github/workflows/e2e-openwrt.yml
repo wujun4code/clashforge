@@ -220,7 +220,12 @@ jobs:
           IPK_LOCAL="/tmp/e2e-ipk/${IPK_NAME}"
           echo "安装 IPK: $IPK_NAME"
 
-          # 推送 IPK 到 VM（OpenWrt 无 sftp-server，用 ssh + cat 传输）
+          # 先用 uninstall-clashforge 彻底清除旧版（清除 opkg 注册 + 停止服务 + 清理接管状态）
+          # 注意：uninstall 会删除 /tmp/clashforge*，必须在它之后再传 IPK
+          _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
+          sleep 1
+
+          # 传输 IPK（OpenWrt 无 sftp-server，用 ssh + cat）
           _ssh "cat > /tmp/clashforge.ipk" < "$IPK_LOCAL"
 
           # 验证传输成功
@@ -228,10 +233,6 @@ jobs:
           echo "IPK 传输完成，大小: ${IPK_SIZE} bytes"
           [ "$IPK_SIZE" -gt 1000 ] || (echo 'IPK 传输失败，文件过小' && exit 1)
 
-          # 先用 uninstall-clashforge 彻底清除旧版（清除 opkg 注册 + 停止服务 + 清理接管状态）
-          # 然后 opkg install 把它当全新包处理，不会触发下载逻辑
-          _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
-          sleep 1
           _ssh "opkg install --nodeps /tmp/clashforge.ipk"
 
           # 安装内核模块
