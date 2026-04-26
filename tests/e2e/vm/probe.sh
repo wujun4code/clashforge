@@ -187,8 +187,9 @@ if [ "$PHASE" = "running" ]; then
     # ── HTTP HEAD via proxy（对齐 testHTTPProxyEndpoint） ──────────────────────
     _http_head_via_proxy() {
         _url="$1"
-        _proxy_port="${2:-$MIXED_PORT}"
-        _proxy_url="http://127.0.0.1:${_proxy_port}"
+        # Use MIXED_PORT_URL (includes credentials when proxy auth is configured).
+        # Falling back to bare http://127.0.0.1:PORT would cause 407 when auth is required.
+        _proxy_url="${MIXED_PORT_URL:-http://127.0.0.1:${MIXED_PORT}}"
         # HEAD request, 8s timeout — matches Go's 8s http.Client.Timeout
         _out=$(curl -sfI -o /dev/null -w "%{http_code}:%{time_total}" \
             --proxy "$_proxy_url" --max-time 8 "$_url" 2>&1) || true
@@ -261,14 +262,17 @@ if [ "$PHASE" = "running" ]; then
         # ── Step 1: 端口监听检查 ──────────────────────────────────────────
         if [ "$MIXED_LISTENING" != "true" ]; then
             record FAIL "RD-${RD_TOTAL}a" "${name} 端口检查" \
+                "curl http://127.0.0.1:${MIXED_PORT}" \
                 "mixed 端口 ${MIXED_PORT} 监听" \
                 "端口未监听（mihomo 未运行或配置错误）"
             # 端口不通，DNS 和 HTTP 都跳过
             record FAIL "RD-${RD_TOTAL}b" "${name} DNS 解析" \
-                "mihomo DNS ${MIHOMO_DNS_PORT} 解析 ${HOST}" \
+                "nslookup ${HOST} via mihomo :${MIHOMO_DNS_PORT}" \
+                "解析返回 IP" \
                 "跳过：mixed 端口不通"
             record FAIL "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
-                "curl --proxy 127.0.0.1:${MIXED_PORT} -I ${URL} → 2xx/3xx" \
+                "curl --proxy 127.0.0.1:${MIXED_PORT} -I ${URL}" \
+                "HTTP 2xx/3xx" \
                 "跳过：端口 ${MIXED_PORT} 未监听（stage=proxy_port）"
             continue
         fi
@@ -283,7 +287,8 @@ if [ "$PHASE" = "running" ]; then
                 FAKE_IP_MARKER=" (fake-ip)"
             fi
             record PASS "RD-${RD_TOTAL}b" "${name} DNS 解析" \
-                "mihomo DNS :${MIHOMO_DNS_PORT} 解析 ${HOST} → IP" \
+                "nslookup ${HOST} via mihomo :${MIHOMO_DNS_PORT}" \
+                "解析返回 IP" \
                 "解析: ${DNS_FIRST_IP}${FAKE_IP_MARKER}，共 $(echo "$DNS_IPS" | tr ',' '\n' | wc -l) 条"
             DNS_OK="true"
         else
@@ -292,20 +297,22 @@ if [ "$PHASE" = "running" ]; then
                 DNS_FAIL_MSG="mihomo DNS 端口 ${MIHOMO_DNS_PORT} 未监听"
             fi
             record FAIL "RD-${RD_TOTAL}b" "${name} DNS 解析" \
-                "mihomo DNS :${MIHOMO_DNS_PORT} 解析 ${HOST} → IP" \
+                "nslookup ${HOST} via mihomo :${MIHOMO_DNS_PORT}" \
+                "解析返回 IP" \
                 "DNS 解析失败: ${DNS_FAIL_MSG}（stage=dns）"
             DNS_OK="false"
         fi
 
         # ── Step 3: HTTP HEAD via mixed proxy ─────────────────────────────
-        HTTP_RESULT=$(_http_head_via_proxy "$URL" "$MIXED_PORT")
+        HTTP_RESULT=$(_http_head_via_proxy "$URL")
         HTTP_CODE=$(echo "$HTTP_RESULT" | cut -d: -f1 | tr -d ' ')
         HTTP_TIME=$(echo "$HTTP_RESULT" | cut -d: -f2 | tr -d ' ')
 
         if [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 400 ] 2>/dev/null; then
             RD_OK_COUNT=$((RD_OK_COUNT+1))
             record PASS "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
-                "curl --proxy 127.0.0.1:${MIXED_PORT} -I ${URL} → 2xx/3xx" \
+                "curl --proxy <mixed> -I ${URL}" \
+                "HTTP 2xx/3xx" \
                 "HTTP ${HTTP_CODE} (${HTTP_TIME}s)"
         else
             # ── 错误分级（对齐 handler_overview.go stage 分类） ──────────
@@ -322,8 +329,9 @@ if [ "$PHASE" = "running" ]; then
             fi
 
             record FAIL "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
-                "curl --proxy 127.0.0.1:${MIXED_PORT} -I ${URL} → 2xx/3xx" \
-                "失败 (stage=${STAGE}): HTTP ${HTTP_CODE:-error} ${HTTP_TIME:+( ${HTTP_TIME}s)}"
+                "curl --proxy <mixed> -I ${URL}" \
+                "HTTP 2xx/3xx" \
+                "失败 (stage=${STAGE}): HTTP ${HTTP_CODE:-error}${HTTP_TIME:+ (${HTTP_TIME}s)}"
         fi
     done <<TARGETS
 https://www.taobao.com:淘宝:国内
