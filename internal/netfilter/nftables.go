@@ -14,10 +14,16 @@ import (
 const fwMark = "0x1a3"
 const routeTable = "100"
 
-// FWMark and RouteTable are exported so the API layer can display them in
-// stop-flow SSE messages without duplicating the values.
-const FWMark = fwMark
-const RouteTable = routeTable
+// fwMarkOutput marks packets from router-originated processes so they can be
+// re-routed through loopback and intercepted by tproxy_prerouting.
+const fwMarkOutput    = "0x1a4"
+const routeTableOutput = "101"
+
+// Exported for use in API stop-flow SSE messages.
+const FWMark          = fwMark
+const RouteTable      = routeTable
+const FWMarkOutput    = fwMarkOutput
+const RouteTableOutput = routeTableOutput
 
 // NftablesBackend manages nftables TProxy rules.
 type NftablesBackend struct {
@@ -79,7 +85,9 @@ table inet metaclash {
     chain tproxy_prerouting {
         type filter hook prerouting priority mangle; policy accept;
         meta mark {{ .FWMark }} return
-        fib saddr type local return
+        # Skip router-originated traffic UNLESS it was re-routed by tproxy_output
+        # (those packets carry {{ .FWMarkOutput }} and must be tproxied, not skipped).
+        fib saddr type local meta mark != {{ .FWMarkOutput }} return
         ip daddr @bypass_ipv4 return
         # Block QUIC (HTTP/3 over UDP 443) — mihomo cannot SNI-sniff QUIC packets,
         # dropping forces the client to retry over TCP where SNI matching works correctly.
@@ -90,6 +98,19 @@ table inet metaclash {
         meta l4proto { tcp, udp } tproxy ip6 to [::1]:{{ .TProxyPort }} meta mark set {{ .FWMark }}
 {{ end }}
     }
+
+    # Intercept traffic originating from the router itself (curl, wget, opkg, etc.).
+    # Router-originated packets skip PREROUTING entirely, so without this chain they
+    # would attempt direct connections to mihomo fake-IPs (198.18.0.x) which do not
+    # exist as real destinations.
+    # Only fake-IP destinations are matched — mihomo's own upstream connections always
+    # target real IPs, so there is no routing loop.
+    chain tproxy_output {
+        type route hook output priority mangle; policy accept;
+        meta mark {{ .FWMark }} return
+        meta mark {{ .FWMarkOutput }} return
+        ip daddr 198.18.0.0/15 meta l4proto { tcp, udp } meta mark set {{ .FWMarkOutput }}
+    }
 }
 `))
 
@@ -97,6 +118,7 @@ table inet metaclash {
 func (n *NftablesBackend) Apply() error {
 	vars := struct {
 		FWMark             string
+		FWMarkOutput       string
 		TProxyPort         int
 		DNSPort            int
 		EnableDNSRedirect  bool
@@ -104,6 +126,7 @@ func (n *NftablesBackend) Apply() error {
 		BypassIPv4Elements string
 	}{
 		FWMark:             fwMark,
+		FWMarkOutput:       fwMarkOutput,
 		TProxyPort:         n.TProxyPort,
 		DNSPort:            n.DNSPort,
 		EnableDNSRedirect:  n.EnableDNSRedirect,
@@ -149,6 +172,12 @@ func (n *NftablesBackend) Apply() error {
 		_ = exec.Command("ip", "-6", "rule", "add", "fwmark", fwMark, "table", routeTable).Run()
 		_ = exec.Command("ip", "-6", "route", "add", "local", "default", "dev", "lo", "table", routeTable).Run()
 	}
+
+	// Setup policy routing for tproxy_output (router-originated traffic).
+	// tproxy_output only marks IPv4 fake-IP destinations, so only IPv4 rules needed.
+	_ = exec.Command("ip", "rule", "add", "fwmark", fwMarkOutput, "table", routeTableOutput).Run()
+	_ = exec.Command("ip", "route", "add", "local", "default", "dev", "lo", "table", routeTableOutput).Run()
+
 	return nil
 }
 
@@ -166,6 +195,8 @@ func (n *NftablesBackend) Cleanup() error {
 	_ = exec.Command("ip", "route", "flush", "table", routeTable).Run()
 	_ = exec.Command("ip", "-6", "rule", "del", "fwmark", fwMark, "table", routeTable).Run()
 	_ = exec.Command("ip", "-6", "route", "flush", "table", routeTable).Run()
+	_ = exec.Command("ip", "rule", "del", "fwmark", fwMarkOutput, "table", routeTableOutput).Run()
+	_ = exec.Command("ip", "route", "flush", "table", routeTableOutput).Run()
 	return nil
 }
 

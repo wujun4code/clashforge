@@ -77,50 +77,68 @@ if ($LASTEXITCODE -ne 0) {
 Ok "Upload complete."
 
 # ── build remote install commands ─────────────────────────────────────────────
+# Mirrors install.sh exactly:
+#   non-purge → pre_upgrade_cleanup then opkg install
+#   -Purge    → do_purge (calls pre_upgrade_cleanup + opkg remove + wipe) then opkg install
 
-$purgeBlock = @'
-echo "[clashforge] Purging old installation..."
-/etc/init.d/clashforge stop 2>/dev/null || true
-/etc/init.d/clashforge disable 2>/dev/null || true
-for pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
-  cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
-  case "$cmdline" in
-    *"/usr/bin/clashforge"*|*"/usr/bin/mihomo-clashforge"*)
-      kill -9 "$pid" 2>/dev/null || true ;;
-  esac
-done
-nft delete table inet metaclash 2>/dev/null || true
-while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-ip route flush table 100 2>/dev/null || true
-rm -f /etc/dnsmasq.d/clashforge.conf /tmp/dnsmasq.d/clashforge.conf
-/etc/init.d/dnsmasq restart 2>/dev/null || /etc/init.d/dnsmasq reload 2>/dev/null || true
-if command -v opkg >/dev/null 2>&1 && opkg status clashforge 2>/dev/null | grep -q "^Package:"; then
-  opkg remove clashforge 2>/dev/null || true
-fi
-rm -rf /etc/metaclash /usr/share/metaclash /var/run/metaclash
-rm -f /var/log/clashforge.log
-echo "[clashforge] Purge complete."
-'@
+$purgeAction = if ($Purge) { "do_purge" } else { "pre_upgrade_cleanup" }
 
-$installBlock = (@'
-set -e
-echo '[clashforge] Installing via opkg...'
-opkg install --nodeps --force-downgrade 'REMOTE_TMP_PLACEHOLDER'
-rm -f 'REMOTE_TMP_PLACEHOLDER'
-ROUTER_IP=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
-[ -z "$ROUTER_IP" ] && ROUTER_IP=$(ip -4 addr show 2>/dev/null | awk '/inet /{split($2,a,"/"); if(a[1]!="127.0.0.1"){print a[1];exit}}')
-[ -z "$ROUTER_IP" ] && ROUTER_IP='<router-ip>'
-echo ''
-echo '[clashforge] Installed successfully!'
-echo "[clashforge] Web UI -> http://${ROUTER_IP}:7777"
-echo ''
-'@) -replace 'REMOTE_TMP_PLACEHOLDER', $RemoteTmp
-
-if ($Purge) {
-    $remoteScript = $purgeBlock + "`n" + $installBlock
-} else {
-    $remoteScript = $installBlock
+$remoteScript = (@'
+pre_upgrade_cleanup() {
+  _cf_running=0
+  pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && _cf_running=1
+  pgrep -f "/usr/bin/mihomo-clashforge" >/dev/null 2>&1 && _cf_running=1
+  nft list table inet metaclash >/dev/null 2>&1 && _cf_running=1
+  if [ "$_cf_running" = "0" ]; then
+    echo "[clashforge] pre-upgrade: nothing running, skipping cleanup"
+    return 0
+  fi
+  echo "[clashforge] pre-upgrade: restoring system state..."
+  if command -v uci >/dev/null 2>&1; then
+    uci -q delete dhcp.@dnsmasq[0].port     || true
+    uci -q delete dhcp.@dnsmasq[0].server   || true
+    uci -q delete dhcp.@dnsmasq[0].noresolv || true
+    uci commit dhcp 2>/dev/null             || true
+  fi
+  rm -f /etc/dnsmasq.d/clashforge.conf 2>/dev/null || true
+  /etc/init.d/dnsmasq restart 2>/dev/null || true
+  nft delete table inet metaclash 2>/dev/null || true
+  nft delete table inet dnsmasq   2>/dev/null || true
+  while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
+  ip route flush table 100 2>/dev/null || true
+  while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
+  ip -6 route flush table 100 2>/dev/null || true
+  while ip rule del fwmark 0x1a4 table 101 2>/dev/null; do :; done
+  ip route flush table 101 2>/dev/null || true
+  /etc/init.d/clashforge stop 2>/dev/null || true
+  sleep 1
+  for _name in clashforge mihomo-clashforge; do
+    _pids=$(pgrep -f "/usr/bin/$_name" 2>/dev/null || true)
+    if [ -n "$_pids" ]; then
+      kill $_pids 2>/dev/null || true
+      sleep 1
+      _pids=$(pgrep -f "/usr/bin/$_name" 2>/dev/null || true)
+      [ -n "$_pids" ] && kill -9 $_pids 2>/dev/null || true
+    fi
+  done
+  echo "[clashforge] pre-upgrade cleanup complete"
 }
+
+do_purge() {
+  pre_upgrade_cleanup
+  if command -v opkg >/dev/null 2>&1 && opkg status clashforge 2>/dev/null | grep -q "^Package:"; then
+    opkg remove clashforge 2>/dev/null || true
+  fi
+  rm -rf /etc/metaclash /usr/share/metaclash /var/run/metaclash
+  rm -f /var/log/clashforge.log
+  echo "[clashforge] Purge complete."
+}
+
+PURGE_ACTION_PLACEHOLDER
+opkg install --nodeps --force-downgrade IPK_PATH_PLACEHOLDER
+rm -f IPK_PATH_PLACEHOLDER
+'@) -replace 'PURGE_ACTION_PLACEHOLDER', $purgeAction `
+   -replace 'IPK_PATH_PLACEHOLDER',   $RemoteTmp
 
 # ── execute on router ─────────────────────────────────────────────────────────
 
