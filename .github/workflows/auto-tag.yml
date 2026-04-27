@@ -1,12 +1,34 @@
-name: Auto Tag & Release on main push
+name: Auto Tag & Release
 
-# 触发条件：有 commit 推送到 main 分支时
-# 不使用 pull_request.closed，因为 GitHub auto-merge 有时不触发该事件
+# Low-noise release chain:
+# - pull_request_target.closed runs once when a PR is closed/merged.
+# - push to main remains a fallback for direct/manual main updates.
+# - workflow_dispatch remains a manual backfill path.
+#
+# Do not use workflow_run here. workflow_run fires for every completed check run
+# on every PR update, which wastes runner minutes and can sit around polling.
+# For tags created by GITHUB_TOKEN, tag push does not reliably trigger release.yml,
+# so this workflow dispatches release.yml explicitly after pushing the tag.
 
 on:
+  pull_request_target:
+    types:
+      - closed
+    branches:
+      - main
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to tag; defaults to current ref'
+        required: false
+        default: ''
+
+concurrency:
+  group: auto-tag-release-${{ github.event.pull_request.number || github.event.inputs.sha || github.sha || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   tag-release:
@@ -15,24 +37,76 @@ jobs:
     permissions:
       contents: write
       actions: write
+      pull-requests: read
+
+    # Closed-but-unmerged PRs are ignored before a runner is allocated.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch merged main
+      - name: Resolve commit to release
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_SHA: ${{ github.event.inputs.sha }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            TARGET_SHA="$PR_MERGE_SHA"
+            REASON="merged PR #$PR_NUMBER"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TARGET_SHA="${MANUAL_SHA:-${{ github.sha }}}"
+            REASON="manual dispatch"
+          else
+            TARGET_SHA="${{ github.sha }}"
+            REASON="main push"
+          fi
+
+          if [ -z "${TARGET_SHA:-}" ]; then
+            echo "Could not resolve target commit for $REASON" >&2
+            exit 1
+          fi
+
+          git fetch origin main --tags --force
+          if ! git cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+            git fetch origin "$TARGET_SHA"
+          fi
+
+          echo "Target: $TARGET_SHA ($REASON)"
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
+      - name: Check for existing release tag on target
+        id: existing
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          EXISTING=$(git tag --points-at "${{ steps.target.outputs.sha }}" --list 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*' | sort -V | tail -1 || true)
+          if [ -n "$EXISTING" ]; then
+            echo "Commit already tagged as $EXISTING"
+            echo "tag=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute next tag
         id: next
+        if: steps.existing.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           LATEST=$(git tag --list 'v*' --sort=-version:refname \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$' \
-            | head -1)
+            | head -1 || true)
           echo "Latest clean tag: $LATEST"
 
           if [ -z "$LATEST" ]; then
@@ -47,17 +121,21 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Push tag
+        if: steps.existing.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.next.outputs.tag }}" \
+          git tag "${{ steps.next.outputs.tag }}" "${{ steps.target.outputs.sha }}" \
             -m "Release ${{ steps.next.outputs.tag }}"
           git push origin "${{ steps.next.outputs.tag }}"
 
       - name: Trigger release build
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           gh workflow run release.yml \
             --ref "${{ steps.next.outputs.tag }}" \
             --field version="${{ steps.next.outputs.tag }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
