@@ -1,12 +1,32 @@
-name: Auto Tag & Release on main push
+name: Auto Tag & Release
 
-# 触发条件：有 commit 推送到 main 分支时
-# 不使用 pull_request.closed，因为 GitHub auto-merge 有时不触发该事件
+# Why this is not push-only:
+# GitHub does not create new workflow runs for most events caused by the
+# repository GITHUB_TOKEN. When auto-merge is enabled by an Actions workflow,
+# the resulting main push can therefore fail to trigger a push-only auto-tag
+# workflow. workflow_run is independent of that suppressed push chain, so it is
+# the reliable hook for PRs that were auto-merged after checks passed.
 
 on:
   push:
     branches:
       - main
+  workflow_run:
+    workflows:
+      - CI
+      - E2E Integration Test (OpenWrt)
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to tag; defaults to current ref'
+        required: false
+        default: ''
+
+concurrency:
+  group: auto-tag-release-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.sha || github.sha || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   tag-release:
@@ -15,24 +35,101 @@ jobs:
     permissions:
       contents: write
       actions: write
+      pull-requests: read
+
+    # For workflow_run, only successful PR check runs are candidates. Direct
+    # pushes and manual dispatches remain supported as fallback/manual paths.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.pull_requests[0].number != '')
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch merged main
+      - name: Resolve commit to release
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          MANUAL_SHA: ${{ github.event.inputs.sha }}
         run: |
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TARGET_SHA="${MANUAL_SHA:-${{ github.sha }}}"
+            REASON="manual dispatch"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            TARGET_SHA="${{ github.sha }}"
+            REASON="main push"
+          else
+            echo "Checking whether PR #$PR_NUMBER has been merged..."
+            TARGET_SHA=""
+
+            # The workflow_run event can start a few seconds before GitHub's
+            # auto-merge has finished writing the squash commit to main. Poll
+            # briefly; if this was not the final required check, exit cleanly
+            # and let a later workflow_run event handle the release.
+            for attempt in $(seq 1 30); do
+              PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER")
+              MERGED=$(echo "$PR_JSON" | jq -r '.merged')
+              TARGET_SHA=$(echo "$PR_JSON" | jq -r '.merge_commit_sha // empty')
+
+              if [ "$MERGED" = "true" ] && [ -n "$TARGET_SHA" ]; then
+                REASON="merged PR #$PR_NUMBER"
+                break
+              fi
+
+              echo "PR #$PR_NUMBER is not merged yet (attempt $attempt/30); waiting..."
+              sleep 10
+            done
+
+            if [ -z "${TARGET_SHA:-}" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "PR #$PR_NUMBER was not merged by the time this check completed; skipping."
+              exit 0
+            fi
+          fi
+
+          git fetch origin main --tags --force
+          if ! git cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+            git fetch origin "$TARGET_SHA"
+          fi
+
+          echo "Target: $TARGET_SHA ($REASON)"
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
+      - name: Check for existing release tag on target
+        id: existing
+        if: steps.target.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          EXISTING=$(git tag --points-at "${{ steps.target.outputs.sha }}" --list 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*' | sort -V | tail -1 || true)
+          if [ -n "$EXISTING" ]; then
+            echo "Commit already tagged as $EXISTING"
+            echo "tag=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute next tag
         id: next
+        if: steps.target.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           LATEST=$(git tag --list 'v*' --sort=-version:refname \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$' \
-            | head -1)
+            | head -1 || true)
           echo "Latest clean tag: $LATEST"
 
           if [ -z "$LATEST" ]; then
@@ -47,17 +144,21 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Push tag
+        if: steps.target.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.next.outputs.tag }}" \
+          git tag "${{ steps.next.outputs.tag }}" "${{ steps.target.outputs.sha }}" \
             -m "Release ${{ steps.next.outputs.tag }}"
           git push origin "${{ steps.next.outputs.tag }}"
 
       - name: Trigger release build
+        if: steps.target.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           gh workflow run release.yml \
             --ref "${{ steps.next.outputs.tag }}" \
             --field version="${{ steps.next.outputs.tag }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
