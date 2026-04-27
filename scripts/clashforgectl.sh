@@ -532,6 +532,19 @@ cmd_reset() {
 cmd_upgrade() {
   log "Upgrading ClashForge..."
 
+  # ── Snapshot running state BEFORE we stop anything ─────────────────────────
+  # If clashforge was running (processes alive or takeover tables present or
+  # init.d service is enabled), we must restart it after the new IPK is installed
+  # so the user does not lose network connectivity.
+  _was_running=0
+  pgrep -f "/usr/bin/clashforge"        >/dev/null 2>&1 && _was_running=1
+  pgrep -f "/usr/bin/mihomo-clashforge"  >/dev/null 2>&1 && _was_running=1
+  nft list table inet metaclash          >/dev/null 2>&1 && _was_running=1
+  # Also treat init.d-enabled-but-not-yet-started as "should start after upgrade"
+  if [ "$_was_running" = "0" ] && [ -f /etc/init.d/clashforge ]; then
+    /etc/init.d/clashforge enabled 2>/dev/null && _was_running=1 || true
+  fi
+
   if [ "$PURGE" = "1" ]; then
     log "Purge mode: wiping existing installation and data before upgrade..."
     restore_system_state
@@ -542,6 +555,8 @@ cmd_upgrade() {
     rm -rf /etc/metaclash /usr/share/metaclash /var/run/metaclash
     rm -f  /var/log/clashforge.log
     ok "Purge complete"
+    # After a full purge there is no configuration to start from; skip auto-restart.
+    _was_running=0
   else
     # Normal upgrade: stop takeover, preserve /etc/metaclash config
     restore_system_state
@@ -554,6 +569,20 @@ cmd_upgrade() {
     || die "opkg install failed"
   rm -f "$TMP_IPK"
   ok "opkg install complete"
+
+  # ── Re-enable and start the service if it was running before upgrade ────────
+  if [ "$_was_running" = "1" ]; then
+    log "Service was running before upgrade — restarting with new version..."
+    /etc/init.d/clashforge enable 2>/dev/null || true
+    if /etc/init.d/clashforge start 2>/dev/null; then
+      ok "clashforge service restarted successfully"
+    else
+      warn "Service start returned non-zero — check: /etc/init.d/clashforge status"
+    fi
+  else
+    log "Service was not running before upgrade — skipping auto-start"
+    log "To start: /etc/init.d/clashforge enable && /etc/init.d/clashforge start"
+  fi
 
   _router_ip=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
   [ -z "$_router_ip" ] && _router_ip=$(ip -4 addr show 2>/dev/null \

@@ -378,9 +378,23 @@ print_success() {
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+# Snapshot running state BEFORE we stop anything.
+# If clashforge was running (process alive, takeover table present, or init.d
+# service enabled), restart it after the new IPK is installed so the user does
+# not lose network connectivity during an upgrade.
+_WAS_RUNNING=0
+pgrep -f "/usr/bin/clashforge"        >/dev/null 2>&1 && _WAS_RUNNING=1
+pgrep -f "/usr/bin/mihomo-clashforge"  >/dev/null 2>&1 && _WAS_RUNNING=1
+nft list table inet metaclash          >/dev/null 2>&1 && _WAS_RUNNING=1
+if [ "$_WAS_RUNNING" = "0" ] && [ -f /etc/init.d/clashforge ]; then
+  /etc/init.d/clashforge enabled 2>/dev/null && _WAS_RUNNING=1 || true
+fi
+
 if [ "$PURGE" = "1" ]; then
   # --purge: full wipe (network cleanup + opkg remove + data wipe)
   do_purge
+  # After full purge there is no config to start from; do not auto-restart.
+  _WAS_RUNNING=0
 else
   # Normal install / upgrade: clean up running state first, keep config/data.
   pre_upgrade_cleanup
@@ -388,4 +402,16 @@ fi
 
 IPK_PATH=$(download_ipk)
 install_ipk "$IPK_PATH"
+
+# Re-enable and start the service if it was running before the upgrade.
+if [ "$_WAS_RUNNING" = "1" ]; then
+  log "Service was running before upgrade — restarting with new version..."
+  /etc/init.d/clashforge enable 2>/dev/null || true
+  if /etc/init.d/clashforge start 2>/dev/null; then
+    ok "clashforge service restarted successfully"
+  else
+    warn "Service start returned non-zero — check: /etc/init.d/clashforge status"
+  fi
+fi
+
 print_success
