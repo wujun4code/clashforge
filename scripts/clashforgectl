@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# clashforgectl — ClashForge Remote Control Script (macOS / Linux)
+#
+# Uploads clashforgectl.sh to the target router and executes the requested
+# subcommand over SSH, providing a unified control surface from a POSIX host.
+#
+# Usage:
+#   ./scripts/clashforgectl --router 192.168.1.1 status
+#   ./scripts/clashforgectl --router 192.168.1.1 stop
+#   ./scripts/clashforgectl --router 192.168.1.1 reset
+#   ./scripts/clashforgectl --router 192.168.1.1 reset --start
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --version v0.1.0
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --mirror https://ghproxy.com
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --base-url https://releases.example.com
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --purge
+#   ./scripts/clashforgectl --router 192.168.1.1 deploy
+#   ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
+#   ./scripts/clashforgectl --router 192.168.1.1 deploy --skip go
+#   ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
+#   ./scripts/clashforgectl --router 192.168.1.1 uninstall
+#   ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
+#   ./scripts/clashforgectl --router 192.168.1.1 diag
+#   ./scripts/clashforgectl --router 192.168.1.1 diag --fetch
+#   ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --local-path ./cf-diag.txt --redact
+#
+# Requirements:
+#   - ssh and scp must be available (standard OpenSSH)
+#   - clashforgectl.sh must exist alongside this script (or in scripts/)
+#   - Password-less SSH key auth is recommended
+
+set -euo pipefail
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+
+log()  { printf "${CYAN}[clashforgectl]${NC} %s\n"       "$*"; }
+ok()   { printf "${GREEN}[clashforgectl] OK  %s${NC}\n"  "$*"; }
+warn() { printf "${YELLOW}[clashforgectl] WARN %s${NC}\n" "$*"; }
+die()  { printf "${RED}[clashforgectl] ERROR %s${NC}\n"  "$*" >&2; exit 1; }
+
+sh_quote() {
+    # POSIX single-quote escaping: replace ' with '\''
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# ── locate clashforgectl.sh ───────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SH_SCRIPT="$SCRIPT_DIR/clashforgectl.sh"
+
+if [ ! -f "$SH_SCRIPT" ]; then
+    # Try workspace root scripts/ directory (when called from repo root)
+    SH_SCRIPT="$(dirname "$SCRIPT_DIR")/scripts/clashforgectl.sh"
+fi
+
+if [ ! -f "$SH_SCRIPT" ]; then
+    die "clashforgectl.sh not found. Expected: $SCRIPT_DIR/clashforgectl.sh"
+fi
+
+# ── validate tools ────────────────────────────────────────────────────────────
+for tool in ssh scp; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool not found. Install OpenSSH (e.g. 'brew install openssh' or 'apt install openssh-client')."
+done
+
+# ── defaults ──────────────────────────────────────────────────────────────────
+ACTION=""
+ROUTER=""
+SSH_USER="root"
+SSH_PORT="22"
+IDENTITY=""
+
+VERSION="latest"
+MIRROR=""
+BASE_URL=""
+PURGE=0
+
+SKIP=""    # for deploy: comma-separated steps to skip (ui, go)
+REPO_ROOT=""  # for deploy: auto-detected from script location
+
+START=0
+KEEP_CONFIG=0
+
+FETCH=0
+REMOTE_OUTPUT="/tmp/cf-diag.txt"
+LOCAL_PATH=""
+REDACT=0
+
+YES=0
+DRY_RUN=0
+
+# ── parse arguments ───────────────────────────────────────────────────────────
+# First positional arg that is not a flag is the ACTION.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        status|stop|reset|upgrade|deploy|check|uninstall|diag|help)
+            ACTION="$1"; shift ;;
+        --router)     ROUTER="$2";      shift 2 ;;
+        --router=*)   ROUTER="${1#*=}"; shift ;;
+        --user)       SSH_USER="$2";    shift 2 ;;
+        --user=*)     SSH_USER="${1#*=}"; shift ;;
+        --port)       SSH_PORT="$2";    shift 2 ;;
+        --port=*)     SSH_PORT="${1#*=}"; shift ;;
+        --identity|-i) IDENTITY="$2";  shift 2 ;;
+        --identity=*) IDENTITY="${1#*=}"; shift ;;
+        # upgrade options
+        --version)    VERSION="$2";     shift 2 ;;
+        --version=*)  VERSION="${1#*=}"; shift ;;
+        --mirror)     MIRROR="$2";      shift 2 ;;
+        --mirror=*)   MIRROR="${1#*=}"; shift ;;
+        --base-url)   BASE_URL="$2";    shift 2 ;;
+        --base-url=*) BASE_URL="${1#*=}"; shift ;;
+        --purge)      PURGE=1;          shift ;;
+        # deploy options
+        --skip)       SKIP="$2";        shift 2 ;;
+        --skip=*)     SKIP="${1#*=}";   shift ;;
+        --repo-root)  REPO_ROOT="$2";   shift 2 ;;
+        --repo-root=*) REPO_ROOT="${1#*=}"; shift ;;
+        # reset options
+        --start)      START=1;          shift ;;
+        # uninstall options
+        --keep-config) KEEP_CONFIG=1;   shift ;;
+        # diag options
+        --fetch)      FETCH=1;          shift ;;
+        --output)     REMOTE_OUTPUT="$2"; shift 2 ;;
+        --output=*)   REMOTE_OUTPUT="${1#*=}"; shift ;;
+        --local-path) LOCAL_PATH="$2";  shift 2 ;;
+        --local-path=*) LOCAL_PATH="${1#*=}"; shift ;;
+        --redact)     REDACT=1;         shift ;;
+        # common options
+        --yes|-y)     YES=1;            shift ;;
+        --dry-run)    DRY_RUN=1;        shift ;;
+        --help|-h)    ACTION="help";    shift ;;
+        *)
+            die "Unknown argument: $1. Run with --help for usage."
+            ;;
+    esac
+done
+
+# ── help ──────────────────────────────────────────────────────────────────────
+show_help() {
+    cat <<'EOF'
+clashforgectl — ClashForge Remote Control Script (macOS / Linux)
+
+USAGE
+    ./scripts/clashforgectl --router <host> <subcommand> [options]
+
+SUBCOMMANDS
+    status      Show current ClashForge state (read-only)
+    stop        Stop ClashForge and exit takeover mode
+    reset       Reset to first-install state (keeps installed package)
+    upgrade     Install latest or a specific version
+    deploy      Build locally, package as IPK, upload and install on router
+    uninstall   Completely remove ClashForge from the router
+    diag        Collect a full diagnostic report
+    help        Show this help
+
+CONNECTION OPTIONS
+    --router <host>      Router IP or hostname (required)
+    --user <name>        SSH user (default: root)
+    --port <port>        SSH port (default: 22)
+    --identity <path>    Path to SSH private key
+
+DEPLOY OPTIONS
+    --skip <steps>       Comma-separated build steps to skip: ui, go
+    --repo-root <path>   Repo root directory (default: auto-detect via go.mod)
+    --purge              Full cleanup before install
+
+UPGRADE OPTIONS
+    --version <tag>      Version to install (default: latest)
+    --mirror <url>       Force a GitHub proxy mirror
+    --base-url <url>     Custom release base URL
+    --purge              Full cleanup before install
+
+RESET OPTIONS
+    --start              Start ClashForge after reset
+
+UNINSTALL OPTIONS
+    --keep-config        Preserve /etc/metaclash after removal
+
+DIAG OPTIONS
+    --fetch              Download report to local machine after collection
+    --output <path>      Remote output path (default: /tmp/cf-diag.txt)
+    --local-path <path>  Local path for fetched report (default: cf-diag_<router>_<timestamp>.txt)
+    --redact             Best-effort masking of sensitive values
+
+COMMON OPTIONS
+    --yes                Skip confirmation prompts
+    --dry-run            Print planned actions without making changes
+    --help               Show this help
+
+EXAMPLES
+    ./scripts/clashforgectl --router 192.168.1.1 status
+    ./scripts/clashforgectl --router 192.168.1.1 stop
+    ./scripts/clashforgectl --router 192.168.1.1 reset --start
+    ./scripts/clashforgectl --router 192.168.1.1 upgrade --version latest
+    ./scripts/clashforgectl --router 192.168.1.1 upgrade --purge
+    ./scripts/clashforgectl --router 192.168.1.1 deploy
+    ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
+    ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
+    ./scripts/clashforgectl --router 192.168.1.1 check
+    ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
+    ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
+EOF
+}
+
+if [ "$ACTION" = "help" ]; then
+    show_help
+    exit 0
+fi
+
+# ── validate required args ────────────────────────────────────────────────────
+[ -z "$ACTION" ] && { show_help; echo; die "--router and a subcommand are required."; }
+[ -z "$ROUTER" ] && die "--router is required."
+
+# ── build SSH/SCP base arg arrays ─────────────────────────────────────────────
+TARGET="${SSH_USER}@${ROUTER}"
+SSH_OPTS=(-p "$SSH_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
+SCP_OPTS=(-P "$SSH_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=15)
+
+if [ -n "$IDENTITY" ]; then
+    SSH_OPTS+=(-i "$IDENTITY")
+    SCP_OPTS+=(-i "$IDENTITY")
+fi
+
+REMOTE_SCRIPT="/tmp/clashforgectl.sh"
+
+log "Router  : $TARGET  (port $SSH_PORT)"
+log "Script  : $SH_SCRIPT"
+log "Action  : $ACTION"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEPLOY — local build + package + push to router
+# ══════════════════════════════════════════════════════════════════════════════
+if [ "$ACTION" = "deploy" ]; then
+    # Auto-detect repo root: look for go.mod walking up from script dir
+    if [ -z "$REPO_ROOT" ]; then
+        REPO_ROOT="$SCRIPT_DIR"
+        [ -f "$REPO_ROOT/go.mod" ] || REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+        [ -f "$REPO_ROOT/go.mod" ] || die "Cannot auto-detect repo root (no go.mod). Pass --repo-root."
+    fi
+    log "Repo root: $REPO_ROOT"
+    log ""
+
+    # ── 1. Bump patch version ─────────────────────────────────────────────────
+    log "── Step 1: Bumping version"
+    CONTROL_FILE="$REPO_ROOT/ipk/CONTROL/control"
+    [ -f "$CONTROL_FILE" ] || die "control file not found: $CONTROL_FILE"
+    OLD_VER="$(grep -m1 '^Version:' "$CONTROL_FILE" | awk '{print $2}')"
+    [ -n "$OLD_VER" ] || die "Cannot parse version from $CONTROL_FILE"
+    VER_PREFIX="${OLD_VER%.*}"
+    VER_PATCH="${OLD_VER##*.}"
+    NEW_VER="${VER_PREFIX}.$((VER_PATCH + 1))"
+    # Use awk for in-place replacement (BusyBox-safe is not needed here — running on host)
+    sed -i.bak "s/^Version: .*/Version: $NEW_VER/" "$CONTROL_FILE" && rm -f "${CONTROL_FILE}.bak"
+    ok "Version $OLD_VER  →  $NEW_VER"
+    IPK_NAME="clashforge_${NEW_VER}_x86_64.ipk"
+
+    # ── 2. Build UI ───────────────────────────────────────────────────────────
+    case "$SKIP" in *ui*)
+        warn "Skipping UI build (--skip contains 'ui')" ;;
+    *)
+        log "── Step 2: Building React UI"
+        (cd "$REPO_ROOT/ui" && VITE_APP_VERSION="$NEW_VER" npm run build) \
+            || die "npm run build failed"
+        UI_DIST="$REPO_ROOT/internal/api/ui_dist"
+        rm -rf "$UI_DIST"/*
+        cp -r "$REPO_ROOT/ui/dist/." "$UI_DIST/"
+        ok "UI build complete"
+        ;;
+    esac
+
+    # ── 3. Cross-compile Go ───────────────────────────────────────────────────
+    case "$SKIP" in *go*)
+        warn "Skipping Go build (--skip contains 'go')" ;;
+    *)
+        log "── Step 3: Cross-compiling Go (linux/amd64)"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -ldflags='-s -w' \
+               -o "$REPO_ROOT/ipk/usr/bin/clashforge" \
+               "$REPO_ROOT/cmd/clashforge" \
+            || die "go build failed"
+        ok "Binary written to ipk/usr/bin/clashforge"
+        ;;
+    esac
+
+    # ── 4. Sync openwrt/files helpers → ipk/ ─────────────────────────────────
+    log "── Step 4: Syncing openwrt/files helpers → ipk/"
+    _sync() {
+        src="$REPO_ROOT/$1"; dst="$REPO_ROOT/$2"
+        if [ -f "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp -f "$src" "$dst"
+            ok "$(basename "$src")"
+        else
+            warn "Not found (skipped): $1"
+        fi
+    }
+    _sync "openwrt/files/usr/bin/clashforge-diag"                           "ipk/usr/bin/clashforge-diag"
+    _sync "openwrt/files/etc/init.d/metaclash"                              "ipk/etc/init.d/clashforge"
+    _sync "openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json"    "ipk/usr/share/luci/menu.d/luci-app-clashforge.json"
+    _sync "openwrt/files/www/luci-static/resources/view/clashforge/main.js" "ipk/www/luci-static/resources/view/clashforge/main.js"
+    _sync "openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json"     "ipk/usr/share/rpcd/acl.d/luci-app-clashforge.json"
+    _sync "openwrt/files/etc/metaclash/postinst.sh"                         "ipk/CONTROL/postinst"
+    _sync "openwrt/files/etc/metaclash/prerm.sh"                            "ipk/CONTROL/prerm"
+    _sync "openwrt/files/etc/metaclash/postrm.sh"                           "ipk/CONTROL/postrm"
+
+    # ── 5. Build IPK ─────────────────────────────────────────────────────────
+    log "── Step 5: Building IPK ($IPK_NAME)"
+    BUILD_SCRIPT="$REPO_ROOT/scripts/build_ipk.py"
+    [ -f "$BUILD_SCRIPT" ] || die "build_ipk.py not found: $BUILD_SCRIPT"
+    (cd "$REPO_ROOT" && PKG_NAME="$IPK_NAME" python3 "$BUILD_SCRIPT") \
+        || die "build_ipk.py failed"
+    LOCAL_IPK="$REPO_ROOT/$IPK_NAME"
+    ok "IPK ready: $LOCAL_IPK"
+
+    # ── 6. Upload IPK ─────────────────────────────────────────────────────────
+    REMOTE_IPK="/tmp/cf_deploy.ipk"
+    log "── Step 6: Uploading $IPK_NAME → ${TARGET}:${REMOTE_IPK}"
+    scp "${SCP_OPTS[@]}" "$LOCAL_IPK" "${TARGET}:${REMOTE_IPK}" \
+        || die "scp upload of IPK failed"
+    ok "IPK uploaded"
+
+    # ── 7. Upload clashforgectl.sh ────────────────────────────────────────────
+    log "── Step 7: Uploading clashforgectl.sh → ${TARGET}:${REMOTE_SCRIPT}"
+    scp "${SCP_OPTS[@]}" "$SH_SCRIPT" "${TARGET}:${REMOTE_SCRIPT}" \
+        || die "scp upload of clashforgectl.sh failed"
+    ok "clashforgectl.sh uploaded"
+
+    # ── 8. Install via clashforgectl upgrade --local-ipk ─────────────────────
+    PURGE_FLAG=""
+    [ "$PURGE" -eq 1 ] && PURGE_FLAG=" --purge"
+    REMOTE_INSTALL="sh $REMOTE_SCRIPT upgrade --local-ipk $REMOTE_IPK$PURGE_FLAG"
+    log "── Step 8: Installing on router"
+    log "Remote  : $REMOTE_INSTALL"
+    log ""
+    ssh "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_INSTALL" \
+        || die "Remote install failed"
+
+    log ""
+    ok "Deploy complete: $NEW_VER  →  http://${ROUTER}:7777"
+    exit 0
+fi
+
+
+# ── upload clashforgectl.sh to router ─────────────────────────────────────────
+log "Uploading clashforgectl.sh to router..."
+scp "${SCP_OPTS[@]}" "$SH_SCRIPT" "${TARGET}:${REMOTE_SCRIPT}" \
+    || die "scp upload failed. Check router SSH access and disk space."
+ok "Upload complete."
+
+# ── build remote command ──────────────────────────────────────────────────────
+REMOTE_CMD="sh $REMOTE_SCRIPT $ACTION"
+
+case "$ACTION" in
+    upgrade)
+        [ "$VERSION" != "latest" ] && REMOTE_CMD="$REMOTE_CMD --version $(sh_quote "$VERSION")"
+        [ -n "$MIRROR"   ]         && REMOTE_CMD="$REMOTE_CMD --mirror $(sh_quote "$MIRROR")"
+        [ -n "$BASE_URL" ]         && REMOTE_CMD="$REMOTE_CMD --base-url $(sh_quote "$BASE_URL")"
+        [ "$PURGE" -eq 1 ]         && REMOTE_CMD="$REMOTE_CMD --purge"
+        ;;
+    reset)
+        [ "$START" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --start"
+        ;;
+    uninstall)
+        [ "$KEEP_CONFIG" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --keep-config"
+        ;;
+    diag)
+        REMOTE_CMD="$REMOTE_CMD --output $(sh_quote "$REMOTE_OUTPUT")"
+        [ "$REDACT" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --redact"
+        # Print to stdout only when not fetching
+        [ "$FETCH" -eq 0 ] && REMOTE_CMD="$REMOTE_CMD --stdout"
+        ;;
+esac
+
+[ "$YES"     -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --yes"
+[ "$DRY_RUN" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --dry-run"
+
+log "Remote  : $REMOTE_CMD"
+log ""
+
+# ── execute on router ─────────────────────────────────────────────────────────
+ssh "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_CMD" \
+    || die "Remote command failed."
+
+# ── diag: fetch report to local machine ───────────────────────────────────────
+if [ "$ACTION" = "diag" ] && [ "$FETCH" -eq 1 ]; then
+    if [ -z "$LOCAL_PATH" ]; then
+        TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+        LOCAL_PATH="cf-diag_${ROUTER}_${TIMESTAMP}.txt"
+    fi
+
+    log ""
+    log "Fetching diagnostic report from router..."
+    if [ "$REDACT" -eq 1 ]; then
+        warn "Fetching report with redaction applied on router side."
+    else
+        warn "Report is UNREDACTED — handle with care (may contain subscription URLs, tokens)."
+    fi
+
+    scp "${SCP_OPTS[@]}" "${TARGET}:${REMOTE_OUTPUT}" "$LOCAL_PATH" \
+        || die "scp fetch failed. Remote path: $REMOTE_OUTPUT"
+
+    # Resolve absolute local path for display
+    ABS_LOCAL="$(cd "$(dirname "$LOCAL_PATH")" && pwd)/$(basename "$LOCAL_PATH")"
+
+    ok ""
+    ok "Diagnostic report fetched:"
+    ok "  Remote : ${REMOTE_OUTPUT}"
+    ok "  Local  : ${ABS_LOCAL}"
+fi
+
+ok ""
+ok "Done."
