@@ -324,15 +324,6 @@ jobs:
 
           _ssh "sh /tmp/e2e-install-verify.sh"
 
-      - name: "[Step 4.5] clashforgectl E2E"
-        run: |
-          chmod +x tests/e2e/clashforgectl/run.sh
-          E2E_IPK_PATH="/tmp/e2e-ipk/${{ needs.build.outputs.ipk_name }}" \
-          ROUTER_HOST=127.0.0.1 \
-          ROUTER_PORT=2222 \
-          ROUTER_USER=root \
-          tests/e2e/clashforgectl/run.sh
-
       # ── Scenario 1/2: dnsmasq_mode=upstream ──────────────────────────────────
       - name: "[Scenario 1/2] dnsmasq_mode=upstream"
         uses: ./.github/actions/e2e-scenario
@@ -384,6 +375,15 @@ jobs:
           subscription_url: ${{ secrets.SUBSCRIPTION_URL }}
           reuse_subscription: 'true'
           scenario_label: 'Scenario 2/2 — dnsmasq_mode=replace'
+
+      - name: "[Step 8.5] clashforgectl E2E"
+        run: |
+          chmod +x tests/e2e/clashforgectl/run.sh
+          E2E_IPK_PATH="/tmp/e2e-ipk/${{ needs.build.outputs.ipk_name }}" \
+          ROUTER_HOST=127.0.0.1 \
+          ROUTER_PORT=2222 \
+          ROUTER_USER=root \
+          tests/e2e/clashforgectl/run.sh
 
       # ── Step 9: 紧急清理 ──────────────────────────────────────────────────
       - name: "[Step 9] Emergency cleanup"
