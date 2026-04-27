@@ -16,13 +16,13 @@ const routeTable = "100"
 
 // fwMarkOutput marks packets from router-originated processes so they can be
 // re-routed through loopback and intercepted by tproxy_prerouting.
-const fwMarkOutput    = "0x1a4"
+const fwMarkOutput = "0x1a4"
 const routeTableOutput = "101"
 
 // Exported for use in API stop-flow SSE messages.
-const FWMark          = fwMark
-const RouteTable      = routeTable
-const FWMarkOutput    = fwMarkOutput
+const FWMark = fwMark
+const RouteTable = routeTable
+const FWMarkOutput = fwMarkOutput
 const RouteTableOutput = routeTableOutput
 
 // NftablesBackend manages nftables TProxy rules.
