@@ -1,22 +1,24 @@
 name: Auto Tag & Release
 
-# Why this is not push-only:
-# GitHub does not create new workflow runs for most events caused by the
-# repository GITHUB_TOKEN. When auto-merge is enabled by an Actions workflow,
-# the resulting main push can therefore fail to trigger a push-only auto-tag
-# workflow. workflow_run is independent of that suppressed push chain, so it is
-# the reliable hook for PRs that were auto-merged after checks passed.
+# Low-noise release chain:
+# - pull_request_target.closed runs once when a PR is closed/merged.
+# - push to main remains a fallback for direct/manual main updates.
+# - workflow_dispatch remains a manual backfill path.
+#
+# Do not use workflow_run here. workflow_run fires for every completed check run
+# on every PR update, which wastes runner minutes and can sit around polling.
+# For tags created by GITHUB_TOKEN, tag push does not reliably trigger release.yml,
+# so this workflow dispatches release.yml explicitly after pushing the tag.
 
 on:
+  pull_request_target:
+    types:
+      - closed
+    branches:
+      - main
   push:
     branches:
       - main
-  workflow_run:
-    workflows:
-      - CI
-      - E2E Integration Test (OpenWrt)
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       sha:
@@ -25,7 +27,7 @@ on:
         default: ''
 
 concurrency:
-  group: auto-tag-release-${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.sha || github.sha || github.ref }}
+  group: auto-tag-release-${{ github.event.pull_request.number || github.event.inputs.sha || github.sha || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -37,15 +39,11 @@ jobs:
       actions: write
       pull-requests: read
 
-    # For workflow_run, only successful PR check runs are candidates. Direct
-    # pushes and manual dispatches remain supported as fallback/manual paths.
+    # Closed-but-unmerged PRs are ignored before a runner is allocated.
     if: >-
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.pull_requests[0].number != '')
+      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
 
     steps:
       - uses: actions/checkout@v4
@@ -55,47 +53,27 @@ jobs:
       - name: Resolve commit to release
         id: target
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           MANUAL_SHA: ${{ github.event.inputs.sha }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            TARGET_SHA="$PR_MERGE_SHA"
+            REASON="merged PR #$PR_NUMBER"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             TARGET_SHA="${MANUAL_SHA:-${{ github.sha }}}"
             REASON="manual dispatch"
-          elif [ "$EVENT_NAME" = "push" ]; then
+          else
             TARGET_SHA="${{ github.sha }}"
             REASON="main push"
-          else
-            echo "Checking whether PR #$PR_NUMBER has been merged..."
-            TARGET_SHA=""
+          fi
 
-            # The workflow_run event can start a few seconds before GitHub's
-            # auto-merge has finished writing the squash commit to main. Poll
-            # briefly; if this was not the final required check, exit cleanly
-            # and let a later workflow_run event handle the release.
-            for attempt in $(seq 1 30); do
-              PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER")
-              MERGED=$(echo "$PR_JSON" | jq -r '.merged')
-              TARGET_SHA=$(echo "$PR_JSON" | jq -r '.merge_commit_sha // empty')
-
-              if [ "$MERGED" = "true" ] && [ -n "$TARGET_SHA" ]; then
-                REASON="merged PR #$PR_NUMBER"
-                break
-              fi
-
-              echo "PR #$PR_NUMBER is not merged yet (attempt $attempt/30); waiting..."
-              sleep 10
-            done
-
-            if [ -z "${TARGET_SHA:-}" ]; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "PR #$PR_NUMBER was not merged by the time this check completed; skipping."
-              exit 0
-            fi
+          if [ -z "${TARGET_SHA:-}" ]; then
+            echo "Could not resolve target commit for $REASON" >&2
+            exit 1
           fi
 
           git fetch origin main --tags --force
@@ -109,7 +87,6 @@ jobs:
 
       - name: Check for existing release tag on target
         id: existing
-        if: steps.target.outputs.skip != 'true'
         run: |
           set -euo pipefail
           git fetch origin --tags --force
@@ -124,7 +101,7 @@ jobs:
 
       - name: Compute next tag
         id: next
-        if: steps.target.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        if: steps.existing.outputs.skip != 'true'
         run: |
           set -euo pipefail
           LATEST=$(git tag --list 'v*' --sort=-version:refname \
@@ -144,7 +121,7 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Push tag
-        if: steps.target.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        if: steps.existing.outputs.skip != 'true'
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
@@ -154,7 +131,7 @@ jobs:
           git push origin "${{ steps.next.outputs.tag }}"
 
       - name: Trigger release build
-        if: steps.target.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        if: steps.existing.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
