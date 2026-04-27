@@ -16,16 +16,16 @@ export default function App() {
       >
         跳转到主要内容
       </a>
-      <div className="relative flex h-screen overflow-hidden bg-surface-0 text-white">
+      <div className="app-shell relative flex h-screen overflow-hidden bg-surface-0 text-white">
         <div
-          className="pointer-events-none absolute inset-0"
+          className="app-backdrop pointer-events-none absolute inset-0"
           style={{
-            background: `radial-gradient(circle at top left, var(--app-glow-top-left), transparent 30%), radial-gradient(circle at bottom right, var(--app-glow-bottom-right), transparent 28%), linear-gradient(180deg, rgba(255,255,255,0.02), transparent 40%)`,
+            background: 'var(--app-background)',
           }}
         />
         <Sidebar />
         <main id="main-content" className="relative z-10 flex-1 overflow-y-auto">
-          <div className="mx-auto min-h-full w-full max-w-[1680px] px-4 py-4 md:px-6 md:py-6">
+          <div className="app-content mx-auto min-h-full w-full max-w-[1680px] px-4 py-4 md:px-6 md:py-6">
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/config" element={<ConfigManagement />} />

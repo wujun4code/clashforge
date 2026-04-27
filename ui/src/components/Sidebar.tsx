@@ -71,19 +71,19 @@ export function Sidebar() {
 
   return (
     <aside
-      className="flex h-screen flex-shrink-0 flex-col border-r border-white/[0.06]"
+      className="app-sidebar flex h-screen flex-shrink-0 flex-col border-r border-white/[0.06]"
       style={{
         width: 'var(--sidebar-width)',
         background: 'linear-gradient(180deg, rgb(var(--surface-1)) 0%, rgb(var(--surface-0)) 100%)',
       }}
     >
       {/* ── Logo ──────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-4">
+      <div className="sidebar-brand flex items-center gap-3 border-b border-white/[0.06] px-4 py-4">
         <div
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center border border-brand/20 bg-brand/[0.09]"
+          className="sidebar-logo-mark flex h-9 w-9 flex-shrink-0 items-center justify-center border border-brand/20 bg-brand/[0.09]"
           style={{
             borderRadius: 'var(--radius-md)',
-            boxShadow: '0 0 16px rgba(139,92,246,0.22)',
+            boxShadow: 'var(--shadow-glow-brand-sm)',
           }}
         >
           <img src="/favicon.svg" alt="ClashForge" className="h-[18px] w-[18px]" />
@@ -106,7 +106,7 @@ export function Sidebar() {
           {({ isActive }) => (
             <div
               className={[
-                'relative flex items-center gap-3 border px-3 py-2.5 transition-all duration-200',
+                'sidebar-service-card relative flex items-center gap-3 border px-3 py-2.5 transition-all duration-200',
                 isActive ? 'border-brand/28 bg-brand/[0.07]' : `${sc.border} ${sc.bg}`,
               ].join(' ')}
               style={{ borderRadius: 'var(--radius-lg)' }}
@@ -159,7 +159,7 @@ export function Sidebar() {
       </div>
 
       {/* ── Nav section label ─────────────────────────────── */}
-      <div className="mx-4 mt-3 flex items-center gap-2">
+      <div className="sidebar-nav-label mx-4 mt-3 flex items-center gap-2">
         <div className="h-px flex-1 bg-white/[0.05]" />
         <span className="text-[9px] font-semibold uppercase tracking-[0.28em] text-white/20">
           功能导航
@@ -168,34 +168,35 @@ export function Sidebar() {
       </div>
 
       {/* ── Nav links ─────────────────────────────────────── */}
-      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1.5">
+      <nav className="sidebar-nav flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1.5">
         {navLinks.map(({ to, icon: Icon, label, caption }) => (
           <NavLink
             key={to}
             to={to}
             end={to === '/'}
+            className={({ isActive }) =>
+              [
+                'sidebar-nav-item sidebar-nav-link group relative flex items-center gap-2.5 px-2.5 py-2 transition-all duration-150 cursor-pointer',
+                isActive
+                  ? 'sidebar-nav-link-active text-white bg-brand/[0.07]'
+                  : 'text-white/50 hover:bg-white/[0.04] hover:text-white/80',
+              ].join(' ')
+            }
+            style={{ borderRadius: 'var(--radius-md)' }}
           >
             {({ isActive }) => (
-              <div
-                className={[
-                  'group relative flex items-center gap-2.5 px-2.5 py-2 transition-all duration-150 cursor-pointer',
-                  isActive
-                    ? 'text-white bg-brand/[0.07]'
-                    : 'text-white/50 hover:bg-white/[0.04] hover:text-white/80',
-                ].join(' ')}
-                style={{ borderRadius: 'var(--radius-md)' }}
-              >
+              <>
                 {/* Active left accent bar */}
                 {isActive && (
                   <span
-                    className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-full bg-brand"
-                    style={{ boxShadow: '0 0 6px rgba(139,92,246,0.60)' }}
+                    className="sidebar-nav-active-bar absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-full bg-brand"
+                    style={{ boxShadow: 'var(--shadow-glow-brand-sm)' }}
                   />
                 )}
 
                 {/* Icon box */}
                 <div
-                  className={`flex h-[34px] w-[34px] flex-shrink-0 items-center justify-center transition-colors ${
+                  className={`sidebar-nav-icon flex h-[34px] w-[34px] flex-shrink-0 items-center justify-center transition-colors ${
                     isActive
                       ? 'bg-brand/14 text-brand-light'
                       : 'bg-white/[0.045] text-white/38 group-hover:bg-white/[0.07] group-hover:text-white/65'
@@ -206,11 +207,11 @@ export function Sidebar() {
                 </div>
 
                 {/* Text */}
-                <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-semibold leading-none">
+                <div className="min-w-0 flex-1 py-[1px]">
+                  <p className="text-[13px] font-semibold leading-[1.24]">
                     {label}
                   </p>
-                  <p className="mt-[5px] text-[10.5px] leading-none text-white/28 truncate group-hover:text-white/40">
+                  <p className="mt-1 text-[10.5px] leading-[1.32] text-white/30 truncate group-hover:text-white/42">
                     {caption}
                   </p>
                 </div>
@@ -221,20 +222,20 @@ export function Sidebar() {
                     isActive ? 'text-brand-light/55' : 'text-white/18 group-hover:text-white/38'
                   }`}
                 />
-              </div>
+              </>
             )}
           </NavLink>
         ))}
       </nav>
 
       {/* ── Footer ────────────────────────────────────────── */}
-      <div className="border-t border-white/[0.06] px-3 pb-4 pt-3 space-y-2">
+      <div className="sidebar-footer border-t border-white/[0.06] px-3 pb-4 pt-3 space-y-2">
         <ThemeSwitcher />
-        <div className="flex items-center justify-between px-1">
-          <span className="text-[9.5px] font-medium uppercase tracking-[0.20em] text-white/22">
+        <div className="sidebar-version-row flex items-center gap-2 px-1">
+          <span className="flex-shrink-0 text-[9.5px] font-medium uppercase tracking-[0.20em] text-white/22">
             Version
           </span>
-          <span className="font-mono text-[11px] text-white/40">
+          <span className="sidebar-version-value font-mono text-[11px] text-white/40" title={__APP_VERSION__}>
             {__APP_VERSION__}
           </span>
         </div>

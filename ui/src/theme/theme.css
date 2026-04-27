@@ -1,12 +1,10 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ClashForge — Nebula (星云)  ·  Design System v2
+   ClashForge — Theme System  ·  Design System v3
 
-   Philosophy: Command-Center Dark
-   · Near-black canvas with deep indigo undertone
-   · Electric violet (#8B5CF6) as the single brand accent — used with discipline
-   · Operational colors (emerald/rose/amber) carry live-status weight
-   · Fira Code for headings & data  ·  Fira Sans for prose & labels
-   · 4pt spacing grid  ·  8/12/16 radius ladder  ·  Spring-bounce micro-motion
+   Themes:
+   · Nebula: command-center dark, violet glass, existing default
+   · Meow: cute cat-inspired control room, candy accents, soft motion
+   · Infra: professional router/network infrastructure console, dense controls
    ═══════════════════════════════════════════════════════════════════════════ */
 
 
@@ -70,7 +68,7 @@
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   NEBULA  ·  applied globally (single theme)
+   NEBULA
    ═══════════════════════════════════════════════════════════════════════════ */
 :root,
 [data-theme="nebula"] {
@@ -152,10 +150,213 @@
   --modal-backdrop:        rgba(2,1,10,0.88);
   --app-glow-top-left:     rgba(139,92,246,0.14);
   --app-glow-bottom-right: rgba(249,115,22,0.08);
+  --app-background:
+    radial-gradient(circle at top left, var(--app-glow-top-left), transparent 30%),
+    radial-gradient(circle at bottom right, var(--app-glow-bottom-right), transparent 28%),
+    linear-gradient(180deg, rgba(255,255,255,0.02), transparent 40%);
 
   /* Callout text */
   --callout-info-text:    #EDE9FF;
   --callout-success-text: #DCFCE7;
+  --callout-warning-text: #FEF3C7;
+  --callout-danger-text:  #FECACA;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MEOW  ·  cute cat-inspired control room
+   ═══════════════════════════════════════════════════════════════════════════ */
+[data-theme="meow"] {
+
+  /* ── Brand ──────────────────────────────────────────────────────────────── */
+  --brand:              255 138 201;   /* #FF8AC9 */
+  --brand-light:        255 220 238;   /* blush highlight */
+  --brand-subtle-rgb:   255 138 201;
+  --brand-subtle-alpha: 0.13;
+
+  --cta:              255 198  92;     /* honey */
+  --cta-subtle-rgb:   255 198  92;
+  --cta-subtle-alpha: 0.12;
+
+  /* ── Surfaces — warm dark candy stack ──────────────────────────────────── */
+  --surface-0:  20  18  29;
+  --surface-1:  31  27  42;
+  --surface-2:  42  35  54;
+  --surface-3:  60  48  72;
+  --surface-4:  82  64  88;
+
+  /* ── Text ───────────────────────────────────────────────────────────────── */
+  --text-primary: 255 247 252;
+  --text-dim:     237 204 224;
+  --muted:        187 151 171;
+
+  /* ── Borders ────────────────────────────────────────────────────────────── */
+  --border-width: 1px;
+  --border-color: 255 204 230;
+  --border-alpha: 0.16;
+
+  /* ── Glass ──────────────────────────────────────────────────────────────── */
+  --glass-blur:         20px;
+  --glass-bg:           255 138 201;
+  --glass-bg-alpha:     0.08;
+  --glass-bg-hover:     0.14;
+  --glass-border-alpha: 0.18;
+
+  /* ── Shadows ────────────────────────────────────────────────────────────── */
+  --shadow-card:
+    0 10px 30px rgba(8,4,14,0.36),
+    0 2px 6px rgba(8,4,14,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+
+  --shadow-card-hover:
+    0 18px 42px rgba(8,4,14,0.50),
+    0 0 26px rgba(255,138,201,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.12);
+
+  --shadow-button:
+    0 7px 18px rgba(255,138,201,0.24),
+    inset 0 1px 0 rgba(255,255,255,0.30);
+
+  --shadow-inset:          inset 0 1px 0 rgba(255,255,255,0.11), inset 0 -1px 0 rgba(0,0,0,0.15);
+  --shadow-glow-brand:     0 0 26px rgba(255,138,201,0.40);
+  --shadow-glow-brand-sm:  0 0 12px rgba(255,138,201,0.32);
+  --shadow-glow-cta:       0 0 22px rgba(255,198,92,0.32);
+
+  /* ── Motion ─────────────────────────────────────────────────────────────── */
+  --ease-default: var(--ease-spring);
+
+  /* ── Typography ─────────────────────────────────────────────────────────── */
+  --font-sans:    'Nunito', 'Fira Sans', system-ui, sans-serif;
+  --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Nunito', 'Fira Sans', system-ui, sans-serif;
+
+  /* ── Layout ─────────────────────────────────────────────────────────────── */
+  --sidebar-width: 276px;
+  --btn-min-width: 88px;
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
+  --radius-xl:   16px;
+  --space-md:    18px;
+  --space-lg:    26px;
+  --space-xl:    42px;
+
+  /* ── Misc ───────────────────────────────────────────────────────────────── */
+  --scrollbar-thumb:       rgba(255,138,201,0.28);
+  --scrollbar-thumb-hover: rgba(255,198,92,0.48);
+  --selection-bg:          rgba(255,138,201,0.34);
+  --selection-text:        #FFF7FC;
+  --modal-backdrop:        rgba(18,10,24,0.86);
+  --app-glow-top-left:     rgba(255,138,201,0.16);
+  --app-glow-bottom-right: rgba(52,211,153,0.10);
+  --app-background:
+    radial-gradient(circle at 14% 12%, rgba(255,138,201,0.15), transparent 26%),
+    radial-gradient(circle at 88% 84%, rgba(52,211,153,0.12), transparent 30%),
+    linear-gradient(135deg, rgba(255,198,92,0.06), transparent 32%),
+    repeating-linear-gradient(135deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 22px);
+
+  --callout-info-text:    #FFEAF6;
+  --callout-success-text: #DFFCEF;
+  --callout-warning-text: #FFF3C7;
+  --callout-danger-text:  #FFD7DC;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   INFRA  ·  professional router/network infrastructure console
+   ═══════════════════════════════════════════════════════════════════════════ */
+[data-theme="infra"] {
+
+  /* ── Brand ──────────────────────────────────────────────────────────────── */
+  --brand:              56 189 248;    /* sky-400 */
+  --brand-light:        125 211 252;   /* sky-300 */
+  --brand-subtle-rgb:   56 189 248;
+  --brand-subtle-alpha: 0.10;
+
+  --cta:              20 184 166;      /* teal-500 */
+  --cta-subtle-rgb:   20 184 166;
+  --cta-subtle-alpha: 0.09;
+
+  /* ── Surfaces — network operations stack ───────────────────────────────── */
+  --surface-0:   5  10  18;
+  --surface-1:  10  17  29;
+  --surface-2:  15  23  37;
+  --surface-3:  25  35  51;
+  --surface-4:  38  52  70;
+
+  /* ── Text ───────────────────────────────────────────────────────────────── */
+  --text-primary: 241 245 249;
+  --text-dim:     197 207 219;
+  --muted:        136 153 172;
+
+  /* ── Borders ────────────────────────────────────────────────────────────── */
+  --border-width: 1px;
+  --border-color: 148 163 184;
+  --border-alpha: 0.16;
+
+  /* ── Glass ──────────────────────────────────────────────────────────────── */
+  --glass-blur:         12px;
+  --glass-bg:           56 189 248;
+  --glass-bg-alpha:     0.04;
+  --glass-bg-hover:     0.07;
+  --glass-border-alpha: 0.16;
+
+  /* ── Shadows ────────────────────────────────────────────────────────────── */
+  --shadow-card:
+    0 1px 0 rgba(255,255,255,0.04),
+    0 12px 30px rgba(0,0,0,0.32);
+
+  --shadow-card-hover:
+    0 1px 0 rgba(255,255,255,0.08),
+    0 18px 42px rgba(0,0,0,0.45),
+    0 0 0 1px rgba(56,189,248,0.08);
+
+  --shadow-button:
+    0 0 0 1px rgba(125,211,252,0.10),
+    0 8px 18px rgba(56,189,248,0.18);
+
+  --shadow-inset:          inset 0 1px 0 rgba(255,255,255,0.06);
+  --shadow-glow-brand:     0 0 18px rgba(56,189,248,0.24);
+  --shadow-glow-brand-sm:  0 0 8px rgba(56,189,248,0.22);
+  --shadow-glow-cta:       0 0 18px rgba(20,184,166,0.24);
+
+  /* ── Motion ─────────────────────────────────────────────────────────────── */
+  --ease-default: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ── Typography ─────────────────────────────────────────────────────────── */
+  --font-sans:    'Inter', 'Fira Sans', system-ui, sans-serif;
+  --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Inter', 'Fira Sans', system-ui, sans-serif;
+
+  /* ── Layout ─────────────────────────────────────────────────────────────── */
+  --sidebar-width: 232px;
+  --btn-min-width: 72px;
+  --radius-sm:   3px;
+  --radius-md:   6px;
+  --radius-lg:   8px;
+  --radius-xl:   10px;
+  --space-xs:    3px;
+  --space-sm:    6px;
+  --space-md:    12px;
+  --space-lg:    18px;
+  --space-xl:    30px;
+
+  /* ── Misc ───────────────────────────────────────────────────────────────── */
+  --scrollbar-thumb:       rgba(56,189,248,0.22);
+  --scrollbar-thumb-hover: rgba(20,184,166,0.46);
+  --selection-bg:          rgba(56,189,248,0.32);
+  --selection-text:        #F8FAFC;
+  --modal-backdrop:        rgba(2,6,12,0.88);
+  --app-glow-top-left:     rgba(56,189,248,0.10);
+  --app-glow-bottom-right: rgba(20,184,166,0.08);
+  --app-background:
+    linear-gradient(180deg, rgba(56,189,248,0.06), transparent 34%),
+    repeating-linear-gradient(0deg, rgba(148,163,184,0.045) 0 1px, transparent 1px 36px),
+    repeating-linear-gradient(90deg, rgba(148,163,184,0.035) 0 1px, transparent 1px 36px),
+    linear-gradient(135deg, rgba(20,184,166,0.055), transparent 44%);
+
+  --callout-info-text:    #E0F2FE;
+  --callout-success-text: #CCFBF1;
   --callout-warning-text: #FEF3C7;
   --callout-danger-text:  #FECACA;
 }
