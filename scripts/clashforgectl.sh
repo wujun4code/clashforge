@@ -27,6 +27,7 @@ CLASHFORGE_VERSION="latest"
 PURGE=0
 MIRROR=""
 BASE_URL=""
+LOCAL_IPK=""
 KEEP_CONFIG=0
 AUTO_START=0
 DIAG_OUTPUT="/tmp/cf-diag.txt"
@@ -70,6 +71,7 @@ Options for upgrade:
   --mirror <url>             Force a GitHub proxy mirror
   --base-url <url>           Custom release base URL (e.g. Cloudflare R2)
   --purge                    Full cleanup before install (wipes config)
+  --local-ipk <path>         Use a pre-uploaded IPK on the router (skip download)
 
 Options for reset:
   --start                    Start ClashForge after reset
@@ -96,6 +98,7 @@ while [ $# -gt 0 ]; do
     --base-url)    [ -n "${2:-}" ] || die "--base-url requires a value"; BASE_URL="${2%/}"; shift 2 ;;
     --output)      [ -n "${2:-}" ] || die "--output requires a value";  DIAG_OUTPUT="$2"; shift 2 ;;
     --purge)       PURGE=1; shift ;;
+    --local-ipk)   [ -n "${2:-}" ] || die "--local-ipk requires a path"; LOCAL_IPK="$2"; shift 2 ;;
     --keep-config) KEEP_CONFIG=1; shift ;;
     --start)       AUTO_START=1; shift ;;
     --stdout)      DIAG_STDOUT=1; shift ;;
@@ -562,12 +565,20 @@ cmd_upgrade() {
     restore_system_state
   fi
 
-  download_ipk
+  if [ -n "$LOCAL_IPK" ]; then
+    log "Using pre-staged local IPK: $LOCAL_IPK"
+    [ -f "$LOCAL_IPK" ] || die "--local-ipk path not found on router: $LOCAL_IPK"
+    TMP_IPK="$LOCAL_IPK"
+    _cleanup_ipk=0
+  else
+    download_ipk
+    _cleanup_ipk=1
+  fi
 
   log "Installing via opkg (--nodeps --force-downgrade)..."
   opkg install --nodeps --force-downgrade "$TMP_IPK" \
     || die "opkg install failed"
-  rm -f "$TMP_IPK"
+  [ "${_cleanup_ipk:-1}" = "1" ] && rm -f "$TMP_IPK" || true
   ok "opkg install complete"
 
   # ── Re-enable and start the service if it was running before upgrade ────────
