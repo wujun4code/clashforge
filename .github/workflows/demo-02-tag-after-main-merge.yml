@@ -1,0 +1,117 @@
+name: Demo 02 - Tag After Main Merge
+
+# Demo-only tagging flow.
+#
+# Goal:
+# 2. Any merge/commit on main gets a demo tag.
+#
+# This workflow supports two paths:
+# - push.main: for human merges/direct commits and any event GitHub does deliver.
+# - workflow_dispatch: explicit bridge from Demo 01 for GITHUB_TOKEN merges,
+#   because push.main may be suppressed by GitHub's recursion guard.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Merged main commit SHA to tag; defaults to current ref'
+        required: false
+        default: ''
+
+concurrency:
+  group: demo-tag-${{ github.event.inputs.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  create-demo-tag:
+    name: Create demo tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target commit
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_SHA: ${{ github.event.inputs.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TARGET_SHA="${MANUAL_SHA:-${{ github.sha }}}"
+            REASON="explicit dispatch after automated merge"
+          else
+            TARGET_SHA="${{ github.sha }}"
+            REASON="push to main"
+          fi
+
+          git fetch origin main --tags --force
+          git cat-file -e "$TARGET_SHA^{commit}"
+
+          echo "Target commit: $TARGET_SHA ($REASON)"
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse existing demo tag if present
+        id: existing
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          EXISTING=$(git tag --points-at "${{ steps.target.outputs.sha }}" --list 'demo-v*' | sort -V | tail -1 || true)
+          if [ -n "$EXISTING" ]; then
+            echo "Commit already has demo tag: $EXISTING"
+            echo "tag=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "skip_create=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_create=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next demo tag
+        id: next
+        if: steps.existing.outputs.skip_create != 'true'
+        run: |
+          set -euo pipefail
+          LATEST=$(git tag --list 'demo-v*' --sort=-version:refname \
+            | grep -E '^demo-v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | head -1 || true)
+
+          if [ -z "$LATEST" ]; then
+            NEXT="demo-v0.0.1"
+          else
+            PATCH=$(echo "$LATEST" | grep -oE '[0-9]+$')
+            NEXT="demo-v0.0.$((PATCH + 1))"
+          fi
+
+          echo "Next demo tag: $NEXT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Push demo tag
+        if: steps.existing.outputs.skip_create != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.next.outputs.tag }}" "${{ steps.target.outputs.sha }}" \
+            -m "Demo release ${{ steps.next.outputs.tag }}"
+          git push origin "${{ steps.next.outputs.tag }}"
+          echo "Pushed demo tag ${{ steps.next.outputs.tag }}"
+
+      - name: Dispatch demo release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.existing.outputs.tag || steps.next.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching Demo 03 release workflow for $TAG"
+          gh workflow run demo-03-release-on-tag.yml \
+            --repo "$REPO" \
+            --ref main \
+            --field tag="$TAG"

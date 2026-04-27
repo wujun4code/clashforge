@@ -1,0 +1,49 @@
+name: Demo 03 - Release On Tag
+
+# Demo-only release flow.
+#
+# Goal:
+# 3. Any demo tag push runs the release flow.
+#
+# This also supports workflow_dispatch because tags pushed with GITHUB_TOKEN may
+# not recursively trigger `push.tags`. Human/app-token tag pushes use push.tags;
+# Demo 02 uses workflow_dispatch as the bridge for automated tags.
+
+on:
+  push:
+    tags:
+      - 'demo-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Demo tag to release'
+        required: true
+
+jobs:
+  demo-release:
+    name: Demo release flow
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Print release flow log
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          PUSH_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$DISPATCH_TAG"
+            REASON="explicit dispatch after automated demo tag push"
+          else
+            TAG="$PUSH_TAG"
+            REASON="tag push"
+          fi
+
+          echo "🚀 Demo release workflow started"
+          echo "Tag: $TAG"
+          echo "Reason: $REASON"
+          echo "This is intentionally a demo: no real release artifact is created."
+          echo "A production workflow would build artifacts and publish a GitHub Release here."

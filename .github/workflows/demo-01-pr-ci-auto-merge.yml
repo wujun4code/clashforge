@@ -1,0 +1,100 @@
+name: Demo 01 - PR CI and Auto Merge
+
+# Demo-only CI/CD flow.
+#
+# Goal:
+# 1. A PR is merged automatically after the demo required checks are green.
+# 2. The merge job explicitly dispatches Demo 02 with the merge commit SHA.
+#
+# Why explicit dispatch?
+# GitHub suppresses most workflow events caused by GITHUB_TOKEN to prevent
+# recursion. So a GITHUB_TOKEN merge may not reliably wake a separate
+# `on: push` workflow. `workflow_dispatch` is the supported bridge event.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: demo-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  demo-required-check:
+    name: Demo required CI check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print demo CI log
+        run: |
+          echo "✅ Demo required CI check passed"
+          echo "PR #${{ github.event.pull_request.number }}"
+          echo "Head SHA: ${{ github.event.pull_request.head.sha }}"
+
+  auto-merge-after-checks:
+    name: Demo auto merge after checks
+    runs-on: ubuntu-latest
+    needs: demo-required-check
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
+      statuses: read
+    steps:
+      - name: Merge PR and dispatch tag workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          pr_json=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json number,title,isDraft,headRefOid,statusCheckRollup)
+
+          title=$(jq -r '.title' <<<"$pr_json")
+          is_draft=$(jq -r '.isDraft' <<<"$pr_json")
+          head_oid=$(jq -r '.headRefOid' <<<"$pr_json")
+
+          # Demo isolation: this workflow treats only its own demo CI check as
+          # the required check. The final GitHub merge command remains the
+          # source of truth if real branch protection requires more checks.
+          pending=$(jq '[.statusCheckRollup[]? | select((.name // "") == "Demo required CI check" and (.status // "") != "COMPLETED")] | length' <<<"$pr_json")
+          failed=$(jq '[.statusCheckRollup[]? | select((.name // "") == "Demo required CI check" and (((.conclusion // "") | IN("SUCCESS", "SKIPPED", "NEUTRAL")) | not))] | length' <<<"$pr_json")
+
+          echo "PR #$PR_NUMBER: $title"
+          echo "draft=$is_draft head=$head_oid expected=$EXPECTED_HEAD pending=$pending failed=$failed"
+
+          if [ "$is_draft" = "true" ]; then
+            echo "Skip: draft PR"
+            exit 0
+          fi
+
+          if [ "$head_oid" != "$EXPECTED_HEAD" ]; then
+            echo "Skip: PR head changed while checks were running"
+            exit 0
+          fi
+
+          if [ "$pending" -ne 0 ] || [ "$failed" -ne 0 ]; then
+            echo "Skip: not all demo checks are green yet"
+            exit 0
+          fi
+
+          echo "Merging PR #$PR_NUMBER with GITHUB_TOKEN..."
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --squash
+
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // empty')
+          if [ -z "$merge_sha" ]; then
+            echo "::error::Merged, but merge commit SHA was not available"
+            exit 1
+          fi
+
+          echo "Merged PR #$PR_NUMBER as $merge_sha"
+          echo "Dispatching Demo 02 tag workflow..."
+          gh workflow run demo-02-tag-after-main-merge.yml \
+            --repo "$REPO" \
+            --ref main \
+            --field sha="$merge_sha"
