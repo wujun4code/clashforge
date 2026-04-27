@@ -765,12 +765,16 @@ cmd_check() {
     label="$1"; url="$2"
     _ts_start="$(date +%s)"
     if command -v curl >/dev/null 2>&1; then
+      # curl already outputs "000" for %{http_code} on connection failure —
+      # do NOT add || echo "000" or the code becomes "000000".
       _code="$(curl -sSL --max-time 12 --proxy "$_PROXY" \
                     -A "clashforgectl-check/1.0" \
-                    -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")" || true
+                    -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)" || true
+      [ -z "$_code" ] && _code="000"
     else
       _code="$(http_proxy="$_PROXY" wget -qO/dev/null --timeout=12 \
-                    --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}' || echo "000")" || true
+                    --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}')" || true
+      [ -z "$_code" ] && _code="000"
     fi
     _ts_end="$(date +%s)"
     _ms=$(( (_ts_end - _ts_start) * 1000 ))
