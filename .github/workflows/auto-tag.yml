@@ -1,16 +1,16 @@
 name: Auto Tag & Release
 
-# Release chain design without PAT:
-# - final CI/E2E jobs merge ready PRs with GITHUB_TOKEN, then explicitly
-#   dispatch this workflow with the merge commit SHA.
-# - push to main remains a fallback for human/app-token/direct merges.
-# - tag pushes created by GITHUB_TOKEN do not reliably trigger release.yml, so
-#   this workflow explicitly dispatches release.yml after pushing the tag.
+# Triggered by push.main after PAT-based auto-merge (auto-merge.yml enables
+# native auto-merge via GH_PAT, so the resulting merge push fires normally —
+# GITHUB_TOKEN merges are blocked by GitHub's recursion guard).
 #
-# Race-condition prevention:
-# - key concurrency on the target commit SHA, so manual dispatch and push-main
-#   fallback for the same commit serialize and the second run exits after seeing
-#   the existing tag.
+# workflow_dispatch is a manual fallback for direct pushes or recovery.
+#
+# Tag pushes by GITHUB_TOKEN do not trigger push:tags in other workflows, so
+# release.yml is dispatched explicitly via gh workflow run after pushing the tag.
+#
+# Concurrency keyed on the target commit SHA prevents double-tagging if both
+# push.main and a manual dispatch target the same commit.
 
 on:
   push:
