@@ -1,45 +1,78 @@
 name: "[Demo] 2 — Auto-merge"
 
-# Step 2 of 3 (trigger): Enable GitHub's native auto-merge on every non-draft PR.
+# Step 2 of 3: after the demo CI workflow succeeds, merge the PR and explicitly
+# dispatch the tag workflow with the exact merge commit SHA.
 #
-# GitHub will automatically merge the PR once all required status checks pass.
-# The actual merge is performed by GitHub's merge service, not by this workflow —
-# so the resulting push to main DOES trigger other workflows (no GITHUB_TOKEN
-# recursion guard applies here).
-#
-# Prerequisite: "Allow auto-merge" must be enabled in Settings → General.
+# Why not rely on GitHub native auto-merge + push.main?
+# If automation is rooted in GITHUB_TOKEN, GitHub may suppress downstream push
+# workflows. For a reliable demo chain, the merge workflow calls the next
+# workflow via workflow_dispatch immediately after merging.
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
-    branches: [main]
+  workflow_run:
+    workflows: ["[Demo] 1 — CI Checks"]
+    types: [completed]
+
+concurrency:
+  group: demo-auto-merge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
-  enable-auto-merge:
-    name: Enable auto-merge
-    if: github.event.pull_request.draft == false
+  merge-and-dispatch-tag:
+    name: Merge PR and dispatch tag
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
       contents: write
+      pull-requests: write
+      actions: write
 
     steps:
-      - name: Enable auto-merge (squash)
+      - name: Find PR, merge, dispatch tag workflow
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
           REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          set -euo pipefail
           echo "========================================="
-          echo " [Demo Auto-merge] Enabling auto-merge"
+          echo " [Demo Auto-merge] Merge after CI success"
           echo "========================================="
-          echo "  PR: #$PR_NUMBER"
-          echo "  Title: $PR_TITLE"
+          echo "  Head SHA: $HEAD_SHA"
+
+          prs=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPO/commits/$HEAD_SHA/pulls")
+
+          pr=$(jq -c '[.[] | select(.state == "open" and .base.ref == "main" and .draft == false)][0] // empty' <<<"$prs")
+          if [ -z "$pr" ]; then
+            echo "No open, non-draft PR targeting main found for $HEAD_SHA. Nothing to merge."
+            exit 0
+          fi
+
+          pr_number=$(jq -r '.number' <<<"$pr")
+          pr_title=$(jq -r '.title' <<<"$pr")
+          echo "  PR: #$pr_number"
+          echo "  Title: $pr_title"
+
           echo ""
-          gh pr merge "$PR_NUMBER" \
-            --auto --squash \
-            --repo "$REPO"
+          echo "Merging PR #$pr_number with GITHUB_TOKEN..."
+          gh pr merge "$pr_number" --repo "$REPO" --squash
+
+          merge_sha=$(gh pr view "$pr_number" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // empty')
+          if [ -z "$merge_sha" ]; then
+            echo "::error::Merged PR #$pr_number, but merge commit SHA was unavailable"
+            exit 1
+          fi
+
+          echo "  ✅ Merged PR #$pr_number as $merge_sha"
           echo ""
-          echo "✅ Auto-merge enabled"
-          echo "   GitHub will merge this PR once 'Demo Check' passes."
+          echo "Dispatching demo-tag.yml with merge SHA..."
+          gh workflow run demo-tag.yml \
+            --repo "$REPO" \
+            --ref main \
+            --field sha="$merge_sha"
+          echo "  ✅ Dispatched demo-tag.yml for $merge_sha"
