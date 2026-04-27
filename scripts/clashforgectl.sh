@@ -691,11 +691,18 @@ cmd_check() {
   # ── check if ClashForge API + mixed proxy are up ───────────────────────────
   _cf_api_ok=0
   _cf_proxy_ok=0
-  _api_resp="$(_get "$_API_BASE/health" "" 4 2>/dev/null || true)"
+  # Use -sSL (no -f) so 401/403 from auth middleware still counts as "reachable"
+  if command -v curl >/dev/null 2>&1; then
+    _api_resp="$(curl -sSL --max-time 4 -A "clashforgectl-check/1.0" \
+                      "$_API_BASE/health/check" 2>/dev/null || true)"
+  else
+    _api_resp="$(wget -qO- --timeout=4 --user-agent="clashforgectl-check/1.0" \
+                      "$_API_BASE/health/check" 2>/dev/null || true)"
+  fi
   [ -n "$_api_resp" ] && _cf_api_ok=1
   # Test mixed proxy with a quick HEAD to an always-available target
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --max-time 4 --proxy "http://127.0.0.1:$_MIXED_PORT" \
+    curl -sSL --max-time 4 --proxy "http://127.0.0.1:$_MIXED_PORT" \
          -A "clashforgectl-check/1.0" "http://connectivitycheck.gstatic.com/generate_204" \
          -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q "^204$" && _cf_proxy_ok=1 || true
   else
