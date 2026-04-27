@@ -31,7 +31,7 @@ function TextInput({ value, onChange }: { value: string; onChange: (v: string) =
 function SelectInput({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <select
-      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors appearance-none"
+      className="theme-select w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors appearance-none"
       value={value}
       onChange={e => onChange(e.target.value)}
     >
