@@ -111,22 +111,22 @@ func handleSetupPortCheck(deps Dependencies) http.HandlerFunc {
 		if cfg.DNS.Enable && cfg.DNS.ApplyOnStart && cfg.DNS.DnsmasqMode != "none" {
 			switch cfg.DNS.DnsmasqMode {
 			case "replace":
-			// LAN clients: verify the prerouting nftables chain redirects :53 → dnsPort.
-			specs = append(specs, spec{
-				name: "DNS :53 接管 — LAN 客户端 (replace)",
-				desc: fmt.Sprintf("nftables dns_redirect prerouting：:53 → :%d", cfg.Ports.DNS),
-				port: 53,
-				mode: "nft_chain",
-			})
-			// Router itself: send a real DNS query to 127.0.0.1:53 via the OUTPUT nat hook.
-			// dnsmasq port=0 means nothing binds :53; the OUTPUT chain redirects loopback
-			// DNS transparently to mihomo so the router's own DNS resolution works.
-			specs = append(specs, spec{
-				name: "DNS :53 接管 — 本机 DNS (replace)",
-				desc: fmt.Sprintf("nftables dns_output_redirect output：:53 → :%d (路由器本机 DNS)", cfg.Ports.DNS),
-				port: 53,
-				mode: "dns_lo_redirect",
-			})
+				// LAN clients: verify the prerouting nftables chain redirects :53 → dnsPort.
+				specs = append(specs, spec{
+					name: "DNS :53 接管 — LAN 客户端 (replace)",
+					desc: fmt.Sprintf("nftables dns_redirect prerouting：:53 → :%d", cfg.Ports.DNS),
+					port: 53,
+					mode: "nft_chain",
+				})
+				// Router itself: send a real DNS query to 127.0.0.1:53 via the OUTPUT nat hook.
+				// dnsmasq port=0 means nothing binds :53; the OUTPUT chain redirects loopback
+				// DNS transparently to mihomo so the router's own DNS resolution works.
+				specs = append(specs, spec{
+					name: "DNS :53 接管 — 本机 DNS (replace)",
+					desc: fmt.Sprintf("nftables dns_output_redirect output：:53 → :%d (路由器本机 DNS)", cfg.Ports.DNS),
+					port: 53,
+					mode: "dns_lo_redirect",
+				})
 			case "upstream":
 				// dnsmasq keeps port 53 and forwards queries to mihomo DNS port.
 				// dnsmasq in OpenWrt may only bind to the LAN interface, not 127.0.0.1,
@@ -365,6 +365,7 @@ func checkDNSLoopbackRedirect() error {
 	}
 	return nil
 }
+
 // Used for replace mode to confirm LAN client DNS redirect is in place.
 func checkNftDNSRedirect(dnsPort int) error {
 	out, err := exec.Command("nft", "list", "chain", "inet", "metaclash", "dns_redirect").CombinedOutput()

@@ -1,360 +1,161 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ClashForge Theme System — Three Distinct Visual Languages
+   ClashForge — Nebula (星云)  ·  Design System v2
 
-   Design Principles:
-   · Nebula    — Glassmorphism · Deep space purples · Bouncy spring · Spacious
-   · ClashCat  — Warm dark · Orange fire · Retro-geek · Compact · Punchy
-   · Enterprise— Trust navy · Professional flat · Dense · Zero-flash
-
-   All component classes reference CSS custom properties exclusively.
-   Never hardcode colors, radii, spacing, or shadows in component files.
+   Philosophy: Command-Center Dark
+   · Near-black canvas with deep indigo undertone
+   · Electric violet (#8B5CF6) as the single brand accent — used with discipline
+   · Operational colors (emerald/rose/amber) carry live-status weight
+   · Fira Code for headings & data  ·  Fira Sans for prose & labels
+   · 4pt spacing grid  ·  8/12/16 radius ladder  ·  Spring-bounce micro-motion
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Shared base tokens (overridden per-theme) ────────────────────────────── */
-:root {
-  /* Typography scale */
-  --text-xs:    0.6875rem;
-  --text-sm:    0.875rem;
-  --text-base:  1rem;
-  --text-lg:    1.125rem;
-  --text-xl:    1.375rem;
-  --text-2xl:   1.75rem;
-  --text-3xl:   2.25rem;
 
-  /* Radius scale */
+/* ── Shared tokens (theme-agnostic) ──────────────────────────────────────── */
+:root {
+  /* Type scale — 12px floor for Chinese readability */
+  --text-xs:   0.75rem;     /*  12px */
+  --text-sm:   0.8125rem;   /*  13px */
+  --text-base: 0.9375rem;   /*  15px */
+  --text-lg:   1.125rem;    /*  18px */
+  --text-xl:   1.375rem;    /*  22px */
+  --text-2xl:  1.75rem;     /*  28px */
+  --text-3xl:  2.25rem;     /*  36px */
+
+  /* Radius ladder — 8px base, strict 4/8/12/16/∞ */
   --radius-none: 0;
   --radius-sm:   4px;
   --radius-md:   8px;
-  --radius-lg:   14px;
-  --radius-xl:   20px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  24px;
   --radius-full: 9999px;
 
-  /* Border */
-  --border-width: 1px;
-  --border-color: 255 255 255;
-  --border-alpha: 0.08;
-
-  /* Transition */
-  --ease-bounce:  cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-snap:    cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-instant: linear;
-  --ease-default: var(--ease-snap);
-  --dur-fast:     150ms;
-  --dur-normal:   250ms;
-  --dur-slow:     400ms;
-
-  /* Feedback */
-  --success: 34 197 94;
-  --success-subtle-rgb: 34 197 94;
-  --success-subtle-alpha: 0.12;
-  --warning: 245 158 11;
-  --warning-subtle-rgb: 245 158 11;
-  --warning-subtle-alpha: 0.12;
-  --danger: 239 68 68;
-  --danger-subtle-rgb: 239 68 68;
-  --danger-subtle-alpha: 0.12;
-
-  /* Button min-width — prevents text wrapping */
-  --btn-min-width: 5rem;
-}
-
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   NEBULA (星云)
-   Glassmorphism · Deep violet space · Spring bounce · Generous spacing
-   Inspired by: macOS Sequoia, Linear, Vercel
-   Font pairing: Fira Code (heading) + Fira Sans (body)
-   ═══════════════════════════════════════════════════════════════════════════ */
-:root,
-[data-theme="nebula"] {
-  /* ── Brand palette ─────────────────────────────────── */
-  --brand:            124 58 237;     /* violet-700 */
-  --brand-light:      167 139 250;    /* violet-400 */
-  --brand-subtle-rgb: 124 58 237;
-  --brand-subtle-alpha: 0.14;
-  --cta:              249 115 22;     /* orange-500 */
-  --cta-subtle-rgb:   249 115 22;
-  --cta-subtle-alpha: 0.12;
-
-  /* ── Surface stack (dark violet space) ───────────── */
-  --surface-0: 8 7 20;
-  --surface-1: 15 14 35;
-  --surface-2: 23 21 50;
-  --surface-3: 32 30 66;
-  --surface-4: 44 42 82;
-  --muted:     148 145 178;
-
-  /* ── Text ─────────────────────────────────────────── */
-  --text-primary: 242 240 252;
-  --text-dim:     188 185 215;
-
-  /* ── Callout text ─────────────────────────────────── */
-  --callout-info-text:    #EDE9FF;
-  --callout-success-text: #DCFCE7;
-  --callout-warning-text: #FEF3C7;
-  --callout-danger-text:  #FECACA;
-  --modal-backdrop:       rgba(4, 2, 12, 0.75);
-
-  /* ── Spacing (generous: 5px unit) ────────────────── */
-  --space-xs:  5px;
-  --space-sm:  10px;
-  --space-md:  20px;
-  --space-lg:  32px;
-  --space-xl:  48px;
-  --space-2xl: 72px;
-
-  /* ── Typography (slightly larger, airy) ──────────── */
-  --text-xs:    0.6875rem;  /* 11px */
-  --text-sm:    0.875rem;   /* 14px */
-  --text-base:  1rem;       /* 16px */
-  --text-lg:    1.1875rem;  /* 19px */
-  --text-xl:    1.5rem;     /* 24px */
-  --text-2xl:   1.875rem;   /* 30px */
-  --text-3xl:   2.5rem;     /* 40px */
-
-  /* ── Radius (large, playful rounded) ─────────────── */
-  --radius-sm:  8px;
-  --radius-md:  14px;
-  --radius-lg:  20px;
-  --radius-xl:  28px;
-
-  /* ── Border (glassy gossamer) ─────────────────────── */
-  --border-width: 1px;
-  --border-color: 255 255 255;
-  --border-alpha: 0.07;
-
-  /* ── Shadows (deep + violet glow) ────────────────── */
-  --shadow-card:        0 4px 28px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.05);
-  --shadow-card-hover:  0 10px 44px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.07);
-  --shadow-button:      0 4px 14px rgba(124,58,237,0.35);
-  --shadow-inset:       inset 0 1px 0 rgba(255,255,255,0.06);
-  --shadow-glow-brand:  0 0 28px rgba(124,58,237,0.40);
-  --shadow-glow-cta:    0 0 24px rgba(249,115,22,0.35);
-
-  /* ── Glass (heavy blur, subtle tint) ─────────────── */
-  --glass-blur:         18px;
-  --glass-bg:           255 255 255;
-  --glass-bg-alpha:     0.04;
-  --glass-bg-hover:     0.07;
-  --glass-border-alpha: 0.07;
-
-  /* ── Motion (spring bounce) ───────────────────────── */
-  --ease-default: var(--ease-bounce);
-  --dur-fast:     200ms;
-  --dur-normal:   320ms;
-  --dur-slow:     500ms;
-
-  /* ── Misc ─────────────────────────────────────────── */
-  --font-sans:    'Fira Sans', system-ui, sans-serif;
-  --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
-  --font-heading: 'Fira Code', monospace;
-  --sidebar-width: 288px;
-  --btn-min-width: 5.5rem;
-
-  --scrollbar-thumb:       rgba(124,58,237,0.28);
-  --scrollbar-thumb-hover: rgba(124,58,237,0.50);
-  --selection-bg:          rgba(124,58,237,0.32);
-  --selection-text:        #F8FAFC;
-  --app-glow-top-left:     rgba(124,58,237,0.20);
-  --app-glow-bottom-right: rgba(249,115,22,0.14);
-}
-
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   CLASHCAT (萌猫)
-   Warm dark amber · Retro-geek · Compact · Punchy pop
-   Inspired by: Clash original cat UI + terminal geek aesthetic
-   Font pairing: system-ui (body) + JetBrains Mono (heading/code)
-   ═══════════════════════════════════════════════════════════════════════════ */
-[data-theme="clashcat"] {
-  /* ── Brand palette ─────────────────────────────────── */
-  --brand:            249 115 22;     /* orange-500 */
-  --brand-light:      251 191 36;     /* amber-400  */
-  --brand-subtle-rgb: 249 115 22;
-  --brand-subtle-alpha: 0.16;
-  --cta:              236 72 153;     /* pink-500   */
-  --cta-subtle-rgb:   236 72 153;
-  --cta-subtle-alpha: 0.12;
-
-  /* ── Surface stack (warm dark brown) ─────────────── */
-  --surface-0: 18 14 10;
-  --surface-1: 28 22 16;
-  --surface-2: 40 32 24;
-  --surface-3: 52 42 32;
-  --surface-4: 66 54 42;
-  --muted:     172 160 148;
-
-  /* ── Text ─────────────────────────────────────────── */
-  --text-primary: 248 242 232;
-  --text-dim:     192 182 168;
-
-  /* ── Callout text ─────────────────────────────────── */
-  --callout-info-text:    #FFE8D0;
-  --callout-success-text: #D4F5E0;
-  --callout-warning-text: #FFF5D0;
-  --callout-danger-text:  #FECACA;
-  --modal-backdrop:       rgba(8, 5, 2, 0.80);
-
-  /* ── Spacing (compact: 3.5px unit) ───────────────── */
+  /* Spacing — 4pt grid */
   --space-xs:  4px;
   --space-sm:  8px;
   --space-md:  16px;
   --space-lg:  24px;
-  --space-xl:  36px;
-  --space-2xl: 56px;
+  --space-xl:  40px;
+  --space-2xl: 64px;
 
-  /* ── Typography (compact) ─────────────────────────── */
-  --text-xs:    0.625rem;   /* 10px */
-  --text-sm:    0.8125rem;  /* 13px */
-  --text-base:  0.9375rem;  /* 15px */
-  --text-lg:    1.0625rem;  /* 17px */
-  --text-xl:    1.3125rem;  /* 21px */
-  --text-2xl:   1.625rem;   /* 26px */
-  --text-3xl:   2.125rem;   /* 34px */
+  /* Easing */
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);  /* signature bounce */
+  --ease-smooth:  cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-snap:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-default: var(--ease-smooth);
+  --ease-bounce:  var(--ease-spring);
 
-  /* ── Radius (medium approachable) ────────────────── */
-  --radius-sm:  5px;
-  --radius-md:  9px;
-  --radius-lg:  14px;
-  --radius-xl:  20px;
+  /* Duration */
+  --dur-fast:   150ms;
+  --dur-normal: 250ms;
+  --dur-slow:   400ms;
 
-  /* ── Border (thicker, warm tint) ─────────────────── */
-  --border-width: 1.5px;
-  --border-color: 255 200 130;
-  --border-alpha: 0.10;
+  /* Semantic feedback — RGB triplets for composability */
+  --success: 34 197 94;
+  --warning: 245 158 11;
+  --danger:  239  68  68;
+  --info:     99 102 241;
 
-  /* ── Shadows (warm drop-shadow, no blur) ─────────── */
-  --shadow-card:        0 2px 0 rgba(0,0,0,0.35), 0 4px 16px rgba(0,0,0,0.22);
-  --shadow-card-hover:  0 4px 0 rgba(0,0,0,0.40), 0 8px 24px rgba(0,0,0,0.30);
-  --shadow-button:      0 2px 0 rgba(0,0,0,0.30);
-  --shadow-inset:       inset 0 1px 0 rgba(255,180,80,0.08);
-  --shadow-glow-brand:  0 0 18px rgba(249,115,22,0.45);
-  --shadow-glow-cta:    0 0 16px rgba(236,72,153,0.38);
+  --success-subtle-rgb:   34 197  94;
+  --success-subtle-alpha: 0.10;
+  --warning-subtle-rgb:  245 158  11;
+  --warning-subtle-alpha: 0.10;
+  --danger-subtle-rgb:   239  68  68;
+  --danger-subtle-alpha:  0.10;
+  --info-subtle-rgb:      99 102 241;
+  --info-subtle-alpha:    0.10;
 
-  /* ── Glass (minimal, warm tint) ──────────────────── */
-  --glass-blur:         5px;
-  --glass-bg:           255 180 80;
-  --glass-bg-alpha:     0.05;
-  --glass-bg-hover:     0.09;
-  --glass-border-alpha: 0.10;
-
-  /* ── Motion (quick snap, geek feel) ─────────────── */
-  --ease-default: var(--ease-snap);
-  --dur-fast:     110ms;
-  --dur-normal:   180ms;
-  --dur-slow:     260ms;
-
-  /* ── Misc ─────────────────────────────────────────── */
-  --font-sans:    'JetBrains Mono', 'Fira Code', monospace;
-  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
-  --font-heading: 'JetBrains Mono', 'Fira Code', monospace;
-  --sidebar-width: 262px;
-  --btn-min-width: 5rem;
-
-  --scrollbar-thumb:       rgba(249,115,22,0.28);
-  --scrollbar-thumb-hover: rgba(249,115,22,0.50);
-  --selection-bg:          rgba(249,115,22,0.32);
-  --selection-text:        #FFF7ED;
-  --app-glow-top-left:     rgba(249,115,22,0.18);
-  --app-glow-bottom-right: rgba(236,72,153,0.12);
+  --btn-min-width: 80px;
 }
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   ENTERPRISE (商务)
-   Trust navy · Professional flat · Dense data · Zero-flash
-   Inspired by: Linear, GitHub, Datadog, Grafana
-   Font pairing: 'Inter' / system-ui (body + heading)
+   NEBULA  ·  applied globally (single theme)
    ═══════════════════════════════════════════════════════════════════════════ */
-[data-theme="enterprise"] {
-  /* ── Brand palette ─────────────────────────────────── */
-  --brand:            59 130 246;     /* blue-500   */
-  --brand-light:      147 197 253;    /* blue-300   */
-  --brand-subtle-rgb: 59 130 246;
-  --brand-subtle-alpha: 0.10;
-  --cta:              16 185 129;     /* emerald-500 */
-  --cta-subtle-rgb:   16 185 129;
-  --cta-subtle-alpha: 0.10;
+:root,
+[data-theme="nebula"] {
 
-  /* ── Surface stack (slate navy) ──────────────────── */
-  --surface-0: 10 15 28;
-  --surface-1: 17 24 39;
-  --surface-2: 26 35 52;
-  --surface-3: 36 48 66;
-  --surface-4: 51 65 85;
-  --muted:     100 116 139;
+  /* ── Brand ──────────────────────────────────────────────────────────────── */
+  --brand:              139  92 246;   /* violet-500  #8B5CF6 */
+  --brand-light:        192 174 250;   /* violet-300+ #C0AEFA — crisp on dark */
+  --brand-subtle-rgb:   139  92 246;
+  --brand-subtle-alpha: 0.08;
 
-  /* ── Text ─────────────────────────────────────────── */
-  --text-primary: 236 242 252;
-  --text-dim:     100 116 139;
+  /* CTA — warm call-to-action (used on deploy / primary flow actions) */
+  --cta:              249 115  22;     /* orange-500 */
+  --cta-subtle-rgb:   249 115  22;
+  --cta-subtle-alpha: 0.08;
 
-  /* ── Callout text ─────────────────────────────────── */
-  --callout-info-text:    #BFDBFE;
-  --callout-success-text: #A7F3D0;
-  --callout-warning-text: #FDE68A;
-  --callout-danger-text:  #FECACA;
-  --modal-backdrop:       rgba(3, 6, 14, 0.80);
+  /* ── Surfaces — deep indigo-black stack ─────────────────────────────────── */
+  --surface-0:   4   3  14;           /* #04030E  ← near-black base */
+  --surface-1:  10   9  26;           /* #0A091A  ← card background */
+  --surface-2:  16  14  38;           /* #100E26  ← elevated card */
+  --surface-3:  24  22  54;           /* #181636  ← hover / active fill */
+  --surface-4:  35  32  72;           /* #232048  ← deepest nesting */
 
-  /* ── Spacing (dense: 3px unit) ───────────────────── */
-  --space-xs:  3px;
-  --space-sm:  6px;
-  --space-md:  12px;
-  --space-lg:  20px;
-  --space-xl:  32px;
-  --space-2xl: 48px;
+  /* ── Text ───────────────────────────────────────────────────────────────── */
+  --text-primary: 238 235 255;        /* #EEEBFF lavender-white */
+  --text-dim:     180 172 220;        /* #B4ACDC dim lavender */
+  --muted:        122 114 162;        /* #7A72A2 muted slate-violet */
 
-  /* ── Typography (tight, legible) ─────────────────── */
-  --text-xs:    0.625rem;   /* 10px */
-  --text-sm:    0.75rem;    /* 12px */
-  --text-base:  0.8125rem;  /* 13px */
-  --text-lg:    0.9375rem;  /* 15px */
-  --text-xl:    1.125rem;   /* 18px */
-  --text-2xl:   1.375rem;   /* 22px */
-  --text-3xl:   1.75rem;    /* 28px */
-
-  /* ── Radius (sharp, professional) ────────────────── */
-  --radius-sm:  3px;
-  --radius-md:  5px;
-  --radius-lg:  8px;
-  --radius-xl:  10px;
-
-  /* ── Border (hairline blue-tinted) ───────────────── */
+  /* ── Borders ────────────────────────────────────────────────────────────── */
   --border-width: 1px;
-  --border-color: 148 196 255;
-  --border-alpha: 0.08;
+  --border-color: 192 174 250;        /* brand-light tint */
+  --border-alpha: 0.10;
 
-  /* ── Shadows (flat, no decoration) ───────────────── */
-  --shadow-card:        0 1px 3px rgba(0,0,0,0.20);
-  --shadow-card-hover:  0 2px 8px rgba(0,0,0,0.25);
-  --shadow-button:      none;
-  --shadow-inset:       none;
-  --shadow-glow-brand:  none;
-  --shadow-glow-cta:    none;
+  /* ── Glass ──────────────────────────────────────────────────────────────── */
+  --glass-blur:         24px;
+  --glass-bg:           139  92 246;
+  --glass-bg-alpha:     0.05;
+  --glass-bg-hover:     0.09;
+  --glass-border-alpha: 0.12;
 
-  /* ── Glass (none) ─────────────────────────────────── */
-  --glass-blur:         0px;
-  --glass-bg:           255 255 255;
-  --glass-bg-alpha:     0.02;
-  --glass-bg-hover:     0.04;
-  --glass-border-alpha: 0.08;
+  /* ── Shadows ────────────────────────────────────────────────────────────── */
+  --shadow-card:
+    0 2px 8px  rgba(0,0,0,0.40),
+    0 1px 2px  rgba(0,0,0,0.28),
+    inset 0 1px 0 rgba(255,255,255,0.04);
 
-  /* ── Motion (near-instant, decisive) ─────────────── */
-  --ease-default: var(--ease-instant);
-  --dur-fast:     80ms;
-  --dur-normal:   120ms;
-  --dur-slow:     160ms;
+  --shadow-card-hover:
+    0 8px 32px rgba(0,0,0,0.55),
+    0 2px 8px  rgba(0,0,0,0.35),
+    0 0 24px   rgba(139,92,246,0.10),
+    inset 0 1px 0 rgba(255,255,255,0.07);
 
-  /* ── Misc ─────────────────────────────────────────── */
-  --font-sans:    'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
-  --font-heading: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --sidebar-width: 232px;
-  --btn-min-width: 4.5rem;
+  --shadow-button:
+    0 2px 6px  rgba(139,92,246,0.40),
+    0 1px 2px  rgba(0,0,0,0.30),
+    inset 0 1px 0 rgba(255,255,255,0.15);
 
-  --scrollbar-thumb:       rgba(59,130,246,0.22);
-  --scrollbar-thumb-hover: rgba(59,130,246,0.40);
-  --selection-bg:          rgba(59,130,246,0.25);
-  --selection-text:        #EFF6FF;
-  --app-glow-top-left:     rgba(59,130,246,0.06);
-  --app-glow-bottom-right: rgba(16,185,129,0.05);
+  --shadow-inset:       inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -1px 0 rgba(0,0,0,0.18);
+  --shadow-glow-brand:  0 0 24px rgba(139,92,246,0.42);
+  --shadow-glow-brand-sm: 0 0 10px rgba(139,92,246,0.30);
+  --shadow-glow-cta:    0 0 22px rgba(249,115,22,0.42);
+
+  /* ── Motion ─────────────────────────────────────────────────────────────── */
+  --ease-default: var(--ease-smooth);
+
+  /* ── Typography ─────────────────────────────────────────────────────────── */
+  --font-sans:    'Fira Sans', system-ui, sans-serif;
+  --font-mono:    'Fira Code', 'JetBrains Mono', monospace;
+  --font-heading: 'Fira Code', monospace;
+
+  /* ── Layout ─────────────────────────────────────────────────────────────── */
+  --sidebar-width: 248px;
+  --btn-min-width: 80px;
+
+  /* ── Misc ───────────────────────────────────────────────────────────────── */
+  --scrollbar-thumb:       rgba(139,92,246,0.22);
+  --scrollbar-thumb-hover: rgba(139,92,246,0.44);
+  --selection-bg:          rgba(139,92,246,0.30);
+  --selection-text:        #EEEBFF;
+  --modal-backdrop:        rgba(2,1,10,0.88);
+  --app-glow-top-left:     rgba(139,92,246,0.14);
+  --app-glow-bottom-right: rgba(249,115,22,0.08);
+
+  /* Callout text */
+  --callout-info-text:    #EDE9FF;
+  --callout-success-text: #DCFCE7;
+  --callout-warning-text: #FEF3C7;
+  --callout-danger-text:  #FECACA;
 }
