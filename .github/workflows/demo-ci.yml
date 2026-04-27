@@ -1,0 +1,36 @@
+name: "[Demo] 1 — CI Checks"
+
+# Step 1 of 3: Run required checks on every PR targeting main.
+#
+# For auto-merge to wait for this check, you must configure branch protection:
+#   Settings → Branches → Branch protection rules → main
+#     ☑ Require status checks to pass before merging
+#     Required check: "Demo Check"   ← must match the job name below
+#   Settings → General
+#     ☑ Allow auto-merge
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  demo-check:
+    name: Demo Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run checks
+        run: |
+          echo "========================================="
+          echo " [Demo CI] Running checks"
+          echo "========================================="
+          echo "  PR   : #${{ github.event.number }}"
+          echo "  Head : ${{ github.head_ref }}"
+          echo "  Base : ${{ github.base_ref }}"
+          echo "  SHA  : ${{ github.sha }}"
+          echo ""
+          echo "  (In a real pipeline this would run lint,"
+          echo "   unit tests, build, etc.)"
+          echo ""
+          echo "✅ All checks passed"
