@@ -111,9 +111,19 @@ $SshBase = @(
     $Target
 )
 
+# ── snapshot running state before we stop anything ───────────────────────────
+$WasRunning = (ssh @SshBase @'
+pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && echo 1 && exit
+pgrep -f "/usr/bin/mihomo-clashforge" >/dev/null 2>&1 && echo 1 && exit
+nft list table inet metaclash >/dev/null 2>&1 && echo 1 && exit
+[ -f /etc/init.d/clashforge ] && /etc/init.d/clashforge enabled 2>/dev/null && echo 1 && exit
+echo 0
+'@).Trim() -eq "1"
+
 if ($Purge) {
     Log "Running reset --yes on router before install (--purge)..."
     ssh @SshBase "sh $RemoteScript reset --yes"
+    $WasRunning = $false   # no config left to start from after full purge
 } else {
     Log "Running stop on router before install..."
     ssh @SshBase "sh $RemoteScript stop"
@@ -127,4 +137,17 @@ Log "Installing IPK via opkg..."
 ssh @SshBase "opkg install --nodeps --force-downgrade '$RemoteTmp' && rm -f '$RemoteTmp'"
 if ($LASTEXITCODE -ne 0) {
     Die "Remote install failed (exit $LASTEXITCODE)."
+}
+
+# ── restart service if it was running before the upgrade ─────────────────────
+if ($WasRunning) {
+    Log "Service was running before upgrade — restarting with new version..."
+    ssh @SshBase "/etc/init.d/clashforge enable 2>/dev/null; /etc/init.d/clashforge start"
+    if ($LASTEXITCODE -eq 0) {
+        Ok "clashforge service restarted successfully."
+    } else {
+        Warn "Service start returned non-zero — check: /etc/init.d/clashforge status"
+    }
+} else {
+    Log "Service was not running before upgrade — skipping auto-start."
 }
