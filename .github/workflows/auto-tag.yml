@@ -1,14 +1,21 @@
 name: Auto Tag & Release
 
-# Low-noise release chain:
-# - pull_request_target.closed runs once when a PR is closed/merged.
-# - push to main remains a fallback for direct/manual main updates.
-# - workflow_dispatch remains a manual backfill path.
+# Release chain:
+#   pull_request_target.closed  — fires when any PR merges to main (manual UI
+#     merge or GitHub auto-merge).  Runs in the BASE branch context so it has
+#     access to repo secrets and write permissions.
+#   push.main  — fallback for direct commits / emergency fixes to main.
+#   workflow_dispatch  — manual backfill or re-run.
 #
-# Do not use workflow_run here. workflow_run fires for every completed check run
-# on every PR update, which wastes runner minutes and can sit around polling.
-# For tags created by GITHUB_TOKEN, tag push does not reliably trigger release.yml,
-# so this workflow dispatches release.yml explicitly after pushing the tag.
+# Race-condition prevention:
+#   Both pull_request_target.closed and push.main fire for the same auto-merged
+#   PR (merge_commit_sha == github.sha).  Using a SHA-keyed concurrency group
+#   ensures at most one job runs at a time; the queued job finds the tag already
+#   present and exits cleanly without duplicating the release dispatch.
+#
+# Tags created by GITHUB_TOKEN do not trigger push:tags: in release.yml (GitHub
+# Actions recursion guard), so this workflow dispatches release.yml explicitly
+# via gh workflow run after pushing the tag.
 
 on:
   pull_request_target:
@@ -27,7 +34,10 @@ on:
         default: ''
 
 concurrency:
-  group: auto-tag-release-${{ github.event.pull_request.number || github.event.inputs.sha || github.sha || github.ref }}
+  # Key on the actual commit SHA so both triggers (pull_request_target.closed
+  # and push.main) for the same merge commit share one slot and serialize
+  # instead of racing to push the same tag simultaneously.
+  group: auto-tag-${{ github.event.pull_request.merge_commit_sha || github.event.inputs.sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
