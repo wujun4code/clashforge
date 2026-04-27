@@ -731,7 +731,7 @@ cmd_check() {
 
   _check_ip() {
     label="$1"; url="$2"; jq_ip="$3"; jq_loc="$4"
-    _body="$(_get "$url" "$_PROXY" 8)"
+    _body="$(_get "$url" "$_PROXY" 8)" || true
     if [ -z "$_body" ]; then
       printf "  %-10s : ✗ (request failed)\n" "$label"
       return
@@ -765,12 +765,12 @@ cmd_check() {
     label="$1"; url="$2"
     _ts_start="$(date +%s)"
     if command -v curl >/dev/null 2>&1; then
-      _code="$(curl -fsSL --max-time 12 --proxy "$_PROXY" \
+      _code="$(curl -sSL --max-time 12 --proxy "$_PROXY" \
                     -A "clashforgectl-check/1.0" \
-                    -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")"
+                    -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")" || true
     else
       _code="$(http_proxy="$_PROXY" wget -qO/dev/null --timeout=12 \
-                    --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}' || echo "000")"
+                    --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}' || echo "000")" || true
     fi
     _ts_end="$(date +%s)"
     _ms=$(( (_ts_end - _ts_start) * 1000 ))
