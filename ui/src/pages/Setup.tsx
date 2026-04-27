@@ -4,7 +4,7 @@ import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
   Sparkles, RotateCw, Link2, PowerOff, ShieldOff, Database, Radio,
-  Minus, Terminal,
+  Minus, Terminal, ShieldCheck, Network, ServerCog, Gauge,
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
@@ -29,6 +29,14 @@ const STEPS: { id: Step; label: string }[] = [
   { id: 'launch',  label: '启动服务' },
   { id: 'check',   label: '连通检测' },
 ]
+
+const STEP_DETAILS: Record<Step, { eyebrow: string; title: string; desc: string }> = {
+  import:  { eyebrow: '01 · Source',  title: '选择配置来源', desc: '从历史配置、订阅、文件或 YAML 文本开始，先确认生成结果再继续。' },
+  dns:     { eyebrow: '02 · Resolve', title: '确认 DNS 接管', desc: '保持默认安全配置，按需调整 fake-ip、监听地址和 dnsmasq 共存方式。' },
+  network: { eyebrow: '03 · Route',   title: '设置透明代理', desc: '选择 TProxy / Redir / TUN 与防火墙后端，决定哪些流量进入 Mihomo。' },
+  launch:  { eyebrow: '04 · Launch',  title: '启动并验证端口', desc: '实时查看启动日志，确认必需端口都已响应后再进入连通检测。' },
+  check:   { eyebrow: '05 · Verify',  title: '验证实际连通', desc: '同时从路由器侧和浏览器侧检测出口 IP、国内外站点与 AI 服务访问。' },
+}
 
 interface ClashDNS {
   enable?: boolean
@@ -186,12 +194,12 @@ function ConfigPreview({ content, onContinue }: { content: string; onContinue: (
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex-shrink-0 w-44">
-        <label className="text-sm text-slate-300">{label}</label>
-        {hint && <p className="text-xs text-muted mt-0.5 leading-4">{hint}</p>}
+    <div className="grid gap-3 rounded-xl border border-white/[0.06] bg-white/[0.018] px-4 py-3.5 transition-colors hover:border-white/[0.11] sm:grid-cols-[180px_1fr]">
+      <div>
+        <label className="text-sm font-medium text-slate-200">{label}</label>
+        {hint && <p className="mt-1 text-xs leading-5 text-muted">{hint}</p>}
       </div>
-      <div className="flex-1">{children}</div>
+      <div className="min-w-0 sm:pt-0.5">{children}</div>
     </div>
   )
 }
@@ -199,7 +207,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 function TextInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
     <input
-      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors"
+      className="glass-input min-h-11"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -210,7 +218,7 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
 function SelectInput({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <select
-      className="w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors appearance-none"
+      className="glass-input min-h-11 appearance-none cursor-pointer"
       value={value}
       onChange={e => onChange(e.target.value)}
     >
@@ -221,15 +229,17 @@ function SelectInput({ value, onChange, options }: { value: string; onChange: (v
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex min-h-11 items-center gap-3">
       <button
         type="button"
+        role="switch"
+        aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`w-10 h-5 rounded-full transition-colors flex-shrink-0 relative ${checked ? 'bg-brand' : 'bg-surface-3'}`}
+        className={`relative h-7 w-12 flex-shrink-0 rounded-full border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/70 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 cursor-pointer ${checked ? 'border-brand/40 bg-brand shadow-[0_0_18px_rgba(139,92,246,0.25)]' : 'border-white/10 bg-surface-3'}`}
       >
-        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${checked ? 'left-5' : 'left-0.5'}`} />
+        <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${checked ? 'left-5' : 'left-0.5'}`} />
       </button>
-      {label && <span className={`text-xs ${checked ? 'text-slate-200' : 'text-muted'}`}>{label}</span>}
+      {label && <span className={`text-sm font-medium ${checked ? 'text-slate-100' : 'text-muted'}`}>{label}</span>}
     </div>
   )
 }
@@ -237,23 +247,41 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
 function StepBar({ step }: { step: Step }) {
   const idx = STEPS.findIndex(s => s.id === step)
   return (
-    <div className="flex items-center gap-0">
-      {STEPS.map((s, i) => (
-        <div key={s.id} className="flex items-center">
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-            i < idx ? 'text-success' :
-            i === idx ? 'bg-brand/20 text-brand border border-brand/30' :
-            'text-muted'
-          }`}>
-            {i < idx
-              ? <CheckCircle2 size={12} className="text-success" />
-              : <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold border ${i === idx ? 'border-brand bg-brand/30 text-brand' : 'border-white/15 text-muted'}`}>{i + 1}</span>
-            }
-            {s.label}
-          </div>
-          {i < STEPS.length - 1 && <ChevronRight size={14} className="text-white/15 mx-1 flex-shrink-0" />}
-        </div>
-      ))}
+    <div className="glass-card px-3 py-3">
+      <div className="grid min-w-[720px] grid-cols-5 gap-2">
+        {STEPS.map((s, i) => {
+          const done = i < idx
+          const active = i === idx
+          return (
+            <div
+              key={s.id}
+              className={`relative overflow-hidden border px-3 py-2.5 transition-all ${
+                active
+                  ? 'border-brand/35 bg-brand/[0.10] text-white shadow-[0_0_20px_rgba(139,92,246,0.14)]'
+                  : done
+                    ? 'border-success/20 bg-success/[0.045] text-success'
+                    : 'border-white/[0.06] bg-white/[0.018] text-muted'
+              }`}
+              style={{ borderRadius: 'var(--radius-md)' }}
+            >
+              <div className="flex items-center gap-2">
+                <span className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold ${
+                  done
+                    ? 'border-success/25 bg-success/15 text-success'
+                    : active
+                      ? 'border-brand/40 bg-brand/25 text-brand-light'
+                      : 'border-white/12 bg-white/[0.03] text-white/28'
+                }`}>
+                  {done ? <CheckCircle2 size={12} /> : i + 1}
+                </span>
+                <span className="truncate text-xs font-semibold">{s.label}</span>
+              </div>
+              <p className={`mt-1 truncate text-[10px] ${active ? 'text-brand-light/70' : done ? 'text-success/65' : 'text-muted/70'}`}>{STEP_DETAILS[s.id].eyebrow.split(' · ')[1]}</p>
+              <div className={`mt-2 h-0.5 rounded-full ${done ? 'bg-success/40' : active ? 'bg-brand/55' : 'bg-white/[0.06]'}`} />
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -849,26 +877,74 @@ export function Setup() {
     )
   }
 
+  const activeStep = STEP_DETAILS[step]
+  const progress = ((STEPS.findIndex(s => s.id === step) + 1) / STEPS.length) * 100
+
   return (
-    <div className="min-h-full bg-gradient-to-b from-surface-0 to-surface-1 px-6 py-8">
-      <div className="max-w-2xl mx-auto space-y-6">
+    <div className="relative min-h-full overflow-hidden px-4 py-4 sm:px-6 lg:px-8">
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_20%_0%,rgba(139,92,246,0.16),transparent_34%),radial-gradient(circle_at_90%_8%,rgba(249,115,22,0.10),transparent_30%),linear-gradient(180deg,rgb(var(--surface-0)),rgb(var(--surface-1)))]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-px bg-gradient-to-r from-transparent via-brand/50 to-transparent" />
+
+      <div className="mx-auto max-w-6xl space-y-5">
 
         {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-brand/20 flex items-center justify-center">
-            <Sparkles size={18} className="text-brand" />
-          </div>
-          <div>
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxy</p>
-              <h1 className="text-base font-bold text-white mt-1">代理服务</h1>
+        <div className="hero-panel !p-0">
+          <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(139,92,246,0.12),transparent_34%),radial-gradient(circle_at_82%_18%,rgba(34,197,94,0.10),transparent_28%)]" />
+          <div className="relative z-10 grid gap-5 p-5 lg:grid-cols-[1fr_320px]">
+            <div className="flex min-w-0 flex-col justify-between gap-6">
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center border border-brand/25 bg-brand/[0.10] shadow-[0_0_26px_rgba(139,92,246,0.24)]" style={{ borderRadius: 'var(--radius-lg)' }}>
+                  <Sparkles size={22} className="text-brand-light" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.30em] text-brand-light/60">ClashForge Setup</p>
+                  <h1 className="mt-1 text-2xl font-bold tracking-tight text-white sm:text-3xl">代理服务向导</h1>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">把配置导入、DNS、透明代理、启动日志和连通验证收进一个清晰流程。重点操作更醒目，危险状态更早暴露。</p>
+                </div>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.035] px-3 py-3">
+                  <div className="flex items-center gap-2 text-xs text-muted"><ShieldCheck size={13} className="text-success" /> 安全默认</div>
+                  <p className="mt-1 text-sm font-semibold text-slate-100">IPv6 泄露防护</p>
+                </div>
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.035] px-3 py-3">
+                  <div className="flex items-center gap-2 text-xs text-muted"><Network size={13} className="text-brand-light" /> 路由接管</div>
+                  <p className="mt-1 text-sm font-semibold text-slate-100">TProxy / Redir / TUN</p>
+                </div>
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.035] px-3 py-3">
+                  <div className="flex items-center gap-2 text-xs text-muted"><Gauge size={13} className="text-warning" /> 验证闭环</div>
+                  <p className="mt-1 text-sm font-semibold text-slate-100">端口 + 出口 IP</p>
+                </div>
+              </div>
             </div>
-            <p className="text-xs text-muted">导入配置 → 调整参数 → 一键启动 → 验证连通</p>
+
+            <div className="rounded-2xl border border-white/[0.08] bg-black/20 p-4 shadow-inner">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-brand-light/65">{activeStep.eyebrow}</p>
+                  <h2 className="mt-1 text-lg font-bold text-white">{activeStep.title}</h2>
+                </div>
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-brand/25 bg-brand/10 text-brand-light">
+                  <ServerCog size={18} />
+                </div>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-muted">{activeStep.desc}</p>
+              <div className="mt-5">
+                <div className="mb-2 flex items-center justify-between text-[11px] text-muted">
+                  <span>进度</span>
+                  <span>{Math.round(progress)}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div className="h-full rounded-full bg-gradient-to-r from-brand to-success shadow-[0_0_18px_rgba(139,92,246,0.35)] transition-all duration-300" style={{ width: `${progress}%` }} />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Step bar */}
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto pb-1">
           <StepBar step={step} />
         </div>
 
@@ -888,21 +964,40 @@ export function Setup() {
                 <h2 className="text-sm font-semibold text-slate-200">选择导入方式</h2>
               </div>
               {importMode !== 'existing' && importMode !== 'existing_file' && (
-                <div className="flex gap-2 flex-wrap">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   {([
-                    { id: 'saved', icon: <Database size={13} />, label: '已保存配置' },
-                    { id: 'paste', icon: <FileText size={13} />, label: '粘贴 YAML' },
-                    { id: 'file',  icon: <Upload size={13} />,   label: '上传文件' },
-                    { id: 'url',   icon: <Link2 size={13} />,    label: '订阅链接' },
-                  ] as const).map(m => (
-                    <button
-                      key={m.id}
-                      onClick={() => setImportMode(m.id)}
-                      className={`btn text-xs py-1.5 flex items-center gap-1.5 ${importMode === m.id ? 'btn-primary' : 'btn-ghost'}`}
-                    >
-                      {m.icon}{m.label}
-                    </button>
-                  ))}
+                    { id: 'saved', icon: <Database size={15} />, label: '已保存配置', hint: '从历史文件或订阅继续' },
+                    { id: 'paste', icon: <FileText size={15} />, label: '粘贴 YAML', hint: '直接粘贴完整配置' },
+                    { id: 'file',  icon: <Upload size={15} />,   label: '上传文件', hint: '.yaml / .yml 本地文件' },
+                    { id: 'url',   icon: <Link2 size={15} />,    label: '订阅链接', hint: '拉取远程 Clash 订阅' },
+                  ] as const).map(m => {
+                    const active = importMode === m.id
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setImportMode(m.id)}
+                        className={`group flex min-h-[74px] items-start gap-3 border px-3 py-3 text-left transition-all ${
+                          active
+                            ? 'border-brand/45 bg-brand/[0.11] shadow-[0_0_18px_rgba(139,92,246,0.16)]'
+                            : 'border-white/[0.07] bg-white/[0.025] hover:border-white/[0.14] hover:bg-white/[0.045]'
+                        }`}
+                        style={{ borderRadius: 'var(--radius-lg)' }}
+                      >
+                        <span className={`mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center border ${
+                          active
+                            ? 'border-brand/35 bg-brand/20 text-brand-light'
+                            : 'border-white/[0.07] bg-white/[0.035] text-white/38 group-hover:text-white/65'
+                        }`} style={{ borderRadius: 'var(--radius-md)' }}>
+                          {m.icon}
+                        </span>
+                        <span className="min-w-0">
+                          <span className={`block text-[13px] font-semibold ${active ? 'text-white' : 'text-slate-300'}`}>{m.label}</span>
+                          <span className="mt-1 block text-[11px] leading-4 text-muted">{m.hint}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               )}
 

@@ -250,7 +250,13 @@
      Text never wraps: white-space: nowrap always present
   ──────────────────────────────────────────────────────────────────────── */
 
-  .btn {
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost,
+  .btn-ghost-active,
+  .btn-danger,
+  .btn-cta {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -273,9 +279,27 @@
       opacity      var(--dur-fast) var(--ease-default),
       transform    var(--dur-fast) var(--ease-spring);
   }
-  .btn:disabled      { opacity: 0.38; cursor: not-allowed; pointer-events: none; }
-  .btn:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.45); }
-  .btn:active:not(:disabled) { transform: scale(0.96); }
+  .btn:disabled,
+  .btn-primary:disabled,
+  .btn-secondary:disabled,
+  .btn-ghost:disabled,
+  .btn-ghost-active:disabled,
+  .btn-danger:disabled,
+  .btn-cta:disabled { opacity: 0.38; cursor: not-allowed; pointer-events: none; }
+  .btn:focus-visible,
+  .btn-primary:focus-visible,
+  .btn-secondary:focus-visible,
+  .btn-ghost:focus-visible,
+  .btn-ghost-active:focus-visible,
+  .btn-danger:focus-visible,
+  .btn-cta:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.45); }
+  .btn:active:not(:disabled),
+  .btn-primary:active:not(:disabled),
+  .btn-secondary:active:not(:disabled),
+  .btn-ghost:active:not(:disabled),
+  .btn-ghost-active:active:not(:disabled),
+  .btn-danger:active:not(:disabled),
+  .btn-cta:active:not(:disabled) { transform: scale(0.96); }
 
   /* Primary — solid brand fill */
   .btn-primary {
