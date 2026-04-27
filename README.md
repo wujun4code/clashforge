@@ -79,22 +79,22 @@ ClashForge 的目标不是再造代理内核，而是重新做一遍 OpenWrt 上
 - `aarch64_generic`
 - `aarch64_cortex-a53`
 
-在路由器上安装：
+在路由器上直接安装最新版本：
 
 ```sh
-opkg install clashforge_*.ipk
+wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 ```
 
-卸载（完全清除）：
+国内加速（通过 ghproxy）：
 
 ```sh
-uninstall-clashforge
+wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 ```
 
-保留配置与订阅数据：
+安装指定版本：
 
 ```sh
-uninstall-clashforge --keep-config
+wget -qO- .../install.sh | sh -s -- --version v0.1.0
 ```
 
 ### 2. 启动服务
@@ -120,6 +120,171 @@ http://<router-ip>:7777
 ### 4. 按需开启接管
 
 确认节点和内核运行正常后，再从**设置页面**或**概览仪表盘**手动开启透明代理和 DNS 接管。
+
+## 路由器管理命令（clashforgectl）
+
+`clashforgectl` 是 ClashForge 的统一运维入口，安装包会自动部署到路由器上。
+
+### 本机操作（在路由器 SSH 终端中执行）
+
+```sh
+# 查看当前运行状态（只读，不修改任何设置）
+clashforgectl status
+
+# 停止 ClashForge，完全退出透明代理接管模式
+# 自动恢复 dnsmasq 配置、清理 nftables、策略路由
+clashforgectl stop
+
+# 重置为初始安装状态（保留已安装的包版本）
+# 清除订阅、规则集、生成配置、缓存、运行时数据与日志
+clashforgectl reset
+
+# 重置并自动重启服务
+clashforgectl reset --start
+
+# 升级到最新版本
+clashforgectl upgrade
+
+# 升级到指定版本
+clashforgectl upgrade --version v0.1.0
+
+# 使用国内镜像升级
+clashforgectl upgrade --mirror https://ghproxy.com
+
+# 完全重置后升级（--purge）
+clashforgectl upgrade --purge
+
+# 收集诊断报告（输出至 /tmp/cf-diag.txt）
+clashforgectl diag
+
+# 收集诊断报告并打印到终端
+clashforgectl diag --stdout
+
+# 收集诊断报告并对敏感信息做脱敏处理
+clashforgectl diag --redact
+
+# 完全卸载 ClashForge
+clashforgectl uninstall
+
+# 完全卸载，但保留 /etc/metaclash 配置数据
+clashforgectl uninstall --keep-config
+```
+
+### 远程操作（从 Windows 主机控制路由器）
+
+```powershell
+# 查看状态
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 status
+
+# 停止 ClashForge
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 stop
+
+# 重置为初始状态
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset
+
+# 升级到最新版本
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade
+
+# 收集诊断报告并下载到本地
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch
+
+# 收集脱敏报告并下载
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
+
+# 卸载（保留配置）
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -KeepConfig
+```
+
+指定 SSH 用户、端口或密钥：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
+```
+
+### 远程操作（从 macOS / Linux 主机控制路由器）
+
+```sh
+# 查看状态
+./scripts/clashforgectl --router 192.168.1.1 status
+
+# 停止 ClashForge
+./scripts/clashforgectl --router 192.168.1.1 stop
+
+# 升级
+./scripts/clashforgectl --router 192.168.1.1 upgrade --version latest
+
+# 收集脱敏诊断报告并下载
+./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
+
+# 卸载
+./scripts/clashforgectl --router 192.168.1.1 uninstall
+```
+
+## 故障排查
+
+### DNS 断连 / 无法上网
+
+ClashForge 退出接管后 DNS 未恢复：
+
+```sh
+# 强制恢复 dnsmasq 配置并重启
+clashforgectl stop
+
+# 验证 dnsmasq 是否监听 53 端口
+netstat -lnup | grep :53
+
+# 如仍有问题，手动恢复 UCI 设置
+uci delete dhcp.@dnsmasq[0].port
+uci delete dhcp.@dnsmasq[0].server
+uci delete dhcp.@dnsmasq[0].noresolv
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+```
+
+### nftables 规则残留
+
+```sh
+# 查看是否有残留表
+nft list tables
+
+# 手动清除（clashforgectl stop 会自动处理）
+nft delete table inet metaclash
+nft delete table inet dnsmasq
+```
+
+### 策略路由规则残留
+
+```sh
+# 查看
+ip rule list | grep 0x1a3
+
+# 手动清除
+while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
+ip route flush table 100
+while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
+ip -6 route flush table 100
+```
+
+### opkg 安装 / 升级失败
+
+```sh
+# 更新包列表后重试
+opkg update
+opkg install --nodeps --force-downgrade clashforge_*.ipk
+
+# 检查磁盘空间
+df -h /tmp /overlay
+```
+
+### 收集完整诊断报告
+
+```sh
+# 在路由器上收集（含所有探测信息，输出至 /tmp/cf-diag.txt）
+clashforgectl diag --redact
+
+# 从 Windows 远程拉取报告到本地
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
+```
 
 ## 本地开发
 
@@ -229,22 +394,22 @@ Each `v*` tag triggers release builds for:
 - `aarch64_generic`
 - `aarch64_cortex-a53`
 
-Install on OpenWrt:
+Install the latest release on OpenWrt:
 
 ```sh
-opkg install clashforge_*.ipk
+wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 ```
 
-Full uninstall:
+China mirror (via ghproxy):
 
 ```sh
-uninstall-clashforge
+wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
 ```
 
-Keep config and subscription data:
+Install a specific version:
 
 ```sh
-uninstall-clashforge --keep-config
+wget -qO- .../install.sh | sh -s -- --version v0.1.0
 ```
 
 ### 2. Enable and start the service
@@ -270,6 +435,147 @@ Use the Setup wizard to complete first-run configuration:
 ### 4. Enable takeover when ready
 
 Once nodes and core status are confirmed healthy, enable transparent proxy and DNS takeover manually from the **Settings page** or the **Overview dashboard**.
+
+## Router Management (`clashforgectl`)
+
+`clashforgectl` is the unified operations entry point for ClashForge. The IPK package deploys it automatically.
+
+### On the router (over SSH)
+
+```sh
+# Read-only status check
+clashforgectl status
+
+# Stop ClashForge and exit takeover mode
+# Restores dnsmasq, removes nftables tables and policy routing rules
+clashforgectl stop
+
+# Reset to first-install state (keeps installed package version)
+# Clears subscriptions, rule-sets, generated configs, caches, runtime data, logs
+clashforgectl reset
+
+# Reset and auto-start the service
+clashforgectl reset --start
+
+# Upgrade to the latest version
+clashforgectl upgrade
+
+# Upgrade to a specific version
+clashforgectl upgrade --version v0.1.0
+
+# Upgrade via China mirror
+clashforgectl upgrade --mirror https://ghproxy.com
+
+# Full reset before upgrading
+clashforgectl upgrade --purge
+
+# Collect a diagnostic report (saved to /tmp/cf-diag.txt)
+clashforgectl diag
+
+# Print diagnostic report to terminal
+clashforgectl diag --stdout
+
+# Collect report with sensitive values redacted
+clashforgectl diag --redact
+
+# Fully uninstall ClashForge
+clashforgectl uninstall
+
+# Uninstall but keep /etc/metaclash config data
+clashforgectl uninstall --keep-config
+```
+
+### Remote control from Windows
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 status
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 stop
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -KeepConfig
+```
+
+Specify SSH user, port, or key:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
+```
+
+### Remote control from macOS / Linux
+
+```sh
+./scripts/clashforgectl --router 192.168.1.1 status
+./scripts/clashforgectl --router 192.168.1.1 stop
+./scripts/clashforgectl --router 192.168.1.1 upgrade --version latest
+./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
+./scripts/clashforgectl --router 192.168.1.1 uninstall
+```
+
+## Troubleshooting
+
+### DNS drops after ClashForge stops
+
+```sh
+# Force dnsmasq config restore and restart
+clashforgectl stop
+
+# Verify dnsmasq is listening on port 53
+netstat -lnup | grep :53
+
+# Manual UCI restore if needed
+uci delete dhcp.@dnsmasq[0].port
+uci delete dhcp.@dnsmasq[0].server
+uci delete dhcp.@dnsmasq[0].noresolv
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+```
+
+### Leftover nftables rules
+
+```sh
+# Check for leftover tables
+nft list tables
+
+# Remove manually (clashforgectl stop handles this automatically)
+nft delete table inet metaclash
+nft delete table inet dnsmasq
+```
+
+### Leftover policy routing rules
+
+```sh
+# Check
+ip rule list | grep 0x1a3
+
+# Remove manually
+while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
+ip route flush table 100
+while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
+ip -6 route flush table 100
+```
+
+### opkg install / upgrade failure
+
+```sh
+# Update package list and retry
+opkg update
+opkg install --nodeps --force-downgrade clashforge_*.ipk
+
+# Check disk space
+df -h /tmp /overlay
+```
+
+### Collect a full diagnostic report
+
+```sh
+# On the router
+clashforgectl diag --redact
+
+# Pull report to local machine from Windows
+.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
+```
 
 ## Local Development
 

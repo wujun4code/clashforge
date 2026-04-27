@@ -1,7 +1,7 @@
 # ClashForge Unified Control Script Plan
 
 Date: 2026-04-27
-Status: Planning
+Status: Implemented (Phases 1–5 complete)
 Scope: scripts for local OpenWrt control and remote router control from Windows/macOS/Linux
 
 ## Background
