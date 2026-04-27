@@ -57,6 +57,7 @@ Subcommands:
   stop                       Stop all services and fully exit takeover mode
   reset [--start]            Reset to first-install state (keeps installed package)
   upgrade                    Upgrade to latest or specified version
+  check                      Quick connectivity & egress IP check (lightweight)
   uninstall [--keep-config]  Completely remove ClashForge from the router
   diag                       Collect full diagnostic report
 
@@ -656,6 +657,158 @@ cmd_uninstall() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUBCOMMAND: check
+#
+# Lightweight connectivity & IP probe — prints results directly to stdout.
+# Mirrors the "IP检查 + 连通性检测" panels shown in the ClashForge web UI.
+# ══════════════════════════════════════════════════════════════════════════════
+cmd_check() {
+  _MIXED_PORT="7893"
+  _API_BASE="http://127.0.0.1:7777/api/v1"
+
+  # ── tiny HTTP helper (wget or curl) ────────────────────────────────────────
+  _get() {
+    url="$1"; proxy="$2"; timeout="${3:-8}"
+    if [ -n "$proxy" ]; then
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time "$timeout" --proxy "$proxy" \
+             -A "clashforgectl-check/1.0" "$url" 2>/dev/null
+      else
+        http_proxy="$proxy" wget -qO- --timeout="$timeout" \
+             --user-agent="clashforgectl-check/1.0" "$url" 2>/dev/null
+      fi
+    else
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time "$timeout" \
+             -A "clashforgectl-check/1.0" "$url" 2>/dev/null
+      else
+        wget -qO- --timeout="$timeout" \
+             --user-agent="clashforgectl-check/1.0" "$url" 2>/dev/null
+      fi
+    fi
+  }
+
+  # ── check if ClashForge API + mixed proxy are up ───────────────────────────
+  _cf_api_ok=0
+  _cf_proxy_ok=0
+  _api_resp="$(_get "$_API_BASE/health" "" 4 2>/dev/null || true)"
+  [ -n "$_api_resp" ] && _cf_api_ok=1
+  # Test mixed proxy with a quick HEAD to an always-available target
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --max-time 4 --proxy "http://127.0.0.1:$_MIXED_PORT" \
+         -A "clashforgectl-check/1.0" "http://connectivitycheck.gstatic.com/generate_204" \
+         -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q "^204$" && _cf_proxy_ok=1 || true
+  else
+    _r="$(http_proxy="http://127.0.0.1:$_MIXED_PORT" \
+          wget -qO- --timeout=4 --server-response \
+               "http://connectivitycheck.gstatic.com/generate_204" 2>&1 | grep -c "204 No Content" || true)"
+    [ "$_r" -gt 0 ] && _cf_proxy_ok=1 || true
+  fi
+
+  _PROXY=""
+  [ "$_cf_proxy_ok" = "1" ] && _PROXY="http://127.0.0.1:$_MIXED_PORT"
+
+  printf "\n"
+  printf "═══════════════════════════════════════════════════════\n"
+  printf "  ClashForge Connectivity Check\n"
+  printf "═══════════════════════════════════════════════════════\n"
+
+  # ── Service status ─────────────────────────────────────────────────────────
+  printf "\n[Service]\n"
+  if [ "$_cf_api_ok" = "1" ]; then
+    printf "  ClashForge API  : ✓ running (http://127.0.0.1:7777)\n"
+  else
+    printf "  ClashForge API  : ✗ not reachable\n"
+  fi
+  if [ "$_cf_proxy_ok" = "1" ]; then
+    printf "  Mixed proxy     : ✓ port %s active\n" "$_MIXED_PORT"
+  else
+    printf "  Mixed proxy     : ✗ port %s not active\n" "$_MIXED_PORT"
+  fi
+
+  # ── IP check providers ─────────────────────────────────────────────────────
+  printf "\n[Egress IP]\n"
+
+  _check_ip() {
+    label="$1"; url="$2"; jq_ip="$3"; jq_loc="$4"
+    _body="$(_get "$url" "$_PROXY" 8)"
+    if [ -z "$_body" ]; then
+      printf "  %-10s : ✗ (request failed)\n" "$label"
+      return
+    fi
+    # Poor-man's JSON field extraction (no jq required on router)
+    _ip="$(printf '%s' "$_body" | grep -o "\"${jq_ip}\":\"[^\"]*\"" | head -1 | cut -d'"' -f4)"
+    if [ -n "$jq_loc" ]; then
+      _loc="$(printf '%s' "$_body" | grep -o "\"${jq_loc}\":\"[^\"]*\"" | head -1 | cut -d'"' -f4)"
+    else
+      _loc=""
+    fi
+    if [ -n "$_ip" ]; then
+      if [ -n "$_loc" ]; then
+        printf "  %-10s : ✓ %-42s  %s\n" "$label" "$_ip" "$_loc"
+      else
+        printf "  %-10s : ✓ %s\n" "$label" "$_ip"
+      fi
+    else
+      printf "  %-10s : ✗ (unexpected response)\n" "$label"
+    fi
+  }
+
+  _check_ip "IP.SB"  "https://api.ip.sb/geoip"               "ip"      "country"
+  _check_ip "ipify"  "https://api.ipify.org?format=json"      "ip"      ""
+  _check_ip "ip-api" "http://ip-api.com/json?fields=query,isp,country" "query" "country"
+
+  # ── Access checks ──────────────────────────────────────────────────────────
+  printf "\n[Access Check]  (via ClashForge mixed proxy port %s)\n" "$_MIXED_PORT"
+
+  _check_url() {
+    label="$1"; url="$2"
+    _ts_start="$(date +%s)"
+    if command -v curl >/dev/null 2>&1; then
+      _code="$(curl -fsSL --max-time 12 --proxy "$_PROXY" \
+                    -A "clashforgectl-check/1.0" \
+                    -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")"
+    else
+      _code="$(http_proxy="$_PROXY" wget -qO/dev/null --timeout=12 \
+                    --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}' || echo "000")"
+    fi
+    _ts_end="$(date +%s)"
+    _ms=$(( (_ts_end - _ts_start) * 1000 ))
+    if printf '%s' "$_code" | grep -qE '^[23][0-9][0-9]$'; then
+      printf "  %-20s : ✓ HTTP %s  (%s ms)\n" "$label" "$_code" "$_ms"
+    elif [ "$_code" = "000" ]; then
+      if [ -z "$_PROXY" ]; then
+        printf "  %-20s : ✗ (proxy not running)\n" "$label"
+      else
+        printf "  %-20s : ✗ (timeout or blocked)\n" "$label"
+      fi
+    else
+      printf "  %-20s : ✗ HTTP %s\n" "$label" "$_code"
+    fi
+  }
+
+  _check_url "baidu.com"         "https://www.baidu.com"
+  _check_url "github.com"        "https://github.com"
+  _check_url "youtube.com"       "https://www.youtube.com"
+  _check_url "google.com"        "https://www.google.com"
+
+  # ── nftables takeover ──────────────────────────────────────────────────────
+  printf "\n[Takeover]\n"
+  if nft list table inet metaclash >/dev/null 2>&1; then
+    printf "  nft metaclash   : ✓ active\n"
+  else
+    printf "  nft metaclash   : ✗ not loaded\n"
+  fi
+  if ip rule list 2>/dev/null | grep -q "0x1a3"; then
+    printf "  policy routing  : ✓ rule 0x1a3 present\n"
+  else
+    printf "  policy routing  : ✗ rule 0x1a3 absent\n"
+  fi
+
+  printf "\n"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SUBCOMMAND: diag
 #
 # Full diagnostic report covering all 23 sections.
@@ -900,6 +1053,7 @@ case "$SUBCOMMAND" in
   stop)           cmd_stop      ;;
   reset)          cmd_reset     ;;
   upgrade)        cmd_upgrade   ;;
+  check)          cmd_check     ;;
   uninstall)      cmd_uninstall ;;
   diag)           cmd_diag      ;;
   help|--help|-h) usage; exit 0 ;;

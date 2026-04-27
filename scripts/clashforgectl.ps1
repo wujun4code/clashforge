@@ -17,6 +17,7 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 deploy -Skip ui
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 deploy -Skip go
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 deploy -Purge
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 check
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -KeepConfig
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag
@@ -32,7 +33,7 @@
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "uninstall", "diag", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "uninstall", "diag", "help")]
     [string]$Action,
 
     # Connection parameters

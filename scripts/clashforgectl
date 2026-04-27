@@ -92,7 +92,7 @@ DRY_RUN=0
 # First positional arg that is not a flag is the ACTION.
 while [ $# -gt 0 ]; do
     case "$1" in
-        status|stop|reset|upgrade|deploy|uninstall|diag|help)
+        status|stop|reset|upgrade|deploy|check|uninstall|diag|help)
             ACTION="$1"; shift ;;
         --router)     ROUTER="$2";      shift 2 ;;
         --router=*)   ROUTER="${1#*=}"; shift ;;
@@ -197,6 +197,7 @@ EXAMPLES
     ./scripts/clashforgectl --router 192.168.1.1 deploy
     ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
     ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
+    ./scripts/clashforgectl --router 192.168.1.1 check
     ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
     ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
 EOF
