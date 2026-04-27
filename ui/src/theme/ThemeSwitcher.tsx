@@ -1,36 +1,105 @@
-import { Gem } from 'lucide-react'
+import { Check, ChevronDown } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
+import { applyTheme, loadTheme, persistTheme, THEMES, type ThemeId } from './themes'
 
 export function ThemeSwitcher() {
+  const [themeId, setThemeId] = useState<ThemeId>(() => loadTheme())
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  const currentTheme = useMemo(
+    () => THEMES.find((theme) => theme.id === themeId) ?? THEMES[0],
+    [themeId]
+  )
+  const CurrentIcon = currentTheme.icon
+
+  useEffect(() => {
+    applyTheme(themeId)
+  }, [themeId])
+
+  useEffect(() => {
+    if (!open) return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [open])
+
+  const selectTheme = (id: ThemeId) => {
+    setThemeId(id)
+    persistTheme(id)
+    applyTheme(id)
+    setOpen(false)
+  }
+
   return (
     <div
-      className="flex w-full items-center gap-[var(--space-sm)] border bg-white/[0.025] cursor-default"
-      style={{
-        borderRadius: 'var(--radius-md)',
-        borderColor: 'rgb(var(--border-color) / var(--border-alpha))',
-        padding: 'var(--space-xs) var(--space-sm)',
-      }}
+      ref={rootRef}
+      className={`theme-switcher ${open ? 'theme-switcher-open' : ''}`}
     >
-      <span
-        className="block h-3 w-3 flex-shrink-0"
-        style={{
-          background: 'linear-gradient(135deg, #8B5CF6 0%, #4C1D95 100%)',
-          borderRadius: 'var(--radius-full)',
-          boxShadow: '0 0 8px rgba(139,92,246,0.60)',
-        }}
-      />
-      <Gem size={12} className="text-brand-light flex-shrink-0" />
-      <span
-        className="font-medium text-muted"
-        style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-sans)' }}
+      <button
+        type="button"
+        className="theme-switcher-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="切换界面皮肤"
+        onClick={() => setOpen((prev) => !prev)}
+        style={{ '--theme-preview': currentTheme.preview, '--theme-accent': currentTheme.accent } as CSSProperties}
       >
-        星云
-      </span>
-      <span
-        className="ml-auto font-mono tracking-widest text-brand-light/40"
-        style={{ fontSize: '0.65rem', letterSpacing: '0.18em' }}
+        <span className="theme-switcher-swatch" aria-hidden />
+        <CurrentIcon size={13} className="theme-switcher-icon" aria-hidden />
+        <span className="theme-switcher-copy">
+          <span className="theme-switcher-name">{currentTheme.name}</span>
+          <span className="theme-switcher-description">{currentTheme.description}</span>
+        </span>
+        <ChevronDown size={13} className="theme-switcher-caret" aria-hidden />
+      </button>
+
+      <div
+        className={`theme-switcher-menu ${open ? 'theme-switcher-menu-open' : ''}`}
+        role="listbox"
+        aria-label="界面皮肤列表"
       >
-        NEBULA
-      </span>
+        {THEMES.map((theme) => {
+          const Icon = theme.icon
+          const active = theme.id === themeId
+
+          return (
+            <button
+              key={theme.id}
+              type="button"
+              role="option"
+              aria-selected={active}
+              aria-label={`${theme.name}皮肤`}
+              className={`theme-switcher-option ${active ? 'theme-switcher-option-active' : ''}`}
+              onClick={() => selectTheme(theme.id)}
+              style={{ '--theme-preview': theme.preview, '--theme-accent': theme.accent } as CSSProperties}
+              title={theme.description}
+            >
+              <span className="theme-switcher-swatch" aria-hidden />
+              <Icon size={13} className="theme-switcher-icon" aria-hidden />
+              <span className="theme-switcher-copy">
+                <span className="theme-switcher-name">{theme.name}</span>
+                <span className="theme-switcher-description">{theme.shortName}</span>
+              </span>
+              {active ? <Check size={12} className="theme-switcher-check" aria-hidden /> : null}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
