@@ -700,16 +700,14 @@ cmd_check() {
                       "$_API_BASE/health/check" 2>/dev/null || true)"
   fi
   [ -n "$_api_resp" ] && _cf_api_ok=1
-  # Test mixed proxy with a quick HEAD to an always-available target
-  if command -v curl >/dev/null 2>&1; then
-    curl -sSL --max-time 4 --proxy "http://127.0.0.1:$_MIXED_PORT" \
-         -A "clashforgectl-check/1.0" "http://connectivitycheck.gstatic.com/generate_204" \
-         -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q "^204$" && _cf_proxy_ok=1 || true
+  # Test mixed proxy: local TCP listen check only — no external network required.
+  # nc -z is available on virtually all OpenWrt builds; /proc/net/tcp is the fallback.
+  if command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$_MIXED_PORT" 2>/dev/null && _cf_proxy_ok=1 || true
   else
-    _r="$(http_proxy="http://127.0.0.1:$_MIXED_PORT" \
-          wget -qO- --timeout=4 --server-response \
-               "http://connectivitycheck.gstatic.com/generate_204" 2>&1 | grep -c "204 No Content" || true)"
-    [ "$_r" -gt 0 ] && _cf_proxy_ok=1 || true
+    # /proc/net/tcp stores ports in uppercase hex, little-endian (x86: 0100007F or 00000000)
+    _hex_port="$(printf '%04X' "$_MIXED_PORT")"
+    grep -q ":${_hex_port} " /proc/net/tcp 2>/dev/null && _cf_proxy_ok=1 || true
   fi
 
   _PROXY=""
