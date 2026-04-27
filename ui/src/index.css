@@ -708,6 +708,38 @@
     box-shadow: 0 0 0 3px rgb(var(--danger) / 0.12) !important;
   }
 
+  .theme-select {
+    color-scheme: dark;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image:
+      linear-gradient(45deg, transparent 50%, rgb(var(--muted) / 0.90) 50%),
+      linear-gradient(135deg, rgb(var(--muted) / 0.90) 50%, transparent 50%);
+    background-position:
+      calc(100% - 16px) calc(50% - 2px),
+      calc(100% - 11px) calc(50% - 2px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 34px !important;
+  }
+
+  .theme-select:focus {
+    background-image:
+      linear-gradient(45deg, transparent 50%, rgb(var(--brand-light) / 0.95) 50%),
+      linear-gradient(135deg, rgb(var(--brand-light) / 0.95) 50%, transparent 50%);
+  }
+
+  .theme-select option {
+    background: rgb(var(--surface-2));
+    color: rgb(var(--text-primary));
+  }
+
+  .theme-select option:checked {
+    background: rgb(var(--brand-subtle-rgb) / calc(var(--brand-subtle-alpha) * 2.8));
+    color: rgb(var(--text-primary));
+  }
+
   .glass-textarea {
     width: 100%;
     border-radius: var(--radius-md);

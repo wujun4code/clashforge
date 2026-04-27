@@ -14,6 +14,7 @@
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade --mirror https://ghproxy.com
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade --base-url https://releases.example.com
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade --purge
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --remote-download   # legacy: let router download
 #   ./scripts/clashforgectl --router 192.168.1.1 deploy
 #   ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
 #   ./scripts/clashforgectl --router 192.168.1.1 deploy --skip go
@@ -73,6 +74,7 @@ VERSION="latest"
 MIRROR=""
 BASE_URL=""
 PURGE=0
+REMOTE_DOWNLOAD=0
 
 SKIP=""    # for deploy: comma-separated steps to skip (ui, go)
 REPO_ROOT=""  # for deploy: auto-detected from script location
@@ -109,7 +111,8 @@ while [ $# -gt 0 ]; do
         --mirror=*)   MIRROR="${1#*=}"; shift ;;
         --base-url)   BASE_URL="$2";    shift 2 ;;
         --base-url=*) BASE_URL="${1#*=}"; shift ;;
-        --purge)      PURGE=1;          shift ;;
+        --purge)         PURGE=1;           shift ;;
+        --remote-download) REMOTE_DOWNLOAD=1; shift ;;
         # deploy options
         --skip)       SKIP="$2";        shift 2 ;;
         --skip=*)     SKIP="${1#*=}";   shift ;;
@@ -167,9 +170,10 @@ DEPLOY OPTIONS
 
 UPGRADE OPTIONS
     --version <tag>      Version to install (default: latest)
-    --mirror <url>       Force a GitHub proxy mirror
-    --base-url <url>     Custom release base URL
+    --mirror <url>       Force a GitHub proxy mirror for local download
+    --base-url <url>     Custom release base URL for local download
     --purge              Full cleanup before install
+    --remote-download    Legacy: have the router download the IPK itself
 
 RESET OPTIONS
     --start              Start ClashForge after reset
@@ -338,6 +342,126 @@ if [ "$ACTION" = "deploy" ]; then
 
     log ""
     ok "Deploy complete: $NEW_VER  →  http://${ROUTER}:7777"
+    exit 0
+fi
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPGRADE — download IPK locally, push to router, install via --local-ipk
+#
+# Default path: the local machine downloads the IPK and SCPs it to the router.
+# This avoids the "chicken-and-egg" problem where ClashForge stopping breaks the
+# router's internet access before it can download its own replacement.
+# Use --remote-download to revert to the old behaviour (router downloads itself).
+# ══════════════════════════════════════════════════════════════════════════════
+if [ "$ACTION" = "upgrade" ] && [ "$REMOTE_DOWNLOAD" -eq 0 ]; then
+
+    # ── 1. Detect router architecture ─────────────────────────────────────────
+    log "── Step 1: Detecting router architecture..."
+    ROUTER_MACHINE="$(ssh "${SSH_OPTS[@]}" "$TARGET" 'uname -m')"
+
+    case "$ROUTER_MACHINE" in
+        x86_64|amd64)
+            IPK_ARCH="x86_64" ;;
+        aarch64|arm64)
+            CPU_PART="$(ssh "${SSH_OPTS[@]}" "$TARGET" \
+                "grep -m1 'CPU part' /proc/cpuinfo 2>/dev/null | awk '{print tolower(\$NF)}'")"
+            if [ "$CPU_PART" = "0xd03" ]; then
+                IPK_ARCH="aarch64_cortex-a53"
+            else
+                IPK_ARCH="aarch64_generic"
+            fi ;;
+        *)
+            die "Unsupported router architecture: $ROUTER_MACHINE (supported: x86_64, aarch64)" ;;
+    esac
+    ok "Router arch : $ROUTER_MACHINE → $IPK_ARCH"
+
+    # ── 2. Resolve version ─────────────────────────────────────────────────────
+    TAG="$VERSION"
+    if [ "$TAG" = "latest" ]; then
+        log "── Step 2: Resolving latest release version..."
+        _api="https://api.github.com/repos/wujun4code/clashforge/releases?per_page=1"
+        TAG="$(curl -fsSL --connect-timeout 15 --max-time 20 \
+                    -H "Accept: application/vnd.github+json" \
+                    "$_api" 2>/dev/null \
+               | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)"
+        [ -n "$TAG" ] || die "Failed to resolve latest version from GitHub API."
+    fi
+    PKG_VER="${TAG#v}"
+    IPK_NAME="clashforge_${PKG_VER}_${IPK_ARCH}.ipk"
+    ok "Version     : $TAG"
+    ok "Package     : $IPK_NAME"
+
+    # ── 3. Download IPK to local machine ──────────────────────────────────────
+    log "── Step 3: Downloading IPK locally..."
+    LOCAL_IPK="$(mktemp /tmp/clashforge_XXXXXX).ipk"
+    GH_URL="https://github.com/wujun4code/clashforge/releases/download/$TAG/$IPK_NAME"
+    GH_PROXIES="https://ghproxy.com https://mirror.ghproxy.com https://ghfast.top https://github.moeyy.xyz"
+    DOWNLOADED=0
+
+    _dl() { curl -fsSL --connect-timeout 15 --max-time 300 -o "$LOCAL_IPK" "$1" 2>/dev/null && [ -s "$LOCAL_IPK" ]; }
+
+    if [ -n "$BASE_URL" ]; then
+        _url="${BASE_URL%/}/releases/$TAG/$IPK_NAME"
+        log "Downloading from custom base URL: $BASE_URL"
+        _dl "$_url" && DOWNLOADED=1 \
+            || die "Download failed from base URL: $_url"
+    elif [ -n "$MIRROR" ]; then
+        _url="${MIRROR%/}/$GH_URL"
+        log "Downloading via mirror: $MIRROR"
+        _dl "$_url" && DOWNLOADED=1 \
+            || die "Download failed from mirror: $MIRROR"
+    else
+        log "Downloading from GitHub..."
+        if _dl "$GH_URL"; then
+            DOWNLOADED=1
+            ok "Downloaded from GitHub"
+        else
+            warn "Direct GitHub download failed, trying mirrors..."
+            rm -f "$LOCAL_IPK"
+            for _proxy in $GH_PROXIES; do
+                log "Trying mirror: $_proxy"
+                if _dl "$_proxy/$GH_URL"; then
+                    DOWNLOADED=1
+                    ok "Downloaded via $_proxy"
+                    break
+                fi
+                rm -f "$LOCAL_IPK"
+            done
+        fi
+    fi
+
+    [ "$DOWNLOADED" -eq 1 ] \
+        || die "Failed to download IPK from all sources.\nTry: --mirror https://ghproxy.com  or  --base-url <your-cdn>"
+    ok "Local IPK   : $LOCAL_IPK ($(wc -c < "$LOCAL_IPK" | tr -d ' ') bytes)"
+
+    # ── 4. Upload clashforgectl.sh ─────────────────────────────────────────────
+    log "── Step 4: Uploading clashforgectl.sh → ${TARGET}:${REMOTE_SCRIPT}"
+    scp "${SCP_OPTS[@]}" "$SH_SCRIPT" "${TARGET}:${REMOTE_SCRIPT}" \
+        || die "scp upload of clashforgectl.sh failed"
+    ok "clashforgectl.sh uploaded"
+
+    # ── 5. Push IPK to router ──────────────────────────────────────────────────
+    REMOTE_IPK="/tmp/$IPK_NAME"
+    log "── Step 5: Pushing $IPK_NAME → ${TARGET}:${REMOTE_IPK}"
+    scp "${SCP_OPTS[@]}" "$LOCAL_IPK" "${TARGET}:${REMOTE_IPK}" \
+        || die "scp upload of IPK failed"
+    ok "IPK pushed to router"
+    rm -f "$LOCAL_IPK"
+
+    # ── 6. Install on router via --local-ipk (no download needed on router) ──
+    PURGE_FLAG="";  [ "$PURGE"   -eq 1 ] && PURGE_FLAG=" --purge"
+    YES_FLAG="";    [ "$YES"     -eq 1 ] && YES_FLAG=" --yes"
+    DRYRUN_FLAG=""; [ "$DRY_RUN" -eq 1 ] && DRYRUN_FLAG=" --dry-run"
+    REMOTE_CMD="sh $REMOTE_SCRIPT upgrade --local-ipk $REMOTE_IPK$PURGE_FLAG$YES_FLAG$DRYRUN_FLAG"
+    log "── Step 6: Installing on router"
+    log "Remote  : $REMOTE_CMD"
+    log ""
+    ssh "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_CMD" \
+        || die "Remote install failed"
+
+    log ""
+    ok "Upgrade complete: $TAG  →  http://${ROUTER}:7777"
     exit 0
 fi
 

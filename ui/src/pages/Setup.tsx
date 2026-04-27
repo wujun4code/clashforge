@@ -218,7 +218,7 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
 function SelectInput({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <select
-      className="glass-input min-h-11 appearance-none cursor-pointer"
+      className="theme-select glass-input min-h-11 appearance-none cursor-pointer"
       value={value}
       onChange={e => onChange(e.target.value)}
     >
