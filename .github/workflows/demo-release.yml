@@ -3,10 +3,11 @@ name: "[Demo] 4 — Release"
 # Step 3 of 3 (second half): Create a GitHub Release for the given tag.
 #
 # Triggered two ways:
-#   1. workflow_dispatch — dispatched by demo-tag.yml after pushing a demo-v* tag
-#      This is the normal path in the automated pipeline.
-#   2. push: tags: demo-v* — fires when a human manually pushes a demo-v* tag.
-#      (Tags pushed by GITHUB_TOKEN do NOT trigger this; see demo-tag.yml.)
+#   1. workflow_dispatch — dispatched by demo-tag.yml after pushing a demo-v* tag.
+#      This is the normal path in the automated pipeline because tags pushed by
+#      GITHUB_TOKEN do not trigger downstream workflows.
+#   2. push: tags: demo-v* — fires when a human or app-token manually pushes a
+#      demo-v* tag.
 
 on:
   workflow_dispatch:
@@ -30,26 +31,34 @@ jobs:
 
       - name: Resolve tag
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          PUSH_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$DISPATCH_TAG"
             SOURCE="workflow_dispatch (dispatched by demo-tag.yml)"
           else
-            TAG="${{ github.ref_name }}"
-            SOURCE="push:tags (manual tag push)"
+            TAG="$PUSH_TAG"
+            SOURCE="push:tags (manual/app-token tag push)"
           fi
           echo "tag=$TAG"       >> "$GITHUB_OUTPUT"
           echo "source=$SOURCE" >> "$GITHUB_OUTPUT"
 
       - name: Log release info
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          SOURCE: ${{ steps.meta.outputs.source }}
+          REPO: ${{ github.repository }}
         run: |
           echo "========================================="
           echo " [Demo Release] Release pipeline started"
           echo "========================================="
-          echo "  Tag     : ${{ steps.meta.outputs.tag }}"
-          echo "  Trigger : ${{ steps.meta.outputs.source }}"
-          echo "  Repo    : ${{ github.repository }}"
+          echo "  Tag     : $TAG"
+          echo "  Trigger : $SOURCE"
+          echo "  Repo    : $REPO"
           echo ""
           echo "  In a real pipeline this step would:"
           echo "    1. Download build artifacts from the tag commit"
@@ -61,30 +70,34 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
+          set -euo pipefail
           echo ""
           echo " [Demo Release] Creating GitHub Release $TAG"
+
+          cat > demo-release-notes.md <<'EOF'
+          ## Demo Release
+
+          This release was created automatically by the CI/CD demo pipeline.
+
+          **Pipeline steps:**
+          1. PR opened → auto-merge enabled
+          2. CI check passed → PR auto-merged
+          3. Merge detected → tag pushed
+          4. Tag pushed → this release created
+
+          > This is a demo release. No real artifacts are attached.
+          EOF
+
           gh release create "$TAG" \
             --title "Demo Release $TAG" \
-            --notes "$(cat <<'EOF'
-## Demo Release
-
-This release was created automatically by the CI/CD demo pipeline.
-
-**Pipeline steps:**
-1. PR opened → auto-merge enabled
-2. CI check passed → PR auto-merged
-3. Merge detected → tag pushed
-4. Tag pushed → this release created
-
-> This is a demo release. No real artifacts are attached.
-EOF
-)" \
+            --notes-file demo-release-notes.md \
             --prerelease \
-            --repo "${{ github.repository }}"
+            --repo "$REPO"
           echo ""
-          echo "  ✅ Release created: https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          echo "  ✅ Release created: https://github.com/$REPO/releases/tag/$TAG"
           echo ""
           echo "===== Pipeline complete ====="
           echo "  PR → CI → Auto-merge → Tag → Release ✓"
