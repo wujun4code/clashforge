@@ -700,15 +700,10 @@ cmd_check() {
                       "$_API_BASE/health/check" 2>/dev/null || true)"
   fi
   [ -n "$_api_resp" ] && _cf_api_ok=1
-  # Test mixed proxy: local TCP listen check only — no external network required.
-  # nc -z is available on virtually all OpenWrt builds; /proc/net/tcp is the fallback.
-  if command -v nc >/dev/null 2>&1; then
-    nc -z 127.0.0.1 "$_MIXED_PORT" 2>/dev/null && _cf_proxy_ok=1 || true
-  else
-    # /proc/net/tcp stores ports in uppercase hex, little-endian (x86: 0100007F or 00000000)
-    _hex_port="$(printf '%04X' "$_MIXED_PORT")"
-    grep -q ":${_hex_port} " /proc/net/tcp 2>/dev/null && _cf_proxy_ok=1 || true
-  fi
+  # Test mixed proxy: netstat is always present on OpenWrt/BusyBox and shows all
+  # interfaces. BusyBox nc has no -z flag, and mihomo binds :::PORT (IPv6 dual-stack)
+  # so connecting to 127.0.0.1 fails even when the port is open.
+  netstat -tlnp 2>/dev/null | grep -q ":${_MIXED_PORT} " && _cf_proxy_ok=1 || true
 
   _PROXY=""
   [ "$_cf_proxy_ok" = "1" ] && _PROXY="http://127.0.0.1:$_MIXED_PORT"
