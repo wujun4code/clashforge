@@ -1,1 +1,128 @@
-#!/usr/bin/env python3"""build_ipk.py 鈥?Build an opkg-compatible IPK package for OpenWrtOpenWrt IPK format: outer .tar.gz containing:  ./debian-binary  ./data.tar.gz  ./control.tar.gzNOT the Debian ar format!Usage: PKG_NAME=clashforge_x.x.x_arch.ipk python3 build_ipk.pyMust be run from the directory containing the 'ipk/' staging tree."""import osimport sysimport tarfileimport iopkg_name = os.environ.get('PKG_NAME')if not pkg_name:    print("ERROR: PKG_NAME env var required", file=sys.stderr)    sys.exit(1)def make_tar_gz(out_path, base_dir, names):    """Create a reproducible gzipped tar with uid/gid=0 and mtime=0."""    with tarfile.open(out_path, 'w:gz', compresslevel=9) as tar:        for name in sorted(names):            full = os.path.join(base_dir, name)            if not os.path.exists(full):                continue            normalized_name = name.replace('\\', '/').lstrip('./')            def _set_metadata(info):                info.uid = info.gid = 0                info.uname = info.gname = 'root'                info.mtime = 0                # Windows hosts don't preserve executable bits reliably; force modes.                if info.isdir():                    info.mode = 0o755                elif (                    normalized_name.startswith('usr/bin/')                    or normalized_name == 'etc/init.d/clashforge'                    or normalized_name in {'postinst', 'prerm', 'postrm'}                ):                    info.mode = 0o755                else:                    info.mode = 0o644                return info            if os.path.isdir(full):                def _filt(info):                    return _set_metadata(info)                tar.add(full, arcname=name, recursive=False, filter=_filt)                continue            with open(full, 'rb') as fh:                payload = fh.read()            # Normalize line endings for shell/control metadata so OpenWrt parsing is stable.            if (                normalized_name in {'control', 'conffiles', 'postinst', 'prerm', 'postrm'}                or normalized_name.startswith('etc/init.d/')                or normalized_name in {'usr/bin/uninstall-clashforge', 'usr/bin/clashforge-diag'}            ):                payload = payload.replace(b'\r\n', b'\n')                if payload and not payload.endswith(b'\n'):                    payload += b'\n'            info = tarfile.TarInfo(name=name)            info.size = len(payload)            info.type = tarfile.REGTYPE            _set_metadata(info)            tar.addfile(info, io.BytesIO(payload))    print(f"  wrote {out_path} ({os.path.getsize(out_path):,} bytes)")# 鈹€鈹€ data.tar.gz 鈥?package contents 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€data_names = []for root, dirs, files in os.walk('ipk'):    rel_root = os.path.relpath(root, 'ipk').replace('\\', '/')    if rel_root.startswith('CONTROL'):        continue    # Add the directory entry itself (needed for opkg to create parent dirs)    if rel_root != '.':        data_names.append(rel_root)    for f in files:        p = f if rel_root == '.' else f'{rel_root}/{f}'        data_names.append(p)make_tar_gz('data.tar.gz', 'ipk', data_names)# 鈹€鈹€ control.tar.gz 鈥?package metadata 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ctrl_order = ['control', 'conffiles', 'postinst', 'prerm', 'postrm']ctrl_names = [f for f in ctrl_order if os.path.exists(f'ipk/CONTROL/{f}')]make_tar_gz('control.tar.gz', 'ipk/CONTROL', ctrl_names)# 鈹€鈹€ debian-binary 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€with open('debian-binary', 'w') as fh:    fh.write('2.0\n')# 鈹€鈹€ Outer tar.gz (OpenWrt IPK format) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€# OpenWrt IPK = tar.gz containing: debian-binary, data.tar.gz, control.tar.gz# Order matters: debian-binary first, then data, then controlwith tarfile.open(pkg_name, 'w:gz', compresslevel=9) as outer:    for fname in ['debian-binary', 'data.tar.gz', 'control.tar.gz']:        ti = tarfile.TarInfo(name=fname)        ti.size = os.path.getsize(fname)        ti.uid = ti.gid = 0        ti.uname = ti.gname = 'root'        ti.mtime = 0        ti.mode = 0o100644        with open(fname, 'rb') as fh:            outer.addfile(ti, fh)final_size = os.path.getsize(pkg_name)print(f"Built {pkg_name} ({final_size:,} bytes)")# 鈹€鈹€ Verify 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€import subprocessresult = subprocess.run(['tar', 'tzf', pkg_name], capture_output=True, text=True)print(f"IPK contents: {result.stdout.strip()}")if 'debian-binary' not in result.stdout or 'data.tar.gz' not in result.stdout:    print("ERROR: IPK verification failed!", file=sys.stderr)    sys.exit(1)print("IPK built successfully (OpenWrt tar.gz format).")
+#!/usr/bin/env python3
+"""build_ipk.py — Build an opkg-compatible IPK package for OpenWrt
+
+OpenWrt IPK format: outer .tar.gz containing:
+  ./debian-binary
+  ./data.tar.gz
+  ./control.tar.gz
+
+NOT the Debian ar format!
+
+Usage: PKG_NAME=clashforge_x.x.x_arch.ipk python3 build_ipk.py
+Must be run from the directory containing the 'ipk/' staging tree.
+"""
+
+import io
+import os
+import subprocess
+import sys
+import tarfile
+
+pkg_name = os.environ.get('PKG_NAME')
+if not pkg_name:
+    print("ERROR: PKG_NAME env var required", file=sys.stderr)
+    sys.exit(1)
+
+
+def make_tar_gz(out_path, base_dir, names):
+    """Create a reproducible gzipped tar with uid/gid=0 and mtime=0."""
+    with tarfile.open(out_path, 'w:gz', compresslevel=9) as tar:
+        for name in sorted(names):
+            full = os.path.join(base_dir, name)
+            if not os.path.exists(full):
+                continue
+            normalized_name = name.replace('\\', '/').lstrip('./')
+
+            def _set_metadata(info, _norm=normalized_name):
+                info.uid = info.gid = 0
+                info.uname = info.gname = 'root'
+                info.mtime = 0
+                # Windows hosts don't preserve executable bits; force modes.
+                if info.isdir():
+                    info.mode = 0o755
+                elif (
+                    _norm.startswith('usr/bin/')
+                    or _norm == 'etc/init.d/clashforge'
+                    or _norm in {'postinst', 'prerm', 'postrm'}
+                ):
+                    info.mode = 0o755
+                else:
+                    info.mode = 0o644
+                return info
+
+            if os.path.isdir(full):
+                tar.add(full, arcname=name, recursive=False,
+                        filter=_set_metadata)
+                continue
+
+            with open(full, 'rb') as fh:
+                payload = fh.read()
+
+            # Normalize line endings for shell/control files so OpenWrt parsing
+            # is stable regardless of host OS.
+            if (
+                normalized_name in {'control', 'conffiles', 'postinst', 'prerm', 'postrm'}
+                or normalized_name.startswith('etc/init.d/')
+                or normalized_name == 'usr/bin/clashforge-diag'
+            ):
+                payload = payload.replace(b'\r\n', b'\n')
+                if payload and not payload.endswith(b'\n'):
+                    payload += b'\n'
+
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            info.type = tarfile.REGTYPE
+            _set_metadata(info)
+            tar.addfile(info, io.BytesIO(payload))
+
+    print(f"  wrote {out_path} ({os.path.getsize(out_path):,} bytes)")
+
+
+# ── data.tar.gz — package contents ───────────────────────────────────────────
+data_names = []
+for root, dirs, files in os.walk('ipk'):
+    rel_root = os.path.relpath(root, 'ipk').replace('\\', '/')
+    if rel_root.startswith('CONTROL'):
+        continue
+    # Add the directory entry itself (needed for opkg to create parent dirs)
+    if rel_root != '.':
+        data_names.append(rel_root)
+    for f in files:
+        p = f if rel_root == '.' else f'{rel_root}/{f}'
+        data_names.append(p)
+
+make_tar_gz('data.tar.gz', 'ipk', data_names)
+
+# ── control.tar.gz — package metadata ────────────────────────────────────────
+ctrl_order = ['control', 'conffiles', 'postinst', 'prerm', 'postrm']
+ctrl_names = [f for f in ctrl_order if os.path.exists(f'ipk/CONTROL/{f}')]
+make_tar_gz('control.tar.gz', 'ipk/CONTROL', ctrl_names)
+
+# ── debian-binary ─────────────────────────────────────────────────────────────
+with open('debian-binary', 'w') as fh:
+    fh.write('2.0\n')
+
+# ── outer tar.gz (OpenWrt IPK format) ────────────────────────────────────────
+# OpenWrt IPK = tar.gz containing: debian-binary, data.tar.gz, control.tar.gz
+# Order matters: debian-binary first, then data, then control.
+with tarfile.open(pkg_name, 'w:gz', compresslevel=9) as outer:
+    for fname in ['debian-binary', 'data.tar.gz', 'control.tar.gz']:
+        ti = tarfile.TarInfo(name=fname)
+        ti.size = os.path.getsize(fname)
+        ti.uid = ti.gid = 0
+        ti.uname = ti.gname = 'root'
+        ti.mtime = 0
+        ti.mode = 0o100644
+        with open(fname, 'rb') as fh:
+            outer.addfile(ti, fh)
+
+final_size = os.path.getsize(pkg_name)
+print(f"Built {pkg_name} ({final_size:,} bytes)")
+
+# ── verify ────────────────────────────────────────────────────────────────────
+result = subprocess.run(['tar', 'tzf', pkg_name], capture_output=True, text=True)
+print(f"IPK contents: {result.stdout.strip()}")
+if 'debian-binary' not in result.stdout or 'data.tar.gz' not in result.stdout:
+    print("ERROR: IPK verification failed!", file=sys.stderr)
+    sys.exit(1)
+print("IPK built successfully (OpenWrt tar.gz format).")

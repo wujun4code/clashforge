@@ -215,7 +215,6 @@ if ($Action -eq "deploy") {
     Log "── Step 4: Syncing openwrt/files helpers → ipk/"
     $HelperMap = @{
         "openwrt\files\usr\bin\clashforge-diag"                             = "ipk\usr\bin\clashforge-diag"
-        "openwrt\files\usr\bin\uninstall-clashforge.sh"                     = "ipk\usr\bin\uninstall-clashforge"
         "openwrt\files\etc\init.d\metaclash"                                = "ipk\etc\init.d\clashforge"
         "openwrt\files\usr\share\luci\menu.d\luci-app-clashforge.json"      = "ipk\usr\share\luci\menu.d\luci-app-clashforge.json"
         "openwrt\files\www\luci-static\resources\view\clashforge\main.js"   = "ipk\www\luci-static\resources\view\clashforge\main.js"
@@ -256,9 +255,15 @@ if ($Action -eq "deploy") {
     # ── 6. Upload IPK to router ───────────────────────────────────────────────
     $RemoteIpk = "/tmp/cf_deploy.ipk"
     Log "── Step 6: Uploading $IpkName → ${Target}:${RemoteIpk}"
-    $ScpIpkArgs = $ScpBase + @($LocalIpk, "${Target}:${RemoteIpk}")
-    scp @ScpIpkArgs
-    if ($LASTEXITCODE -ne 0) { Die "scp upload of IPK failed" }
+    # Push to RepoRoot and use relative path: Windows scp misreads 'C:' as hostname
+    Push-Location $RepoRoot
+    try {
+        $ScpIpkArgs = $ScpBase + @(".\$IpkName", "${Target}:${RemoteIpk}")
+        scp @ScpIpkArgs
+        if ($LASTEXITCODE -ne 0) { Die "scp upload of IPK failed" }
+    } finally {
+        Pop-Location
+    }
     Ok "IPK uploaded"
 
     # ── 7. Upload clashforgectl.sh ────────────────────────────────────────────

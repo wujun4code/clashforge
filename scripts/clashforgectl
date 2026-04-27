@@ -295,7 +295,6 @@ if [ "$ACTION" = "deploy" ]; then
         fi
     }
     _sync "openwrt/files/usr/bin/clashforge-diag"                           "ipk/usr/bin/clashforge-diag"
-    _sync "openwrt/files/usr/bin/uninstall-clashforge.sh"                   "ipk/usr/bin/uninstall-clashforge"
     _sync "openwrt/files/etc/init.d/metaclash"                              "ipk/etc/init.d/clashforge"
     _sync "openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json"    "ipk/usr/share/luci/menu.d/luci-app-clashforge.json"
     _sync "openwrt/files/www/luci-static/resources/view/clashforge/main.js" "ipk/www/luci-static/resources/view/clashforge/main.js"
