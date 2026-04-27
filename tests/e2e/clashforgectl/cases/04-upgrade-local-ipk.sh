@@ -12,8 +12,8 @@ case_04_upgrade_local_ipk() {
     return 1
   }
 
-  vm_scp_to "$SCRIPT_SH" "/tmp/clashforgectl.sh" || return 1
-  vm_scp_to "$E2E_IPK_PATH" "/tmp/e2e-upgrade.ipk" || return 1
+  vm_copy_to "$SCRIPT_SH" "/tmp/clashforgectl.sh" || return 1
+  vm_copy_to "$E2E_IPK_PATH" "/tmp/e2e-upgrade.ipk" || return 1
 
   run_remote_sh "remote upgrade --local-ipk" "upgrade --local-ipk /tmp/e2e-upgrade.ipk --yes" || return 1
   assert_vm_ok "API status reachable after local upgrade" "wget -q -O - --timeout=8 http://127.0.0.1:7777/api/v1/status >/dev/null" || return 1

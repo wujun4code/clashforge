@@ -11,19 +11,18 @@ vm_ssh() {
   ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p "$ROUTER_PORT" "$ROUTER_USER@$ROUTER_HOST" "$@"
 }
 
-vm_scp_to() {
-  scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -P "$ROUTER_PORT" "$1" "$ROUTER_USER@$ROUTER_HOST:$2"
+vm_copy_to() {
+  _local="$1"; _remote="$2"
+  vm_ssh "cat > '$_remote'" < "$_local"
 }
 
-run_ctl() {
-  _name="$1"; shift
-  log "RUN: bash $CTL --router $ROUTER_HOST --port $ROUTER_PORT $*"
-  _out=$(bash "$CTL" --router "$ROUTER_HOST" --port "$ROUTER_PORT" "$@" 2>&1)
+upload_remote_script() {
+  _out=$(vm_ssh "cat > /tmp/clashforgectl.sh" < "$SCRIPT_SH" 2>&1)
   _code=$?
   if [ "$_code" -eq 0 ]; then
-    pass "$_name"
+    pass "upload clashforgectl.sh to router"
   else
-    fail "$_name (exit=$_code)"
+    fail "upload clashforgectl.sh to router"
     printf '%s\n' "$_out" >&2
   fi
   return "$_code"

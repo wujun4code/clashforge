@@ -10,7 +10,6 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 ROUTER_HOST="${ROUTER_HOST:-127.0.0.1}"
 ROUTER_PORT="${ROUTER_PORT:-2222}"
 ROUTER_USER="${ROUTER_USER:-root}"
-CTL="${CTL:-$REPO_ROOT/scripts/clashforgectl}"
 SCRIPT_SH="${SCRIPT_SH:-$REPO_ROOT/scripts/clashforgectl.sh}"
 E2E_IPK_PATH="${E2E_IPK_PATH:-}"
 
@@ -23,17 +22,16 @@ E2E_IPK_PATH="${E2E_IPK_PATH:-}"
 
 log "Repo root     : $REPO_ROOT"
 log "Router target : $ROUTER_USER@$ROUTER_HOST:$ROUTER_PORT"
-log "Wrapper script: $CTL"
 log "Remote script : $SCRIPT_SH"
 log "IPK path      : ${E2E_IPK_PATH:-<unset>}"
 
-[ -f "$CTL" ] || { fail "wrapper not found: $CTL"; summary_and_exit; }
 [ -f "$SCRIPT_SH" ] || { fail "missing script: $SCRIPT_SH"; summary_and_exit; }
 [ -n "$E2E_IPK_PATH" ] || { fail "E2E_IPK_PATH is required"; summary_and_exit; }
 [ -f "$E2E_IPK_PATH" ] || { fail "IPK not found: $E2E_IPK_PATH"; summary_and_exit; }
 
 assert_vm_ok "router ssh reachable" "echo ok >/dev/null" || summary_and_exit
 assert_vm_ok "clashforge init script exists" "[ -x /etc/init.d/clashforge ]" || summary_and_exit
+upload_remote_script || summary_and_exit
 
 case_01_status_check
 case_02_diag
