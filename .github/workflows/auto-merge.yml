@@ -2,12 +2,13 @@ name: Auto-enable merge on PR
 
 on:
   pull_request:
-    types: [opened, reopened]
+    types: [opened, reopened, ready_for_review]
     branches:
       - main
 
 jobs:
   enable-auto-merge:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
