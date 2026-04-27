@@ -727,11 +727,14 @@ cmd_check() {
   fi
 
   # ── IP check providers ─────────────────────────────────────────────────────
+  # Note: use direct connections (no explicit proxy). The router's own traffic
+  # is routed through the transparent proxy (policy routing fwmark 0x1a3).
+  # Port 7893 mixed proxy requires credentials (407) for explicit proxy usage.
   printf "\n[Egress IP]\n"
 
   _check_ip() {
     label="$1"; url="$2"; jq_ip="$3"; jq_loc="$4"
-    _body="$(_get "$url" "$_PROXY" 8)" || true
+    _body="$(_get "$url" "" 8)" || true
     if [ -z "$_body" ]; then
       printf "  %-10s : ✗ (request failed)\n" "$label"
       return
@@ -759,7 +762,8 @@ cmd_check() {
   _check_ip "ip-api" "http://ip-api.com/json?fields=query,isp,country" "query" "country"
 
   # ── Access checks ──────────────────────────────────────────────────────────
-  printf "\n[Access Check]  (via ClashForge mixed proxy port %s)\n" "$_MIXED_PORT"
+  # Direct connections — transparent proxy handles routing, no explicit proxy needed.
+  printf "\n[Access Check]  (via transparent proxy / policy routing)\n"
 
   _check_url() {
     label="$1"; url="$2"
@@ -767,12 +771,12 @@ cmd_check() {
     if command -v curl >/dev/null 2>&1; then
       # curl already outputs "000" for %{http_code} on connection failure —
       # do NOT add || echo "000" or the code becomes "000000".
-      _code="$(curl -sSL --max-time 12 --proxy "$_PROXY" \
+      _code="$(curl -sSL --max-time 12 \
                     -A "clashforgectl-check/1.0" \
                     -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)" || true
       [ -z "$_code" ] && _code="000"
     else
-      _code="$(http_proxy="$_PROXY" wget -qO/dev/null --timeout=12 \
+      _code="$(wget -qO/dev/null --timeout=12 \
                     --server-response "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}')" || true
       [ -z "$_code" ] && _code="000"
     fi
@@ -781,11 +785,7 @@ cmd_check() {
     if printf '%s' "$_code" | grep -qE '^[23][0-9][0-9]$'; then
       printf "  %-20s : ✓ HTTP %s  (%s ms)\n" "$label" "$_code" "$_ms"
     elif [ "$_code" = "000" ]; then
-      if [ -z "$_PROXY" ]; then
-        printf "  %-20s : ✗ (proxy not running)\n" "$label"
-      else
-        printf "  %-20s : ✗ (timeout or blocked)\n" "$label"
-      fi
+      printf "  %-20s : ✗ (timeout or no route)\n" "$label"
     else
       printf "  %-20s : ✗ HTTP %s\n" "$label" "$_code"
     fi
