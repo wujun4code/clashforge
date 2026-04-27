@@ -1,25 +1,25 @@
 name: "[Demo] 3 — Tag on Merge"
 
-# Step 3 of 3 (first half): Create and push a version tag whenever a PR merges
-# into main, then dispatch the release workflow.
+# Step 3 of 3 (first half): Create and push a version tag whenever main moves,
+# then dispatch the release workflow.
 #
-# Why pull_request_target instead of push?
-#   pull_request_target runs in the BASE branch context, so it has write
-#   permissions to push tags — and it fires reliably regardless of whether
-#   the merge was done by a human or by GitHub's auto-merge service.
+# Normal demo path:
+#   demo-auto-merge.yml enables GitHub native auto-merge. GitHub performs the
+#   actual merge after required checks pass, which creates a normal push to main.
+#   This workflow listens to that push and tags the merge commit.
+#
+# Fallback paths:
+#   pull_request_target.closed also handles PR merges that surface as PR-close
+#   events. workflow_dispatch gives a manual backfill path for any commit SHA.
 #
 # Why explicit dispatch instead of relying on push:tags: in demo-release.yml?
 #   Tags pushed by GITHUB_TOKEN do not trigger on:push:tags: in other workflows
 #   (GitHub Actions recursion guard). We dispatch demo-release.yml explicitly
 #   via gh workflow run after the tag is pushed.
-#
-# Concurrency keyed on the actual merge commit SHA:
-#   Both pull_request_target.closed and a push.main event fire for the same
-#   auto-merged PR (merge_commit_sha == github.sha). Using the SHA as the
-#   concurrency key serializes them — the second job runs after the first,
-#   finds the tag already present, and exits cleanly without a duplicate dispatch.
 
 on:
+  push:
+    branches: [main]
   pull_request_target:
     types: [closed]
     branches: [main]
@@ -39,6 +39,7 @@ jobs:
     name: Create and push tag
     runs-on: ubuntu-latest
     if: >-
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
     permissions:
@@ -61,6 +62,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request_target" ]; then
             SHA="${{ github.event.pull_request.merge_commit_sha }}"
             echo "  Trigger : merged PR #${{ github.event.pull_request.number }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            SHA="${{ github.sha }}"
+            echo "  Trigger : push to main"
           else
             INPUT_SHA="${{ github.event.inputs.sha }}"
             SHA="${INPUT_SHA:-${{ github.sha }}}"

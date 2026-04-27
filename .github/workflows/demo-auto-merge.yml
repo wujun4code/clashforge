@@ -11,7 +11,7 @@ name: "[Demo] 2 — Auto-merge"
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review]
     branches: [main]
 
 jobs:
@@ -27,16 +27,19 @@ jobs:
       - name: Enable auto-merge (squash)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPO: ${{ github.repository }}
         run: |
           echo "========================================="
           echo " [Demo Auto-merge] Enabling auto-merge"
           echo "========================================="
-          echo "  PR: #${{ github.event.number }}"
-          echo "  Title: ${{ github.event.pull_request.title }}"
+          echo "  PR: #$PR_NUMBER"
+          echo "  Title: $PR_TITLE"
           echo ""
-          gh pr merge ${{ github.event.number }} \
+          gh pr merge "$PR_NUMBER" \
             --auto --squash \
-            --repo ${{ github.repository }}
+            --repo "$REPO"
           echo ""
           echo "✅ Auto-merge enabled"
           echo "   GitHub will merge this PR once 'Demo Check' passes."
