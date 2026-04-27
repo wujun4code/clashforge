@@ -183,6 +183,16 @@ log "Package : $IPK_NAME"
 #   3. Kill processes LAST — avoids racing with the service's own SIGTERM handler.
 
 pre_upgrade_cleanup() {
+  # Delegate to clashforgectl.sh when it is already on the router (subsequent upgrades).
+  # Fall through to embedded logic for first-time piped installs (clashforgectl.sh absent).
+  for _ctl in /tmp/clashforgectl.sh /usr/bin/clashforgectl; do
+    if [ -x "$_ctl" ]; then
+      log "pre-upgrade: delegating cleanup to $_ctl"
+      sh "$_ctl" stop
+      return 0
+    fi
+  done
+
   # Quick check: skip if nothing is running and no nft metaclash table exists.
   _cf_running=0
   pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && _cf_running=1
@@ -271,6 +281,16 @@ pre_upgrade_cleanup() {
 
 do_purge() {
   log "Purging old installation..."
+
+  # Delegate to clashforgectl.sh when already on the router.
+  for _ctl in /tmp/clashforgectl.sh /usr/bin/clashforgectl; do
+    if [ -x "$_ctl" ]; then
+      log "purge: delegating to $_ctl reset + uninstall"
+      sh "$_ctl" reset --yes 2>/dev/null || true
+      sh "$_ctl" uninstall --yes 2>/dev/null || true
+      return 0
+    fi
+  done
 
   # Use pre_upgrade_cleanup for the network/process teardown (correct order).
   pre_upgrade_cleanup

@@ -76,83 +76,55 @@ if ($LASTEXITCODE -ne 0) {
 }
 Ok "Upload complete."
 
-# ── build remote install commands ─────────────────────────────────────────────
-# Mirrors install.sh exactly:
-#   non-purge → pre_upgrade_cleanup then opkg install
-#   -Purge    → do_purge (calls pre_upgrade_cleanup + opkg remove + wipe) then opkg install
-
-$purgeAction = if ($Purge) { "do_purge" } else { "pre_upgrade_cleanup" }
-
-$remoteScript = (@'
-pre_upgrade_cleanup() {
-  _cf_running=0
-  pgrep -f "/usr/bin/clashforge" >/dev/null 2>&1 && _cf_running=1
-  pgrep -f "/usr/bin/mihomo-clashforge" >/dev/null 2>&1 && _cf_running=1
-  nft list table inet metaclash >/dev/null 2>&1 && _cf_running=1
-  if [ "$_cf_running" = "0" ]; then
-    echo "[clashforge] pre-upgrade: nothing running, skipping cleanup"
-    return 0
-  fi
-  echo "[clashforge] pre-upgrade: restoring system state..."
-  if command -v uci >/dev/null 2>&1; then
-    uci -q delete dhcp.@dnsmasq[0].port     || true
-    uci -q delete dhcp.@dnsmasq[0].server   || true
-    uci -q delete dhcp.@dnsmasq[0].noresolv || true
-    uci commit dhcp 2>/dev/null             || true
-  fi
-  rm -f /etc/dnsmasq.d/clashforge.conf 2>/dev/null || true
-  /etc/init.d/dnsmasq restart 2>/dev/null || true
-  nft delete table inet metaclash 2>/dev/null || true
-  nft delete table inet dnsmasq   2>/dev/null || true
-  while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-  ip route flush table 100 2>/dev/null || true
-  while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-  ip -6 route flush table 100 2>/dev/null || true
-  while ip rule del fwmark 0x1a4 table 101 2>/dev/null; do :; done
-  ip route flush table 101 2>/dev/null || true
-  /etc/init.d/clashforge stop 2>/dev/null || true
-  sleep 1
-  for _name in clashforge mihomo-clashforge; do
-    _pids=$(pgrep -f "/usr/bin/$_name" 2>/dev/null || true)
-    if [ -n "$_pids" ]; then
-      kill $_pids 2>/dev/null || true
-      sleep 1
-      _pids=$(pgrep -f "/usr/bin/$_name" 2>/dev/null || true)
-      [ -n "$_pids" ] && kill -9 $_pids 2>/dev/null || true
-    fi
-  done
-  echo "[clashforge] pre-upgrade cleanup complete"
+# ── locate clashforgectl.sh ───────────────────────────────────────────────────
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ShScript  = Join-Path $ScriptDir "clashforgectl.sh"
+if (-not (Test-Path $ShScript)) {
+    $ShScript = Join-Path (Split-Path -Parent $ScriptDir) "scripts\clashforgectl.sh"
+}
+if (-not (Test-Path $ShScript)) {
+    Die "clashforgectl.sh not found. Expected: $(Join-Path $ScriptDir 'clashforgectl.sh')"
 }
 
-do_purge() {
-  pre_upgrade_cleanup
-  if command -v opkg >/dev/null 2>&1 && opkg status clashforge 2>/dev/null | grep -q "^Package:"; then
-    opkg remove clashforge 2>/dev/null || true
-  fi
-  rm -rf /etc/metaclash /usr/share/metaclash /var/run/metaclash
-  rm -f /var/log/clashforge.log
-  echo "[clashforge] Purge complete."
+$RemoteScript = "/tmp/clashforgectl.sh"
+
+# ── upload clashforgectl.sh to router ─────────────────────────────────────────
+Log "Uploading clashforgectl.sh to router..."
+$scpCtlArgs = @(
+    "-P", $Port,
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "ConnectTimeout=10",
+    $ShScript,
+    "${Target}:${RemoteScript}"
+)
+scp @scpCtlArgs
+if ($LASTEXITCODE -ne 0) {
+    Die "scp upload of clashforgectl.sh failed (exit $LASTEXITCODE)."
 }
+Ok "Upload complete."
 
-PURGE_ACTION_PLACEHOLDER
-opkg install --nodeps --force-downgrade IPK_PATH_PLACEHOLDER
-rm -f IPK_PATH_PLACEHOLDER
-'@) -replace 'PURGE_ACTION_PLACEHOLDER', $purgeAction `
-   -replace 'IPK_PATH_PLACEHOLDER',   $RemoteTmp
-
-# ── execute on router ─────────────────────────────────────────────────────────
-
-Log "Running installer on router..."
-
-$sshArgs = @(
+# ── run pre-install cleanup via clashforgectl ─────────────────────────────────
+$SshBase = @(
     "-p", $Port,
     "-o", "StrictHostKeyChecking=no",
     "-o", "ConnectTimeout=10",
-    $Target,
-    "sh -s"
+    $Target
 )
 
-$remoteScript | ssh @sshArgs
+if ($Purge) {
+    Log "Running reset --yes on router before install (--purge)..."
+    ssh @SshBase "sh $RemoteScript reset --yes"
+} else {
+    Log "Running stop on router before install..."
+    ssh @SshBase "sh $RemoteScript stop"
+}
+if ($LASTEXITCODE -ne 0) {
+    Warn "Pre-install cleanup returned non-zero (exit $LASTEXITCODE) — continuing with install."
+}
+
+# ── install IPK via opkg ──────────────────────────────────────────────────────
+Log "Installing IPK via opkg..."
+ssh @SshBase "opkg install --nodeps --force-downgrade '$RemoteTmp' && rm -f '$RemoteTmp'"
 if ($LASTEXITCODE -ne 0) {
     Die "Remote install failed (exit $LASTEXITCODE)."
 }
