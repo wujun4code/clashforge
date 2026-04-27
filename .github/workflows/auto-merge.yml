@@ -1,20 +1,92 @@
-name: Auto-enable merge on PR
+name: Manual merge and release queue
+
+# Fallback only. Normal automatic merging is handled by the final
+# "Merge and dispatch release" jobs in CI and E2E workflows.
+#
+# This manual queue is useful if GitHub had a transient mergeability delay or a
+# previous run was cancelled. It does not rely on PATs, workflow_run, or
+# pull_request_target.closed.
 
 on:
-  pull_request:
-    types: [opened, reopened, ready_for_review]
-    branches:
-      - main
+  workflow_dispatch:
+
+concurrency:
+  group: auto-merge-release-queue
+  cancel-in-progress: false
 
 jobs:
-  enable-auto-merge:
-    if: github.event.pull_request.draft == false
+  merge-ready-prs:
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
       contents: write
+      pull-requests: write
+      actions: write
+      checks: read
+      statuses: read
     steps:
-      - name: Enable auto-merge (squash)
-        run: gh pr merge ${{ github.event.number }} --auto --squash --repo ${{ github.repository }}
+      - name: Merge ready PRs and dispatch release tagging
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t PRS < <(gh pr list \
+            --repo "$REPO" \
+            --base main \
+            --state open \
+            --json number,title,isDraft,headRepositoryOwner,mergeStateStatus,statusCheckRollup \
+            --jq '.[] | @base64')
+
+          if [ "${#PRS[@]}" -eq 0 ]; then
+            echo "No open PRs targeting main."
+            exit 0
+          fi
+
+          merged_any=false
+
+          for encoded in "${PRS[@]}"; do
+            pr_json=$(printf '%s' "$encoded" | base64 -d)
+            number=$(jq -r '.number' <<<"$pr_json")
+            title=$(jq -r '.title' <<<"$pr_json")
+            is_draft=$(jq -r '.isDraft' <<<"$pr_json")
+            merge_state=$(jq -r '.mergeStateStatus // "UNKNOWN"' <<<"$pr_json")
+            pending=$(jq '[.statusCheckRollup[]? | select((.name // "") != "Merge and dispatch release" and (.name // "") != "enable-auto-merge" and (.status // "") != "COMPLETED")] | length' <<<"$pr_json")
+            failed=$(jq '[.statusCheckRollup[]? | select((.name // "") != "Merge and dispatch release" and (.name // "") != "enable-auto-merge" and (((.conclusion // "") | IN("SUCCESS", "SKIPPED", "NEUTRAL")) | not))] | length' <<<"$pr_json")
+
+            echo "PR #$number: $title"
+            echo "  draft=$is_draft mergeState=$merge_state pendingChecks=$pending failedChecks=$failed"
+
+            if [ "$is_draft" = "true" ]; then
+              echo "  skip: draft PR"
+              continue
+            fi
+
+            if [ "$pending" -ne 0 ] || [ "$failed" -ne 0 ]; then
+              echo "  skip: checks are not all green yet"
+              continue
+            fi
+
+            if ! gh pr merge "$number" --repo "$REPO" --squash; then
+              echo "  skip: GitHub did not allow merge yet"
+              continue
+            fi
+
+            merged_any=true
+            merge_sha=$(gh pr view "$number" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid // empty')
+            if [ -z "$merge_sha" ]; then
+              echo "::error::PR #$number merged, but merge commit SHA was not available"
+              exit 1
+            fi
+
+            echo "  merged: $merge_sha"
+            gh workflow run auto-tag.yml \
+              --repo "$REPO" \
+              --ref main \
+              --field sha="$merge_sha"
+            echo "  dispatched auto-tag.yml for $merge_sha"
+          done
+
+          if [ "$merged_any" = "false" ]; then
+            echo "No PRs were ready to merge."
+          fi
