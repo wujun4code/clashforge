@@ -6,6 +6,7 @@ import {
   FolderCog,
   LayoutDashboard,
   Loader2,
+  Network,
   Rocket,
   Server,
   Settings,
@@ -18,6 +19,7 @@ type CoreState = 'running' | 'stopped' | 'checking'
 const navLinks = [
   { to: '/',         icon: LayoutDashboard, label: '概览',   caption: '运行状态 · 核心监控' },
   { to: '/config',   icon: FolderCog,       label: '配置管理', caption: '订阅 · 规则 · 运行配置' },
+  { to: '/device-rules', icon: Network,     label: '设备路由', caption: '分组设备 · 节点覆盖' },
   { to: '/nodes',    icon: Server,          label: '节点管理', caption: '远程部署 · 证书' },
   { to: '/activity', icon: Activity,        label: '活动日志', caption: '连接轨迹 · 实时日志' },
   { to: '/settings', icon: Settings,        label: '高级管理', caption: '系统参数 · 重置' },

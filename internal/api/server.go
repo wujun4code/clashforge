@@ -22,16 +22,17 @@ var uiDist embed.FS
 
 // Dependencies holds all injected services.
 type Dependencies struct {
-	Version    string
-	StartedAt  time.Time
-	ConfigPath string
-	Config     *config.MetaclashConfig
-	Core       *core.CoreManager
-	SubManager *subscription.Manager
-	Netfilter  *netfilter.Manager
-	SSEBroker  *SSEBroker
-	LogBuffer  *LogBuffer
-	NodeStore  *nodes.Store
+	Version     string
+	StartedAt   time.Time
+	ConfigPath  string
+	Config      *config.MetaclashConfig
+	Core        *core.CoreManager
+	SubManager  *subscription.Manager
+	Netfilter   *netfilter.Manager
+	SSEBroker   *SSEBroker
+	LogBuffer   *LogBuffer
+	NodeStore   *nodes.Store
+	NodeKeyPair *nodes.KeyPair
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -57,7 +58,10 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))
 		api.Get("/config/overrides", handleGetOverrides(deps))
 		api.Put("/config/overrides", handleUpdateOverrides(deps))
+		api.Get("/config/device-groups", handleGetDeviceGroups(deps))
+		api.Put("/config/device-groups", handlePutDeviceGroups(deps))
 		api.Post("/config/generate", handleGenerateConfig(deps))
+		api.Get("/network/clients", handleGetNetworkClients(deps))
 		api.Get("/config/sources", handleGetSources(deps))
 		api.Post("/config/sources", handleSaveSource(deps))
 		api.Get("/config/sources/{filename}", handleGetSourceFile(deps))
@@ -74,6 +78,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/system/conflicts", handleDetectConflicts(deps))
 		api.Post("/system/stop-service", handleStopService(deps))
 		api.Post("/setup/launch", handleSetupLaunch(deps))
+		api.Post("/setup/final-config-preview", handleSetupFinalConfigPreview(deps))
 		api.Get("/setup/port-check", handleSetupPortCheck(deps))
 		api.Post("/setup/stop", handleSetupStop(deps))
 		api.Post("/system/reset", handleResetClashForge(deps))
@@ -84,6 +89,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Delete("/subscriptions/{id}", handleDeleteSubscription(deps))
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
 		api.Post("/subscriptions/{id}/sync-update", handleSyncSubscriptionUpdate(deps))
+		api.Get("/subscriptions/{id}/cache", handleGetSubscriptionCache(deps))
 		api.Get("/logs", handleGetLogs(deps))
 		api.Delete("/logs", handleClearLogs(deps))
 		api.Post("/logs/pause", handlePauseLogs(deps))
@@ -101,14 +107,15 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/rules/providers/{name}/sync", handleSyncRuleProvider(deps))
 		api.Get("/rules/search", handleSearchRules(deps))
 		// Node server management
+		api.Get("/nodes/ssh-pubkey", handleGetSSHPubKey(deps.NodeKeyPair))
 		api.Get("/nodes", handleListNodes(deps.NodeStore))
 		api.Post("/nodes", handleCreateNode(deps.NodeStore))
 		api.Get("/nodes/{id}", handleGetNode(deps.NodeStore))
 		api.Put("/nodes/{id}", handleUpdateNode(deps.NodeStore))
 		api.Delete("/nodes/{id}", handleDeleteNode(deps.NodeStore))
-		api.Post("/nodes/{id}/test", handleTestNode(deps.NodeStore))
-		api.Post("/nodes/{id}/deploy", handleDeployNode(deps.NodeStore))
-		api.Post("/nodes/{id}/destroy", handleDestroyNode(deps.NodeStore))
+		api.Post("/nodes/{id}/test", handleTestNode(deps.NodeStore, deps.NodeKeyPair))
+		api.Post("/nodes/{id}/deploy", handleDeployNode(deps.NodeStore, deps.NodeKeyPair))
+		api.Post("/nodes/{id}/destroy", handleDestroyNode(deps.NodeStore, deps.NodeKeyPair))
 		api.Get("/nodes/{id}/proxy-config", handleExportProxyConfig(deps.NodeStore))
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())

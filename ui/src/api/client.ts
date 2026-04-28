@@ -291,6 +291,34 @@ export interface Connection {
 }
 
 export interface LogEntry { level: string; msg: string; ts: number; fields?: Record<string, unknown> }
+
+export interface DeviceRouteDevice {
+  ip: string
+  prefix: number
+  hostname?: string
+}
+
+export interface DeviceRouteOverride {
+  original_group: string
+  proxies: string[]
+}
+
+export interface DeviceRouteGroup {
+  id: string
+  name: string
+  devices: DeviceRouteDevice[]
+  overrides: DeviceRouteOverride[]
+  order: number
+}
+
+export interface NetworkClient {
+  ip: string
+  mac?: string
+  hostname?: string
+  interface?: string
+  source?: string
+}
+
 export const getStatus        = () => request<StatusData>('GET', '/status')
 export const getOverview      = () => request<OverviewData>('GET', '/overview')
 export const getOverviewCore  = () => request<OverviewCoreData>('GET', '/overview/core')
@@ -339,6 +367,7 @@ export const updateSubscription = (id: string, p: Partial<Subscription>) => requ
 export const deleteSubscription = (id: string) => request('DELETE', `/subscriptions/${id}`)
 export const triggerSubUpdate   = (id: string) => request('POST', `/subscriptions/${id}/update`)
 export const syncSubUpdate      = (id: string) => request('POST', `/subscriptions/${id}/sync-update`)
+export const getSubscriptionCache = (id: string) => request<{id: string; content: string}>('GET', `/subscriptions/${id}/cache`)
 export const triggerUpdateAll   = () => request('POST', '/subscriptions/update-all')
 export const getConfig        = () => request<Record<string,unknown>>('GET', '/config')
 export const updateConfig     = (p: Record<string,unknown>) => request('PUT', '/config', p)
@@ -346,6 +375,17 @@ export const getOverrides     = () => request<{content:string}>('GET', '/config/
 export const updateOverrides  = (content: string) => request('PUT', '/config/overrides', { content })
 export const generateConfig   = () => request<{generated: boolean; config_file: string}>('POST', '/config/generate')
 export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/mihomo')
+export const getDeviceGroups  = () => request<{device_groups: DeviceRouteGroup[]}>('GET', '/config/device-groups')
+export const updateDeviceGroups = (device_groups: DeviceRouteGroup[]) =>
+  request<{
+    updated: boolean
+    config_generated: boolean
+    core_running?: boolean
+    core_reloaded?: boolean
+    warning?: string
+    reload_error?: string
+  }>('PUT', '/config/device-groups', { device_groups })
+export const getNetworkClients = () => request<{clients: NetworkClient[]}>('GET', '/network/clients')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
 export const clearLogs        = () => request<{ok: boolean}>('DELETE', '/logs')
 export const pauseLogs        = () => request<{ok: boolean; paused: boolean}>('POST', '/logs/pause')
@@ -368,6 +408,10 @@ export interface SetupPortCheck {
   error?: string
 }
 export const checkSetupPorts = () => request<{ checks: SetupPortCheck[] }>('GET', '/setup/port-check')
+export const previewSetupFinalConfig = (payload: {
+  dns: { enable: boolean; mode: string; dnsmasq_mode: string; apply_on_start: boolean }
+  network: { mode: string; firewall_backend: string; bypass_lan: boolean; bypass_china: boolean; apply_on_start: boolean; ipv6: boolean }
+}) => request<{ config_file: string; content: string }>('POST', '/setup/final-config-preview', payload)
 
 // ---- rule providers ----
 export interface RuleProvider {
@@ -447,6 +491,7 @@ export interface NodeCreateRequest {
   cf_zone_id: string
 }
 
+export const getNodeSSHPubKey = () => request<{ public_key: string }>('GET', '/nodes/ssh-pubkey')
 export const getNodes = () => request<{ nodes: NodeListItem[] }>('GET', '/nodes')
 export const getNode = (id: string) => request<{ node: NodeListItem }>('GET', `/nodes/${encodeURIComponent(id)}`)
 export const createNode = (node: NodeCreateRequest) => request<{ node: NodeListItem }>('POST', '/nodes', node)

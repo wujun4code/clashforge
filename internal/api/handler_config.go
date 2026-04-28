@@ -229,6 +229,16 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 
 	generated = config.ApplyManagedRuntimeSettings(deps.Config, generated)
 
+	deviceGroupsPath := config.DeviceGroupsPath(deps.Config.Core.DataDir)
+	deviceGroups, err := config.LoadDeviceGroups(deviceGroupsPath)
+	if err != nil {
+		return false, err
+	}
+	generated, providerSpecs := config.ApplyPerDeviceSubRulesWithProviders(generated, deviceGroups)
+	if err := config.SyncDeviceRuleProviderFiles(deps.Config.Core.RuntimeDir, providerSpecs); err != nil {
+		return false, err
+	}
+
 	data, err := config.MarshalYAML(generated)
 	if err != nil {
 		return false, err

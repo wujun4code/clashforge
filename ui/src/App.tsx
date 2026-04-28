@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './pages/Dashboard'
 import { Nodes } from './pages/Nodes'
 import { ConfigManagement } from './pages/ConfigManagement'
+import { PerDeviceRules } from './pages/PerDeviceRules'
 import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
 import { Settings } from './pages/Settings'
@@ -29,6 +30,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/config" element={<ConfigManagement />} />
+              <Route path="/device-rules" element={<PerDeviceRules />} />
               <Route path="/nodes" element={<Nodes />} />
               <Route path="/activity" element={<ActivityLog />} />
               <Route path="/setup" element={<Setup />} />

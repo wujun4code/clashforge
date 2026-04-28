@@ -59,6 +59,55 @@ type geodataSpec struct {
 	URLs     []string // download URLs in priority order
 }
 
+// handleSetupFinalConfigPreview returns the final mihomo config preview that would
+// be generated with the provided DNS/network setup values.
+func handleSetupFinalConfigPreview(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setupLaunchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+			return
+		}
+
+		if deps.Config == nil {
+			Err(w, http.StatusInternalServerError, "CONFIG_NOT_READY", "runtime config is not ready")
+			return
+		}
+
+		cfgCopy := *deps.Config
+		cfgCopy.DNS.Enable = req.DNS.Enable
+		cfgCopy.DNS.Mode = req.DNS.Mode
+		cfgCopy.DNS.DnsmasqMode = req.DNS.DnsmasqMode
+		cfgCopy.DNS.ApplyOnStart = req.DNS.ApplyOnStart
+		cfgCopy.Network.Mode = req.Network.Mode
+		cfgCopy.Network.FirewallBackend = req.Network.FirewallBackend
+		cfgCopy.Network.BypassLAN = req.Network.BypassLAN
+		cfgCopy.Network.BypassChina = req.Network.BypassChina
+		cfgCopy.Network.ApplyOnStart = req.Network.ApplyOnStart
+		cfgCopy.Network.IPv6 = req.Network.IPv6
+		cfgCopy.Core.AutoStartCore = true
+
+		previewDeps := deps
+		previewDeps.Config = &cfgCopy
+		if _, err := generateMihomoConfig(previewDeps); err != nil {
+			Err(w, http.StatusInternalServerError, "CONFIG_PREVIEW_FAILED", err.Error())
+			return
+		}
+
+		outPath := filepath.Join(cfgCopy.Core.RuntimeDir, "mihomo-config.yaml")
+		data, err := os.ReadFile(outPath)
+		if err != nil {
+			Err(w, http.StatusInternalServerError, "CONFIG_READ_FAILED", err.Error())
+			return
+		}
+
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"config_file": outPath,
+			"content":     string(data),
+		})
+	}
+}
+
 // defaultGeodataSpecs returns the list of geodata files mihomo needs.
 func defaultGeodataSpecs() []geodataSpec {
 	return []geodataSpec{

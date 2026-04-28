@@ -289,6 +289,8 @@ if [ "$ACTION" = "deploy" ]; then
 
     # ── 4. Sync openwrt/files helpers → ipk/ ─────────────────────────────────
     log "── Step 4: Syncing openwrt/files helpers → ipk/"
+    # Remove deprecated helper that was replaced by clashforgectl diag.
+    rm -f "$REPO_ROOT/ipk/usr/bin/clashforge-diag"
     _sync() {
         src="$REPO_ROOT/$1"; dst="$REPO_ROOT/$2"
         if [ -f "$src" ]; then
@@ -299,7 +301,6 @@ if [ "$ACTION" = "deploy" ]; then
             warn "Not found (skipped): $1"
         fi
     }
-    _sync "openwrt/files/usr/bin/clashforge-diag"                           "ipk/usr/bin/clashforge-diag"
     _sync "openwrt/files/etc/init.d/metaclash"                              "ipk/etc/init.d/clashforge"
     _sync "openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json"    "ipk/usr/share/luci/menu.d/luci-app-clashforge.json"
     _sync "openwrt/files/www/luci-static/resources/view/clashforge/main.js" "ipk/www/luci-static/resources/view/clashforge/main.js"

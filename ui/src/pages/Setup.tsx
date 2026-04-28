@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
   Sparkles, RotateCw, Link2, PowerOff, ShieldOff, Database, Radio,
-  Minus, Terminal, ShieldCheck, Network, ServerCog, Gauge,
+  Minus, Terminal, ShieldCheck, Network, ServerCog, Gauge, Eye, Plus, Trash2,
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
@@ -13,9 +13,10 @@ import {
   getOverviewCore, getOverviewProbes, getLogs,
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
   saveSource, setActiveSource, getSourceFile, getSources,
-  checkSetupPorts,
+  checkSetupPorts, getSubscriptionCache, previewSetupFinalConfig, getDeviceGroups, updateDeviceGroups,
 } from '../api/client'
-import type { OverviewProbeData, OverviewModule, LogEntry, SourceFile, Subscription, SetupPortCheck } from '../api/client'
+import type { OverviewProbeData, OverviewModule, LogEntry, SourceFile, Subscription, SetupPortCheck, DeviceRouteGroup } from '../api/client'
+import { ModalShell } from '../components/ui'
 
 type InitStatus = 'checking' | 'running' | 'ready'
 
@@ -90,34 +91,90 @@ interface LaunchEvent {
 
 // ── Config preview helpers ──────────────────────────────────────────────────
 
-type LineCat = 'dns' | 'geo' | 'port' | 'preserved'
+type LineCat = 'dns' | 'geo' | 'port' | 'device' | 'preserved'
 interface AnnotatedLine { text: string; cat: LineCat; label?: string }
 
 const BLOCK_INFO: Record<string, { cat: LineCat; label: string }> = {
-  'dns':       { cat: 'dns',  label: 'DNS 配置 — 根据向导选择重写' },
-  'geox-url':  { cat: 'geo',  label: 'GeoData 路径 — 使用 ClashForge 管理的本地文件' },
+  'dns':       { cat: 'dns',  label: 'ClashForge 接管：DNS 配置由向导统一重写' },
+  'geox-url':  { cat: 'geo',  label: 'ClashForge 接管：GeoData 路径固定到本地文件' },
 }
 const PORT_INFO: Record<string, string> = {
-  'port':                'HTTP 代理端口（ClashForge 管理）',
-  'socks-port':          'SOCKS5 代理端口（ClashForge 管理）',
-  'mixed-port':          '混合代理端口（ClashForge 管理）',
-  'redir-port':          '透明代理（redir）端口（ClashForge 管理）',
-  'tproxy-port':         'TProxy 代理端口（ClashForge 管理）',
-  'external-controller': 'Mihomo API 地址（ClashForge 管理，仅本地访问）',
-  'geodata-mode':        'GeoData 模式（ClashForge 管理）',
+  'port':                'ClashForge 接管：HTTP 代理端口',
+  'socks-port':          'ClashForge 接管：SOCKS5 代理端口',
+  'mixed-port':          'ClashForge 接管：混合代理端口',
+  'redir-port':          'ClashForge 接管：透明代理（redir）端口',
+  'tproxy-port':         'ClashForge 接管：TProxy 端口',
+  'external-controller': 'ClashForge 接管：Mihomo API 地址（仅本地）',
+  'geodata-mode':        'ClashForge 接管：GeoData 模式',
+}
+const DEVICE_RULE_PROVIDER_PREFIX = 'cf-device-group-'
+const DEVICE_PROVIDER_PATTERN = /cf-device-group-[a-z0-9-]+/ig
+const DEVICE_LINE_LABEL = 'ClashForge 接管：设备分组路由（影子策略组 / RULE-SET / AND 规则）'
+
+interface DevicePreviewSignals {
+  providerNames: Set<string>
+  shadowGroupNames: Set<string>
+}
+
+function normalizeYamlScalarToken(value: string): string {
+  return value.trim().replace(/^["']+/, '').replace(/["']+$/, '').trim()
+}
+
+function collectDevicePreviewSignals(lines: string[]): DevicePreviewSignals {
+  const providerNames = new Set<string>()
+  const shadowGroupNames = new Set<string>()
+
+  for (const line of lines) {
+    const providerMatches = line.match(DEVICE_PROVIDER_PATTERN)
+    if (providerMatches) {
+      for (const name of providerMatches) providerNames.add(name.toLowerCase())
+    }
+    DEVICE_PROVIDER_PATTERN.lastIndex = 0
+
+    const ruleSetMatch = line.match(/RULE-SET,(cf-device-group-[a-z0-9-]+),([^,]+),src,no-resolve/i)
+    if (ruleSetMatch) {
+      providerNames.add(ruleSetMatch[1].toLowerCase())
+      const shadowName = normalizeYamlScalarToken(ruleSetMatch[2])
+      if (shadowName) shadowGroupNames.add(shadowName)
+    }
+
+    const andRuleMatch = line.match(/AND,\(\(RULE-SET,(cf-device-group-[a-z0-9-]+),src,no-resolve\),\(.+\)\),(.+)$/i)
+    if (andRuleMatch) {
+      providerNames.add(andRuleMatch[1].toLowerCase())
+      const shadowName = normalizeYamlScalarToken(andRuleMatch[2])
+      if (shadowName) shadowGroupNames.add(shadowName)
+    }
+  }
+
+  return { providerNames, shadowGroupNames }
 }
 
 function annotateLines(content: string): AnnotatedLine[] {
   const lines = content.split('\n')
+  const deviceSignals = collectDevicePreviewSignals(lines)
+  const hasDeviceManagedPart = deviceSignals.providerNames.size > 0 || deviceSignals.shadowGroupNames.size > 0
   const result: AnnotatedLine[] = []
   let blockCat: LineCat | '' = ''
+  let topLevelBlock = ''
+  let managedProviderIndent = -1
+  let managedProxyGroupIndent = -1
+
   for (const text of lines) {
     const indent = text.search(/\S/)
-    // leaving a top-level block
-    if (blockCat && indent === 0 && text.trim() !== '') blockCat = ''
+    const trimmed = text.trim()
+
+    if (indent === 0 && trimmed !== '') {
+      blockCat = ''
+      managedProviderIndent = -1
+      managedProxyGroupIndent = -1
+      topLevelBlock = ''
+    }
+
     if (indent === 0 || indent === -1) {
       const m = text.match(/^([a-z][a-z0-9-]*):/)
       const key = m?.[1] ?? ''
+      topLevelBlock = key
+
       if (BLOCK_INFO[key]) {
         blockCat = BLOCK_INFO[key].cat
         result.push({ text, cat: blockCat, label: BLOCK_INFO[key].label })
@@ -127,9 +184,62 @@ function annotateLines(content: string): AnnotatedLine[] {
         result.push({ text, cat: 'port', label: PORT_INFO[key] })
         continue
       }
+      if (hasDeviceManagedPart && (key === 'rule-providers' || key === 'proxy-groups' || key === 'rules')) {
+        result.push({ text, cat: 'device', label: DEVICE_LINE_LABEL })
+        continue
+      }
       result.push({ text, cat: 'preserved' })
     } else {
-      result.push({ text, cat: blockCat || 'preserved' })
+      let cat: LineCat = blockCat || 'preserved'
+      let label: string | undefined
+
+      if (hasDeviceManagedPart) {
+        if (topLevelBlock === 'rule-providers') {
+          if (managedProviderIndent >= 0 && indent > managedProviderIndent) {
+            cat = 'device'
+            label = DEVICE_LINE_LABEL
+          } else {
+            if (managedProviderIndent >= 0 && indent <= managedProviderIndent) managedProviderIndent = -1
+            const providerEntry = text.match(/^\s*([^\s:#][^:]*)\s*:\s*$/)
+            const providerName = normalizeYamlScalarToken(providerEntry?.[1] ?? '').toLowerCase()
+            if (providerName && deviceSignals.providerNames.has(providerName)) {
+              managedProviderIndent = indent
+              cat = 'device'
+              label = DEVICE_LINE_LABEL
+            }
+          }
+        }
+
+        if (topLevelBlock === 'proxy-groups') {
+          if (managedProxyGroupIndent >= 0 && indent > managedProxyGroupIndent) {
+            cat = 'device'
+            label = DEVICE_LINE_LABEL
+          } else {
+            if (managedProxyGroupIndent >= 0 && indent <= managedProxyGroupIndent) managedProxyGroupIndent = -1
+            const groupNameLine = text.match(/^\s*-\s*name:\s*(.+)\s*$/)
+            if (groupNameLine) {
+              const groupName = normalizeYamlScalarToken(groupNameLine[1])
+              if (groupName && deviceSignals.shadowGroupNames.has(groupName)) {
+                managedProxyGroupIndent = indent
+                cat = 'device'
+                label = DEVICE_LINE_LABEL
+              }
+            }
+          }
+        }
+
+        if (topLevelBlock === 'rules' && text.toLowerCase().includes(DEVICE_RULE_PROVIDER_PREFIX)) {
+          cat = 'device'
+          label = DEVICE_LINE_LABEL
+        }
+
+        if (cat === 'preserved' && text.toLowerCase().includes(DEVICE_RULE_PROVIDER_PREFIX)) {
+          cat = 'device'
+          label = DEVICE_LINE_LABEL
+        }
+      }
+
+      result.push(label ? { text, cat, label } : { text, cat })
     }
   }
   return result
@@ -139,13 +249,182 @@ const CAT_ROW: Record<LineCat, string> = {
   dns:       'bg-blue-500/10 border-l-2 border-blue-400/50',
   geo:       'bg-violet-500/10 border-l-2 border-violet-400/50',
   port:      'bg-amber-500/10 border-l-2 border-amber-400/50',
+  device:    'bg-emerald-500/10 border-l-2 border-emerald-400/55',
   preserved: '',
 }
 const CAT_LABEL: Record<LineCat, string> = {
   dns:       'text-blue-300/70',
   geo:       'text-violet-300/70',
   port:      'text-amber-300/70',
+  device:    'text-emerald-300/75',
   preserved: '',
+}
+
+const BUILTIN_PROXY_NAMES = ['DIRECT', 'REJECT', 'PASS']
+const OVERRIDEABLE_GROUP_TYPES = new Set(['select', 'url-test', 'fallback', 'load-balance'])
+
+interface RoutePolicyGroupOption {
+  name: string
+  type: string
+  proxies: string[]
+}
+
+interface RoutePolicyOptions {
+  groups: RoutePolicyGroupOption[]
+  knownProxyNames: string[]
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter((item) => item !== '')
+}
+
+function dedupe(items: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of items) {
+    if (seen.has(item)) continue
+    seen.add(item)
+    result.push(item)
+  }
+  return result
+}
+
+function defaultPrefixForIP(ip: string): number {
+  return ip.includes(':') ? 128 : 32
+}
+
+function clampPrefix(value: number, ip: string): number {
+  const max = ip.includes(':') ? 128 : 32
+  if (!Number.isFinite(value)) return defaultPrefixForIP(ip)
+  const rounded = Math.trunc(value)
+  if (rounded < 1) return 1
+  if (rounded > max) return max
+  return rounded
+}
+
+function normalizeDeviceGroupsForSetup(groups: DeviceRouteGroup[]): DeviceRouteGroup[] {
+  return [...groups]
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((group, index) => {
+      const devices = (group.devices ?? [])
+        .map((device) => {
+          const ip = (device.ip ?? '').trim()
+          const hostname = (device.hostname ?? '').trim()
+          return {
+            ip,
+            prefix: clampPrefix(
+              typeof device.prefix === 'number' ? device.prefix : defaultPrefixForIP(ip || '0.0.0.0'),
+              ip || '0.0.0.0',
+            ),
+            ...(hostname ? { hostname } : {}),
+          }
+        })
+        .filter((device) => device.ip !== '')
+      const overrides = (group.overrides ?? [])
+        .map((override) => ({
+          original_group: (override.original_group ?? '').trim(),
+          proxies: dedupe((override.proxies ?? []).map((proxy) => proxy.trim()).filter(Boolean)),
+        }))
+        .filter((override) => override.original_group !== '')
+      return {
+        id: (group.id ?? '').trim() || `dg_setup_${index + 1}`,
+        name: (group.name ?? '').trim(),
+        devices,
+        overrides,
+        order: index,
+      }
+    })
+}
+
+function sanitizeDeviceGroupsForSetup(groups: DeviceRouteGroup[]): DeviceRouteGroup[] {
+  return groups.map((group, index) => {
+    const devices = (group.devices ?? [])
+      .map((device) => {
+        const ip = (device.ip ?? '').trim()
+        if (!ip) return null
+        const hostname = (device.hostname ?? '').trim()
+        return {
+          ip,
+          prefix: clampPrefix(device.prefix, ip),
+          ...(hostname ? { hostname } : {}),
+        }
+      })
+      .filter((device): device is NonNullable<typeof device> => device !== null)
+    const overrides = (group.overrides ?? [])
+      .map((override) => {
+        const originalGroup = (override.original_group ?? '').trim()
+        const proxies = dedupe((override.proxies ?? []).map((proxy) => proxy.trim()).filter(Boolean))
+        if (!originalGroup || proxies.length === 0) return null
+        return {
+          original_group: originalGroup,
+          proxies,
+        }
+      })
+      .filter((override): override is NonNullable<typeof override> => override !== null)
+    return {
+      id: (group.id ?? '').trim() || `dg_setup_${index + 1}`,
+      name: (group.name ?? '').trim(),
+      devices,
+      overrides,
+      order: index,
+    }
+  })
+}
+
+function serializeDeviceGroupsForSetup(groups: DeviceRouteGroup[]): string {
+  return JSON.stringify(sanitizeDeviceGroupsForSetup(groups))
+}
+
+function parseRoutePolicyOptions(content: string): RoutePolicyOptions {
+  if (!content.trim()) {
+    return { groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] }
+  }
+  try {
+    const parsed = yaml.load(content)
+    const root = toRecord(parsed)
+    if (!root) {
+      return { groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] }
+    }
+
+    const knownProxyNames = new Set<string>(BUILTIN_PROXY_NAMES)
+    const proxiesRaw = Array.isArray(root.proxies) ? root.proxies : []
+    for (const item of proxiesRaw) {
+      const proxy = toRecord(item)
+      if (!proxy) continue
+      const name = typeof proxy.name === 'string' ? proxy.name.trim() : ''
+      if (!name) continue
+      knownProxyNames.add(name)
+    }
+
+    const groupsRaw = Array.isArray(root['proxy-groups']) ? root['proxy-groups'] : []
+    const groups: RoutePolicyGroupOption[] = []
+    for (const item of groupsRaw) {
+      const group = toRecord(item)
+      if (!group) continue
+      const name = typeof group.name === 'string' ? group.name.trim() : ''
+      const type = typeof group.type === 'string' ? group.type.trim().toLowerCase() : ''
+      if (!name || !OVERRIDEABLE_GROUP_TYPES.has(type)) continue
+      const members = dedupe(toStringArray(group.proxies).filter((member) => knownProxyNames.has(member)))
+      if (members.length === 0) continue
+      groups.push({ name, type, proxies: members })
+    }
+
+    groups.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+    return {
+      groups,
+      knownProxyNames: Array.from(knownProxyNames),
+    }
+  } catch {
+    return { groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] }
+  }
 }
 
 function ConfigPreview({ content, onContinue }: { content: string; onContinue: () => void }) {
@@ -154,6 +433,7 @@ function ConfigPreview({ content, onContinue }: { content: string; onContinue: (
     { style: 'bg-blue-500/25 text-blue-200',   label: 'DNS 配置（已根据您的选择重写）' },
     { style: 'bg-amber-500/25 text-amber-200', label: '端口 / API 地址（ClashForge 统一管理）' },
     { style: 'bg-violet-500/25 text-violet-200', label: 'GeoData 设置（使用本地文件）' },
+    { style: 'bg-emerald-500/25 text-emerald-200', label: '设备分组接管字段（影子策略组 / RULE-SET / AND）' },
   ]
   return (
     <div className="space-y-4">
@@ -186,6 +466,87 @@ function ConfigPreview({ content, onContinue }: { content: string; onContinue: (
       <button className="btn-primary w-full flex items-center justify-center gap-2" onClick={onContinue}>
         <ArrowRight size={14} />确认，继续 DNS 设置
       </button>
+    </div>
+  )
+}
+
+function LaunchConfigPreview({
+  content,
+  loading,
+  error,
+  onRefresh,
+  title = '最终运行配置预览',
+  description = '高亮区域为 ClashForge 接管项',
+  refreshLabel = '刷新预览',
+}: {
+  content: string
+  loading: boolean
+  error: string
+  onRefresh: () => void
+  title?: string
+  description?: string
+  refreshLabel?: string
+}) {
+  const lines = content ? annotateLines(content) : []
+  const legend = [
+    { style: 'bg-blue-500/25 text-blue-200', label: 'DNS 接管字段' },
+    { style: 'bg-amber-500/25 text-amber-200', label: '端口 / API 接管字段' },
+    { style: 'bg-violet-500/25 text-violet-200', label: 'GeoData 接管字段' },
+    { style: 'bg-emerald-500/25 text-emerald-200', label: '设备分组接管字段' },
+  ]
+
+  return (
+    <div className="glass-card px-5 py-5 space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
+          <p className="mt-1 text-xs text-muted">{description}</p>
+        </div>
+        <button
+          className="btn-ghost text-xs flex items-center gap-1.5"
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          <RotateCw size={12} className={loading ? 'animate-spin' : ''} />
+          {loading ? '刷新中…' : refreshLabel}
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center">
+        {legend.map(l => (
+          <span key={l.label} className={`inline-flex text-xs px-2 py-0.5 rounded-md ${l.style}`}>{l.label}</span>
+        ))}
+      </div>
+
+      {loading && (
+        <div className="flex items-center gap-2 text-sm text-muted py-2">
+          <Loader2 size={14} className="animate-spin text-brand" />
+          正在生成最终配置预览…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && (
+        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-[26rem] text-xs font-mono select-text">
+          {lines.length === 0 && (
+            <div className="px-3 py-3 text-muted">当前没有可展示的配置内容</div>
+          )}
+          {lines.map((ln, i) => (
+            <div key={i} className={`flex items-start gap-2 px-2 py-px leading-5 ${CAT_ROW[ln.cat]}`}>
+              <span className="select-none text-white/20 w-7 flex-shrink-0 text-right tabular-nums">{i + 1}</span>
+              <span className="flex-1 text-slate-200 whitespace-pre">{ln.text || ' '}</span>
+              {ln.label && (
+                <span className={`flex-shrink-0 text-[10px] pl-3 self-center ${CAT_LABEL[ln.cat]}`}>← {ln.label}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -410,6 +771,10 @@ export function Setup() {
   const [selectedSaved, setSelectedSaved] = useState<{ kind: 'file'; filename: string } | { kind: 'sub'; sub: Subscription } | null>(null)
   const [subImportChoice, setSubImportChoice] = useState<'cache' | 'live' | null>(null)
   const [subLiveFailed, setSubLiveFailed] = useState(false)
+  const [subCacheModalOpen, setSubCacheModalOpen] = useState(false)
+  const [subCacheModalLoading, setSubCacheModalLoading] = useState(false)
+  const [subCacheModalError, setSubCacheModalError] = useState('')
+  const [subCacheModalContent, setSubCacheModalContent] = useState('')
   const [pasteContent, setPasteContent] = useState('')
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -437,6 +802,20 @@ export function Setup() {
   const [launchDone, setLaunchDone] = useState(false)
   const [launchError, setLaunchError] = useState('')
   const [launchLog, setLaunchLog] = useState<LaunchEvent[]>([])
+  const [launchConfigPreview, setLaunchConfigPreview] = useState('')
+  const [launchConfigLoading, setLaunchConfigLoading] = useState(false)
+  const [launchConfigError, setLaunchConfigError] = useState('')
+  const [launchPolicyOptions, setLaunchPolicyOptions] = useState<RoutePolicyOptions>({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
+  const [launchPolicyError, setLaunchPolicyError] = useState('')
+  const [launchDeviceGroups, setLaunchDeviceGroups] = useState<DeviceRouteGroup[]>([])
+  const [launchDeviceSnapshot, setLaunchDeviceSnapshot] = useState('[]')
+  const [launchDeviceLoading, setLaunchDeviceLoading] = useState(false)
+  const [launchDeviceSaving, setLaunchDeviceSaving] = useState(false)
+  const [launchDeviceError, setLaunchDeviceError] = useState('')
+  const [launchDeviceNotice, setLaunchDeviceNotice] = useState('')
+  const [runningConfigPreview, setRunningConfigPreview] = useState('')
+  const [runningConfigLoading, setRunningConfigLoading] = useState(false)
+  const [runningConfigError, setRunningConfigError] = useState('')
 
   // ── port check step (after launch, before connectivity check) ──
   const [portChecking, setPortChecking] = useState(false)
@@ -499,6 +878,10 @@ export function Setup() {
   useEffect(() => {
     setSubImportChoice(null)
     setSubLiveFailed(false)
+    setSubCacheModalOpen(false)
+    setSubCacheModalLoading(false)
+    setSubCacheModalError('')
+    setSubCacheModalContent('')
   }, [selectedSaved])
 
   // ── helpers ──
@@ -506,6 +889,125 @@ export function Setup() {
     setDns(prev => ({ ...prev, [k]: v })), [])
   const netSet = useCallback(<K extends keyof FormNetwork>(k: K, v: FormNetwork[K]) =>
     setNet(prev => ({ ...prev, [k]: v })), [])
+
+  const buildLaunchPayload = useCallback(() => ({
+    dns: { enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode, apply_on_start: dns.apply_on_start },
+    network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
+  }), [dns, net])
+
+  const refreshLaunchConfigPreview = useCallback(async () => {
+    setLaunchConfigLoading(true)
+    setLaunchConfigError('')
+    setLaunchPolicyError('')
+    try {
+      const { content } = await previewSetupFinalConfig(buildLaunchPayload())
+      setLaunchConfigPreview(content)
+      const parsed = parseRoutePolicyOptions(content)
+      setLaunchPolicyOptions(parsed)
+      if (content.trim() && parsed.groups.length === 0) {
+        setLaunchPolicyError('当前即将运行的配置中未发现可覆盖的策略组或可选节点。')
+      }
+    } catch (e: unknown) {
+      setLaunchPolicyOptions({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
+      setLaunchPolicyError('读取预览失败，暂时无法获取可绑定节点列表。')
+      setLaunchConfigError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLaunchConfigLoading(false)
+    }
+  }, [buildLaunchPayload])
+
+  const handleViewCachedSubscription = useCallback(async (sub: Subscription) => {
+    setSubCacheModalOpen(true)
+    setSubCacheModalLoading(true)
+    setSubCacheModalError('')
+    setSubCacheModalContent('')
+    try {
+      const { content } = await getSubscriptionCache(sub.id)
+      setSubCacheModalContent(content)
+    } catch (e: unknown) {
+      setSubCacheModalError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSubCacheModalLoading(false)
+    }
+  }, [])
+
+  const refreshRunningConfigPreview = useCallback(async () => {
+    setRunningConfigLoading(true)
+    setRunningConfigError('')
+    try {
+      const { content } = await getMihomoConfig()
+      setRunningConfigPreview(content)
+    } catch (e: unknown) {
+      setRunningConfigPreview('')
+      setRunningConfigError(e instanceof Error ? e.message : '读取运行配置失败')
+    } finally {
+      setRunningConfigLoading(false)
+    }
+  }, [])
+
+  const loadLaunchDeviceGroups = useCallback(async () => {
+    setLaunchDeviceLoading(true)
+    setLaunchDeviceError('')
+    setLaunchDeviceNotice('')
+    try {
+      const { device_groups } = await getDeviceGroups()
+      const normalized = normalizeDeviceGroupsForSetup(device_groups ?? [])
+      setLaunchDeviceGroups(normalized)
+      setLaunchDeviceSnapshot(serializeDeviceGroupsForSetup(normalized))
+    } catch (e: unknown) {
+      setLaunchDeviceGroups([])
+      setLaunchDeviceSnapshot('[]')
+      setLaunchDeviceError(e instanceof Error ? e.message : '读取设备路由配置失败')
+    } finally {
+      setLaunchDeviceLoading(false)
+    }
+  }, [])
+
+  const setLaunchGroupField = useCallback((groupID: string, updater: (group: DeviceRouteGroup) => DeviceRouteGroup) => {
+    setLaunchDeviceGroups((prev) => prev.map((group) => (group.id === groupID ? updater(group) : group)))
+  }, [])
+
+  const removeLaunchOverride = useCallback((groupID: string, overrideIndex: number) => {
+    setLaunchGroupField(groupID, (current) => ({
+      ...current,
+      overrides: current.overrides.filter((_, idx) => idx !== overrideIndex),
+    }))
+  }, [setLaunchGroupField])
+
+  const syncLaunchDeviceGroups = useCallback(async () => {
+    setLaunchDeviceError('')
+    setLaunchDeviceNotice('')
+    setLaunchDeviceSaving(true)
+    try {
+      const sanitized = sanitizeDeviceGroupsForSetup(launchDeviceGroups)
+      const resp = await updateDeviceGroups(sanitized)
+      setLaunchDeviceGroups(sanitized)
+      setLaunchDeviceSnapshot(serializeDeviceGroupsForSetup(sanitized))
+
+      if (!resp.config_generated) {
+        setLaunchDeviceError(resp.warning || '设备路由已保存，但最终配置生成失败。')
+        return false
+      }
+
+      if (resp.core_running === false) {
+        setLaunchDeviceNotice('设备路由代理绑定已同步，启动后会自动生效。')
+      } else if (resp.core_reloaded) {
+        setLaunchDeviceNotice('设备路由代理绑定已同步，并已热加载到运行中的内核。')
+      } else if (resp.reload_error) {
+        setLaunchDeviceError(`设备路由已同步，但热加载失败：${resp.reload_error}`)
+      } else {
+        setLaunchDeviceNotice('设备路由代理绑定已同步到“设备路由”页面。')
+      }
+
+      await refreshLaunchConfigPreview()
+      return true
+    } catch (e: unknown) {
+      setLaunchDeviceError(e instanceof Error ? e.message : '同步设备路由失败')
+      return false
+    } finally {
+      setLaunchDeviceSaving(false)
+    }
+  }, [launchDeviceGroups, refreshLaunchConfigPreview])
 
   // ── fill forms from parsed Clash YAML ──
   const applyClashParsed = useCallback((parsed: ClashParsed) => {
@@ -671,13 +1173,69 @@ export function Setup() {
     }
   }, [])
 
+  const launchDeviceDirty = useMemo(
+    () => serializeDeviceGroupsForSetup(launchDeviceGroups) !== launchDeviceSnapshot,
+    [launchDeviceGroups, launchDeviceSnapshot],
+  )
+
+  const launchGroupNamePrefixes = useMemo(
+    () => launchDeviceGroups.map((group) => group.name.trim()).filter(Boolean),
+    [launchDeviceGroups],
+  )
+
+  const launchPolicyGroups = useMemo(() => (
+    launchPolicyOptions.groups.filter((group) => {
+      for (const prefix of launchGroupNamePrefixes) {
+        if (group.name.startsWith(`${prefix} - `)) return false
+      }
+      return true
+    })
+  ), [launchGroupNamePrefixes, launchPolicyOptions.groups])
+
+  const launchPolicyGroupMap = useMemo(
+    () => new Map(launchPolicyGroups.map((group) => [group.name, group])),
+    [launchPolicyGroups],
+  )
+
+  const launchKnownProxySet = useMemo(
+    () => new Set(launchPolicyOptions.knownProxyNames),
+    [launchPolicyOptions.knownProxyNames],
+  )
+
+  const addLaunchOverride = useCallback((groupID: string) => {
+    setLaunchGroupField(groupID, (current) => {
+      const used = new Set(current.overrides.map((item) => item.original_group))
+      const preferred = launchPolicyGroups.find((item) => !used.has(item.name)) ?? launchPolicyGroups[0]
+      if (!preferred) return current
+      return {
+        ...current,
+        overrides: [...current.overrides, {
+          original_group: preferred.name,
+          proxies: preferred.proxies.length > 0 ? [preferred.proxies[0]] : [],
+        }],
+      }
+    })
+  }, [launchPolicyGroups, setLaunchGroupField])
+
   // ── launch (streaming SSE from POST /api/v1/setup/launch) ──
   const logEndRef = useRef<HTMLDivElement>(null)
   const handleLaunch = useCallback(async () => {
+    setLaunchError('')
+    if (launchDeviceLoading) {
+      setLaunchError('设备路由配置仍在加载，请稍候后再启动。')
+      return
+    }
+    if (launchDeviceDirty) {
+      const ok = await syncLaunchDeviceGroups()
+      if (!ok) {
+        setLaunchError('设备路由配置同步失败，请先处理后再启动服务。')
+        return
+      }
+    }
+
     setLaunching(true)
     setLaunchLog([])
     setLaunchDone(false)
-    setLaunchError('')
 
     const secret = localStorage.getItem('cf_secret') || ''
     let res: Response
@@ -688,10 +1246,7 @@ export function Setup() {
           'Content-Type': 'application/json',
           ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
         },
-        body: JSON.stringify({
-          dns: { enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode, apply_on_start: dns.apply_on_start },
-          network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
-        }),
+        body: JSON.stringify(buildLaunchPayload()),
       })
     } catch (e) {
       setLaunchError(e instanceof Error ? e.message : '无法连接到服务器')
@@ -725,6 +1280,7 @@ export function Setup() {
               setLaunchDone(ev.success ?? false)
               if (!ev.success) setLaunchError(ev.error ?? '启动失败')
               setLaunching(false)
+              void refreshLaunchConfigPreview()
               if (ev.success) {
                 // Auto-run port check after brief settle delay
                 setTimeout(() => { void handlePortCheck() }, 800)
@@ -739,7 +1295,18 @@ export function Setup() {
     } finally {
       setLaunching(false)
     }
-  }, [dns, net, handlePortCheck])
+  }, [buildLaunchPayload, handlePortCheck, launchDeviceDirty, launchDeviceLoading, refreshLaunchConfigPreview, syncLaunchDeviceGroups])
+
+  // ── prepare final runtime config preview when entering launch step ──
+  useEffect(() => {
+    if (step !== 'launch') return
+    void Promise.all([refreshLaunchConfigPreview(), loadLaunchDeviceGroups()])
+  }, [loadLaunchDeviceGroups, refreshLaunchConfigPreview, step])
+
+  useEffect(() => {
+    if (initStatus !== 'running') return
+    void refreshRunningConfigPreview()
+  }, [initStatus, refreshRunningConfigPreview])
 
   // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
   useEffect(() => {
@@ -817,7 +1384,7 @@ export function Setup() {
     const managed = runningModules.filter(m => m.managed_by_clashforge)
     return (
       <div className="min-h-full bg-gradient-to-b from-surface-0 to-surface-1 px-6 py-8">
-        <div className="max-w-xl mx-auto space-y-6">
+        <div className="mx-auto max-w-6xl space-y-6">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-brand/20 flex items-center justify-center">
               <Sparkles size={18} className="text-brand" />
@@ -831,46 +1398,64 @@ export function Setup() {
             </div>
           </div>
 
-          <div className="glass-card px-5 py-5 space-y-4">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-2.5 w-2.5 rounded-full bg-success animate-pulse" />
-              <p className="text-sm font-semibold text-white">内核正在运行</p>
-            </div>
-            <p className="text-sm text-muted leading-6">
-              ClashForge 内核当前处于运行状态，并已接管以下系统服务。
-              要重新配置，请先停止内核并退出所有接管，然后再继续。
-            </p>
-
-            {managed.length > 0 && (
-              <div className="rounded-xl border border-white/8 bg-black/10 px-4 py-3 space-y-2">
-                <p className="text-xs text-muted uppercase tracking-wider font-semibold">当前已接管</p>
-                {managed.map(m => (
-                  <div key={m.id} className="flex items-center gap-2 text-xs">
-                    <ShieldOff size={12} className="text-warning" />
-                    <span className="text-slate-300">{m.title}</span>
-                    <span className="text-muted">— {m.current_owner}</span>
-                  </div>
-                ))}
+          <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+            <div className="glass-card px-5 py-5 space-y-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-2.5 w-2.5 rounded-full bg-success animate-pulse" />
+                <p className="text-sm font-semibold text-white">内核正在运行</p>
               </div>
-            )}
+              <p className="text-sm text-muted leading-6">
+                ClashForge 内核当前处于运行状态，并已接管以下系统服务。
+                要重新配置，请先停止内核并退出所有接管，然后再继续。
+              </p>
 
-            {stopError && (
-              <div className="flex items-center gap-2 text-xs text-danger">
-                <AlertCircle size={13} />{stopError}
-              </div>
-            )}
+              {managed.length > 0 && (
+                <div className="rounded-xl border border-white/8 bg-black/10 px-4 py-3 space-y-2">
+                  <p className="text-xs text-muted uppercase tracking-wider font-semibold">当前已接管</p>
+                  {managed.map(m => (
+                    <div key={m.id} className="flex items-center gap-2 text-xs">
+                      <ShieldOff size={12} className="text-warning" />
+                      <span className="text-slate-300">{m.title}</span>
+                      <span className="text-muted">— {m.current_owner}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-            <button
-              className="w-full flex items-center justify-center gap-2.5 py-4 text-sm font-bold rounded-xl
+              {stopError && (
+                <div className="flex items-center gap-2 text-xs text-danger">
+                  <AlertCircle size={13} />{stopError}
+                </div>
+              )}
+
+              <button
+                className="w-full flex items-center justify-center gap-2.5 py-4 text-sm font-bold rounded-xl
                          bg-danger/90 hover:bg-danger text-white border border-danger/60 hover:border-danger
                          shadow-lg shadow-danger/30 transition-all active:scale-[0.98] disabled:opacity-60"
-              onClick={handleStopAll}
-              disabled={stopping}
-            >
-              {stopping
-                ? <><Loader2 size={16} className="animate-spin" />停止中…</>
-                : <><PowerOff size={16} />停止内核 + 退出所有接管</>}
-            </button>
+                onClick={handleStopAll}
+                disabled={stopping}
+              >
+                {stopping
+                  ? <><Loader2 size={16} className="animate-spin" />停止中…</>
+                  : <><PowerOff size={16} />停止内核 + 退出所有接管</>}
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <LaunchConfigPreview
+                content={runningConfigPreview}
+                loading={runningConfigLoading}
+                error={runningConfigError}
+                onRefresh={() => { void refreshRunningConfigPreview() }}
+                title="正在运行配置预览"
+                description="展示当前完整的运行配置（mihomo-config.yaml）；高亮区域为 ClashForge 接管和统一设置项（含设备分组规则），行尾有具体说明。"
+                refreshLabel="刷新运行配置"
+              />
+              <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-muted leading-6">
+                蓝色高亮表示 DNS 接管字段，橙色高亮表示端口与 API 接管字段，紫色高亮表示 GeoData 接管字段，
+                绿色高亮表示设备分组接管字段（影子策略组、设备 RULE-SET、AND 规则与对应 provider）。这些字段会由 ClashForge 统一维护，避免运行时配置漂移。
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1067,6 +1652,12 @@ export function Setup() {
                               <Link2 size={12} />在线更新订阅
                             </button>
                           </div>
+                          <button
+                            onClick={() => void handleViewCachedSubscription(selectedSaved.sub)}
+                            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-white/12 bg-white/[0.04] text-xs text-slate-200 hover:border-white/25 hover:bg-white/[0.08] transition-colors"
+                          >
+                            <Eye size={12} />查看当前缓存配置
+                          </button>
                           {(subImportChoice === 'cache' || subImportChoice === null) && selectedSaved.sub.last_updated && (
                             <p className="text-[11px] text-muted">
                               缓存时间：{new Date(selectedSaved.sub.last_updated).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -1337,6 +1928,238 @@ export function Setup() {
         {step === 'launch' && (
           <div className="space-y-4">
             <div className="glass-card px-5 py-5 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-200">设备路由代理校准</h2>
+                  <p className="mt-1 text-xs text-muted">
+                    如果你已经配置了设备分组，这里可以按“当前即将运行配置”重新绑定代理。同步后会直接更新到设备路由页面。
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost text-xs flex items-center gap-1.5"
+                  onClick={() => { void loadLaunchDeviceGroups() }}
+                  disabled={launchDeviceLoading || launchDeviceSaving}
+                >
+                  <RotateCw size={12} className={launchDeviceLoading ? 'animate-spin' : ''} />
+                  {launchDeviceLoading ? '加载中…' : '刷新分组'}
+                </button>
+              </div>
+
+              {launchPolicyError && (
+                <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  {launchPolicyError}
+                </div>
+              )}
+              {launchDeviceError && (
+                <div className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+                  {launchDeviceError}
+                </div>
+              )}
+              {launchDeviceNotice && (
+                <div className="rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
+                  {launchDeviceNotice}
+                </div>
+              )}
+
+              {launchDeviceLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted py-2">
+                  <Loader2 size={14} className="animate-spin text-brand" />
+                  正在加载设备分组…
+                </div>
+              ) : launchDeviceGroups.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-4 text-xs text-muted">
+                  当前还没有设备分组配置。你可以在“设备路由”页面创建分组后，再回到这里做启动前校准。
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {launchDeviceGroups.map((group, groupIndex) => (
+                    <div key={group.id || `launch-group-${groupIndex}`} className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-100 truncate">
+                            {group.name || `未命名分组 ${groupIndex + 1}`}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-muted">
+                            {group.devices.length} 台设备 · {group.overrides.length} 条策略覆盖
+                          </p>
+                        </div>
+                        <button
+                          className="btn-ghost h-7 px-2.5 text-xs"
+                          onClick={() => addLaunchOverride(group.id)}
+                          disabled={launchPolicyGroups.length === 0}
+                        >
+                          <Plus size={12} />
+                          添加覆盖
+                        </button>
+                      </div>
+
+                      {group.overrides.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-white/15 px-3 py-3 text-xs text-muted">
+                          {launchPolicyGroups.length === 0 ? '当前配置中没有可覆盖策略组。' : '该分组暂未配置策略覆盖，可点击右上角“添加覆盖”。'}
+                        </p>
+                      ) : (
+                        group.overrides.map((override, overrideIndex) => {
+                          const selectedGroup = launchPolicyGroupMap.get(override.original_group)
+                          const knownMembers = selectedGroup?.proxies ?? []
+                          const memberOptions = dedupe([...knownMembers, ...override.proxies])
+
+                          return (
+                            <div key={`${group.id}-override-${overrideIndex}`} className="rounded-lg border border-white/10 bg-black/25 px-3 py-3 space-y-2.5">
+                              <div className="flex items-start gap-2">
+                                <select
+                                  className="theme-select glass-input min-h-[34px] h-[34px] w-full"
+                                  value={override.original_group}
+                                  onChange={(event) => {
+                                    const nextGroupName = event.target.value
+                                    const nextMembers = new Set(launchPolicyGroupMap.get(nextGroupName)?.proxies ?? [])
+                                    setLaunchGroupField(group.id, (current) => ({
+                                      ...current,
+                                      overrides: current.overrides.map((item, idx) => {
+                                        if (idx !== overrideIndex) return item
+                                        const cleaned = item.proxies.filter((proxy) => nextMembers.has(proxy))
+                                        return {
+                                          ...item,
+                                          original_group: nextGroupName,
+                                          proxies: cleaned,
+                                        }
+                                      }),
+                                    }))
+                                  }}
+                                >
+                                  <option value="">选择策略组</option>
+                                  {launchPolicyGroups.map((item) => (
+                                    <option key={item.name} value={item.name}>
+                                      {item.name}
+                                    </option>
+                                  ))}
+                                  {override.original_group && !launchPolicyGroupMap.has(override.original_group) ? (
+                                    <option value={override.original_group}>
+                                      {override.original_group}（失效引用）
+                                    </option>
+                                  ) : null}
+                                </select>
+                                <button
+                                  className="btn-ghost btn-icon-sm h-[34px] w-[34px] min-w-[34px] flex-shrink-0 text-danger hover:bg-danger/10"
+                                  title="删除覆盖"
+                                  onClick={() => removeLaunchOverride(group.id, overrideIndex)}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+
+                              {!selectedGroup && (
+                                <p className="text-[11px] text-warning">
+                                  当前配置中未找到策略组“{override.original_group}”，请先在配置中确认该策略组仍存在。
+                                </p>
+                              )}
+
+                              {memberOptions.length === 0 ? (
+                                <p className="text-xs text-muted">
+                                  {override.original_group ? '当前策略组没有可选代理节点。' : '先选择策略组后再选节点。'}
+                                </p>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {memberOptions.map((member) => {
+                                    const selected = override.proxies.includes(member)
+                                    const known = launchKnownProxySet.has(member)
+                                    return (
+                                      <button
+                                        key={member}
+                                        type="button"
+                                        className={[
+                                          'rounded-md border px-2 py-1 text-xs font-medium transition-all',
+                                          selected
+                                            ? 'border-brand/50 bg-brand/15 text-brand-light'
+                                            : known
+                                              ? 'border-white/12 bg-white/5 text-slate-300 hover:bg-white/8'
+                                              : 'border-warning/35 bg-warning/10 text-warning',
+                                        ].join(' ')}
+                                        onClick={() => {
+                                          setLaunchGroupField(group.id, (current) => ({
+                                            ...current,
+                                            overrides: current.overrides.map((item, idx) => {
+                                              if (idx !== overrideIndex) return item
+                                              if (item.proxies.includes(member)) {
+                                                return { ...item, proxies: item.proxies.filter((proxy) => proxy !== member) }
+                                              }
+                                              return { ...item, proxies: dedupe([...item.proxies, member]) }
+                                            }),
+                                          }))
+                                        }}
+                                      >
+                                        {member}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              )}
+
+                              {knownMembers.length > 0 && (
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] text-muted">
+                                    已选 {override.proxies.length} / {knownMembers.length}
+                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      className="btn-ghost h-6 px-2 text-[11px]"
+                                      onClick={() => {
+                                        setLaunchGroupField(group.id, (current) => ({
+                                          ...current,
+                                          overrides: current.overrides.map((item, idx) => (
+                                            idx === overrideIndex ? { ...item, proxies: [...knownMembers] } : item
+                                          )),
+                                        }))
+                                      }}
+                                    >
+                                      全选
+                                    </button>
+                                    <button
+                                      className="btn-ghost h-6 px-2 text-[11px]"
+                                      onClick={() => {
+                                        setLaunchGroupField(group.id, (current) => ({
+                                          ...current,
+                                          overrides: current.overrides.map((item, idx) => (
+                                            idx === overrideIndex ? { ...item, proxies: [] } : item
+                                          )),
+                                        }))
+                                      }}
+                                    >
+                                      清空
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+                <span className={`text-xs ${launchDeviceDirty ? 'text-warning' : 'text-muted'}`}>
+                  {launchDeviceDirty ? '有未同步的设备路由修改' : '设备路由配置已同步'}
+                </span>
+                <button
+                  className="btn-primary text-xs flex items-center gap-1.5"
+                  onClick={() => { void syncLaunchDeviceGroups() }}
+                  disabled={launchDeviceSaving || launchDeviceLoading || !launchDeviceDirty}
+                >
+                  {launchDeviceSaving ? <><Loader2 size={12} className="animate-spin" />同步中…</> : '同步到设备路由'}
+                </button>
+              </div>
+            </div>
+
+            <LaunchConfigPreview
+              content={launchConfigPreview}
+              loading={launchConfigLoading}
+              error={launchConfigError}
+              onRefresh={() => { void refreshLaunchConfigPreview() }}
+            />
+
+            <div className="glass-card px-5 py-5 space-y-4">
               {/* Config summary */}
               <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">启动服务</h2>
               <div className="space-y-2 text-xs">
@@ -1427,7 +2250,7 @@ export function Setup() {
                 <button
                   className="btn-primary w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold"
                   onClick={handleLaunch}
-                  disabled={launching}
+                  disabled={launching || launchDeviceSaving || launchDeviceLoading}
                 >
                   {launching
                     ? <><Loader2 size={16} className="animate-spin" />正在启动…</>
@@ -1721,6 +2544,40 @@ export function Setup() {
           </div>
         )}
       </div>
+      {subCacheModalOpen && selectedSaved?.kind === 'sub' && (
+        <ModalShell
+          title={`缓存配置 · ${selectedSaved.sub.name}`}
+          description="这是当前订阅在本地缓存的原始配置内容（raw YAML）。"
+          icon={<Database size={16} />}
+          onClose={() => !subCacheModalLoading && setSubCacheModalOpen(false)}
+          size="lg"
+          dismissible={!subCacheModalLoading}
+        >
+          <div className="space-y-3">
+            {subCacheModalLoading && (
+              <div className="flex items-center gap-2 text-sm text-muted">
+                <Loader2 size={14} className="animate-spin text-brand" />
+                正在加载缓存配置…
+              </div>
+            )}
+            {!subCacheModalLoading && subCacheModalError && (
+              <div className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+                {subCacheModalError}
+              </div>
+            )}
+            {!subCacheModalLoading && !subCacheModalError && (
+              <div className="max-h-[60vh] overflow-auto rounded-xl border border-white/10 bg-black/30 p-3">
+                <pre className="whitespace-pre text-xs leading-5 text-slate-200 font-mono select-text">{subCacheModalContent}</pre>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button className="btn-ghost" onClick={() => setSubCacheModalOpen(false)} disabled={subCacheModalLoading}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      )}
     </div>
   )
 }
