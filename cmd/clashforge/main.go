@@ -167,6 +167,12 @@ func main() {
 		log.Fatal().Err(err).Msg("init node store")
 	}
 
+	// Router SSH key pair (used to authenticate to managed servers)
+	nodeKeyPair, err := nodes.LoadOrGenerateKeyPair(cfg.Core.DataDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("init router SSH key pair")
+	}
+
 	// Scheduler
 	sched := scheduler.New(cfg, subManager)
 	sched.Start()
@@ -181,8 +187,9 @@ func main() {
 		SubManager: subManager,
 		Netfilter:  nfManager,
 		SSEBroker:  sseBroker,
-		LogBuffer:  logBuf,
-		NodeStore:  nodeStore,
+		LogBuffer:   logBuf,
+		NodeStore:   nodeStore,
+		NodeKeyPair: nodeKeyPair,
 	})
 
 	addr := cfg.UIListenAddr()
@@ -402,6 +409,16 @@ func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscript
 	}
 
 	generated = config.ApplyManagedRuntimeSettings(cfg, generated)
+
+	deviceGroupsPath := config.DeviceGroupsPath(cfg.Core.DataDir)
+	deviceGroups, err := config.LoadDeviceGroups(deviceGroupsPath)
+	if err != nil {
+		return err
+	}
+	generated, providerSpecs := config.ApplyPerDeviceSubRulesWithProviders(generated, deviceGroups)
+	if err := config.SyncDeviceRuleProviderFiles(cfg.Core.RuntimeDir, providerSpecs); err != nil {
+		return err
+	}
 
 	data, err := config.MarshalYAML(generated)
 	if err != nil {

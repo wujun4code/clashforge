@@ -63,7 +63,6 @@ def make_tar_gz(out_path, base_dir, names):
             if (
                 normalized_name in {'control', 'conffiles', 'postinst', 'prerm', 'postrm'}
                 or normalized_name.startswith('etc/init.d/')
-                or normalized_name == 'usr/bin/clashforge-diag'
             ):
                 payload = payload.replace(b'\r\n', b'\n')
                 if payload and not payload.endswith(b'\n'):

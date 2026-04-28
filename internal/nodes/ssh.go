@@ -13,13 +13,24 @@ type SSHClient struct {
 	client *ssh.Client
 }
 
+// BuildAuthMethods constructs SSH auth methods for a node.
+// Key-based auth (router's key pair) is tried first, then password if set.
+func BuildAuthMethods(password string, kp *KeyPair) []ssh.AuthMethod {
+	var methods []ssh.AuthMethod
+	if kp != nil {
+		methods = append(methods, kp.SSHAuthMethod())
+	}
+	if password != "" {
+		methods = append(methods, ssh.Password(password))
+	}
+	return methods
+}
+
 // TestSSH attempts an SSH connection and returns an error if it fails.
-func TestSSH(host string, port int, username, password string, timeout time.Duration) error {
+func TestSSH(host string, port int, username string, authMethods []ssh.AuthMethod, timeout time.Duration) error {
 	config := &ssh.ClientConfig{
-		User: username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
+		User:            username,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // acceptable for user's own servers
 		Timeout:         timeout,
 	}
@@ -34,12 +45,10 @@ func TestSSH(host string, port int, username, password string, timeout time.Dura
 }
 
 // NewSSHClient establishes an SSH connection and returns a client.
-func NewSSHClient(host string, port int, username, password string, timeout time.Duration) (*SSHClient, error) {
+func NewSSHClient(host string, port int, username string, authMethods []ssh.AuthMethod, timeout time.Duration) (*SSHClient, error) {
 	config := &ssh.ClientConfig{
-		User: username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
+		User:            username,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         timeout,
 	}

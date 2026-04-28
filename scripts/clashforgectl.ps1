@@ -216,8 +216,9 @@ if ($Action -eq "deploy") {
 
     # ── 4. Sync openwrt/files helpers → ipk/ ─────────────────────────────────
     Log "── Step 4: Syncing openwrt/files helpers → ipk/"
+    # Remove deprecated helper that was replaced by clashforgectl diag.
+    Remove-Item -Force (Join-Path $RepoRoot "ipk\usr\bin\clashforge-diag") -ErrorAction SilentlyContinue
     $HelperMap = @{
-        "openwrt\files\usr\bin\clashforge-diag"                             = "ipk\usr\bin\clashforge-diag"
         "openwrt\files\etc\init.d\metaclash"                                = "ipk\etc\init.d\clashforge"
         "openwrt\files\usr\share\luci\menu.d\luci-app-clashforge.json"      = "ipk\usr\share\luci\menu.d\luci-app-clashforge.json"
         "openwrt\files\www\luci-static\resources\view\clashforge\main.js"   = "ipk\www\luci-static\resources\view\clashforge\main.js"

@@ -64,11 +64,12 @@ type DeployProgress func(step, status, message, detail string)
 func DeployGOST(
 	ctx context.Context,
 	node *Node,
+	kp *KeyPair,
 	progress DeployProgress,
 ) (*DeployResult, error) {
 	// Step 1: SSH connect
 	progress("connect", "running", "正在连接远程服务器...", "")
-	client, err := NewSSHClient(node.Host, node.Port, node.Username, node.Password, 30*time.Second)
+	client, err := NewSSHClient(node.Host, node.Port, node.Username, BuildAuthMethods(node.Password, kp), 30*time.Second)
 	if err != nil {
 		progress("connect", "error", "SSH 连接失败", err.Error())
 		return &DeployResult{Success: false, Error: err.Error()}, err

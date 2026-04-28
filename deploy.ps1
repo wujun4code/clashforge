@@ -66,8 +66,9 @@ if ($Skip -notmatch '\bgo\b') {
 
 # ── 3b. Sync openwrt/files helper scripts → ipk/ ─────────────────────────────
 Step "Syncing openwrt/files helpers → ipk/"
+# Remove deprecated helper that was replaced by clashforgectl diag.
+Remove-Item -Force "$Root\ipk\usr\bin\clashforge-diag" -ErrorAction SilentlyContinue
 $helperMap = @{
-    "$Root\openwrt\files\usr\bin\clashforge-diag"                                      = "$Root\ipk\usr\bin\clashforge-diag"
     "$Root\openwrt\files\usr\bin\uninstall-clashforge.sh"                              = "$Root\ipk\usr\bin\uninstall-clashforge"
     "$Root\openwrt\files\etc\init.d\metaclash"                                         = "$Root\ipk\etc\init.d\clashforge"
     "$Root\openwrt\files\usr\share\luci\menu.d\luci-app-clashforge.json"               = "$Root\ipk\usr\share\luci\menu.d\luci-app-clashforge.json"

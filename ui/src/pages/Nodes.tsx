@@ -15,9 +15,11 @@ import {
   RotateCw,
   Copy,
   Check,
+  Key,
 } from 'lucide-react'
 import {
   getNodes,
+  getNodeSSHPubKey,
   createNode,
   updateNode,
   deleteNode,
@@ -119,6 +121,10 @@ function NodeFormModal({
   const isEdit = !!node
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [sshPubKey, setSSHPubKey] = useState('')
+  const [copiedKey, setCopiedKey] = useState(false)
+  const [copiedCmd, setCopiedCmd] = useState(false)
+  const [copiedLocal, setCopiedLocal] = useState(false)
   const [form, setForm] = useState<NodeCreateRequest>({
     name: node?.name ?? '',
     host: node?.host ?? '',
@@ -134,6 +140,24 @@ function NodeFormModal({
 
   const update = <K extends keyof NodeCreateRequest>(k: K, v: NodeCreateRequest[K]) =>
     setForm(f => ({ ...f, [k]: v }))
+
+  useEffect(() => {
+    getNodeSSHPubKey().then(r => setSSHPubKey(r.public_key)).catch(() => {})
+  }, [])
+
+  const authorizeCmd = form.host && form.username
+    ? `ssh -p ${form.port} ${form.username}@${form.host} "echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"`
+    : ''
+
+  const localCmd = sshPubKey
+    ? `mkdir -p ~/.ssh && echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh`
+    : ''
+
+  const copyText = async (text: string, setCopied: (v: boolean) => void) => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -160,6 +184,7 @@ function NodeFormModal({
       description="添加一台远程 Linux 服务器"
       onClose={onClose}
       size="lg"
+      dismissible={false}
       icon={<Server size={18} />}
     >
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
@@ -187,9 +212,74 @@ function NodeFormModal({
             </div>
           </div>
           <div>
-            <label className="block text-xs text-slate-400 mb-1">{isEdit ? '新密码 (留空不修改)' : 'SSH 密码'}</label>
-            <input className="glass-input" type="password" value={form.password} onChange={e => update('password', e.target.value)} placeholder={isEdit ? '留空则不修改密码' : '输入 SSH 密码'} />
+            <label className="block text-xs text-slate-400 mb-1">{isEdit ? '新密码 (留空不修改)' : 'SSH 密码 (可选)'}</label>
+            <input className="glass-input" type="password" value={form.password} onChange={e => update('password', e.target.value)} placeholder={isEdit ? '留空则不修改' : '已授权 SSH Key 可留空'} />
           </div>
+        </fieldset>
+
+        <div className="divider" />
+
+        {/* Router SSH Key Authorization */}
+        <fieldset className="space-y-3">
+          <legend className="text-xs font-semibold uppercase tracking-[0.2em] text-muted mb-2 flex items-center gap-1.5">
+            <Key size={12} />
+            路由器 SSH 公钥授权
+          </legend>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            如果你的电脑已有该服务器的 SSH 访问权限，在本地终端执行下方命令，将路由器公钥加入服务器授权列表，之后无需密码即可连接。
+          </p>
+          {sshPubKey && (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2">
+                <code className="flex-1 block rounded-lg bg-surface-2 border border-white/5 px-3 py-2 font-mono text-[11px] text-slate-300 break-all leading-relaxed">
+                  {sshPubKey}
+                </code>
+                <button
+                  type="button"
+                  className="btn-ghost shrink-0 px-2 py-2"
+                  onClick={() => copyText(sshPubKey, setCopiedKey)}
+                  title="复制公钥"
+                >
+                  {copiedKey ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                </button>
+              </div>
+              {/* 方式一：从本地电脑远程执行 */}
+              <p className="text-[11px] text-slate-500 mt-1">方式一：在你的电脑终端执行（需本地已有服务器 SSH 权限）</p>
+              {authorizeCmd ? (
+                <div className="flex items-start gap-2">
+                  <code className="flex-1 block rounded-lg bg-surface-2 border border-white/5 px-3 py-2 font-mono text-[11px] text-slate-300 break-all leading-relaxed">
+                    {authorizeCmd}
+                  </code>
+                  <button
+                    type="button"
+                    className="btn-ghost shrink-0 px-2 py-2"
+                    onClick={() => copyText(authorizeCmd, setCopiedCmd)}
+                    title="复制命令"
+                  >
+                    {copiedCmd ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted">填写主机地址和用户名后自动生成</p>
+              )}
+
+              {/* 方式二：登录服务器后直接执行 */}
+              <p className="text-[11px] text-slate-500 mt-1">方式二：SSH 登录目标服务器后，在服务器上直接执行</p>
+              <div className="flex items-start gap-2">
+                <code className="flex-1 block rounded-lg bg-surface-2 border border-white/5 px-3 py-2 font-mono text-[11px] text-slate-300 break-all leading-relaxed">
+                  {localCmd}
+                </code>
+                <button
+                  type="button"
+                  className="btn-ghost shrink-0 px-2 py-2"
+                  onClick={() => copyText(localCmd, setCopiedLocal)}
+                  title="复制命令"
+                >
+                  {copiedLocal ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                </button>
+              </div>
+            </div>
+          )}
         </fieldset>
 
         <div className="divider" />

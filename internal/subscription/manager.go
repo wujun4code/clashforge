@@ -302,6 +302,12 @@ func (m *Manager) HasCache(id string) bool {
 	return err == nil
 }
 
+// GetRawYAML returns the saved raw YAML bytes for the given subscription id.
+// It returns os.ErrNotExist when no raw YAML cache is available.
+func (m *Manager) GetRawYAML(id string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(m.dataDir, "cache", id+".raw.yaml"))
+}
+
 // GetRawYAMLForEnabled returns the saved raw YAML bytes for every enabled subscription
 // that was last fetched as a full Clash YAML (i.e. a .raw.yaml cache file exists).
 // This allows callers to extract extra sections (rule-providers, rules, etc.) that

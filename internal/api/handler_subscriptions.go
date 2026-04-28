@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wujun4code/clashforge/internal/subscription"
@@ -97,6 +99,30 @@ func handleSyncSubscriptionUpdate(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// handleGetSubscriptionCache returns cached raw YAML for a subscription when available.
+func handleGetSubscriptionCache(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if _, ok := deps.SubManager.GetByID(id); !ok {
+			Err(w, http.StatusNotFound, "SUB_NOT_FOUND", "subscription not found")
+			return
+		}
+		raw, err := deps.SubManager.GetRawYAML(id)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				Err(w, http.StatusNotFound, "SUB_CACHE_NOT_FOUND", "subscription raw cache not found")
+				return
+			}
+			Err(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"id":      id,
+			"content": string(raw),
+		})
 	}
 }
 

@@ -151,7 +151,19 @@ func handleDeleteNode(store *nodes.Store) http.HandlerFunc {
 	}
 }
 
-func handleTestNode(store *nodes.Store) http.HandlerFunc {
+func handleGetSSHPubKey(kp *nodes.KeyPair) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if kp == nil {
+			Err(w, http.StatusInternalServerError, "KEYPAIR_UNAVAILABLE", "SSH key pair not initialized")
+			return
+		}
+		JSON(w, http.StatusOK, map[string]string{
+			"public_key": kp.PublicKeyString(),
+		})
+	}
+}
+
+func handleTestNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		node, ok := store.Get(id)
@@ -160,7 +172,7 @@ func handleTestNode(store *nodes.Store) http.HandlerFunc {
 			return
 		}
 
-		if err := nodes.TestSSH(node.Host, node.Port, node.Username, node.Password, 15*time.Second); err != nil {
+		if err := nodes.TestSSH(node.Host, node.Port, node.Username, nodes.BuildAuthMethods(node.Password, kp), 15*time.Second); err != nil {
 			JSON(w, http.StatusOK, map[string]interface{}{
 				"ok":      false,
 				"message": err.Error(),
@@ -179,7 +191,7 @@ func handleTestNode(store *nodes.Store) http.HandlerFunc {
 	}
 }
 
-func handleDeployNode(store *nodes.Store) http.HandlerFunc {
+func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		node, ok := store.Get(id)
@@ -225,7 +237,7 @@ func handleDeployNode(store *nodes.Store) http.HandlerFunc {
 		node.DeployLog = ""
 		store.Update(id, node)
 
-		result, err := nodes.DeployGOST(r.Context(), node, sendSSE)
+		result, err := nodes.DeployGOST(r.Context(), node, kp, sendSSE)
 		if err != nil || !result.Success {
 			node.Status = nodes.StatusError
 			if err != nil {
@@ -263,7 +275,7 @@ func handleDeployNode(store *nodes.Store) http.HandlerFunc {
 	}
 }
 
-func handleDestroyNode(store *nodes.Store) http.HandlerFunc {
+func handleDestroyNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		node, ok := store.Get(id)
@@ -294,7 +306,7 @@ func handleDestroyNode(store *nodes.Store) http.HandlerFunc {
 			flusher.Flush()
 		}
 
-		result, err := nodes.DestroyGOST(r.Context(), node, sendSSE)
+		result, err := nodes.DestroyGOST(r.Context(), node, kp, sendSSE)
 		if err != nil || !result.Success {
 			node.Status = nodes.StatusError
 			if err != nil {
