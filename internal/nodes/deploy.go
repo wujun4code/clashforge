@@ -95,7 +95,7 @@ func DeployGOST(
 	out, err := client.Run("which curl || echo MISSING_CURL")
 	if err != nil || strings.Contains(out, "MISSING_CURL") {
 		progress("prereqs", "running", "安装 curl...", "")
-		_, _ = client.Run("apt-get update -qq && apt-get install -y -qq curl 2>&1")
+		_, _ = client.Run("(apt-get update -qq && apt-get install -y -qq curl 2>&1) || (sudo apt-get update -qq && sudo apt-get install -y -qq curl 2>&1)")
 	}
 	progress("prereqs", "ok", "系统环境就绪", "")
 
@@ -135,10 +135,12 @@ echo "OK"
 
 	progress("config-write", "running", "正在生成 GOST 配置文件...", "")
 	gostYAML := fmt.Sprintf(gostConfigTemplate, proxyUser, proxyPass)
-	// Use printf + tee to write the config: avoids quoting issues and ensures
-	// the directory is created in the same command so failures surface immediately.
+	// Use printf + tee to write the config and gracefully handle privilege models:
+	// 1) direct write (root user), 2) sudo write (non-root with sudo).
 	out, err = client.Run(fmt.Sprintf(
-		"mkdir -p /etc/gost && printf '%%s' %s | tee /etc/gost/gost.yaml > /dev/null",
+		"(mkdir -p /etc/gost && printf '%%s' %s | tee /etc/gost/gost.yaml > /dev/null) || "+
+			"(sudo mkdir -p /etc/gost && printf '%%s' %s | sudo tee /etc/gost/gost.yaml > /dev/null)",
+		shellEscape(gostYAML),
 		shellEscape(gostYAML),
 	))
 	if err != nil {
@@ -149,6 +151,7 @@ echo "OK"
 
 	progress("systemd", "running", "正在注册 systemd 服务...", "")
 	out, err = client.Run(fmt.Sprintf(`
+(
 cat > /etc/systemd/system/gost.service << 'SYSTEMDEOF'
 %s
 SYSTEMDEOF
@@ -156,7 +159,17 @@ systemctl daemon-reload
 systemctl enable gost
 systemctl restart gost
 systemctl is-active gost
-`, gostServiceTemplate))
+) || (
+cat > /tmp/gost.service << 'SYSTEMDEOF'
+%s
+SYSTEMDEOF
+sudo mv /tmp/gost.service /etc/systemd/system/gost.service
+sudo systemctl daemon-reload
+sudo systemctl enable gost
+sudo systemctl restart gost
+sudo systemctl is-active gost
+)
+`, gostServiceTemplate, gostServiceTemplate))
 	if err != nil || strings.TrimSpace(out) != "active" {
 		progress("systemd", "error", "systemd 服务启动失败", fmt.Sprintf("%s\n%s", err, out))
 		return &DeployResult{Success: false, Error: "systemd service failed to start", Phase: phase}, err
