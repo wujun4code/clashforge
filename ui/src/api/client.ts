@@ -518,4 +518,18 @@ export const testNodeConnection = (id: string) => request<{ ok: boolean; message
 export const probeNode = (id: string, mode: 'ip' | 'domain' = 'ip') =>
   request<{ mode: 'ip' | 'domain'; proxy_host: string; proxy_port: number; probe_results: NodeProbeResult[]; summary: { ok: number; total: number; success: boolean } }>('POST', `/nodes/${encodeURIComponent(id)}/probe`, { mode })
 
+export interface DomainProbeResult {
+  domain: string
+  checked_at: string
+  dns_ips?: string[]
+  dns_error?: string
+  ok: boolean
+  latency_ms?: number
+  status_code?: number
+  error?: string
+}
+
+export const probeDomain = (domain: string) =>
+  request<DomainProbeResult>('POST', '/health/probe-domain', { domain })
+
 

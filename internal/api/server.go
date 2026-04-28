@@ -53,6 +53,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/overview/takeover", handleTakeoverOverviewModule(deps))
 		api.Post("/overview/release", handleReleaseOverviewTakeover(deps))
 		api.Get("/health/check", handleHealthCheck(deps))
+			api.Post("/health/probe-domain", handleProbeDomain(deps))
 		api.Get("/config", handleGetConfig(deps))
 		api.Put("/config", handleUpdateConfig(deps))
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))
