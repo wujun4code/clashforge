@@ -280,13 +280,27 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
   )
 }
 
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return } catch { /* fall through */ }
+  }
+  // Fallback for HTTP (non-secure) contexts
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'
+  document.body.appendChild(ta)
+  ta.focus(); ta.select()
+  document.execCommand('copy')
+  document.body.removeChild(ta)
+}
+
 function CopyableCode({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <div className="flex items-start gap-2">
       <code className="flex-1 block rounded-lg bg-surface-2 border border-white/5 px-3 py-2 font-mono text-[11px] text-slate-300 break-all leading-relaxed">{text}</code>
       <button type="button" className="btn-ghost shrink-0 px-2 py-2" onClick={async () => {
-        await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000)
+        await copyText(text); setCopied(true); setTimeout(() => setCopied(false), 2000)
       }}>
         {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
       </button>
@@ -889,7 +903,7 @@ function ExportModal({ node, onClose }: { node: NodeListItem; onClose: () => voi
   }, [node.id])
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(yaml)
+    await copyText(yaml)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
