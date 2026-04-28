@@ -115,6 +115,7 @@ GOST_VER=$(curl -sf "https://api.github.com/repos/go-gost/gost/releases/latest" 
 echo "Installing gost v${GOST_VER} for ${GOARCH}..."
 GOST_URL="https://github.com/go-gost/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOARCH}.tar.gz"
 curl -sSfL "$GOST_URL" -o /tmp/gost.tar.gz 2>&1
+rm -f /tmp/gost
 tar -xzf /tmp/gost.tar.gz -C /tmp/ gost 2>&1
 chmod +x /tmp/gost
 mv -f /tmp/gost /usr/local/bin/gost
