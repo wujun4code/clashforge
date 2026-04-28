@@ -115,11 +115,11 @@ GOST_VER=$(curl -sf "https://api.github.com/repos/go-gost/gost/releases/latest" 
 echo "Installing gost v${GOST_VER} for ${GOARCH}..."
 GOST_URL="https://github.com/go-gost/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOARCH}.tar.gz"
 curl -sSfL "$GOST_URL" -o /tmp/gost.tar.gz 2>&1
-rm -f /tmp/gost
+rm -rf /tmp/gost
 tar -xzf /tmp/gost.tar.gz -C /tmp/ gost 2>&1
-chmod +x /tmp/gost
-mv -f /tmp/gost /usr/local/bin/gost
-rm -f /tmp/gost.tar.gz
+mkdir -p /usr/local/bin
+sudo install -m 755 /tmp/gost /usr/local/bin/gost 2>/dev/null || install -m 755 /tmp/gost /usr/local/bin/gost
+rm -f /tmp/gost.tar.gz /tmp/gost
 echo "OK"
 `)
 	if err != nil {
@@ -135,9 +135,12 @@ echo "OK"
 
 	progress("config-write", "running", "正在生成 GOST 配置文件...", "")
 	gostYAML := fmt.Sprintf(gostConfigTemplate, proxyUser, proxyPass)
-	_, _ = client.Run("mkdir -p /etc/gost")
-	escapedYAML := strings.ReplaceAll(gostYAML, "'", "'\\''")
-	out, err = client.Run(fmt.Sprintf("echo '%s' > /etc/gost/gost.yaml", escapedYAML))
+	// Use printf + tee to write the config: avoids quoting issues and ensures
+	// the directory is created in the same command so failures surface immediately.
+	out, err = client.Run(fmt.Sprintf(
+		"mkdir -p /etc/gost && printf '%%s' %s | tee /etc/gost/gost.yaml > /dev/null",
+		shellEscape(gostYAML),
+	))
 	if err != nil {
 		progress("config-write", "error", "配置写入失败", err.Error())
 		return &DeployResult{Success: false, Error: fmt.Sprintf("write config: %v", err), Phase: phase}, err

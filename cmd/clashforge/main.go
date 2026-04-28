@@ -167,7 +167,8 @@ func main() {
 		log.Fatal().Err(err).Msg("init node store")
 	}
 
-	// Router SSH key pair (used to authenticate to managed servers)
+	// Router SSH key pair — LoadOrGenerateKeyPair prefers /root/.ssh/ (opkg-safe)
+	// and auto-migrates from dataDir on first run after an upgrade.
 	nodeKeyPair, err := nodes.LoadOrGenerateKeyPair(cfg.Core.DataDir)
 	if err != nil {
 		log.Fatal().Err(err).Msg("init router SSH key pair")
@@ -179,14 +180,14 @@ func main() {
 
 	// HTTP server
 	router := api.NewRouter(api.Dependencies{
-		Version:    buildVersion,
-		StartedAt:  time.Now(),
-		ConfigPath: *cfgPath,
-		Config:     cfg,
-		Core:       coreManager,
-		SubManager: subManager,
-		Netfilter:  nfManager,
-		SSEBroker:  sseBroker,
+		Version:     buildVersion,
+		StartedAt:   time.Now(),
+		ConfigPath:  *cfgPath,
+		Config:      cfg,
+		Core:        coreManager,
+		SubManager:  subManager,
+		Netfilter:   nfManager,
+		SSEBroker:   sseBroker,
 		LogBuffer:   logBuf,
 		NodeStore:   nodeStore,
 		NodeKeyPair: nodeKeyPair,

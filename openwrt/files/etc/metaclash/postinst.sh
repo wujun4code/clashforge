@@ -8,6 +8,9 @@ if [ -f /tmp/clashforge-ed25519.bak ];     then mv /tmp/clashforge-ed25519.bak  
 if [ -f /tmp/clashforge-nodes.bak ];       then mv /tmp/clashforge-nodes.bak     /etc/metaclash/nodes.json;         fi
 if [ -f /tmp/clashforge-nodes-key.bak ];   then mv /tmp/clashforge-nodes-key.bak /etc/metaclash/nodes.key;          fi
 
+# Legacy SSH key (if restored above) is migrated to /root/.ssh by the Go binary
+# on first start after upgrade.
+
 if [ ! -f /etc/metaclash/config.toml ]; then
   cat > /etc/metaclash/config.toml << 'TOML'
 [core]
