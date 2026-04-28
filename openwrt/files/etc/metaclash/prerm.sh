@@ -1,7 +1,10 @@
 #!/bin/sh
 
-# 0. Backup user config so postinst can restore it after opkg removes the directory
-cp /etc/metaclash/config.toml /tmp/clashforge-config.bak 2>/dev/null || true
+# 0. Backup persistent data so postinst can restore it after opkg removes the directory
+cp /etc/metaclash/config.toml      /tmp/clashforge-config.bak      2>/dev/null || true
+cp /etc/metaclash/clashforge_ed25519 /tmp/clashforge-ed25519.bak   2>/dev/null || true
+cp /etc/metaclash/nodes.json       /tmp/clashforge-nodes.bak        2>/dev/null || true
+cp /etc/metaclash/nodes.key        /tmp/clashforge-nodes-key.bak    2>/dev/null || true
 
 # 1. Disable auto-respawn so procd won't restart after we kill
 /etc/init.d/clashforge disable 2>/dev/null || true
