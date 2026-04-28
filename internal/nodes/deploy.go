@@ -92,19 +92,34 @@ func DeployGOST(
 	progress("connect", "ok", "SSH 连接成功", node.Host)
 
 	progress("prereqs", "running", "正在检查系统环境...", "")
-	out, err := client.Run("which go && which git && which curl || echo MISSING_PREREQS")
-	if err != nil || strings.Contains(out, "MISSING_PREREQS") {
-		progress("prereqs", "running", "安装必要依赖 (go, git)...", "")
-		_, _ = client.Run("which go || (apt-get update -qq && apt-get install -y -qq golang-go git curl) 2>&1")
+	out, err := client.Run("which curl || echo MISSING_CURL")
+	if err != nil || strings.Contains(out, "MISSING_CURL") {
+		progress("prereqs", "running", "安装 curl...", "")
+		_, _ = client.Run("apt-get update -qq && apt-get install -y -qq curl 2>&1")
 	}
 	progress("prereqs", "ok", "系统环境就绪", "")
 
-	progress("gost-install", "running", "正在安装 GOST...", "从 GitHub 克隆并编译")
+	progress("gost-install", "running", "正在安装 GOST...", "下载预编译二进制")
 	out, err = client.Run(`
-if [ -d /tmp/gost ]; then rm -rf /tmp/gost; fi
-git clone --depth 1 https://github.com/go-gost/gost.git /tmp/gost 2>&1
-cd /tmp/gost
-sudo bash install.sh 2>&1
+set -e
+ARCH=$(uname -m)
+case $ARCH in
+  x86_64)        GOARCH="amd64" ;;
+  aarch64|arm64) GOARCH="arm64" ;;
+  armv7l|armhf)  GOARCH="armv7" ;;
+  *)             GOARCH="amd64" ;;
+esac
+GOST_VER=$(curl -sf "https://api.github.com/repos/go-gost/gost/releases/latest" 2>/dev/null \
+  | grep '"tag_name"' | sed 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/' | head -1)
+[ -z "$GOST_VER" ] && GOST_VER="3.2.6"
+echo "Installing gost v${GOST_VER} for ${GOARCH}..."
+GOST_URL="https://github.com/go-gost/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOARCH}.tar.gz"
+curl -sSfL "$GOST_URL" -o /tmp/gost.tar.gz 2>&1
+tar -xzf /tmp/gost.tar.gz -C /tmp/ gost 2>&1
+chmod +x /tmp/gost
+mv -f /tmp/gost /usr/local/bin/gost
+rm -f /tmp/gost.tar.gz
+echo "OK"
 `)
 	if err != nil {
 		progress("gost-install", "error", "GOST 安装失败", fmt.Sprintf("%s\n%s", err.Error(), out))
