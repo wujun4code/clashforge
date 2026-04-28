@@ -499,4 +499,18 @@ export const updateNode = (id: string, node: Partial<NodeCreateRequest>) => requ
 export const deleteNode = (id: string) => request<{ ok: boolean }>('DELETE', `/nodes/${encodeURIComponent(id)}`)
 export const testNodeConnection = (id: string) => request<{ ok: boolean; message: string }>('POST', `/nodes/${encodeURIComponent(id)}/test`)
 
+export interface DomainProbeResult {
+  domain: string
+  checked_at: string
+  dns_ips?: string[]
+  dns_error?: string
+  ok: boolean
+  latency_ms?: number
+  status_code?: number
+  error?: string
+}
+
+export const probeDomain = (domain: string) =>
+  request<DomainProbeResult>('POST', '/health/probe-domain', { domain })
+
 

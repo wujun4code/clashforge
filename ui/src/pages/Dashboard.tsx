@@ -18,8 +18,9 @@ import {
   getProxies,
   selectProxy,
   testLatency,
+  probeDomain,
 } from '../api/client'
-import type { ClashforgeVersionData } from '../api/client'
+import type { ClashforgeVersionData, DomainProbeResult } from '../api/client'
 import type {
   OverviewAccessCheck,
   OverviewCoreData,
@@ -530,6 +531,104 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
   )
 }
 
+// ── Domain connectivity checker ────────────────────────────────────────────
+
+interface DomainProbeState {
+  domain: string
+  router: DomainProbeResult | null
+  browser: { ok: boolean; latency_ms?: number; error?: string } | null
+}
+
+const PRESET_DOMAINS = ['google.com', 'youtube.com', 'github.com', 'openai.com']
+
+function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
+  domain: string
+  onDomainChange: (v: string) => void
+  loading: boolean
+  result: DomainProbeState | null
+  onRun: () => void
+}) {
+  return (
+    <div className="glass-card overflow-hidden">
+      <div className="px-4 py-3.5 space-y-3">
+        {/* Input row */}
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={domain}
+            onChange={e => onDomainChange(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') onRun() }}
+            placeholder="输入域名，如 google.com"
+            className="glass-input h-8 flex-1 min-w-0 text-xs font-mono"
+          />
+          <button
+            onClick={onRun}
+            disabled={loading || !domain.trim()}
+            className="btn-primary h-8 px-3 flex items-center gap-1.5 text-xs shrink-0"
+          >
+            {loading && <Loader2 size={11} className="animate-spin" />}
+            {loading ? '检测中' : '探测'}
+          </button>
+        </div>
+
+        {/* Preset chips */}
+        <div className="flex flex-wrap gap-1.5">
+          {PRESET_DOMAINS.map(d => (
+            <button
+              key={d}
+              onClick={() => onDomainChange(d)}
+              className={`px-2.5 py-0.5 rounded-full border text-[10px] font-mono transition-colors ${domain === d ? 'border-brand/40 bg-brand/10 text-brand' : 'border-white/10 bg-white/[0.03] text-muted hover:text-slate-300 hover:border-white/20'}`}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Results */}
+      {result && (
+        <div className="border-t border-white/8 grid grid-cols-2">
+          {/* Router */}
+          <div className="px-4 py-3 space-y-1 border-r border-white/8">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">路由器侧</p>
+              <Pill tone={result.router?.ok ? 'success' : 'danger'} label={result.router?.ok ? '通' : '不通'} />
+            </div>
+            <p className="text-[10px] text-muted/60">经 Mihomo mixed 端口转发</p>
+            {result.router?.ok
+              ? <p className="text-sm font-mono font-semibold text-white">{result.router.latency_ms} ms</p>
+              : <p className="text-xs text-danger/80 leading-5 break-all">{result.router?.error || '连接失败'}</p>}
+            {result.router?.dns_ips?.[0] && (
+              <p className="text-[10px] text-muted/50 font-mono">DNS → {result.router.dns_ips[0]}</p>
+            )}
+            {result.router?.dns_error && (
+              <p className="text-[10px] text-warning/60 break-all">DNS 失败: {result.router.dns_error}</p>
+            )}
+          </div>
+          {/* Browser */}
+          <div className="px-4 py-3 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">浏览器侧</p>
+              <Pill tone={result.browser?.ok ? 'success' : 'danger'} label={result.browser?.ok ? '通' : '不通'} />
+            </div>
+            <p className="text-[10px] text-muted/60">由浏览器直连，不经过代理</p>
+            {result.browser?.ok
+              ? <p className="text-sm font-mono font-semibold text-white">{result.browser.latency_ms} ms</p>
+              : <p className="text-xs text-danger/80 leading-5 break-all">{result.browser?.error || '连接失败'}</p>}
+          </div>
+        </div>
+      )}
+
+      {loading && !result && (
+        <div className="border-t border-white/8 px-4 py-4 flex items-center gap-2 text-xs text-muted">
+          <Loader2 size={12} className="animate-spin" />
+          正在同时从路由器和浏览器发起探测…
+        </div>
+      )}
+    </div>
+  )
+}
+
 const SKIP_VERSION_KEY = 'cf_skip_version'
 
 function ResourceDrawer({
@@ -678,8 +777,13 @@ export function Dashboard() {
 
   // resource drawer + probe tab + last-switched-proxy tracking
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
-  const [probeTab, setProbeTab] = useState<'router' | 'browser'>('router')
+  const [probeTab, setProbeTab] = useState<'router' | 'browser' | 'domain'>('router')
   const [lastSwitchedProxy, setLastSwitchedProxy] = useState<{ group: string; proxy: string } | null>(null)
+
+  // domain probe state (tab 3)
+  const [domainInput, setDomainInput] = useState('google.com')
+  const [domainLoading, setDomainLoading] = useState(false)
+  const [domainResult, setDomainResult] = useState<DomainProbeState | null>(null)
 
   // prevents auto-running probes more than once per mount
   const probesAutoRanRef = useRef(false)
@@ -775,6 +879,31 @@ export function Dashboard() {
     await refreshProxies()
     // auto-run probes to verify the switch
     void refreshProbes()
+  }
+
+  const handleDomainProbe = async (d: string) => {
+    const clean = d.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+    if (!clean) return
+    setDomainLoading(true)
+    setDomainResult(null)
+    const [routerRes, browserRes] = await Promise.all([
+      probeDomain(clean).catch((e: unknown) => ({
+        domain: clean, checked_at: new Date().toISOString(),
+        ok: false, error: e instanceof Error ? e.message : '请求失败',
+      }) as DomainProbeResult),
+      (async () => {
+        const t0 = performance.now()
+        try {
+          await fetchWithTimeout(`https://${clean}`, { method: 'GET', mode: 'no-cors', cache: 'no-store' }, 8000)
+          return { ok: true, latency_ms: Math.max(1, Math.round(performance.now() - t0)) }
+        } catch (e) {
+          const { message } = categorizeBrowserFetchError(e, Math.round(performance.now() - t0))
+          return { ok: false, error: message }
+        }
+      })(),
+    ])
+    setDomainResult({ domain: clean, router: routerRes, browser: browserRes })
+    setDomainLoading(false)
   }
 
   const handleTestLatency = async () => {
@@ -939,10 +1068,32 @@ export function Dashboard() {
                   </button>
                 )
               })}
+              {/* Domain probe tab */}
+              <button
+                onClick={() => setProbeTab('domain')}
+                className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
+                  probeTab === 'domain' ? 'border-brand text-white' : 'border-transparent text-muted hover:text-slate-300'
+                }`}
+              >
+                域名测试
+                {domainLoading
+                  ? <Loader2 size={10} className="animate-spin text-muted" />
+                  : domainResult
+                    ? <span className={`h-1.5 w-1.5 rounded-full ${domainResult.router?.ok && domainResult.browser?.ok ? 'bg-success' : 'bg-warning'}`} />
+                    : null}
+              </button>
             </div>
 
             <div className="pt-3">
-              {!probeData && !loadingProbes ? (
+              {probeTab === 'domain' ? (
+                <DomainProbePanel
+                  domain={domainInput}
+                  onDomainChange={setDomainInput}
+                  loading={domainLoading}
+                  result={domainResult}
+                  onRun={() => void handleDomainProbe(domainInput)}
+                />
+              ) : !probeData && !loadingProbes ? (
                 <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
                   {coreRunning ? '正在准备首次检测…' : '内核未运行，启动服务后将自动检测。'}
                 </div>
