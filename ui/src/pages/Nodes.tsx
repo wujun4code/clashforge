@@ -312,25 +312,43 @@ function ProbeResultList({ results }: { results: NodeProbeResult[] }) {
   )
 }
 
+function resumeStep(status: NodeListItem['status']): number {
+  switch (status) {
+    case 'connected': return 3
+    case 'deploying':
+    case 'error': return 3
+    case 'deployed': return 7
+    default: return 2
+  }
+}
+
 function NodeWizard({
+  initialNode,
   onClose,
   onDone,
   onOpenExport,
 }: {
+  initialNode?: NodeListItem
   onClose: () => void
   onDone: () => void
   onOpenExport: (node: NodeListItem) => void
 }) {
-  const [step, setStep] = useState(1)
+  const [createdNode, setCreatedNode] = useState<NodeListItem | null>(initialNode ?? null)
+  const [step, setStep] = useState(() => initialNode ? resumeStep(initialNode.status) : 1)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok?: boolean } | null>(null)
-  const [createdNode, setCreatedNode] = useState<NodeListItem | null>(null)
   const eventsRef = useRef<HTMLDivElement>(null)
+
+  const minStep = initialNode ? 2 : 1
+  const canGoBack = step > minStep && !busy
+  const goBack = () => { setStep(s => s - 1); setMessage(null) }
 
   // Step 1: server info
   const [form, setForm] = useState<NodeCreateRequest>({
-    name: '', host: '', port: 22, username: 'root', password: '',
-    domain: '', email: '', cf_token: '', cf_account_id: '', cf_zone_id: '',
+    name: initialNode?.name ?? '', host: initialNode?.host ?? '',
+    port: initialNode?.port ?? 22, username: initialNode?.username ?? 'root',
+    password: '', domain: initialNode?.domain ?? '',
+    email: '', cf_token: '', cf_account_id: '', cf_zone_id: '',
   })
   const updateForm = <K extends keyof NodeCreateRequest>(k: K, v: NodeCreateRequest[K]) =>
     setForm(f => ({ ...f, [k]: v }))
@@ -338,8 +356,11 @@ function NodeWizard({
   // Step 2: SSH pubkey
   const [sshPubKey, setSSHPubKey] = useState('')
   useEffect(() => { getNodeSSHPubKey().then(r => setSSHPubKey(r.public_key)).catch(() => {}) }, [])
-  const authorizeCmd = sshPubKey && form.host && form.username
-    ? `ssh -p ${form.port} ${form.username}@${form.host} "echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"`
+  const sshHost = createdNode?.host ?? form.host
+  const sshPort = createdNode?.port ?? form.port
+  const sshUser = createdNode?.username ?? form.username
+  const authorizeCmd = sshPubKey && sshHost && sshUser
+    ? `ssh -p ${sshPort} ${sshUser}@${sshHost} "echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"`
     : ''
   const localCmd = sshPubKey
     ? `mkdir -p ~/.ssh && echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh`
@@ -525,7 +546,7 @@ function NodeWizard({
 
   return (
     <ModalShell
-      title={`新增节点 · ${stepTitles[step - 1]}`}
+      title={`${initialNode ? '继续部署' : '新增节点'} · ${stepTitles[step - 1]}`}
       description={node ? `${node.username}@${node.host}` : '添加一台远程 Linux 服务器'}
       onClose={!busy ? onClose : undefined}
       size="lg"
@@ -564,9 +585,15 @@ function NodeWizard({
             </div>
             <div className="flex justify-end gap-3 pt-1">
               <button className="btn-ghost" onClick={onClose}>取消</button>
-              <button className="btn-primary" disabled={busy || !form.name || !form.host} onClick={handleCreateNode}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 创建节点
-              </button>
+              {createdNode ? (
+                <button className="btn-primary" onClick={() => setStep(2)}>
+                  <CheckCircle2 size={14} /> 继续 →
+                </button>
+              ) : (
+                <button className="btn-primary" disabled={busy || !form.name || !form.host} onClick={handleCreateNode}>
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 创建节点
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -591,9 +618,12 @@ function NodeWizard({
                 </div>
               </>
             )}
-            <button className="btn-primary w-full" disabled={busy} onClick={handleTestSSH}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 已完成授权，校验 SSH 连接
-            </button>
+            <div className="flex gap-3">
+              {canGoBack && <button className="btn-ghost shrink-0" onClick={goBack} disabled={busy}>← 上一步</button>}
+              <button className="btn-primary flex-1" disabled={busy} onClick={handleTestSSH}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 已完成授权，校验 SSH 连接
+              </button>
+            </div>
           </div>
         )}
 
@@ -601,10 +631,13 @@ function NodeWizard({
         {step === 3 && (
           <div className="space-y-3">
             <p className="text-xs text-slate-400 leading-relaxed">安装 GOST，以 IP 直连模式启动，并对 Google / YouTube / GitHub 发起连通性探测。</p>
-            <button className="btn-primary w-full" disabled={busy} onClick={handleBootstrapDeploy}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-              {busy ? '部署中，请等待…' : '开始部署并探测'}
-            </button>
+            <div className="flex gap-3">
+              {canGoBack && <button className="btn-ghost shrink-0" onClick={goBack} disabled={busy}>← 上一步</button>}
+              <button className="btn-primary flex-1" disabled={busy} onClick={handleBootstrapDeploy}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                {busy ? '部署中，请等待…' : '开始部署并探测'}
+              </button>
+            </div>
             {(busy || events.length > 0) && <EventLog evs={events} />}
             {bootstrapProbe.length > 0 && <ProbeResultList results={bootstrapProbe} />}
           </div>
@@ -623,6 +656,7 @@ function NodeWizard({
               <input className="glass-input font-mono text-xs" value={cfAccountId} onChange={e => setCFAccountId(e.target.value)} />
             </div>
             <div className="flex gap-3">
+              {canGoBack && <button className="btn-ghost shrink-0" onClick={goBack} disabled={busy}>← 上一步</button>}
               <button className="btn-ghost" disabled={!cfToken || busy} onClick={handleSaveCF}>
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 保存凭据
               </button>
@@ -667,9 +701,12 @@ function NodeWizard({
               <label className="block text-xs text-slate-400 mb-1">ACME 邮箱 (Let's Encrypt)</label>
               <input className="glass-input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@example.com" />
             </div>
-            <button className="btn-primary w-full" disabled={!domain || !email || !cfToken || busy} onClick={handleSaveDomain}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 确认并进入下一步
-            </button>
+            <div className="flex gap-3">
+              {canGoBack && <button className="btn-ghost shrink-0" onClick={goBack} disabled={busy}>← 上一步</button>}
+              <button className="btn-primary flex-1" disabled={!domain || !email || !cfToken || busy} onClick={handleSaveDomain}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 确认并进入下一步
+              </button>
+            </div>
           </div>
         )}
 
@@ -677,10 +714,13 @@ function NodeWizard({
         {step === 6 && (
           <div className="space-y-3">
             <p className="text-xs text-slate-400 leading-relaxed">将为 <span className="text-slate-300 font-mono">{domain}</span> 创建 DNS A 记录，并通过 ACME 签发 TLS 证书，然后重启 GOST 以域名模式运行。</p>
-            <button className="btn-primary w-full" disabled={busy} onClick={handleFullDeploy}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-              {busy ? '绑定中，请等待…' : '开始绑定与签证'}
-            </button>
+            <div className="flex gap-3">
+              {canGoBack && <button className="btn-ghost shrink-0" onClick={goBack} disabled={busy}>← 上一步</button>}
+              <button className="btn-primary flex-1" disabled={busy} onClick={handleFullDeploy}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                {busy ? '绑定中，请等待…' : '开始绑定与签证'}
+              </button>
+            </div>
             {(busy || fullEvents.length > 0) && <EventLog evs={fullEvents} />}
           </div>
         )}
@@ -892,8 +932,12 @@ export function Nodes() {
 
   // Modal state
   const [showWizard, setShowWizard] = useState(false)
+  const [wizardInitialNode, setWizardInitialNode] = useState<NodeListItem | undefined>()
   const [showEditModal, setShowEditModal] = useState(false)
   const [editNode, setEditNode] = useState<NodeListItem | undefined>()
+
+  const openWizard = (node?: NodeListItem) => { setWizardInitialNode(node); setShowWizard(true) }
+  const closeWizard = () => { setShowWizard(false); setWizardInitialNode(undefined) }
   const [progressNodeId, setProgressNodeId] = useState<string | null>(null)
   const [progressAction, setProgressAction] = useState<'deploy' | 'destroy'>('deploy')
   const [exportNode, setExportNode] = useState<NodeListItem | null>(null)
@@ -965,7 +1009,7 @@ export function Nodes() {
           { label: '已部署', value: String(deployedNodes) },
         ]}
         actions={
-          <button className="btn-primary" onClick={() => setShowWizard(true)}>
+          <button className="btn-primary" onClick={() => openWizard()}>
             <Plus size={14} /> 新增节点
           </button>
         }
@@ -986,7 +1030,7 @@ export function Nodes() {
           title="暂无节点"
           description="添加一台远程 Linux 服务器，ClashForge 将自动部署 GOST 代理并签发 TLS 证书。"
           action={
-            <button className="btn-primary" onClick={() => setShowWizard(true)}>
+            <button className="btn-primary" onClick={() => openWizard()}>
               <Plus size={14} /> 添加第一台服务器
             </button>
           }
@@ -1033,14 +1077,14 @@ export function Nodes() {
                     {testLoading[node.id] ? <Loader2 size={12} className="animate-spin" /> : <Terminal size={12} />}
                   </button>
 
-                  {/* Deploy */}
+                  {/* Deploy / resume wizard for non-deployed nodes */}
                   {node.status !== 'deployed' && (
-                    <button className="btn-icon-sm btn-ghost" title="部署 GOST" onClick={() => handleDeploy(node.id)}>
+                    <button className="btn-icon-sm btn-ghost" title="继续部署向导" onClick={() => openWizard(node)}>
                       <Play size={12} className="text-brand" />
                     </button>
                   )}
 
-                  {/* Redeploy */}
+                  {/* Redeploy for deployed nodes */}
                   {node.status === 'deployed' && (
                     <button className="btn-icon-sm btn-ghost" title="重新部署" onClick={() => handleDeploy(node.id)}>
                       <RotateCw size={12} className="text-amber-400" />
@@ -1062,7 +1106,10 @@ export function Nodes() {
                   )}
 
                   {/* Edit */}
-                  <button className="btn-icon-sm btn-ghost" title="编辑" onClick={() => { setEditNode(node); setShowEditModal(true) }}>
+                  <button className="btn-icon-sm btn-ghost" title="编辑" onClick={() => {
+                    if (node.status !== 'deployed') { openWizard(node) }
+                    else { setEditNode(node); setShowEditModal(true) }
+                  }}>
                     <Pencil size={12} />
                   </button>
 
@@ -1080,9 +1127,10 @@ export function Nodes() {
       {/* Modals */}
       {showWizard && (
         <NodeWizard
-          onClose={() => setShowWizard(false)}
+          initialNode={wizardInitialNode}
+          onClose={closeWizard}
           onDone={loadNodes}
-          onOpenExport={node => { setExportNode(node); setShowWizard(false) }}
+          onOpenExport={node => { setExportNode(node); closeWizard() }}
         />
       )}
 
