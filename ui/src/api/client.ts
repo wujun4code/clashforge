@@ -491,12 +491,31 @@ export interface NodeCreateRequest {
   cf_zone_id: string
 }
 
+export interface NodeProbeResult {
+  name: string
+  url: string
+  ok: boolean
+  status_code?: number
+  latency_ms?: number
+  error?: string
+}
+
+export interface CloudflareZone {
+  id: string
+  name: string
+  status: string
+}
+
 export const getNodeSSHPubKey = () => request<{ public_key: string }>('GET', '/nodes/ssh-pubkey')
+export const getCloudflareZones = (payload: { cf_token: string; cf_account_id?: string }) =>
+  request<{ zones: CloudflareZone[] }>('POST', '/nodes/cloudflare/zones', payload)
 export const getNodes = () => request<{ nodes: NodeListItem[] }>('GET', '/nodes')
 export const getNode = (id: string) => request<{ node: NodeListItem }>('GET', `/nodes/${encodeURIComponent(id)}`)
 export const createNode = (node: NodeCreateRequest) => request<{ node: NodeListItem }>('POST', '/nodes', node)
 export const updateNode = (id: string, node: Partial<NodeCreateRequest>) => request<{ node: NodeListItem }>('PUT', `/nodes/${encodeURIComponent(id)}`, node)
 export const deleteNode = (id: string) => request<{ ok: boolean }>('DELETE', `/nodes/${encodeURIComponent(id)}`)
 export const testNodeConnection = (id: string) => request<{ ok: boolean; message: string }>('POST', `/nodes/${encodeURIComponent(id)}/test`)
+export const probeNode = (id: string, mode: 'ip' | 'domain' = 'ip') =>
+  request<{ mode: 'ip' | 'domain'; proxy_host: string; proxy_port: number; probe_results: NodeProbeResult[]; summary: { ok: number; total: number; success: boolean } }>('POST', `/nodes/${encodeURIComponent(id)}/probe`, { mode })
 
 

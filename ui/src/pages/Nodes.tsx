@@ -24,8 +24,10 @@ import {
   updateNode,
   deleteNode,
   testNodeConnection,
+  getCloudflareZones,
+  probeNode,
 } from '../api/client'
-import type { NodeListItem, NodeCreateRequest } from '../api/client'
+import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone } from '../api/client'
 import { PageHeader, SectionCard, ModalShell, EmptyState } from '../components/ui'
 
 const BASE = '/api/v1'
@@ -52,6 +54,57 @@ function StatusBadge({ status }: { status: NodeStatus }) {
   )
 }
 
+const WIZARD_CF_STORAGE_KEY = 'cf_nodes_wizard_v1'
+
+function maskSecret(v: string) {
+  if (!v) return ''
+  if (v.length <= 8) return '*'.repeat(v.length)
+  return `${v.slice(0, 4)}****${v.slice(-4)}`
+}
+
+function suggestSubdomains(zone: string) {
+  const prefixes = ['market', 'sales', 'trials', 'blog', 'cdn', 'edge']
+  return prefixes.map(p => `${p}-${Math.floor(Math.random() * 90 + 10)}.${zone}`)
+}
+
+async function encryptForLocalStorage(raw: string, secret: string) {
+  const effectiveSecret = secret || 'clashforge-local-key'
+  if (!window.crypto?.subtle) return raw
+  const enc = new TextEncoder()
+  const iv = window.crypto.getRandomValues(new Uint8Array(12))
+  const keyMaterial = await window.crypto.subtle.importKey('raw', enc.encode(effectiveSecret), 'PBKDF2', false, ['deriveKey'])
+  const key = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: enc.encode('cf-wizard-salt'), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  )
+  const cipher = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(raw))
+  return `${btoa(String.fromCharCode(...iv))}.${btoa(String.fromCharCode(...new Uint8Array(cipher)))}`
+}
+
+async function decryptFromLocalStorage(payload: string, secret: string) {
+  const effectiveSecret = secret || 'clashforge-local-key'
+  if (!payload) return ''
+  if (!payload.includes('.') || !window.crypto?.subtle) return payload
+  const [ivB64, cipherB64] = payload.split('.')
+  const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0))
+  const cipher = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0))
+  const enc = new TextEncoder()
+  const dec = new TextDecoder()
+  const keyMaterial = await window.crypto.subtle.importKey('raw', enc.encode(effectiveSecret), 'PBKDF2', false, ['deriveKey'])
+  const key = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: enc.encode('cf-wizard-salt'), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt'],
+  )
+  const plain = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher)
+  return dec.decode(plain)
+}
+
 // ── SSE helpers ──────────────────────────────────────────────────────────────
 
 interface SSEEvent {
@@ -66,6 +119,9 @@ interface SSEDone {
   success: boolean
   error?: string
   deploy_log?: string
+  phase?: 'bootstrap' | 'full'
+  cert_issued?: boolean
+  probe_results?: NodeProbeResult[]
 }
 
 async function streamSSE(
@@ -74,6 +130,7 @@ async function streamSSE(
   onEvent: (ev: SSEEvent) => void,
   onDone: (done: SSEDone) => void,
   signal?: AbortSignal,
+  payload?: unknown,
 ) {
   const resp = await fetch(url, {
     method: 'POST',
@@ -81,6 +138,7 @@ async function streamSSE(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${secret}`,
     },
+    body: payload ? JSON.stringify(payload) : undefined,
     signal,
   })
   const reader = resp.body?.getReader()
@@ -337,6 +395,253 @@ function NodeFormModal({
   )
 }
 
+// ── Deploy Wizard Modal ─────────────────────────────────────────────────────
+
+function DeployWizardModal({
+  node,
+  onClose,
+  onReload,
+  onOpenExport,
+}: {
+  node: NodeListItem
+  onClose: () => void
+  onReload: () => void
+  onOpenExport: () => void
+}) {
+  const [step, setStep] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [events, setEvents] = useState<SSEEvent[]>([])
+  const [probeResults, setProbeResults] = useState<NodeProbeResult[]>([])
+  const [zones, setZones] = useState<CloudflareZone[]>([])
+  const [domainSuggestions, setDomainSuggestions] = useState<string[]>([])
+  const [cfToken, setCFToken] = useState('')
+  const [cfAccountId, setCFAccountId] = useState('')
+  const [cfZoneId, setCFZoneId] = useState('')
+  const [domain, setDomain] = useState(node.domain || '')
+  const [email, setEmail] = useState('')
+  const [domainProbe, setDomainProbe] = useState<NodeProbeResult[]>([])
+  const [sshPubKey, setSSHPubKey] = useState('')
+  const authorizeCmd = sshPubKey
+    ? `ssh -p ${node.port} ${node.username}@${node.host} "echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"`
+    : ''
+
+  useEffect(() => {
+    getNodeSSHPubKey().then(r => setSSHPubKey(r.public_key)).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const secret = localStorage.getItem('cf_secret') || ''
+    const raw = localStorage.getItem(WIZARD_CF_STORAGE_KEY)
+    if (!raw) return
+    decryptFromLocalStorage(raw, secret).then((plain) => {
+      if (!plain) return
+      try {
+        const data = JSON.parse(plain) as { cf_token?: string; cf_account_id?: string; acme_email?: string }
+        if (data.cf_token) setCFToken(data.cf_token)
+        if (data.cf_account_id) setCFAccountId(data.cf_account_id)
+        if (data.acme_email) setEmail(data.acme_email)
+      } catch {
+        // ignore
+      }
+    }).catch(() => {})
+  }, [])
+
+  const persistCF = async () => {
+    const secret = localStorage.getItem('cf_secret') || ''
+    const raw = JSON.stringify({ cf_token: cfToken, cf_account_id: cfAccountId, acme_email: email })
+    const encrypted = await encryptForLocalStorage(raw, secret)
+    localStorage.setItem(WIZARD_CF_STORAGE_KEY, encrypted)
+    setMessage(`Cloudflare 凭据已本地加密存储，Token: ${maskSecret(cfToken)}`)
+  }
+
+  const runDeploy = async (mode: 'bootstrap' | 'full') => {
+    setBusy(true)
+    setEvents([])
+    setMessage('')
+    const secret = localStorage.getItem('cf_secret') || ''
+    const abort = new AbortController()
+    try {
+      await streamSSE(
+        `${BASE}/nodes/${encodeURIComponent(node.id)}/deploy`,
+        secret,
+        (ev) => setEvents(prev => [...prev, ev]),
+        (d) => {
+          if (!d.success) {
+            setMessage(d.error || '部署失败')
+            return
+          }
+          if (d.probe_results) setProbeResults(d.probe_results)
+          if (mode === 'bootstrap') {
+            setStep(3)
+            setMessage('GOST 部署完成，IP直连探测已生成。')
+          } else {
+            setStep(6)
+            setMessage(d.cert_issued ? '域名绑定与证书签发完成。' : '部署完成，但证书未签发。')
+          }
+          onReload()
+        },
+        abort.signal,
+        { mode },
+      )
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : '部署请求失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runDomainProbe = async () => {
+    setBusy(true)
+    setMessage('')
+    try {
+      const data = await probeNode(node.id, 'domain')
+      setDomainProbe(data.probe_results)
+      if (data.summary.success) {
+        setStep(7)
+      }
+      setMessage(`域名探测完成：${data.summary.ok}/${data.summary.total}`)
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : '域名探测失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <ModalShell title={`节点分步部署 · ${node.name}`} onClose={onClose} size="lg" dismissible={!busy}>
+      <div className="space-y-4">
+        <div className="text-xs text-muted">步骤 {step}/7</div>
+
+        {step === 1 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-300">1) 先完成 SSH Key 配置并校验连通性。</p>
+            {sshPubKey && (
+              <>
+                <p className="text-xs text-slate-400">请把以下公钥写入目标服务器 ~/.ssh/authorized_keys：</p>
+                <code className="block rounded-lg bg-surface-2 border border-white/5 px-3 py-2 font-mono text-[11px] text-slate-300 break-all">{sshPubKey}</code>
+                <code className="block rounded-lg bg-surface-2 border border-white/5 px-3 py-2 font-mono text-[11px] text-slate-300 break-all">{authorizeCmd}</code>
+              </>
+            )}
+            <button className="btn-primary" disabled={busy} onClick={async () => {
+              setBusy(true)
+              setMessage('')
+              try {
+                const r = await testNodeConnection(node.id)
+                setMessage(r.ok ? 'SSH 校验成功，可进入下一步。' : r.message)
+                if (r.ok) setStep(2)
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : 'SSH 校验失败')
+              } finally { setBusy(false) }
+            }}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 校验 SSH Key & 连接
+            </button>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-300">2) 部署 GOST（IP直连模式）并执行 Google/YouTube/GitHub 探测。</p>
+            <button className="btn-primary" disabled={busy} onClick={() => runDeploy('bootstrap')}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 开始部署并探测
+            </button>
+            {probeResults.length > 0 && (
+              <div className="rounded-xl border border-white/10 p-3 text-xs space-y-1">
+                {probeResults.map((p, idx) => <p key={idx} className={p.ok ? 'text-emerald-300' : 'text-red-300'}>{p.name}: {p.ok ? `OK (${p.status_code}, ${p.latency_ms}ms)` : p.error}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-300">3) 配置 Cloudflare API Token（显示 Mask，且本地加密保存）。</p>
+            <input className="glass-input" placeholder="CF API Token" value={cfToken} onChange={e => setCFToken(e.target.value)} />
+            <input className="glass-input" placeholder="CF Account ID (可选)" value={cfAccountId} onChange={e => setCFAccountId(e.target.value)} />
+            <button className="btn-primary" disabled={!cfToken || busy} onClick={persistCF}><Check size={14} /> 保存到本地加密存储</button>
+            <button className="btn-ghost" onClick={() => setStep(4)}>下一步</button>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-300">4) 获取 Cloudflare 域名，推荐常见前缀二级域名，并填写 ACME 邮箱。</p>
+            <button className="btn-primary" disabled={busy || !cfToken} onClick={async () => {
+              setBusy(true)
+              try {
+                const r = await getCloudflareZones({ cf_token: cfToken, cf_account_id: cfAccountId })
+                setZones(r.zones)
+                if (r.zones[0]?.name) setDomainSuggestions(suggestSubdomains(r.zones[0].name))
+                setMessage(`获取到 ${r.zones.length} 个域名`) 
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : '获取域名失败')
+              } finally { setBusy(false) }
+            }}><RotateCw size={14} /> 拉取域名列表</button>
+            <select className="glass-input" value={cfZoneId} onChange={e => {
+              setCFZoneId(e.target.value)
+              const z = zones.find(v => v.id === e.target.value)
+              if (z) setDomainSuggestions(suggestSubdomains(z.name))
+            }}>
+              <option value="">选择 Zone</option>
+              {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+            </select>
+            <div className="flex flex-wrap gap-2">
+              {domainSuggestions.map(s => <button key={s} className="btn-ghost text-xs" onClick={() => setDomain(s)}>{s}</button>)}
+            </div>
+            <input className="glass-input" placeholder="手动输入二级域名" value={domain} onChange={e => setDomain(e.target.value)} />
+            <input className="glass-input" type="email" placeholder="ACME 邮箱（真实邮箱）" value={email} onChange={e => setEmail(e.target.value)} />
+            <button className="btn-primary" disabled={!domain || !email || !cfToken || busy} onClick={async () => {
+              setBusy(true)
+              try {
+                await updateNode(node.id, { domain, email, cf_token: cfToken, cf_account_id: cfAccountId, cf_zone_id: cfZoneId })
+                await persistCF()
+                setStep(5)
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : '保存节点配置失败')
+              } finally { setBusy(false) }
+            }}><Check size={14} /> 保存并进入绑定步骤</button>
+          </div>
+        )}
+
+        {step === 5 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-300">5) 开始绑定域名 + 申请证书 + 验证。</p>
+            <button className="btn-primary" disabled={busy} onClick={() => runDeploy('full')}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} 开始绑定与签证
+            </button>
+          </div>
+        )}
+
+        {step === 6 && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-300">6) 使用账号密码+域名执行 probe，验证协议链路。</p>
+            <button className="btn-primary" disabled={busy} onClick={runDomainProbe}>{busy ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />} 执行最终探测</button>
+            {domainProbe.length > 0 && (
+              <div className="rounded-xl border border-white/10 p-3 text-xs space-y-1">
+                {domainProbe.map((p, idx) => <p key={idx} className={p.ok ? 'text-emerald-300' : 'text-red-300'}>{p.name}: {p.ok ? `OK (${p.status_code}, ${p.latency_ms}ms)` : p.error}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 7 && (
+          <div className="space-y-3">
+            <p className="text-sm text-emerald-300">7) 验证成功。现在可导出 Clash 配置并直接复制/导入。</p>
+            <button className="btn-primary" onClick={onOpenExport}><Download size={14} /> 打开 Clash 配置</button>
+          </div>
+        )}
+
+        {events.length > 0 && (
+          <div className="max-h-40 overflow-y-auto rounded-xl border border-white/10 p-3 text-xs font-mono space-y-1">
+            {events.map((ev, i) => <p key={i}>[{ev.step}] {ev.message}</p>)}
+          </div>
+        )}
+        {message && <div className="text-xs text-slate-300">{message}</div>}
+      </div>
+    </ModalShell>
+  )
+}
+
 // ── Deploy / Destroy Progress Modal ──────────────────────────────────────────
 
 function ProgressModal({
@@ -515,6 +820,7 @@ export function Nodes() {
   const [progressNodeId, setProgressNodeId] = useState<string | null>(null)
   const [progressAction, setProgressAction] = useState<'deploy' | 'destroy'>('deploy')
   const [exportNode, setExportNode] = useState<NodeListItem | null>(null)
+  const [deployWizardNode, setDeployWizardNode] = useState<NodeListItem | null>(null)
   const [deployOpen, setDeployOpen] = useState(false)
   const [testLoading, setTestLoading] = useState<Record<string, boolean>>({})
 
@@ -560,10 +866,8 @@ export function Nodes() {
     setDeployOpen(true)
   }
 
-  const handleDeploy = (id: string) => {
-    setProgressNodeId(id)
-    setProgressAction('deploy')
-    setDeployOpen(true)
+  const handleDeploy = (node: NodeListItem) => {
+    setDeployWizardNode(node)
   }
 
   const handleProgressDone = () => {
@@ -656,14 +960,14 @@ export function Nodes() {
 
                   {/* Deploy */}
                   {node.status !== 'deployed' && (
-                    <button className="btn-icon-sm btn-ghost" title="部署 GOST" onClick={() => handleDeploy(node.id)}>
+                    <button className="btn-icon-sm btn-ghost" title="部署 GOST" onClick={() => handleDeploy(node)}>
                       <Play size={12} className="text-brand" />
                     </button>
                   )}
 
                   {/* Redeploy */}
                   {node.status === 'deployed' && (
-                    <button className="btn-icon-sm btn-ghost" title="重新部署" onClick={() => handleDeploy(node.id)}>
+                    <button className="btn-icon-sm btn-ghost" title="重新部署" onClick={() => handleDeploy(node)}>
                       <RotateCw size={12} className="text-amber-400" />
                     </button>
                   )}
@@ -704,6 +1008,18 @@ export function Nodes() {
           node={editNode}
           onClose={() => { setShowForm(false); setEditNode(undefined) }}
           onSaved={loadNodes}
+        />
+      )}
+
+      {deployWizardNode && (
+        <DeployWizardModal
+          node={deployWizardNode}
+          onReload={loadNodes}
+          onClose={() => setDeployWizardNode(null)}
+          onOpenExport={() => {
+            setExportNode(deployWizardNode)
+            setDeployWizardNode(null)
+          }}
         />
       )}
 

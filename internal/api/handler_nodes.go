@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,19 @@ type nodeCreateRequest struct {
 	CFToken     string `json:"cf_token"`
 	CFAccountID string `json:"cf_account_id"`
 	CFZoneID    string `json:"cf_zone_id"`
+}
+
+type nodeProbeRequest struct {
+	Mode string `json:"mode"`
+}
+
+type cloudflareZonesRequest struct {
+	CFToken     string `json:"cf_token"`
+	CFAccountID string `json:"cf_account_id"`
+}
+
+type nodeDeployRequest struct {
+	Mode string `json:"mode"`
 }
 
 func handleListNodes(store *nodes.Store) http.HandlerFunc {
@@ -199,6 +213,17 @@ func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 			Err(w, http.StatusNotFound, "NODE_NOT_FOUND", "节点不存在")
 			return
 		}
+		var req nodeDeployRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mode := strings.TrimSpace(strings.ToLower(req.Mode))
+		deployNode := *node
+		if mode == "bootstrap" {
+			deployNode.Domain = ""
+			deployNode.Email = ""
+			deployNode.CFToken = ""
+			deployNode.CFAccountID = ""
+			deployNode.CFZoneID = ""
+		}
 
 		// Set up SSE streaming
 		flusher, ok := w.(http.Flusher)
@@ -237,7 +262,7 @@ func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 		node.DeployLog = ""
 		store.Update(id, node)
 
-		result, err := nodes.DeployGOST(r.Context(), node, kp, sendSSE)
+		result, err := nodes.DeployGOST(r.Context(), &deployNode, kp, sendSSE)
 		if err != nil || !result.Success {
 			node.Status = nodes.StatusError
 			if err != nil {
@@ -263,12 +288,18 @@ func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 		node.DeployedAt = &now
 		node.ProxyUser = result.ProxyUser
 		node.ProxyPassword = result.ProxyPass
+		if strings.TrimSpace(deployNode.CFZoneID) != "" {
+			node.CFZoneID = deployNode.CFZoneID
+		}
 		node.DeployLog = ""
 		store.Update(id, node)
 
 		doneData, _ := json.Marshal(map[string]interface{}{
-			"type":    "done",
-			"success": true,
+			"type":          "done",
+			"success":       true,
+			"phase":         result.Phase,
+			"cert_issued":   result.CertIssued,
+			"probe_results": result.ProbeResults,
 		})
 		fmt.Fprintf(w, "data: %s\n\n", doneData)
 		flusher.Flush()
@@ -361,6 +392,73 @@ func handleExportProxyConfig(store *nodes.Store) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		w.Write([]byte(yamlData))
+	}
+}
+
+func handleProbeNode(store *nodes.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		node, ok := store.Get(id)
+		if !ok {
+			Err(w, http.StatusNotFound, "NODE_NOT_FOUND", "节点不存在")
+			return
+		}
+
+		var req nodeProbeRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mode := strings.TrimSpace(req.Mode)
+		if mode == "" {
+			mode = "ip"
+		}
+
+		proxyHost := node.Host
+		if mode == "domain" {
+			proxyHost = node.Domain
+		}
+		if strings.TrimSpace(proxyHost) == "" {
+			Err(w, http.StatusBadRequest, "NODE_PROBE_INVALID", "缺少可用的代理地址")
+			return
+		}
+		if strings.TrimSpace(node.ProxyUser) == "" || strings.TrimSpace(node.ProxyPassword) == "" {
+			Err(w, http.StatusBadRequest, "NODE_PROBE_INVALID", "节点尚未生成代理账号密码，请先执行部署")
+			return
+		}
+
+		results := nodes.TestHTTPProxy(proxyHost, 443, node.ProxyUser, node.ProxyPassword, 10*time.Second, nodes.DefaultProbeTargets())
+		okCount := 0
+		for _, item := range results {
+			if item.OK {
+				okCount++
+			}
+		}
+
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"mode":          mode,
+			"proxy_host":    proxyHost,
+			"proxy_port":    443,
+			"probe_results": results,
+			"summary": map[string]interface{}{
+				"ok":      okCount,
+				"total":   len(results),
+				"success": okCount == len(results),
+			},
+		})
+	}
+}
+
+func handleCloudflareZones() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req cloudflareZonesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+			return
+		}
+		zones, err := nodes.CloudflareListZones(strings.TrimSpace(req.CFToken), strings.TrimSpace(req.CFAccountID))
+		if err != nil {
+			Err(w, http.StatusBadRequest, "CF_ZONES_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{"zones": zones})
 	}
 }
 
