@@ -380,6 +380,8 @@ jobs:
 
           (cd apk-root && find . -type f -o -type l | sed 's#^\./#/#' | sort > lib/apk/packages/clashforge.list)
 
+          # apk mkpkg options (--info/--script/--files/--output) require apk-tools 3.x.
+          # Alpine 3.23 ships apk-tools 3.x; 3.21 still uses 2.14.x.
           docker run --rm \
             -v "$PWD:/work" \
             -w /work \
@@ -387,8 +389,6 @@ jobs:
             -e APK_VERSION="$APK_VERSION" \
             -e APK_NAME="$APK_NAME" \
             -e MIHOMO_VER_CLEAN="$MIHOMO_VER_CLEAN" \
-            # apk mkpkg options (--info/--script/--files/--output) require apk-tools 3.x.
-            # Alpine 3.23 ships apk-tools 3.x; 3.21 still uses 2.14.x.
             alpine:3.23 \
             sh -euc '
               apk mkpkg \
