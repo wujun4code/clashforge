@@ -19,13 +19,13 @@ The Windows path downloads the IPK locally and pushes it to the router by defaul
 ## Upgrade to a Specific Version
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
 ```
 
 Router-side:
 
 ```sh
-clashforgectl upgrade --version v0.1.0
+clashforgectl upgrade --version v0.1.0-rc.1
 ```
 
 ## Mirrors and Custom Sources
@@ -52,7 +52,7 @@ Keep the last two or three known-good IPK packages. Rollback flow:
 ```sh
 clashforgectl stop
 opkg remove clashforge
-opkg install /tmp/clashforge_0.1.0_x86_64.ipk
+opkg install /tmp/clashforge_0.1.0-rc.1_x86_64.ipk
 /etc/init.d/clashforge enable
 /etc/init.d/clashforge start
 ```

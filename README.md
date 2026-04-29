@@ -96,7 +96,7 @@ wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clash
 安装指定版本：
 
 ```sh
-wget -qO- .../install.sh | sh -s -- --version v0.1.0
+wget -qO- .../install.sh | sh -s -- --version v0.1.0-rc.1
 ```
 
 ### 2. 启动服务
@@ -148,7 +148,7 @@ clashforgectl reset --start
 clashforgectl upgrade
 
 # 升级到指定版本
-clashforgectl upgrade --version v0.1.0
+clashforgectl upgrade --version v0.1.0-rc.1
 
 # 使用国内镜像升级
 clashforgectl upgrade --mirror https://ghproxy.com
@@ -411,7 +411,7 @@ wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clash
 Install a specific version:
 
 ```sh
-wget -qO- .../install.sh | sh -s -- --version v0.1.0
+wget -qO- .../install.sh | sh -s -- --version v0.1.0-rc.1
 ```
 
 ### 2. Enable and start the service
@@ -463,7 +463,7 @@ clashforgectl reset --start
 clashforgectl upgrade
 
 # Upgrade to a specific version
-clashforgectl upgrade --version v0.1.0
+clashforgectl upgrade --version v0.1.0-rc.1
 
 # Upgrade via China mirror
 clashforgectl upgrade --mirror https://ghproxy.com

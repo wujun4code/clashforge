@@ -35,7 +35,7 @@ The deploy flow:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -BaseUrl https://releases.example.com
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
@@ -46,7 +46,7 @@ The deploy flow:
 ```sh
 clashforgectl status
 clashforgectl upgrade
-clashforgectl upgrade --version v0.1.0
+clashforgectl upgrade --version v0.1.0-rc.1
 clashforgectl upgrade --mirror https://ghproxy.com
 clashforgectl upgrade --purge
 ```

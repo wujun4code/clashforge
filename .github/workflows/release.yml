@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version string (e.g. v0.1.0)'
+        description: 'Version string (e.g. v0.1.0-rc.1)'
         required: false
         default: 'dev'
 
@@ -285,7 +285,7 @@ jobs:
           RAW="${{ needs.build-ui.outputs.version }}"
           PKG_VERSION="${RAW#v}"
           # APK/OpenWrt version field must be numeric dot-separated segments.
-          # Example: 0.1.0-alpha.106 -> 0.1.0.106
+          # Example: 0.1.0-rc.1 -> 0.1.0.1
           APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
           [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
           APK_VERSION="${APK_CORE_VERSION}-r1"
