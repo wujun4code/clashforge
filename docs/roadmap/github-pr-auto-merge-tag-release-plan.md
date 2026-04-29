@@ -105,12 +105,12 @@ This gives a simple manual approval switch:
 ## Recommended Versioning Strategy
 
 ### Preferred default
-Automatically publish **alpha** versions for merged PRs.
+Automatically publish **rc** versions for merged PRs.
 
 Examples:
-- `v0.1.0-alpha.1`
-- `v0.1.0-alpha.2`
-- `v0.1.0-alpha.3`
+- `v0.1.0-rc.1`
+- `v0.1.0-rc.2`
+- `v0.1.0-rc.3`
 
 ### Stable releases
 Stable versions such as:
@@ -122,7 +122,7 @@ should be released manually, not on every merged PR.
 ### Reasoning
 The automated pipeline is best treated as continuous delivery of prerelease artifacts. That keeps the semantics clean:
 
-- auto pipeline -> alpha/prerelease
+- auto pipeline -> rc/prerelease
 - manual curated release -> stable
 
 ---
@@ -264,7 +264,7 @@ The job should proceed only when:
 8. Reset local `main` to `origin/main`
 9. Check whether current `HEAD` already has a version tag
 10. Exit if tag already exists
-11. Compute next alpha tag
+11. Compute next rc tag
 12. Push tag
 13. Dispatch `release.yml` with `version=<tag>`
 14. Write a clear job summary for auditability
@@ -327,7 +327,7 @@ Before creating a release, check whether the release for the tag already exists.
 
 Possible policies:
 - strict: fail or exit if release exists
-- flexible: update/overwrite prerelease assets for alpha tags
+- flexible: update/overwrite prerelease assets for rc tags
 
 Recommended default for now:
 - if release exists, exit cleanly
@@ -345,7 +345,7 @@ If no further policy decisions are made, use the following defaults:
 - label `automerge`
 
 ### Versioning
-- merged PRs produce `alpha` tags only
+- merged PRs produce `rc` tags only
 - stable releases remain manual
 
 ### Merge style
@@ -374,7 +374,7 @@ If no further policy decisions are made, use the following defaults:
 3. add `HEAD already tagged` idempotency check
 
 ### Phase 2: versioning and reproducibility
-4. simplify auto-tag logic to alpha-only incrementing
+4. simplify auto-tag logic to rc-only incrementing
 5. pin Mihomo version in `release.yml`
 
 ### Phase 3: CI quality improvements
@@ -388,9 +388,9 @@ If no further policy decisions are made, use the following defaults:
 
 These decisions should be confirmed before implementation:
 
-1. Should every successful auto-merged PR produce an alpha release?
+1. Should every successful auto-merged PR produce an rc release?
 2. Should review approval be required in addition to the `automerge` label?
-3. Should existing alpha releases be replaceable on rerun, or should reruns always no-op?
+3. Should existing rc releases be replaceable on rerun, or should reruns always no-op?
 4. Where should the pinned Mihomo version live: workflow env, version file, or another repo-managed config file?
 
 ---

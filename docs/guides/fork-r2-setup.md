@@ -89,7 +89,7 @@ Fork 仓库
 4. 在 `tag` 输入框填写你想同步的版本号，例如：
 
    ```
-   v0.1.0-alpha.78
+   v0.1.0-rc.1
    ```
 
 5. 点击绿色 **Run workflow** 按钮
@@ -104,10 +104,10 @@ Fork 仓库
 
 ```
 releases/
-├── v0.1.0-alpha.78/
-│   ├── clashforge_0.1.0-alpha.78_x86_64.ipk
-│   ├── clashforge_0.1.0-alpha.78_aarch64_generic.ipk
-│   ├── clashforge_0.1.0-alpha.78_aarch64_cortex-a53.ipk
+├── v0.1.0-rc.1/
+│   ├── clashforge_0.1.0-rc.1_x86_64.ipk
+│   ├── clashforge_0.1.0-rc.1_aarch64_generic.ipk
+│   ├── clashforge_0.1.0-rc.1_aarch64_cortex-a53.ipk
 │   ├── install.sh
 │   └── SHA256SUMS.txt
 └── latest/
@@ -128,7 +128,7 @@ releases/
 绑定后，用户可以通过如下链接下载：
 
 ```sh
-wget https://releases.example.com/releases/v0.1.0-alpha.78/clashforge_0.1.0-alpha.78_x86_64.ipk
+wget https://releases.example.com/releases/v0.1.0-rc.1/clashforge_0.1.0-rc.1_x86_64.ipk
 ```
 
 如果暂时不绑定自定义域名，也可以在 R2 bucket 的 **Settings → Public Access** 开启公开访问，使用 Cloudflare 自动分配的 `*.r2.dev` 域名。

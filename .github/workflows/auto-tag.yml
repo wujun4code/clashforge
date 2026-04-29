@@ -75,7 +75,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin --tags --force
-          EXISTING=$(git tag --points-at "${{ steps.target.outputs.sha }}" --list 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*' | sort -V | tail -1 || true)
+          EXISTING=$(
+            git tag --points-at "${{ steps.target.outputs.sha }}" --list 'v*' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+              | sort -V | tail -1 || true
+          )
           if [ -n "$EXISTING" ]; then
             echo "Commit already tagged as $EXISTING"
             echo "tag=$EXISTING" >> "$GITHUB_OUTPUT"
@@ -89,17 +93,26 @@ jobs:
         if: steps.existing.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          LATEST=$(git tag --list 'v*' --sort=-version:refname \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$' \
+          LATEST_RC=$(git tag --list 'v*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' \
             | head -1 || true)
-          echo "Latest clean tag: $LATEST"
+          LATEST_ANY=$(git tag --list 'v*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            | head -1 || true)
+          echo "Latest rc tag: $LATEST_RC"
+          echo "Latest semver-ish tag: $LATEST_ANY"
 
-          if [ -z "$LATEST" ]; then
-            NEXT="v0.1.0-alpha.1"
+          if [ -n "$LATEST_RC" ]; then
+            BASE="${LATEST_RC%-rc.*}"
+            N=$(echo "$LATEST_RC" | sed -E 's/^.*-rc\.([0-9]+)$/\1/')
+            NEXT="${BASE}-rc.$((N + 1))"
           else
-            BASE=$(echo "$LATEST" | sed 's/\.[0-9]*$//')
-            N=$(echo "$LATEST" | grep -oE '[0-9]+$')
-            NEXT="${BASE}.$((N + 1))"
+            if [ -n "$LATEST_ANY" ]; then
+              BASE=$(echo "$LATEST_ANY" | sed -E 's/^(v[0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
+            else
+              BASE="v0.1.0"
+            fi
+            NEXT="${BASE}-rc.1"
           fi
 
           echo "Next tag: $NEXT"
