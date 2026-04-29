@@ -7,6 +7,7 @@ import { PerDeviceRules } from './pages/PerDeviceRules'
 import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
 import { Settings } from './pages/Settings'
+import { Publish } from './pages/Publish'
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
               <Route path="/config" element={<ConfigManagement />} />
               <Route path="/device-rules" element={<PerDeviceRules />} />
               <Route path="/nodes" element={<Nodes />} />
+              <Route path="/publish" element={<Publish />} />
               <Route path="/activity" element={<ActivityLog />} />
               <Route path="/setup" element={<Setup />} />
               <Route path="/settings" element={<Settings />} />

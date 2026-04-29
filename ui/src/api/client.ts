@@ -311,6 +311,13 @@ export interface DeviceRouteGroup {
   order: number
 }
 
+export interface DeviceGroupsResponse {
+  device_groups: DeviceRouteGroup[]
+  source_key?: string
+  active_source_key?: string
+  requested_by_source?: boolean
+}
+
 export interface NetworkClient {
   ip: string
   mac?: string
@@ -375,8 +382,9 @@ export const getOverrides     = () => request<{content:string}>('GET', '/config/
 export const updateOverrides  = (content: string) => request('PUT', '/config/overrides', { content })
 export const generateConfig   = () => request<{generated: boolean; config_file: string}>('POST', '/config/generate')
 export const getMihomoConfig  = () => request<{content:string}>('GET', '/config/mihomo')
-export const getDeviceGroups  = () => request<{device_groups: DeviceRouteGroup[]}>('GET', '/config/device-groups')
-export const updateDeviceGroups = (device_groups: DeviceRouteGroup[]) =>
+export const getDeviceGroups  = (source_key?: string) =>
+  request<DeviceGroupsResponse>('GET', `/config/device-groups${source_key ? `?source_key=${encodeURIComponent(source_key)}` : ''}`)
+export const updateDeviceGroups = (device_groups: DeviceRouteGroup[], source_key?: string) =>
   request<{
     updated: boolean
     config_generated: boolean
@@ -384,7 +392,11 @@ export const updateDeviceGroups = (device_groups: DeviceRouteGroup[]) =>
     core_reloaded?: boolean
     warning?: string
     reload_error?: string
-  }>('PUT', '/config/device-groups', { device_groups })
+    profile_active?: boolean
+    profile_source_key?: string
+    active_source_key?: string
+    message?: string
+  }>('PUT', '/config/device-groups', source_key ? { device_groups, source_key } : { device_groups })
 export const getNetworkClients = () => request<{clients: NetworkClient[]}>('GET', '/network/clients')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
 export const clearLogs        = () => request<{ok: boolean}>('DELETE', '/logs')
@@ -531,5 +543,193 @@ export interface DomainProbeResult {
 
 export const probeDomain = (domain: string) =>
   request<DomainProbeResult>('POST', '/health/probe-domain', { domain })
+
+// ---- worker-node proxy ----
+export interface WorkerNodeListItem {
+  id: string
+  name: string
+  worker_name: string
+  cf_account_id: string
+  hostname: string
+  worker_url: string
+  worker_dev_url: string
+  status: 'pending' | 'deployed' | 'error'
+  error?: string
+  deployed_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkerNodeCreateRequest {
+  name: string
+  worker_name: string
+  cf_token: string
+  cf_account_id: string
+  cf_zone_id: string
+  hostname: string
+}
+
+export const getWorkerNodes = () =>
+  request<{ nodes: WorkerNodeListItem[] }>('GET', '/worker-nodes')
+export const createWorkerNode = (req: WorkerNodeCreateRequest) =>
+  request<{ node: WorkerNodeListItem; clash_config: string }>('POST', '/worker-nodes', req)
+export const redeployWorkerNode = (id: string) =>
+  request<{ node: WorkerNodeListItem }>('POST', `/worker-nodes/${encodeURIComponent(id)}/redeploy`)
+export const deleteWorkerNode = (id: string) =>
+  request<{ status: string }>('DELETE', `/worker-nodes/${encodeURIComponent(id)}`)
+export const getWorkerNodeClashConfig = (id: string) =>
+  request<{ yaml: string; name: string }>('GET', `/worker-nodes/${encodeURIComponent(id)}/clash-config`)
+
+// ---- publish workflow ----
+export type PublishTemplateMode = 'builtin' | 'runtime' | 'custom'
+
+export interface PublishNode {
+  id: string
+  name: string
+  host: string
+  domain: string
+  status: string
+  has_credentials: boolean
+  node_type?: 'ssh' | 'worker'
+}
+
+export interface PublishTemplatePreset {
+  id: string
+  name: string
+  description: string
+}
+
+export interface PublishPreviewPayload {
+  node_ids: string[]
+  template_mode: PublishTemplateMode
+  template_id?: string
+  template_content?: string
+}
+
+export interface PublishPreviewResponse {
+  content: string
+  node_count: number
+  template_mode: string
+  managed_groups?: string[]
+}
+
+export interface PublishWorkerConfig {
+  id: string
+  name: string
+  worker_name: string
+  worker_url: string
+  worker_dev_url: string
+  hostname: string
+  account_id: string
+  namespace_id: string
+  zone_id: string
+  has_token: boolean
+  initialized_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PublishWorkerConfigInput {
+  id?: string
+  name: string
+  worker_name: string
+  worker_url: string
+  worker_dev_url: string
+  hostname: string
+  account_id: string
+  namespace_id: string
+  zone_id: string
+  token?: string
+  initialized_at?: string
+}
+
+export interface PublishPermissionCheck {
+  name: string
+  ok: boolean
+  error?: string
+}
+
+export interface PublishVerifyTest {
+  name: string
+  ok: boolean
+  detail?: string
+}
+
+export interface PublishWorkerVerifyResult {
+  ok: boolean
+  tests: PublishVerifyTest[]
+  used_url?: string
+  hello_url?: string
+  note?: string
+}
+
+export interface PublishRecord {
+  id: string
+  worker_config_id: string
+  worker_name: string
+  hostname: string
+  base_name: string
+  version: number
+  file_name: string
+  access_url: string
+  published_at: string
+}
+
+export interface PublishUploadPayload {
+  worker_config_id: string
+  base_name: string
+  content?: string
+  node_ids?: string[]
+  template_mode?: PublishTemplateMode
+  template_id?: string
+  template_content?: string
+}
+
+export const getPublishNodes = () => request<{ nodes: PublishNode[] }>('GET', '/publish/nodes')
+export const getPublishTemplates = () => request<{ templates: PublishTemplatePreset[] }>('GET', '/publish/templates')
+export const previewPublishConfig = (payload: PublishPreviewPayload) =>
+  request<PublishPreviewResponse>('POST', '/publish/preview', payload)
+export const getPublishWorkerConfigs = () =>
+  request<{ configs: PublishWorkerConfig[] }>('GET', '/publish/worker-configs')
+export const createPublishWorkerConfig = (payload: PublishWorkerConfigInput) =>
+  request<{ config: PublishWorkerConfig }>('POST', '/publish/worker-configs', payload)
+export const updatePublishWorkerConfig = (id: string, payload: PublishWorkerConfigInput) =>
+  request<{ config: PublishWorkerConfig }>('PUT', `/publish/worker-configs/${encodeURIComponent(id)}`, payload)
+export const deletePublishWorkerConfig = (id: string) =>
+  request<{ deleted: boolean }>('DELETE', `/publish/worker-configs/${encodeURIComponent(id)}`)
+export const checkPublishWorkerPermissions = (payload: { token: string; account_id: string; zone_id?: string }) =>
+  request<{ ok: boolean; checks: PublishPermissionCheck[]; account_id: string }>('POST', '/publish/worker/check-permissions', payload)
+export const createPublishWorkerNamespace = (payload: { token: string; account_id: string; worker_name: string }) =>
+  request<{ namespace_id: string; reused: boolean; title: string }>('POST', '/publish/worker/create-namespace', payload)
+export const deployPublishWorkerScript = (payload: {
+  token: string
+  account_id: string
+  worker_name: string
+  namespace_id: string
+  access_token: string
+}) => request<{ worker_dev_url: string; workers_subdomain?: string }>('POST', '/publish/worker/deploy-script', payload)
+export const bindPublishWorkerDomain = (payload: {
+  token: string
+  account_id: string
+  zone_id: string
+  worker_name: string
+  hostname: string
+}) => request<{ hostname: string; worker_url: string }>('POST', '/publish/worker/bind-domain', payload)
+export const verifyAndSavePublishWorker = (payload: {
+  name: string
+  worker_name: string
+  worker_url: string
+  worker_dev_url: string
+  hostname: string
+  account_id: string
+  namespace_id: string
+  zone_id: string
+  access_token: string
+}) => request<{ result: PublishWorkerVerifyResult; config?: PublishWorkerConfig }>('POST', '/publish/worker/verify-save', payload)
+export const uploadPublishConfig = (payload: PublishUploadPayload) =>
+  request<{ record: PublishRecord; file_name: string; version: number; access_url: string }>('POST', '/publish/upload', payload)
+export const getPublishRecords = () => request<{ records: PublishRecord[] }>('GET', '/publish/records')
+export const deletePublishRecord = (id: string) =>
+  request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/records/${encodeURIComponent(id)}`)
 
 

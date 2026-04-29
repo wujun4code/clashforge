@@ -253,6 +253,7 @@ export function ModalShell({
   description,
   icon,
   onClose,
+  onBeforeClose,
   children,
   size = 'md',
   dismissible = true,
@@ -261,17 +262,25 @@ export function ModalShell({
   description?: string
   icon?: ReactNode
   onClose?: () => void
+  /** Return false to cancel close (e.g. dirty-form confirmation). Only fires on backdrop click. */
+  onBeforeClose?: () => boolean
   children: ReactNode
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'sm' | 'md' | 'lg' | 'xl'
   dismissible?: boolean
 }) {
-  const maxWidth = size === 'sm' ? 'max-w-sm' : size === 'lg' ? 'max-w-2xl' : 'max-w-md'
+  const maxWidth = size === 'sm'
+    ? 'max-w-sm'
+    : size === 'lg'
+      ? 'max-w-2xl'
+      : size === 'xl'
+        ? 'max-w-3xl'
+        : 'max-w-md'
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-[var(--space-md)]"
       style={{ background: 'var(--modal-backdrop)', backdropFilter: 'blur(8px)' }}
-      onClick={dismissible ? onClose : undefined}
+      onClick={dismissible ? () => { if (onBeforeClose && !onBeforeClose()) return; onClose?.() } : undefined}
     >
       <div
         className={cn('glass-modal w-full overflow-hidden shadow-glass-lg', maxWidth)}

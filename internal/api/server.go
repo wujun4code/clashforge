@@ -14,7 +14,9 @@ import (
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
+	"github.com/wujun4code/clashforge/internal/publish"
 	"github.com/wujun4code/clashforge/internal/subscription"
+	"github.com/wujun4code/clashforge/internal/workernode"
 )
 
 //go:embed ui_dist
@@ -22,17 +24,19 @@ var uiDist embed.FS
 
 // Dependencies holds all injected services.
 type Dependencies struct {
-	Version     string
-	StartedAt   time.Time
-	ConfigPath  string
-	Config      *config.MetaclashConfig
-	Core        *core.CoreManager
-	SubManager  *subscription.Manager
-	Netfilter   *netfilter.Manager
-	SSEBroker   *SSEBroker
-	LogBuffer   *LogBuffer
-	NodeStore   *nodes.Store
-	NodeKeyPair *nodes.KeyPair
+	Version      string
+	StartedAt    time.Time
+	ConfigPath   string
+	Config       *config.MetaclashConfig
+	Core         *core.CoreManager
+	SubManager   *subscription.Manager
+	Netfilter    *netfilter.Manager
+	SSEBroker    *SSEBroker
+	LogBuffer    *LogBuffer
+	NodeStore        *nodes.Store
+	NodeKeyPair      *nodes.KeyPair
+	PublishStore     *publish.Store
+	WorkerNodeStore  *workernode.Store
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -53,7 +57,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/overview/takeover", handleTakeoverOverviewModule(deps))
 		api.Post("/overview/release", handleReleaseOverviewTakeover(deps))
 		api.Get("/health/check", handleHealthCheck(deps))
-			api.Post("/health/probe-domain", handleProbeDomain(deps))
+		api.Post("/health/probe-domain", handleProbeDomain(deps))
 		api.Get("/config", handleGetConfig(deps))
 		api.Put("/config", handleUpdateConfig(deps))
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))
@@ -120,6 +124,28 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/nodes/{id}/deploy", handleDeployNode(deps.NodeStore, deps.NodeKeyPair))
 		api.Post("/nodes/{id}/destroy", handleDestroyNode(deps.NodeStore, deps.NodeKeyPair))
 		api.Get("/nodes/{id}/proxy-config", handleExportProxyConfig(deps.NodeStore))
+		// Worker-based proxy nodes
+		api.Get("/worker-nodes", handleListWorkerNodes(deps.WorkerNodeStore))
+		api.Post("/worker-nodes", handleCreateWorkerNode(deps.WorkerNodeStore))
+		api.Post("/worker-nodes/{id}/redeploy", handleRedeployWorkerNode(deps.WorkerNodeStore))
+		api.Delete("/worker-nodes/{id}", handleDeleteWorkerNode(deps.WorkerNodeStore))
+		api.Get("/worker-nodes/{id}/clash-config", handleGetWorkerNodeClashConfig(deps.WorkerNodeStore))
+		// Subscription publish workflow
+		api.Get("/publish/nodes", handleGetPublishNodes(deps))
+		api.Get("/publish/templates", handleGetPublishTemplates())
+		api.Post("/publish/preview", handlePublishPreview(deps))
+		api.Get("/publish/worker-configs", handleGetPublishWorkerConfigs(deps))
+		api.Post("/publish/worker-configs", handleUpsertPublishWorkerConfig(deps))
+		api.Put("/publish/worker-configs/{id}", handleUpsertPublishWorkerConfig(deps))
+		api.Delete("/publish/worker-configs/{id}", handleDeletePublishWorkerConfig(deps))
+		api.Post("/publish/worker/check-permissions", handlePublishWorkerCheckPermissions())
+		api.Post("/publish/worker/create-namespace", handlePublishWorkerCreateNamespace())
+		api.Post("/publish/worker/deploy-script", handlePublishWorkerDeployScript())
+		api.Post("/publish/worker/bind-domain", handlePublishWorkerBindDomain())
+		api.Post("/publish/worker/verify-save", handlePublishWorkerVerifySave(deps))
+		api.Post("/publish/upload", handlePublishUpload(deps))
+		api.Get("/publish/records", handleGetPublishRecords(deps))
+		api.Delete("/publish/records/{id}", handleDeletePublishRecord(deps))
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}

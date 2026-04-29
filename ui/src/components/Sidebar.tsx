@@ -3,26 +3,45 @@ import { NavLink } from 'react-router-dom'
 import {
   Activity,
   ChevronRight,
-  FolderCog,
   LayoutDashboard,
   Loader2,
   Network,
+  Rss,
   Rocket,
   Server,
   Settings,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
 import { ThemeSwitcher } from '../theme/ThemeSwitcher'
 
 type CoreState = 'running' | 'stopped' | 'checking'
 
-const navLinks = [
-  { to: '/',         icon: LayoutDashboard, label: '概览',   caption: '运行状态 · 核心监控' },
-  { to: '/config',   icon: FolderCog,       label: '配置管理', caption: '订阅 · 规则 · 运行配置' },
-  { to: '/device-rules', icon: Network,     label: '设备路由', caption: '分组设备 · 节点覆盖' },
-  { to: '/nodes',    icon: Server,          label: '节点管理', caption: '远程部署 · 证书' },
-  { to: '/activity', icon: Activity,        label: '活动日志', caption: '连接轨迹 · 实时日志' },
-  { to: '/settings', icon: Settings,        label: '高级管理', caption: '系统参数 · 重置' },
+type NavItem = { to: string; icon: React.ElementType; label: string; caption: string }
+
+const navGroups: { label: string; items: NavItem[] }[] = [
+  {
+    label: '路由引擎',
+    items: [
+      { to: '/',           icon: LayoutDashboard,  label: '概览',   caption: '运行状态 · 核心监控' },
+      { to: '/config',     icon: SlidersHorizontal, label: '配置管理', caption: '来源导入 · 运行配置' },
+      { to: '/device-rules', icon: Network,         label: '设备分流', caption: '设备出口 · 策略覆盖' },
+    ],
+  },
+  {
+    label: '代理资源',
+    items: [
+      { to: '/nodes',   icon: Server,       label: '出口节点', caption: '服务器部署 · 代理管理' },
+      { to: '/publish', icon: Rss,          label: '订阅定制', caption: '模板编排 · 链接生成' },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
+      { to: '/activity', icon: Activity,  label: '活动日志', caption: '连接轨迹 · 实时日志' },
+      { to: '/settings', icon: Settings,  label: '高级管理', caption: '系统参数 · 重置' },
+    ],
+  },
 ]
 
 const coreStatus = {
@@ -160,73 +179,75 @@ export function Sidebar() {
         </NavLink>
       </div>
 
-      {/* ── Nav section label ─────────────────────────────── */}
-      <div className="sidebar-nav-label mx-4 mt-3 flex items-center gap-2">
-        <div className="h-px flex-1 bg-white/[0.05]" />
-        <span className="text-[9px] font-semibold uppercase tracking-[0.28em] text-white/20">
-          功能导航
-        </span>
-        <div className="h-px flex-1 bg-white/[0.05]" />
-      </div>
+      {/* ── Nav groups ────────────────────────────────────── */}
+      <nav className="sidebar-nav flex flex-1 flex-col overflow-y-auto px-2 pb-2">
+        {navGroups.map((group, gi) => (
+          <div key={group.label}>
+            {/* Section label */}
+            <div className={`sidebar-nav-label mx-2 flex items-center gap-2 ${gi === 0 ? 'mt-3' : 'mt-2'} mb-0.5`}>
+              <div className="h-px flex-1 bg-white/[0.05]" />
+              <span className="text-[9px] font-semibold uppercase tracking-[0.28em] text-white/20">
+                {group.label}
+              </span>
+              <div className="h-px flex-1 bg-white/[0.05]" />
+            </div>
 
-      {/* ── Nav links ─────────────────────────────────────── */}
-      <nav className="sidebar-nav flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1.5">
-        {navLinks.map(({ to, icon: Icon, label, caption }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              [
-                'sidebar-nav-item sidebar-nav-link group relative flex items-center gap-2.5 px-2.5 py-2 transition-all duration-150 cursor-pointer',
-                isActive
-                  ? 'sidebar-nav-link-active text-white bg-brand/[0.07]'
-                  : 'text-white/50 hover:bg-white/[0.04] hover:text-white/80',
-              ].join(' ')
-            }
-            style={{ borderRadius: 'var(--radius-md)' }}
-          >
-            {({ isActive }) => (
-              <>
-                {/* Active left accent bar */}
-                {isActive && (
-                  <span
-                    className="sidebar-nav-active-bar absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-full bg-brand"
-                    style={{ boxShadow: 'var(--shadow-glow-brand-sm)' }}
-                  />
-                )}
-
-                {/* Icon box */}
-                <div
-                  className={`sidebar-nav-icon flex h-[34px] w-[34px] flex-shrink-0 items-center justify-center transition-colors ${
-                    isActive
-                      ? 'bg-brand/14 text-brand-light'
-                      : 'bg-white/[0.045] text-white/38 group-hover:bg-white/[0.07] group-hover:text-white/65'
-                  }`}
-                  style={{ borderRadius: '6px' }}
+            {/* Items */}
+            <div className="flex flex-col gap-0.5 py-1">
+              {group.items.map(({ to, icon: Icon, label, caption }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === '/'}
+                  className={({ isActive }) =>
+                    [
+                      'sidebar-nav-item sidebar-nav-link group relative flex items-center gap-2.5 px-2.5 py-2 transition-all duration-150 cursor-pointer',
+                      isActive
+                        ? 'sidebar-nav-link-active text-white bg-brand/[0.07]'
+                        : 'text-white/50 hover:bg-white/[0.04] hover:text-white/80',
+                    ].join(' ')
+                  }
+                  style={{ borderRadius: 'var(--radius-md)' }}
                 >
-                  <Icon size={15} />
-                </div>
+                  {({ isActive }) => (
+                    <>
+                      {isActive && (
+                        <span
+                          className="sidebar-nav-active-bar absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-full bg-brand"
+                          style={{ boxShadow: 'var(--shadow-glow-brand-sm)' }}
+                        />
+                      )}
 
-                {/* Text */}
-                <div className="min-w-0 flex-1 py-[1px]">
-                  <p className="text-[13px] font-semibold leading-[1.24]">
-                    {label}
-                  </p>
-                  <p className="mt-1 text-[10.5px] leading-[1.32] text-white/30 truncate group-hover:text-white/42">
-                    {caption}
-                  </p>
-                </div>
+                      <div
+                        className={`sidebar-nav-icon flex h-[34px] w-[34px] flex-shrink-0 items-center justify-center transition-colors ${
+                          isActive
+                            ? 'bg-brand/14 text-brand-light'
+                            : 'bg-white/[0.045] text-white/38 group-hover:bg-white/[0.07] group-hover:text-white/65'
+                        }`}
+                        style={{ borderRadius: '6px' }}
+                      >
+                        <Icon size={15} />
+                      </div>
 
-                <ChevronRight
-                  size={12}
-                  className={`flex-shrink-0 transition-colors ${
-                    isActive ? 'text-brand-light/55' : 'text-white/18 group-hover:text-white/38'
-                  }`}
-                />
-              </>
-            )}
-          </NavLink>
+                      <div className="min-w-0 flex-1 py-[1px]">
+                        <p className="text-[13px] font-semibold leading-[1.24]">{label}</p>
+                        <p className="mt-1 text-[10.5px] leading-[1.32] text-white/30 truncate group-hover:text-white/42">
+                          {caption}
+                        </p>
+                      </div>
+
+                      <ChevronRight
+                        size={12}
+                        className={`flex-shrink-0 transition-colors ${
+                          isActive ? 'text-brand-light/55' : 'text-white/18 group-hover:text-white/38'
+                        }`}
+                      />
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 
