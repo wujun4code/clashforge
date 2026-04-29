@@ -6,6 +6,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/wujun4code/clashforge/internal/config"
+	"github.com/wujun4code/clashforge/internal/geodata"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
@@ -13,14 +14,16 @@ import (
 type Scheduler struct {
 	cfg        *config.MetaclashConfig
 	subManager *subscription.Manager
+	geoManager *geodata.Manager
 	stopCh     chan struct{}
 }
 
 // New creates a Scheduler.
-func New(cfg *config.MetaclashConfig, subManager *subscription.Manager) *Scheduler {
+func New(cfg *config.MetaclashConfig, subManager *subscription.Manager, geoManager *geodata.Manager) *Scheduler {
 	return &Scheduler{
 		cfg:        cfg,
 		subManager: subManager,
+		geoManager: geoManager,
 		stopCh:     make(chan struct{}),
 	}
 }
@@ -34,16 +37,16 @@ func (s *Scheduler) Start() {
 			_ = s.subManager.TriggerUpdateAll()
 		})
 	}
-	if s.cfg.Update.AutoGeoIP {
+
+	if (s.cfg.Update.AutoGeoIP || s.cfg.Update.AutoGeosite) && s.geoManager != nil {
 		interval := parseDuration(s.cfg.Update.GeoIPInterval, 168*time.Hour)
-		go s.loop("geoip-update", interval, func() {
-			log.Info().Str("url", s.cfg.Update.GeoIPURL).Msg("scheduler: geoip update scheduled (not yet implemented)")
-		})
-	}
-	if s.cfg.Update.AutoGeosite {
-		interval := parseDuration(s.cfg.Update.GeositeInterval, 168*time.Hour)
-		go s.loop("geosite-update", interval, func() {
-			log.Info().Str("url", s.cfg.Update.GeositeURL).Msg("scheduler: geosite update scheduled (not yet implemented)")
+		go s.loop("geodata-update", interval, func() {
+			proxyServer := s.cfg.Update.GeoDataProxyServer
+			log.Info().Str("proxy_server", proxyServer).Msg("scheduler: triggering geodata update")
+			rec := s.geoManager.TriggerSync(proxyServer)
+			if rec != nil {
+				log.Info().Str("status", rec.Status).Str("id", rec.ID).Msg("scheduler: geodata update finished")
+			}
 		})
 	}
 }

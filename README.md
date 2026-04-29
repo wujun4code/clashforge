@@ -1,5 +1,7 @@
 # ClashForge
 
+![ClashForge](./clashforge_brand_assets/readme-hero-1200x630.png)
+
 **ClashForge** is a modern management and control plane for [mihomo](https://github.com/MetaCubeX/mihomo) on OpenWrt routers.
 
 > **ClashForge** 是一个为 OpenWrt 路由器上的 [mihomo](https://github.com/MetaCubeX/mihomo) 构建的现代管理与控制层。

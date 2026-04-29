@@ -732,4 +732,58 @@ export const getPublishRecords = () => request<{ records: PublishRecord[] }>('GE
 export const deletePublishRecord = (id: string) =>
   request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/records/${encodeURIComponent(id)}`)
 
+// ---- geodata management ----
+export interface GeoDataFileStatus {
+  name: string
+  filename: string
+  path: string
+  exists: boolean
+  size_bytes: number
+  mod_time: string
+}
 
+export interface GeoDataFileResult {
+  name: string
+  status: 'ok' | 'error'
+  size_bytes?: number
+  message?: string
+  error?: string
+}
+
+export interface GeoDataUpdateRecord {
+  id: string
+  started_at: string
+  finished_at?: string
+  status: 'running' | 'ok' | 'error'
+  proxy_server: string
+  files: GeoDataFileResult[]
+  error?: string
+}
+
+export interface GeoDataStatus {
+  files: GeoDataFileStatus[]
+  latest: GeoDataUpdateRecord | null
+  is_running: boolean
+}
+
+export interface GeoDataConfig {
+  auto_geoip: boolean
+  geoip_interval: string
+  auto_geosite: boolean
+  geosite_interval: string
+  proxy_server: string
+  geoip_url: string
+  geosite_url: string
+}
+
+export interface GeoDataLogs {
+  records: GeoDataUpdateRecord[]
+  is_running: boolean
+}
+
+export const getGeoDataStatus  = () => request<GeoDataStatus>('GET', '/geodata/status')
+export const getGeoDataConfig  = () => request<GeoDataConfig>('GET', '/geodata/config')
+export const updateGeoDataConfig = (cfg: Partial<GeoDataConfig>) => request<{ updated: boolean }>('PUT', '/geodata/config', cfg)
+export const triggerGeoDataUpdate = (proxy_server?: string) =>
+  request<{ id: string; status: string }>('POST', '/geodata/update', { proxy_server: proxy_server ?? '' })
+export const getGeoDataLogs    = () => request<GeoDataLogs>('GET', '/geodata/logs')

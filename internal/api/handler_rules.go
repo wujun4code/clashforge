@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,7 +60,7 @@ func handleGetRuleProviders(deps Dependencies) http.HandlerFunc {
 		}
 
 		// Read actual file paths from the generated mihomo config
-		providerPaths := readMihomoRuleProviderPaths(deps.Config.Core.RuntimeDir)
+		providerPaths := readMihomoRuleProviderPaths(deps.Config.Core.RuntimeDir, deps.Config.Core.DataDir)
 
 		providers := make([]ruleProviderInfo, 0, len(raw.Providers))
 
@@ -69,13 +70,17 @@ func handleGetRuleProviders(deps Dependencies) http.HandlerFunc {
 				continue
 			}
 			p.Name = name
-			// Use path from mihomo config if available, otherwise fall back to name.yaml
-			candidate := providerPaths[name]
-			if candidate == "" {
-				candidate = filepath.Join(deps.Config.Core.RuntimeDir, "rule_provider", name+".yaml")
+			candidate := resolveRuleProviderFile(
+				name,
+				p.Format,
+				providerPaths,
+				deps.Config.Core.RuntimeDir,
+				deps.Config.Core.DataDir,
+			)
+			if candidate != "" {
+				p.FilePath = candidate
 			}
 			if info, err := os.Stat(candidate); err == nil {
-				p.FilePath = candidate
 				p.SizeMB = bytesToMB(uint64(info.Size()))
 			}
 			providers = append(providers, p)
@@ -156,7 +161,7 @@ func handleSyncAllRuleProviders(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// handleSearchRules searches across all rule provider YAML files in RuntimeDir/rule_provider/.
+// handleSearchRules searches across all rule provider files from mihomo config.
 // Query param: q (required), provider (optional, filter to single provider).
 func handleSearchRules(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -168,36 +173,52 @@ func handleSearchRules(deps Dependencies) http.HandlerFunc {
 		filterProvider := r.URL.Query().Get("provider")
 		qLower := strings.ToLower(q)
 
-		ruleDir := filepath.Join(deps.Config.Core.RuntimeDir, "rule_provider")
-		entries, err := os.ReadDir(ruleDir)
+		mihomoData, err := mihomoGet(deps.Config.Ports.MihomoAPI, "/providers/rules")
 		if err != nil {
-			if os.IsNotExist(err) {
-				JSON(w, http.StatusOK, map[string]any{"query": q, "results": []any{}})
-				return
-			}
-			Err(w, http.StatusInternalServerError, "READ_ERROR", err.Error())
+			Err(w, http.StatusBadGateway, "MIHOMO_UNAVAILABLE", err.Error())
 			return
 		}
+		var raw struct {
+			Providers map[string]struct {
+				Behavior string `json:"behavior"`
+				Format   string `json:"format"`
+			} `json:"providers"`
+		}
+		if err := json.Unmarshal(mihomoData, &raw); err != nil {
+			Err(w, http.StatusBadGateway, "MIHOMO_PARSE_ERROR", err.Error())
+			return
+		}
+
+		providerPaths := readMihomoRuleProviderPaths(deps.Config.Core.RuntimeDir, deps.Config.Core.DataDir)
 
 		var resultsMu sync.Mutex
 		var wg sync.WaitGroup
 		allResults := make([]ruleSearchResult, 0)
 
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+		for providerName, spec := range raw.Providers {
+			if filterProvider != "" && !strings.EqualFold(providerName, filterProvider) {
 				continue
 			}
-			providerName := strings.TrimSuffix(entry.Name(), ".yaml")
-			if filterProvider != "" && !strings.EqualFold(providerName, filterProvider) {
+			path := resolveRuleProviderFile(
+				providerName,
+				spec.Format,
+				providerPaths,
+				deps.Config.Core.RuntimeDir,
+				deps.Config.Core.DataDir,
+			)
+			if path == "" {
 				continue
 			}
 
 			wg.Add(1)
-			go func(name, path string) {
+			go func(name, path, defaultBehavior string) {
 				defer wg.Done()
 				matches, behavior := searchRuleFile(path, qLower)
 				if len(matches) == 0 {
 					return
+				}
+				if behavior == "" {
+					behavior = defaultBehavior
 				}
 				resultsMu.Lock()
 				allResults = append(allResults, ruleSearchResult{
@@ -207,7 +228,7 @@ func handleSearchRules(deps Dependencies) http.HandlerFunc {
 					Total:    len(matches),
 				})
 				resultsMu.Unlock()
-			}(providerName, filepath.Join(ruleDir, entry.Name()))
+			}(providerName, path, spec.Behavior)
 		}
 		wg.Wait()
 
@@ -266,24 +287,29 @@ func searchRuleFile(path, qLower string) (matches []string, behavior string) {
 		Payload  []string `yaml:"payload"`
 	}
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, ""
+		// Fallback to plain-text rule list (one entry per line)
+		return searchRuleLines(data, qLower), ""
 	}
 
 	behavior = doc.Behavior
-	for _, entry := range doc.Payload {
-		if strings.Contains(strings.ToLower(entry), qLower) {
-			matches = append(matches, entry)
-			if len(matches) >= 200 { // cap results per provider
-				break
+	if len(doc.Payload) > 0 {
+		for _, entry := range doc.Payload {
+			if strings.Contains(strings.ToLower(entry), qLower) {
+				matches = append(matches, entry)
+				if len(matches) >= 200 { // cap results per provider
+					break
+				}
 			}
 		}
+		return matches, behavior
 	}
-	return matches, behavior
+
+	return searchRuleLines(data, qLower), behavior
 }
 
 // readMihomoRuleProviderPaths reads the generated mihomo config and returns a
 // map of provider name → absolute file path on disk.
-func readMihomoRuleProviderPaths(runtimeDir string) map[string]string {
+func readMihomoRuleProviderPaths(runtimeDir, dataDir string) map[string]string {
 	result := make(map[string]string)
 	configPath := filepath.Join(runtimeDir, "mihomo-config.yaml")
 	data, err := os.ReadFile(configPath)
@@ -303,11 +329,116 @@ func readMihomoRuleProviderPaths(runtimeDir string) map[string]string {
 			continue
 		}
 		p := rp.Path
-		// Resolve relative paths against runtimeDir (mihomo's working dir)
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(runtimeDir, p)
+		if filepath.IsAbs(p) {
+			result[name] = filepath.Clean(p)
+			continue
 		}
-		result[name] = filepath.Clean(p)
+
+		// Mihomo runtime uses -d <dataDir>, so relative path should be resolved
+		// against dataDir first. Fall back to runtimeDir for legacy layouts.
+		rel := filepath.Clean(p)
+		if dataDir != "" {
+			dataCandidate := filepath.Clean(filepath.Join(dataDir, rel))
+			if pathExists(dataCandidate) {
+				result[name] = dataCandidate
+				continue
+			}
+			runtimeCandidate := filepath.Clean(filepath.Join(runtimeDir, rel))
+			if pathExists(runtimeCandidate) {
+				result[name] = runtimeCandidate
+				continue
+			}
+			result[name] = dataCandidate
+			continue
+		}
+		result[name] = filepath.Clean(filepath.Join(runtimeDir, rel))
 	}
 	return result
+}
+
+func resolveRuleProviderFile(name, format string, configuredPaths map[string]string, runtimeDir, dataDir string) string {
+	if p := strings.TrimSpace(configuredPaths[name]); p != "" {
+		return p
+	}
+	candidates := buildProviderFallbackCandidates(name, format, runtimeDir, dataDir)
+	for _, candidate := range candidates {
+		if pathExists(candidate) {
+			return candidate
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
+func buildProviderFallbackCandidates(name, format, runtimeDir, dataDir string) []string {
+	exts := []string{".yaml", ".yml", ".mrs", ".txt"}
+	f := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(format), "."))
+	if f != "" {
+		exts = append([]string{"." + f}, exts...)
+	}
+
+	dirs := []string{
+		filepath.Join(dataDir, "rule_provider"),
+		filepath.Join(runtimeDir, "rule_provider"),
+		filepath.Join(dataDir, "ruleset"),
+		filepath.Join(dataDir, "rule-set"),
+		filepath.Join(runtimeDir, "ruleset"),
+		filepath.Join(runtimeDir, "rule-set"),
+	}
+
+	seen := map[string]bool{}
+	out := make([]string, 0, len(dirs)*len(exts))
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		for _, ext := range exts {
+			p := filepath.Clean(filepath.Join(dir, name+ext))
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func searchRuleLines(data []byte, qLower string) []string {
+	// Skip binary-like files (e.g. mrs) that are not safely searchable as text.
+	if bytes.IndexByte(data, 0) >= 0 {
+		return nil
+	}
+
+	lines := strings.Split(string(data), "\n")
+	matches := make([]string, 0, 16)
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.EqualFold(line, "payload:") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "-")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(line), qLower) {
+			matches = append(matches, line)
+			if len(matches) >= 200 {
+				break
+			}
+		}
+	}
+	return matches
+}
+
+func pathExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }

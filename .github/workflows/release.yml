@@ -254,6 +254,167 @@ jobs:
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
+  # Stage 3.5: Package OpenWrt APK for each platform (25.12+)
+  # ────────────────────────────────────────────────────────────
+  package-apk:
+    name: Package APK (${{ matrix.pkg_arch }})
+    runs-on: ubuntu-latest
+    needs: [build-ui, build-binaries]
+
+    strategy:
+      matrix:
+        include:
+          - pkg_arch: x86_64
+            binary_suffix: linux-amd64
+            mihomo_asset: mihomo-linux-amd64-compatible
+
+          - pkg_arch: aarch64_generic
+            binary_suffix: linux-arm64
+            mihomo_asset: mihomo-linux-arm64
+
+          - pkg_arch: aarch64_cortex-a53
+            binary_suffix: linux-arm64
+            mihomo_asset: mihomo-linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute pkg version
+        id: version
+        run: |
+          RAW="${{ needs.build-ui.outputs.version }}"
+          PKG_VERSION="${RAW#v}"
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9A-Za-z._+-]+/./g')"
+          APK_VERSION="${APK_CORE_VERSION}-r1"
+          echo "tag=$RAW" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "apk_version=$APK_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download clashforge binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-${{ matrix.binary_suffix }}
+          path: dist/
+
+      - name: Download bundled mihomo
+        run: |
+          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+          echo "Downloading mihomo $MIHOMO_VER (${{ matrix.mihomo_asset }})"
+          curl -fsSL -o /tmp/mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${{ matrix.mihomo_asset }}-${MIHOMO_VER}.gz"
+          gunzip /tmp/mihomo.gz
+          chmod +x /tmp/mihomo
+          echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
+          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        run: |
+          ARCH="${{ matrix.pkg_arch }}"
+          APK_VERSION="${{ steps.version.outputs.apk_version }}"
+          APK_NAME="clashforge-${APK_VERSION}_${ARCH}.apk"
+          MIHOMO_VER_CLEAN="${MIHOMO_VER:-unknown}"
+
+          # Staging tree
+          mkdir -p apk-root/usr/bin
+          mkdir -p apk-root/etc/init.d
+          mkdir -p apk-root/usr/share/metaclash
+          mkdir -p apk-root/usr/share/luci/menu.d
+          mkdir -p apk-root/www/luci-static/resources/view/clashforge
+          mkdir -p apk-root/usr/share/rpcd/acl.d
+          mkdir -p apk-root/lib/apk/packages
+          mkdir -p apk-scripts
+
+          # Binaries
+          cp dist/clashforge-${{ matrix.binary_suffix }} apk-root/usr/bin/clashforge
+          chmod 755 apk-root/usr/bin/clashforge
+          cp /tmp/mihomo apk-root/usr/bin/mihomo-clashforge
+          chmod 755 apk-root/usr/bin/mihomo-clashforge
+
+          # LuCI / rpcd files
+          cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json \
+             apk-root/usr/share/luci/menu.d/luci-app-clashforge.json
+          cp openwrt/files/www/luci-static/resources/view/clashforge/main.js \
+             apk-root/www/luci-static/resources/view/clashforge/main.js
+          cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json \
+             apk-root/usr/share/rpcd/acl.d/luci-app-clashforge.json
+
+          # init.d + helper
+          cp openwrt/files/etc/init.d/metaclash apk-root/etc/init.d/clashforge
+          chmod 755 apk-root/etc/init.d/clashforge
+          cp openwrt/files/etc/metaclash/uninstall-clashforge.sh apk-root/usr/bin/uninstall-clashforge
+          chmod 755 apk-root/usr/bin/uninstall-clashforge
+
+          # diagnostic tool (optional)
+          if [ -f openwrt/files/usr/bin/clashforge-diag ]; then
+            cp openwrt/files/usr/bin/clashforge-diag apk-root/usr/bin/clashforge-diag
+            chmod 755 apk-root/usr/bin/clashforge-diag
+          else
+            echo "[warn] openwrt/files/usr/bin/clashforge-diag not found, skip packaging diagnostic tool"
+          fi
+
+          # Package lifecycle scripts
+          cp openwrt/files/etc/metaclash/postinst.sh apk-scripts/post-install
+          cp openwrt/files/etc/metaclash/prerm.sh apk-scripts/pre-upgrade
+          cp openwrt/files/etc/metaclash/postinst.sh apk-scripts/post-upgrade
+          cp openwrt/files/etc/metaclash/prerm.sh apk-scripts/pre-deinstall
+          cp openwrt/files/etc/metaclash/postrm.sh apk-scripts/post-deinstall
+          chmod 755 apk-scripts/*
+          sed -i 's/\r$//' apk-scripts/*
+
+          # OpenWrt APK metadata files for conffile preservation
+          printf '%s\n' \
+            '/etc/metaclash/config.toml' \
+            '/etc/metaclash/overrides.yaml' \
+            > apk-root/lib/apk/packages/clashforge.conffiles
+          : > apk-root/lib/apk/packages/clashforge.conffiles_static
+          while IFS= read -r f; do
+            [ -f "apk-root$f" ] || continue
+            sum="$(sha256sum "apk-root$f" | awk '{print $1}')"
+            echo "$f $sum" >> apk-root/lib/apk/packages/clashforge.conffiles_static
+          done < apk-root/lib/apk/packages/clashforge.conffiles
+
+          (cd apk-root && find . -type f -o -type l | sed 's#^\./#/#' | sort > lib/apk/packages/clashforge.list)
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            -e PKG_ARCH="$ARCH" \
+            -e APK_VERSION="$APK_VERSION" \
+            -e APK_NAME="$APK_NAME" \
+            -e MIHOMO_VER_CLEAN="$MIHOMO_VER_CLEAN" \
+            alpine:3.21 \
+            sh -euc '
+              apk mkpkg \
+                --info "name:clashforge" \
+                --info "version:${APK_VERSION}" \
+                --info "description:Mihomo (Clash.Meta) proxy manager for OpenWrt. Includes bundled mihomo ${MIHOMO_VER_CLEAN}. Web UI on port 7777." \
+                --info "arch:${PKG_ARCH}" \
+                --info "license:GPL-3.0" \
+                --info "origin:https://github.com/wujun4code/clashforge" \
+                --info "url:https://github.com/wujun4code/clashforge" \
+                --info "maintainer:wujun4code" \
+                --info "depends:ca-bundle ip-full" \
+                --script "post-install:/work/apk-scripts/post-install" \
+                --script "pre-upgrade:/work/apk-scripts/pre-upgrade" \
+                --script "post-upgrade:/work/apk-scripts/post-upgrade" \
+                --script "pre-deinstall:/work/apk-scripts/pre-deinstall" \
+                --script "post-deinstall:/work/apk-scripts/post-deinstall" \
+                --files /work/apk-root \
+                --output "/work/${APK_NAME}"
+            '
+
+          ls -lh "$APK_NAME"
+          echo "pkg_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.pkg_arch }}
+          path: "*.apk"
+          retention-days: 7
+
+  # ────────────────────────────────────────────────────────────
   # Stage 4: Collect clashforgectl.sh (single upload, from checkout)
   # ────────────────────────────────────────────────────────────
   upload-installer:
@@ -274,7 +435,7 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-ui, package-ipk, upload-installer]
+    needs: [build-ui, package-ipk, package-apk, upload-installer]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
@@ -300,6 +461,13 @@ jobs:
           path: release-assets/
           merge-multiple: true
 
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: apk-*
+          path: release-assets/
+          merge-multiple: true
+
       - name: Download clashforgectl.sh
         uses: actions/download-artifact@v4
         with:
@@ -312,7 +480,9 @@ jobs:
       - name: Create checksums
         run: |
           cd release-assets
-          sha256sum *.ipk clashforgectl.sh > SHA256SUMS.txt
+          shopt -s nullglob
+          ASSETS=( *.ipk *.apk clashforgectl.sh )
+          sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create release
@@ -398,6 +568,28 @@ jobs:
             opkg install --nodeps clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_cortex-a53.ipk
             ```
 
+            ### 手动安装 APK（OpenWrt 25.12+）
+
+            OpenWrt 25.12 及以上使用 `apk`，下载对应架构 APK 后安装：
+
+            #### x86_64
+            ```sh
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.pkg_version }}-r1_x86_64.apk
+            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.pkg_version }}-r1_x86_64.apk
+            ```
+
+            #### aarch64_generic
+            ```sh
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_generic.apk
+            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_generic.apk
+            ```
+
+            #### aarch64_cortex-a53
+            ```sh
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_cortex-a53.apk
+            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_cortex-a53.apk
+            ```
+
             ---
 
             ### 安装完成后
@@ -417,6 +609,8 @@ jobs:
 
             ```sh
             opkg remove clashforge
+            # OpenWrt 25.12+:
+            apk del clashforge
             # 或完全清除（含配置和数据）：
             uninstall-clashforge
             ```
@@ -430,5 +624,6 @@ jobs:
           prerelease: ${{ contains(steps.ver.outputs.tag, 'alpha') || contains(steps.ver.outputs.tag, 'beta') || contains(steps.ver.outputs.tag, 'rc') }}
           files: |
             release-assets/*.ipk
+            release-assets/*.apk
             release-assets/clashforgectl.sh
             release-assets/SHA256SUMS.txt

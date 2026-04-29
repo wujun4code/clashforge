@@ -19,6 +19,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/daemon"
 	"github.com/wujun4code/clashforge/internal/dns"
+	"github.com/wujun4code/clashforge/internal/geodata"
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
@@ -184,8 +185,11 @@ func main() {
 		log.Fatal().Err(err).Msg("init router SSH key pair")
 	}
 
+	// GeoData manager
+	geoManager := geodata.New(cfg)
+
 	// Scheduler
-	sched := scheduler.New(cfg, subManager)
+	sched := scheduler.New(cfg, subManager, geoManager)
 	sched.Start()
 
 	// HTTP server
@@ -203,6 +207,7 @@ func main() {
 		NodeKeyPair:     nodeKeyPair,
 		PublishStore:    publishStore,
 		WorkerNodeStore: workerNodeStore,
+		GeoDataManager:  geoManager,
 	})
 
 	addr := cfg.UIListenAddr()
