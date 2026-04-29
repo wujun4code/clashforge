@@ -681,7 +681,7 @@ async function runBrowserProbe(): Promise<BrowserProbeResult> {
   }
 
   const targets = [
-    { name: '淠宝',      group: '国内', url: 'https://www.taobao.com' },
+    { name: '淘宝',      group: '国内', url: 'https://www.taobao.com' },
     { name: '网易云音乐',  group: '国内', url: 'https://music.163.com' },
     { name: 'Google',    group: '国外', url: 'https://www.google.com' },
     { name: 'GitHub',    group: '国外', url: 'https://github.com' },
