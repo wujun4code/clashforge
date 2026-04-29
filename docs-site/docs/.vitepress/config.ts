@@ -19,45 +19,58 @@ export default defineConfig({
     lineNumbers: true
   },
   head: [
+    ["link", { rel: "icon", type: "image/x-icon", href: "/favicon.ico" }],
+    ["link", { rel: "icon", type: "image/png", sizes: "32x32", href: "/favicon-32.png" }],
+    ["link", { rel: "apple-touch-icon", sizes: "256x256", href: "/apple-touch-icon.png" }],
     ["link", { rel: "preconnect", href: "https://fonts.googleapis.com" }],
     ["link", { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" }],
     ["link", { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" }],
-    ["meta", { name: "theme-color", content: "#0f766e" }],
-    ["meta", { property: "og:title", content: "ClashForge Docs" }],
-    ["meta", { property: "og:description", content: "Install, configure, run, verify and troubleshoot ClashForge on OpenWrt." }]
+    ["meta", { name: "theme-color", content: "#7c3aed" }],
+    ["meta", { property: "og:title", content: "ClashForge" }],
+    ["meta", { property: "og:description", content: "在路由器上按设备定义分流规则，统一管控家庭和小型团队的网络出口。" }],
+    ["meta", { property: "og:image", content: "/og-image.png" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:image", content: "/og-image.png" }]
   ],
   locales: {
     root: {
       label: "简体中文",
       lang: "zh-CN",
       title: "ClashForge 文档",
-      description: "把代理服务放到 OpenWrt 路由器上，让家里的设备更容易使用。",
+      description: "在路由器上按设备定义分流规则，统一管控家庭和小型团队的网络出口。支持机场订阅、Cloudflare Worker 节点、VPS 多出口并行，适合跨境团队、外贸公司、独立开发者和家庭用户。",
       themeConfig: {
         nav: [
-          { text: "这是什么", link: "/" },
-          { text: "开始使用", link: "/guide/quick-start" },
+          { text: "为什么 IP 质量很重要", link: "/guide/why" },
+          { text: "快速开始", link: "/guide/quick-start" },
           { text: "不好用怎么办", link: "/guide/troubleshooting" },
           { text: "FAQ", link: "/guide/faq" },
           { text: "GitHub", link: repo }
         ],
         sidebar: [
           {
-            text: "先用起来",
+            text: "先理解，再动手",
             items: [
-              { text: "我该怎么开始", link: "/guide/quick-start" },
+              { text: "为什么 IP 质量很重要", link: "/guide/why" }
+            ]
+          },
+          {
+            text: "安装和配置",
+            items: [
+              { text: "快速开始", link: "/guide/quick-start" },
               { text: "安装到路由器", link: "/guide/install" },
-              { text: "添加代理订阅", link: "/guide/config" },
+              { text: "添加代理来源", link: "/guide/config" },
               { text: "让设备开始使用", link: "/guide/run" }
             ]
           },
           {
-            text: "用得稳定",
+            text: "长期稳定使用",
             items: [
               { text: "怎么知道成功了", link: "/guide/verify" },
-              { text: "日常怎么用", link: "/guide/operations" },
+              { text: "日常维护", link: "/guide/operations" },
               { text: "更新软件", link: "/guide/upgrade" },
               { text: "不好用怎么办", link: "/guide/troubleshooting" },
-              { text: "FAQ", link: "/guide/faq" }
+              { text: "常见问题 FAQ", link: "/guide/faq" }
             ]
           }
         ],
@@ -117,7 +130,7 @@ export default defineConfig({
     }
   },
   themeConfig: {
-    logo: "/logo.svg",
+    logo: "/logo.png",
     search: {
       provider: "local",
       options: {

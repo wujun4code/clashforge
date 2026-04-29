@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 import {
   Activity,
   ChevronRight,
+  Database,
   LayoutDashboard,
   Loader2,
   Network,
@@ -31,8 +32,9 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: '代理资源',
     items: [
-      { to: '/nodes',   icon: Server,       label: '出口节点', caption: '服务器部署 · 代理管理' },
-      { to: '/publish', icon: Rss,          label: '订阅定制', caption: '模板编排 · 链接生成' },
+      { to: '/nodes',   icon: Server,    label: '出口节点', caption: '服务器部署 · 代理管理' },
+      { to: '/publish', icon: Rss,       label: '订阅定制', caption: '模板编排 · 链接生成' },
+      { to: '/geodata', icon: Database,  label: '路由数据', caption: 'GeoIP · GeoSite 更新' },
     ],
   },
   {

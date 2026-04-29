@@ -8,6 +8,7 @@ import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
 import { Settings } from './pages/Settings'
 import { Publish } from './pages/Publish'
+import { GeoData } from './pages/GeoData'
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/device-rules" element={<PerDeviceRules />} />
               <Route path="/nodes" element={<Nodes />} />
               <Route path="/publish" element={<Publish />} />
+              <Route path="/geodata" element={<GeoData />} />
               <Route path="/activity" element={<ActivityLog />} />
               <Route path="/setup" element={<Setup />} />
               <Route path="/settings" element={<Settings />} />

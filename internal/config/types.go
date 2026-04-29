@@ -66,6 +66,10 @@ type UpdateConfig struct {
 	GeositeInterval      string `toml:"geosite_interval" json:"geosite_interval"`
 	GeoIPURL             string `toml:"geoip_url" json:"geoip_url"`
 	GeositeURL           string `toml:"geosite_url" json:"geosite_url"`
+	// GeoDataProxyServer is the mihomo proxy name used when downloading GeoData files.
+	// Empty or "DIRECT" means download without proxy. Any other value routes downloads
+	// through mihomo's HTTP proxy port using its current active routing.
+	GeoDataProxyServer string `toml:"geodata_proxy_server" json:"geodata_proxy_server"`
 }
 
 type SecurityConfig struct {

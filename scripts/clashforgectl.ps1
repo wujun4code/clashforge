@@ -113,6 +113,8 @@ function Sync-GeoDataToRouter {
     }
 
     $RemoteGeoDir = "/etc/metaclash"
+    $NeedGeoIP = $true
+    $NeedGeoSite = $true
     $GeoSpecs = @(
         @{
             Name = "GeoIP.dat"
@@ -132,13 +134,46 @@ function Sync-GeoDataToRouter {
         }
     )
 
-    Log "── GeoData: downloading locally and preloading router"
+    try {
+        $SshCheckArgs = $SshBase + @(
+            $Target,
+            "[ -s /etc/metaclash/GeoIP.dat ] && echo GeoIP=1 || echo GeoIP=0; [ -s /etc/metaclash/GeoSite.dat ] && echo GeoSite=1 || echo GeoSite=0"
+        )
+        $RemoteState = ssh @SshCheckArgs 2>$null
+        if ($LASTEXITCODE -eq 0 -and $RemoteState) {
+            foreach ($Line in $RemoteState) {
+                switch -Regex ($Line) {
+                    '^GeoIP=1$'   { $NeedGeoIP = $false; continue }
+                    '^GeoSite=1$' { $NeedGeoSite = $false; continue }
+                }
+            }
+        } else {
+            Warn "Unable to check existing GeoData on router, falling back to local preload"
+        }
+    } catch {
+        Warn "Unable to check existing GeoData on router, falling back to local preload"
+    }
+
+    if (-not $NeedGeoIP -and -not $NeedGeoSite) {
+        Ok "GeoIP.dat and GeoSite.dat already exist on router, skipping preload"
+        return
+    }
+
+    Log "── GeoData: preloading missing files only"
     $GeoTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("clashforge-geodata-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $GeoTempDir | Out-Null
 
     try {
         $DownloadedFiles = @()
         foreach ($Spec in $GeoSpecs) {
+            if ($Spec.File -eq "GeoIP.dat" -and -not $NeedGeoIP) {
+                Ok "GeoIP.dat already exists on router, skip download/upload"
+                continue
+            }
+            if ($Spec.File -eq "GeoSite.dat" -and -not $NeedGeoSite) {
+                Ok "GeoSite.dat already exists on router, skip download/upload"
+                continue
+            }
             $LocalPath = Join-Path $GeoTempDir $Spec.File
             if (Download-WithFallback -Name $Spec.Name -OutFile $LocalPath -Urls $Spec.Urls) {
                 $DownloadedFiles += $Spec.File
@@ -146,7 +181,7 @@ function Sync-GeoDataToRouter {
         }
 
         if ($DownloadedFiles.Count -eq 0) {
-            Warn "GeoData preload skipped: no GeoData files could be downloaded locally"
+            Warn "GeoData preload skipped: required GeoData files could not be downloaded locally"
             return
         }
 

@@ -75,28 +75,62 @@ sync_geodata_to_router() {
     fi
 
     local remote_dir="/etc/metaclash"
-    local tmpdir downloaded=0
+    local remote_state=""
+    local need_geoip=1
+    local need_geosite=1
+    local tmpdir
+    local geoip_local=0
+    local geosite_local=0
+
+    if remote_state="$(ssh "${SSH_OPTS[@]}" "$TARGET" '[ -s /etc/metaclash/GeoIP.dat ] && echo GeoIP=1 || echo GeoIP=0; [ -s /etc/metaclash/GeoSite.dat ] && echo GeoSite=1 || echo GeoSite=0' 2>/dev/null)"; then
+        while IFS='=' read -r key value; do
+            case "$key" in
+                GeoIP)
+                    [ "$value" = "1" ] && need_geoip=0
+                    ;;
+                GeoSite)
+                    [ "$value" = "1" ] && need_geosite=0
+                    ;;
+            esac
+        done <<< "$remote_state"
+    else
+        warn "Unable to check existing GeoData on router, falling back to local preload"
+    fi
+
+    if [ "$need_geoip" -eq 0 ] && [ "$need_geosite" -eq 0 ]; then
+        ok "GeoIP.dat and GeoSite.dat already exist on router, skipping preload"
+        return 0
+    fi
+
     tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/clashforge-geodata.XXXXXX")" || {
         warn "GeoData preload skipped: cannot create local temp directory"
         return 0
     }
 
-    log "── GeoData: downloading locally and preloading router"
+    log "── GeoData: preloading missing files only"
 
-    if download_with_fallback "GeoIP.dat" "$tmpdir/GeoIP.dat" \
-        "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
-        "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"; then
-        downloaded=1
+    if [ "$need_geoip" -eq 1 ]; then
+        if download_with_fallback "GeoIP.dat" "$tmpdir/GeoIP.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"; then
+            geoip_local=1
+        fi
+    else
+        ok "GeoIP.dat already exists on router, skip download/upload"
     fi
 
-    if download_with_fallback "GeoSite.dat" "$tmpdir/GeoSite.dat" \
-        "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
-        "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"; then
-        downloaded=1
+    if [ "$need_geosite" -eq 1 ]; then
+        if download_with_fallback "GeoSite.dat" "$tmpdir/GeoSite.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"; then
+            geosite_local=1
+        fi
+    else
+        ok "GeoSite.dat already exists on router, skip download/upload"
     fi
 
-    if [ "$downloaded" -eq 0 ]; then
-        warn "GeoData preload skipped: no GeoData files could be downloaded locally"
+    if [ "$geoip_local" -eq 0 ] && [ "$geosite_local" -eq 0 ]; then
+        warn "GeoData preload skipped: required GeoData files could not be downloaded locally"
         rm -rf "$tmpdir"
         return 0
     fi
@@ -107,13 +141,13 @@ sync_geodata_to_router() {
         return 0
     fi
 
-    if [ -s "$tmpdir/GeoIP.dat" ]; then
+    if [ "$geoip_local" -eq 1 ] && [ -s "$tmpdir/GeoIP.dat" ]; then
         scp "${SCP_OPTS[@]}" "$tmpdir/GeoIP.dat" "${TARGET}:${remote_dir}/GeoIP.dat" \
             && ok "GeoIP.dat uploaded to ${remote_dir}/GeoIP.dat" \
             || warn "Failed to upload GeoIP.dat to router"
     fi
 
-    if [ -s "$tmpdir/GeoSite.dat" ]; then
+    if [ "$geosite_local" -eq 1 ] && [ -s "$tmpdir/GeoSite.dat" ]; then
         scp "${SCP_OPTS[@]}" "$tmpdir/GeoSite.dat" "${TARGET}:${remote_dir}/GeoSite.dat" \
             && ok "GeoSite.dat uploaded to ${remote_dir}/GeoSite.dat" \
             || warn "Failed to upload GeoSite.dat to router"

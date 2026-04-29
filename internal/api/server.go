@@ -12,6 +12,7 @@ import (
 
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
+	"github.com/wujun4code/clashforge/internal/geodata"
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
@@ -37,6 +38,7 @@ type Dependencies struct {
 	NodeKeyPair      *nodes.KeyPair
 	PublishStore     *publish.Store
 	WorkerNodeStore  *workernode.Store
+	GeoDataManager   *geodata.Manager
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -146,6 +148,14 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/publish/upload", handlePublishUpload(deps))
 		api.Get("/publish/records", handleGetPublishRecords(deps))
 		api.Delete("/publish/records/{id}", handleDeletePublishRecord(deps))
+		// GeoData management
+		if deps.GeoDataManager != nil {
+			api.Get("/geodata/status", handleGetGeoDataStatus(deps))
+			api.Get("/geodata/config", handleGetGeoDataConfig(deps))
+			api.Put("/geodata/config", handleUpdateGeoDataConfig(deps))
+			api.Post("/geodata/update", handleTriggerGeoDataUpdate(deps))
+			api.Get("/geodata/logs", handleGetGeoDataLogs(deps))
+		}
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}
