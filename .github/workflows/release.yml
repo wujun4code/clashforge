@@ -284,9 +284,9 @@ jobs:
         run: |
           RAW="${{ needs.build-ui.outputs.version }}"
           PKG_VERSION="${RAW#v}"
-          # APK/OpenWrt versions should be dot-separated semantic segments.
-          # Convert prerelease separators like "-" / "+" to ".".
-          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[-+]/./g; s/[^0-9A-Za-z._~]/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          # APK/OpenWrt version field must be numeric dot-separated segments.
+          # Example: 0.1.0-alpha.106 -> 0.1.0.106
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
           [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
           APK_VERSION="${APK_CORE_VERSION}-r1"
           echo "tag=$RAW" >> "$GITHUB_OUTPUT"
@@ -458,7 +458,7 @@ jobs:
             TAG="${{ github.ref_name }}"
           fi
           PKG_VERSION="${TAG#v}"
-          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[-+]/./g; s/[^0-9A-Za-z._~]/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
           [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
           APK_ASSET_VERSION="${APK_CORE_VERSION}-r1"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

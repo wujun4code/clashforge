@@ -189,7 +189,8 @@ jobs:
 
           PKG_VER="${TAG#v}"
           # Keep APK filename derivation in sync with release.yml.
-          APK_CORE_VERSION="$(printf '%s' "$PKG_VER" | sed -E 's/[-+]/./g; s/[^0-9A-Za-z._~]/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          # Example: 0.1.0-alpha.106 -> 0.1.0.106
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VER" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
           [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
           PKG_FILE="clashforge-${APK_CORE_VERSION}-r1_x86_64.apk"
           TRACK="25.12-apk"
