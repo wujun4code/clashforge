@@ -1,12 +1,26 @@
 # FAQ
 
-## 推荐哪种安装方式？
+## 我只想稳定用代理，不想折腾源码，怎么装最合适？
 
-生产或长期使用优先 Release IPK。开发验证优先 `clashforgectl.ps1 deploy`，因为它会自动构建、打包、上传并安装 IPK。
+用 `upgrade` 路径最稳：
 
-## 为什么首次启动不自动接管透明代理和 DNS？
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+```
 
-这是安全默认。代理内核、订阅、DNS 和防火墙任何一层有问题，都可能影响全网。先验证内核和节点，再手动接管，更容易回退。
+它会由你的电脑下载 IPK 再推送到路由器，通常比路由器本机下载更稳。
+
+## 为什么第一次不建议直接开透明代理和 DNS？
+
+因为这是影响面最大的两层。  
+先验证内核与节点，再逐步接管，问题会更容易定位和回退。
+
+## `deploy` 和 `upgrade` 到底怎么选？
+
+| 命令 | 适合谁 |
+| --- | --- |
+| `upgrade` | 普通用户、稳定运维 |
+| `deploy` | 开发者，本地源码验证 |
 
 ## Web UI 默认地址是什么？
 
@@ -20,34 +34,35 @@ http://<router-ip>:7777
 http://192.168.20.1:7777
 ```
 
-## Windows 远程脚本需要什么？
+## Windows 侧最低要求是什么？
 
-需要 OpenSSH Client，也就是 `ssh` 和 `scp` 命令可用。Windows 10/11 通常可以在可选功能中安装。
+需要 `ssh` 和 `scp` 命令可用（OpenSSH Client）。
 
-## `deploy` 和 `upgrade` 有什么区别？
+## 开了接管后网络异常，第一步该做什么？
 
-| 命令 | 用途 |
-| --- | --- |
-| `deploy` | 本地构建当前源码，生成 IPK 并安装到路由器 |
-| `upgrade` | 从 Release 下载 IPK，上传到路由器并安装 |
-
-## 如何跳过 UI 或 Go 构建？
+先回退：
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip ui
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip go
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-## 如何确认真的生效了？
+先恢复可用网络，再继续排障。
+
+## 如何确认“真的生效”而不是“看起来正常”？
 
 至少确认：
 
-1. Web UI 可打开。
-2. `status` 正常。
-3. mihomo 内核正在运行。
-4. 目标客户端出口 IP 符合预期。
-5. DNS 查询路径符合预期。
-6. nftables/iptables 中存在 ClashForge 规则。
+1. `status` 正常。
+2. `check` 返回正常连通性和出口信息。
+3. 你的实际客户端网络体验符合预期（速度、可达性、DNS）。
+
+## 想升级到固定版本怎么做？
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+```
+
+同理也可用这个方式回滚到历史版本。
 
 ## 如何安全卸载？
 
@@ -57,22 +72,18 @@ http://192.168.20.1:7777
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall
 ```
 
-保留配置：
+卸载但保留配置：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
 ```
 
-## 诊断报告可以直接发到 GitHub Issue 吗？
+## 诊断报告可以直接发到 Issue 吗？
 
-建议使用脱敏报告：
+建议只发脱敏报告：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-未脱敏报告可能包含订阅链接、Token、内网地址或其他敏感数据。
-
-## GitHub Pages 如何发布？
-
-本仓库新增的工作流会在 `main` 分支推送 `docs-site/**` 或 Pages 工作流变更时自动构建并部署。仓库 Settings → Pages 的 Source 选择 GitHub Actions。
+因为原始报告可能包含订阅 URL、Token、内网地址等敏感信息。

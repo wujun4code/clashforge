@@ -1,81 +1,117 @@
-# 快速开始
+# 快速开始（15 分钟先把网络跑通）
 
-本页用于从零完成一次可验证的 ClashForge 部署。示例路由器地址使用 `192.168.20.1`，请替换为你的 OpenWrt 管理地址。
+这份快速开始只追求一件事：**先让你的路由器代理能力可用，并且随时能回退**。  
+示例路由器地址用 `192.168.20.1`，请替换成你的实际地址。
+
+## 先明确今天的目标
+
+本页的目标是：
+
+1. ClashForge 安装成功。
+2. Web UI 可打开。
+3. mihomo 内核能启动。
+4. 你知道出问题时如何一键退出接管。
+
+本页不追求：
+
+1. 一次性把所有高级规则调到最优。
+2. 第一次就全网接管所有设备。
 
 ## 前置条件
 
 | 项目 | 要求 |
 | --- | --- |
 | 路由器 | OpenWrt / Kwrt，允许 SSH 登录 |
-| 本机 | Windows 10/11、macOS 或 Linux |
-| 工具 | Git、ssh、scp |
-| 开发部署 | Go、Node.js、npm、Python |
-| 推荐权限 | 路由器 `root` 用户或具备等价权限的用户 |
+| 控制端 | Windows 10/11、macOS 或 Linux |
+| 工具 | `ssh`、`scp` 可用 |
+| 权限 | 推荐 `root` 或等价权限 |
+| 配置来源 | 至少一个可用的 YAML 或订阅链接 |
 
-::: tip 安全默认
-ClashForge 启动时默认不自动接管透明代理和 DNS。先完成配置和节点验证，再手动开启接管，能降低首次部署风险。
+::: tip 为什么先保守
+ClashForge 默认不自动接管透明代理和 DNS，这是为了避免第一次部署时把全网带离线。
 :::
 
-## 1. 获取项目
+## 1. 准备控制脚本
 
 ```powershell
- git clone https://github.com/wujun4code/clashforge.git
- cd clashforge
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
 ```
 
-## 2. 从 Windows 一键部署
-
-此命令会在本机完成 UI 构建、Go 交叉编译、IPK 打包、上传到路由器并安装。
+Windows 可用性检查：
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy
+ssh -V
+scp -V
 ```
 
-常用变体：
+## 2. 安装到路由器（推荐）
+
+推荐用 `upgrade` 路径：由你的电脑下载 IPK，再推送到路由器安装，稳定性更好。
 
 ```powershell
-# 指定 SSH 用户、端口和私钥
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 deploy
-
-# 跳过 UI 构建，只重新打包后端和 IPK
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip ui
-
-# 跳过 Go 编译，只重新打包已有二进制和 UI
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip go
-
-# 清理旧配置后安装，谨慎使用
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Purge
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
 ```
 
-## 3. 打开 Web UI
+网络受限时可加镜像：
 
-部署完成后访问：
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
+
+macOS / Linux：
+
+```sh
+./scripts/clashforgectl --router 192.168.20.1 upgrade
+```
+
+## 3. 打开 Web UI 并导入配置
+
+访问：
 
 ```text
 http://192.168.20.1:7777
 ```
 
-## 4. 完成首次配置
+在 Setup 页面完成最小配置：
 
-进入 Setup/配置向导，至少完成一个配置来源：
+1. 上传 YAML 或添加订阅。
+2. 保存并激活配置。
+3. 启动 mihomo 内核。
 
-1. 上传或粘贴 Clash 兼容 YAML。
-2. 添加订阅链接。
-3. 保存并激活配置。
-4. 启动 mihomo 内核。
-5. 确认节点可用后，再开启透明代理或 DNS 接管。
+## 4. 先验证，再接管
 
-## 5. 快速检查
+先看运行状态：
 
 ```powershell
-# 查看路由器侧 ClashForge 状态
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
-
-# 轻量检查连通性和出口 IP
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
-
-# 收集脱敏诊断报告到本机
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-如果上述步骤都正常，继续阅读 [启动与接管](/guide/run) 和 [检查清单](/guide/verify)。
+确认核心流程可用后，再在 UI 中按顺序开启：
+
+1. 透明代理接管。
+2. DNS 接管。
+
+每开一步都执行一次 `check`，不要两步同时开。
+
+## 5. 出问题时的立即回退
+
+如果开启接管后体验变差或断网，先执行：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
+```
+
+这会尝试退出接管并恢复系统网络基线，再继续排障。
+
+## 完成标志
+
+满足以下 4 条，就算首次上手成功：
+
+1. `status` 显示服务状态正常。
+2. Web UI 能稳定访问。
+3. `check` 能返回有效连通性与出口信息。
+4. 你已经验证过 `stop` 可以作为回退手段。
+
+下一步建议阅读 [启动与接管](/guide/run) 和 [检查清单](/guide/verify)。
