@@ -17,7 +17,8 @@
 # 环境变量：
 #   PHASE              baseline | running | stopped（必须）
 #   PROXY_NODE_IP      代理节点服务器 IP（running 阶段的出口 IP 断言目标）
-#   MIXED_PORT_URL     混合端口代理 URL（running 阶段显式代理用）
+#   MIXED_PORT_URL     混合端口代理 URL（默认 http://127.0.0.1:<mixed>）
+#   PROXY_AUTH         可选，代理认证 user:pass（通过 --proxy-user 传递）
 #   MIHOMO_DNS_PORT    mihomo DNS 端口（默认 7874）
 #   MIXED_PORT         混合端口号（默认 7893）
 #   GITHUB_STEP_SUMMARY
@@ -53,9 +54,22 @@ mask_domain() { echo "$1" | awk -F. '{ if (NF<=2) {print $0} else {print $1".***
 PHASE="${PHASE:-baseline}"
 PROXY_NODE_IP="${PROXY_NODE_IP:-}"
 MIXED_PORT_URL="${MIXED_PORT_URL:-}"
+PROXY_AUTH="${PROXY_AUTH:-}"
 MIHOMO_DNS_PORT="${MIHOMO_DNS_PORT:-7874}"
 MIXED_PORT="${MIXED_PORT:-7893}"
 SNAPSHOT_DIR="/tmp/cf-snapshot"
+if [ -z "$PROXY_AUTH" ]; then
+    PROXY_AUTH=$(cat "$SNAPSHOT_DIR/proxy-auth" 2>/dev/null || echo "")
+fi
+
+_proxy_curl() {
+    _proxy_url="${MIXED_PORT_URL:-http://127.0.0.1:${MIXED_PORT}}"
+    if [ -n "$PROXY_AUTH" ]; then
+        curl --proxy "$_proxy_url" --proxy-user "$PROXY_AUTH" "$@"
+    else
+        curl --proxy "$_proxy_url" "$@"
+    fi
+}
 
 case "$PHASE" in
     baseline) PHASE_LABEL="Round 1 — 基准（安装前直连）" ;;
@@ -76,7 +90,7 @@ info "直连基准 IP: $(mask_ip "$DIRECT_IP")"
 # tproxy 只拦截 PREROUTING（LAN 客户端入流量），不拦截路由器本机进程（OUTPUT）。
 # running 阶段用混合端口（HTTP/SOCKS）显式代理，确保出口 IP 经过代理节点。
 if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
-    CURRENT_IP=$(curl -sf --max-time 10 --proxy "$MIXED_PORT_URL" https://api.ipify.org 2>/dev/null || echo "FAILED")
+    CURRENT_IP=$(_proxy_curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
     info "当前出口 IP（via 混合端口）: $(mask_ip "$CURRENT_IP")"
 else
     CURRENT_IP=$(curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
@@ -187,12 +201,9 @@ if [ "$PHASE" = "running" ]; then
     # ── HTTP HEAD via proxy（对齐 testHTTPProxyEndpoint） ──────────────────────
     _http_head_via_proxy() {
         _url="$1"
-        # Use MIXED_PORT_URL (includes credentials when proxy auth is configured).
-        # Falling back to bare http://127.0.0.1:PORT would cause 407 when auth is required.
-        _proxy_url="${MIXED_PORT_URL:-http://127.0.0.1:${MIXED_PORT}}"
+        # Use explicit mixed-port proxy; proxy auth (if any) is passed via --proxy-user.
         # HEAD request, 8s timeout — matches Go's 8s http.Client.Timeout
-        _out=$(curl -sfI -o /dev/null -w "%{http_code}:%{time_total}" \
-            --proxy "$_proxy_url" --max-time 8 "$_url" 2>&1) || true
+        _out=$(_proxy_curl -sfI -o /dev/null -w "%{http_code}:%{time_total}" --max-time 8 "$_url" 2>&1) || true
         echo "$_out"
     }
 
@@ -382,7 +393,7 @@ for entry in $TARGETS; do
     TOTAL_ACCESS=$((TOTAL_ACCESS+1))
     STARTED=$(date +%s%3N 2>/dev/null || date +%s)
     if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
-        CODE=$(curl -sf -o /dev/null -w "%{http_code}" --proxy "$MIXED_PORT_URL" --max-time 12 "$URL" 2>/dev/null || echo "0")
+        CODE=$(_proxy_curl -sf -o /dev/null -w "%{http_code}" --max-time 12 "$URL" 2>/dev/null || echo "0")
     else
         CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 12 "$URL" 2>/dev/null || echo "0")
     fi

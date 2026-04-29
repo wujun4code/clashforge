@@ -21,6 +21,8 @@ import (
 	"github.com/wujun4code/clashforge/internal/dns"
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
+	"github.com/wujun4code/clashforge/internal/publish"
+	"github.com/wujun4code/clashforge/internal/workernode"
 	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
@@ -166,8 +168,17 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("init node store")
 	}
+	publishStore, err := publish.NewStore(cfg.Core.DataDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("init publish store")
+	}
+	workerNodeStore, err := workernode.NewStore(cfg.Core.DataDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("init worker-node store")
+	}
 
-	// Router SSH key pair (used to authenticate to managed servers)
+	// Router SSH key pair — LoadOrGenerateKeyPair prefers /root/.ssh/ (opkg-safe)
+	// and auto-migrates from dataDir on first run after an upgrade.
 	nodeKeyPair, err := nodes.LoadOrGenerateKeyPair(cfg.Core.DataDir)
 	if err != nil {
 		log.Fatal().Err(err).Msg("init router SSH key pair")
@@ -179,17 +190,19 @@ func main() {
 
 	// HTTP server
 	router := api.NewRouter(api.Dependencies{
-		Version:    buildVersion,
-		StartedAt:  time.Now(),
-		ConfigPath: *cfgPath,
-		Config:     cfg,
-		Core:       coreManager,
-		SubManager: subManager,
-		Netfilter:  nfManager,
-		SSEBroker:  sseBroker,
-		LogBuffer:   logBuf,
-		NodeStore:   nodeStore,
-		NodeKeyPair: nodeKeyPair,
+		Version:      buildVersion,
+		StartedAt:    time.Now(),
+		ConfigPath:   *cfgPath,
+		Config:       cfg,
+		Core:         coreManager,
+		SubManager:   subManager,
+		Netfilter:    nfManager,
+		SSEBroker:    sseBroker,
+		LogBuffer:    logBuf,
+		NodeStore:       nodeStore,
+		NodeKeyPair:     nodeKeyPair,
+		PublishStore:    publishStore,
+		WorkerNodeStore: workerNodeStore,
 	})
 
 	addr := cfg.UIListenAddr()

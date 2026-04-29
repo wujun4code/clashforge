@@ -190,9 +190,9 @@ function SourceFilesPanel({ coreRunning }: { coreRunning: boolean }) {
 
   const doActivate = (item: PendingActivate) => {
     if (item.kind === 'file') {
-      navigate('/setup', { state: { activateFile: { filename: item.filename } } })
+      navigate('/setup', { state: { preselectSaved: { kind: 'file', filename: item.filename } } })
     } else {
-      navigate('/setup', { state: { activateSub: { id: item.id, name: item.name, url: item.url } } })
+      navigate('/setup', { state: { preselectSaved: { kind: 'sub', id: item.id, name: item.name, url: item.url } } })
     }
   }
 
@@ -513,7 +513,7 @@ function SubscriptionsPanel({ coreRunning, activeSource }: { coreRunning: boolea
   }
 
   const doActivate = (sub: Subscription) => {
-    navigate('/setup', { state: { activateSub: { id: sub.id, name: sub.name, url: sub.url } } })
+    navigate('/setup', { state: { preselectSaved: { kind: 'sub', id: sub.id, name: sub.name, url: sub.url } } })
   }
 
   const handleActivate = (sub: Subscription) => {

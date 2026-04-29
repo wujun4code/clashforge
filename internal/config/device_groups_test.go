@@ -515,3 +515,82 @@ func TestLoadDeviceGroups_LegacyArrayFormat(t *testing.T) {
 		t.Fatalf("unexpected loaded groups: %#v", loaded)
 	}
 }
+
+func TestDeviceGroups_SaveLoadForSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "device-groups.json")
+
+	input := []config.DeviceGroup{
+		{
+			ID:   "g1",
+			Name: "WindowsPC",
+			Devices: []config.Device{
+				{IP: "192.168.20.231", Prefix: 32},
+			},
+			Overrides: []config.ProxyGroupOverride{
+				{OriginalGroup: "🚀 节点选择", Proxies: []string{"node-us"}},
+			},
+		},
+	}
+
+	if err := config.SaveDeviceGroupsForSource(path, input, "subscription:test-01"); err != nil {
+		t.Fatalf("SaveDeviceGroupsForSource: %v", err)
+	}
+
+	sourceLoaded, err := config.LoadDeviceGroupsForSource(path, "subscription:test-01")
+	if err != nil {
+		t.Fatalf("LoadDeviceGroupsForSource: %v", err)
+	}
+	if len(sourceLoaded) != 1 || len(sourceLoaded[0].Overrides) != 1 {
+		t.Fatalf("expected source overrides to be loaded, got %#v", sourceLoaded)
+	}
+	if sourceLoaded[0].Overrides[0].OriginalGroup != "🚀 节点选择" {
+		t.Fatalf("unexpected override group: %#v", sourceLoaded[0].Overrides[0])
+	}
+
+	otherSourceLoaded, err := config.LoadDeviceGroupsForSource(path, "file:prod.yaml")
+	if err != nil {
+		t.Fatalf("LoadDeviceGroupsForSource other profile: %v", err)
+	}
+	if len(otherSourceLoaded) != 1 || len(otherSourceLoaded[0].Overrides) != 0 {
+		t.Fatalf("expected no overrides for non-target source, got %#v", otherSourceLoaded)
+	}
+
+	globalLoaded, err := config.LoadDeviceGroups(path)
+	if err != nil {
+		t.Fatalf("LoadDeviceGroups: %v", err)
+	}
+	if len(globalLoaded) != 1 {
+		t.Fatalf("expected one global group, got %#v", globalLoaded)
+	}
+	if len(globalLoaded[0].Overrides) != 0 {
+		t.Fatalf("global groups should not contain source-specific overrides, got %#v", globalLoaded[0].Overrides)
+	}
+}
+
+func TestLoadDeviceGroupsForSource_LegacyFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "device-groups.json")
+	if err := config.SaveDeviceGroups(path, []config.DeviceGroup{
+		{
+			ID:   "g1",
+			Name: "WindowsPC",
+			Devices: []config.Device{
+				{IP: "192.168.20.231", Prefix: 32},
+			},
+			Overrides: []config.ProxyGroupOverride{
+				{OriginalGroup: "🚀 节点选择", Proxies: []string{"node-us"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveDeviceGroups legacy: %v", err)
+	}
+
+	loaded, err := config.LoadDeviceGroupsForSource(path, "subscription:any")
+	if err != nil {
+		t.Fatalf("LoadDeviceGroupsForSource: %v", err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Overrides) != 1 {
+		t.Fatalf("legacy overrides should be preserved as fallback, got %#v", loaded)
+	}
+}

@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -491,4 +492,58 @@ func procNetHasLocalPort(path string, port int) bool {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+type domainProbeReq struct {
+	Domain string `json:"domain"`
+}
+
+type domainProbeResult struct {
+	Domain     string   `json:"domain"`
+	CheckedAt  string   `json:"checked_at"`
+	DNSIPs     []string `json:"dns_ips,omitempty"`
+	DNSError   string   `json:"dns_error,omitempty"`
+	OK         bool     `json:"ok"`
+	LatencyMS  int64    `json:"latency_ms,omitempty"`
+	StatusCode int      `json:"status_code,omitempty"`
+	Error      string   `json:"error,omitempty"`
+}
+
+func handleProbeDomain(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req domainProbeReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			Err(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+			return
+		}
+		domain := strings.TrimSpace(req.Domain)
+		domain = strings.TrimPrefix(domain, "https://")
+		domain = strings.TrimPrefix(domain, "http://")
+		if idx := strings.IndexByte(domain, '/'); idx != -1 {
+			domain = domain[:idx]
+		}
+		if domain == "" {
+			Err(w, http.StatusBadRequest, "INVALID_REQUEST", "domain is required")
+			return
+		}
+
+		res := domainProbeResult{Domain: domain, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+
+		ips, dnsErr := net.LookupHost(domain)
+		if dnsErr != nil {
+			res.DNSError = dnsErr.Error()
+		} else {
+			res.DNSIPs = ips
+		}
+
+		test := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, "https://"+domain, deps.Config.Core.RuntimeDir)
+		res.OK = test.OK
+		res.LatencyMS = test.DurationMS
+		res.StatusCode = test.StatusCode
+		if test.Error != "" {
+			res.Error = test.Error
+		}
+
+		JSON(w, http.StatusOK, res)
+	}
 }

@@ -919,8 +919,8 @@
     border-radius: var(--radius-md);
   }
   .btn-icon-sm {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     min-width: unset;
     padding: 0;
     border-radius: var(--radius-sm);
@@ -1487,6 +1487,13 @@
     font-weight: 700;
   }
 
+  /* Icon-only buttons must stay square with no side padding regardless of theme */
+  [data-theme="infra"] .btn-icon-sm {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+  }
+
   [data-theme="infra"] .btn-lg {
     height: 38px;
     padding: 0 16px;
@@ -1608,6 +1615,37 @@
   @keyframes meow-pattern-drift {
     from { background-position: 0 0, 0 0; }
     to   { background-position: 28px 18px, -20px 24px; }
+  }
+  @keyframes wizard-firework-pop {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, 10px) scale(0.3);
+    }
+    15% {
+      opacity: 1;
+      transform: translate(-50%, -2px) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(calc(-50% + var(--fw-x, 0px)), calc(var(--fw-y, -100px))) scale(0.2);
+    }
+  }
+
+  .wizard-fireworks {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: 0;
+  }
+
+  .wizard-firework-particle {
+    position: absolute;
+    bottom: 18%;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    box-shadow: 0 0 10px currentColor;
+    animation: wizard-firework-pop 900ms ease-out forwards;
   }
 
   .animate-scale-in { animation: scaleIn  var(--dur-normal) var(--ease-default); }

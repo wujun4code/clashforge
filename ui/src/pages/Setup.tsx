@@ -681,7 +681,7 @@ async function runBrowserProbe(): Promise<BrowserProbeResult> {
   }
 
   const targets = [
-    { name: '淠宝',      group: '国内', url: 'https://www.taobao.com' },
+    { name: '淘宝',      group: '国内', url: 'https://www.taobao.com' },
     { name: '网易云音乐',  group: '国内', url: 'https://music.163.com' },
     { name: 'Google',    group: '国外', url: 'https://www.google.com' },
     { name: 'GitHub',    group: '国外', url: 'https://github.com' },
@@ -705,8 +705,16 @@ async function runBrowserProbe(): Promise<BrowserProbeResult> {
 export function Setup() {
   const navigate = useNavigate()
   const location = useLocation()
-  const activateSub = (location.state as { activateSub?: { id: string; name: string; url?: string }; activateFile?: { filename: string } } | null)?.activateSub
-  const activateFile = (location.state as { activateSub?: { id: string; name: string; url?: string }; activateFile?: { filename: string } } | null)?.activateFile
+  const navState = (location.state as {
+    preselectSaved?: { kind: 'file'; filename: string } | { kind: 'sub'; id: string; name: string; url?: string }
+    activateSub?: { id: string; name: string; url?: string } // legacy state, keep compatibility
+    activateFile?: { filename: string } // legacy state, keep compatibility
+  } | null)
+  const activateSub = navState?.activateSub
+  const activateFile = navState?.activateFile
+  const preselectSaved = navState?.preselectSaved
+    ?? (activateSub ? { kind: 'sub' as const, id: activateSub.id, name: activateSub.name, url: activateSub.url } : undefined)
+    ?? (activateFile ? { kind: 'file' as const, filename: activateFile.filename } : undefined)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // ── init guard: check if core is already running ──
@@ -758,8 +766,8 @@ export function Setup() {
   // ── import step ──
   type ImportMode = 'file' | 'paste' | 'url' | 'existing' | 'existing_file' | 'saved'
   const initMode = (): ImportMode => {
-    if (activateSub) return 'existing'
-    if (activateFile) return 'existing_file'
+    // Keep setup flow consistent: always enter via "已保存配置",
+    // then preselect the intended source.
     return 'saved'
   }
   const [importMode, setImportMode] = useState<ImportMode>(initMode)
@@ -873,6 +881,31 @@ export function Setup() {
       setSavedSubs(sub.subscriptions ?? [])
     }).finally(() => setSavedLoading(false))
   }, [importMode])
+
+  // If we navigated from "流量规则 -> 启动", preselect that target while still
+  // keeping the user in the normal saved-source setup flow.
+  useEffect(() => {
+    if (importMode !== 'saved' || !preselectSaved) return
+    if (preselectSaved.kind === 'file') {
+      const exists = savedFiles.some((f) => f.filename === preselectSaved.filename)
+      if (exists) {
+        setSelectedSaved((prev) =>
+          prev?.kind === 'file' && prev.filename === preselectSaved.filename
+            ? prev
+            : { kind: 'file', filename: preselectSaved.filename },
+        )
+      }
+      return
+    }
+    const matched = savedSubs.find((s) => s.id === preselectSaved.id)
+    if (matched) {
+      setSelectedSaved((prev) =>
+        prev?.kind === 'sub' && prev.sub.id === matched.id
+          ? prev
+          : { kind: 'sub', sub: matched },
+      )
+    }
+  }, [importMode, preselectSaved, savedFiles, savedSubs])
 
   // ── reset subscription import choice when selection changes ──
   useEffect(() => {
@@ -1053,9 +1086,9 @@ export function Setup() {
             const parsed = yaml.load(content) as ClashParsed
             if (parsed && typeof parsed === 'object') applyClashParsed(parsed)
           } catch { /* ignore */ }
+          await setActiveSource({ type: 'file', filename: selectedSaved.filename })
           await updateOverrides(content)
-          await generateConfig().catch(() => null)
-          await setActiveSource({ type: 'file', filename: selectedSaved.filename }).catch(() => null)
+          await generateConfig()
           setClashParsed({})
         } else {
           const sub = selectedSaved.sub
@@ -1076,8 +1109,8 @@ export function Setup() {
           } else {
             // Using cached version — no network fetch needed
           }
-          await generateConfig().catch(() => null)
-          await setActiveSource({ type: 'subscription', sub_id: sub.id, sub_name: sub.name }).catch(() => null)
+          await setActiveSource({ type: 'subscription', sub_id: sub.id, sub_name: sub.name })
+          await generateConfig()
           setClashParsed({})
         }
         await showPreview()
@@ -1087,8 +1120,8 @@ export function Setup() {
       // Existing subscription mode: download (sync) + generate
       if (importMode === 'existing' && activateSub) {
         await syncSubUpdate(activateSub.id)
-        await generateConfig().catch(() => null)
-        await setActiveSource({ type: 'subscription', sub_id: activateSub.id, sub_name: activateSub.name }).catch(() => null)
+        await setActiveSource({ type: 'subscription', sub_id: activateSub.id, sub_name: activateSub.name })
+        await generateConfig()
         setClashParsed({})
         await showPreview()
         return
@@ -1102,9 +1135,9 @@ export function Setup() {
         } catch {
           // ignore YAML parse errors – backend validates
         }
+        await setActiveSource({ type: 'file', filename: activateFile.filename })
         await updateOverrides(content)
-        await generateConfig().catch(() => null)
-        await setActiveSource({ type: 'file', filename: activateFile.filename }).catch(() => null)
+        await generateConfig()
         setClashParsed({})
         await showPreview()
         return
@@ -1119,8 +1152,8 @@ export function Setup() {
           ? matched.id
           : (await addSubscription({ name: subName, url: remoteUrl, type: 'clash', enabled: true })).id
         await syncSubUpdate(subId)
-        await generateConfig().catch(() => null)
-        await setActiveSource({ type: 'subscription', sub_id: subId, sub_name: subName }).catch(() => null)
+        await setActiveSource({ type: 'subscription', sub_id: subId, sub_name: subName })
+        await generateConfig()
         setClashParsed({})
         await showPreview()
         return
@@ -1140,17 +1173,17 @@ export function Setup() {
       const suggestedName = (importMode === 'file' && uploadedFileName) ? uploadedFileName : undefined
       const { filename } = await saveSource(yamlContent, suggestedName).catch(() => ({ filename: '' }))
       if (filename) {
-        await setActiveSource({ type: 'file', filename }).catch(() => null)
+        await setActiveSource({ type: 'file', filename })
       }
 
       // Save as overrides and generate
       await updateOverrides(yamlContent)
-      await generateConfig().catch(() => null)
+      await generateConfig()
       await showPreview()
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : String(e))
     } finally { setImporting(false) }
-  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved])
+  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved, subImportChoice])
 
   // ── port check: verify each managed port after launch ──
   const handlePortCheck = useCallback(async () => {
@@ -1307,15 +1340,6 @@ export function Setup() {
     if (initStatus !== 'running') return
     void refreshRunningConfigPreview()
   }, [initStatus, refreshRunningConfigPreview])
-
-  // ── auto-launch when switching configs via activate (skip DNS/network steps) ──
-  useEffect(() => {
-    if (step === 'launch' && (activateSub || activateFile) && !launching && !launchDone) {
-      const t = setTimeout(() => { void handleLaunch() }, 0)
-      return () => clearTimeout(t)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, handleLaunch])
 
   // ── complete (save autostart + navigate) ──
   const handleComplete = useCallback(async () => {
@@ -1773,7 +1797,13 @@ export function Setup() {
                 onClick={handleImport}
                 disabled={
                   importing ||
-                  (!selectedSaved && !pasteContent.trim() && !remoteUrl.trim())
+                  (
+                    (importMode === 'saved' && !selectedSaved) ||
+                    (importMode === 'existing' && !activateSub) ||
+                    (importMode === 'existing_file' && !activateFile) ||
+                    (importMode === 'url' && !remoteUrl.trim()) ||
+                    ((importMode === 'paste' || importMode === 'file') && !pasteContent.trim())
+                  )
                 }
               >
                 {importing
