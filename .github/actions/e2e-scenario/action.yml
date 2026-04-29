@@ -72,6 +72,7 @@ runs:
         PROXY_NODE=$(_ssh "cat /tmp/cf-snapshot/proxy-node 2>/dev/null" || echo "")
         NODE_NAME=$(echo "$PROXY_NODE" | cut -d: -f1)
         SERVER_HOST=$(echo "$PROXY_NODE" | cut -d: -f2)
+        [ -n "$PROXY_AUTH" ] && echo "::add-mask::$PROXY_AUTH"
 
         # 读取实际端口（来自 clashforge API）
         MIXED_PORT=$(_ssh "cat /tmp/cf-snapshot/mixed-port 2>/dev/null" || echo "7893")
@@ -92,9 +93,7 @@ runs:
         echo "server_ip=$SERVER_IP"     >> "$GITHUB_OUTPUT"
         echo "mixed_port=$MIXED_PORT"   >> "$GITHUB_OUTPUT"
         echo "dns_port=$DNS_PORT"       >> "$GITHUB_OUTPUT"
-        [ -n "$PROXY_AUTH" ] && \
-          echo "mixed_port_url=http://${PROXY_AUTH}@127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT" || \
-          echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}"               >> "$GITHUB_OUTPUT"
+        echo "mixed_port_url=http://127.0.0.1:${MIXED_PORT}" >> "$GITHUB_OUTPUT"
 
         MASKED_IP=$(echo "$SERVER_IP" | awk -F. '{print $1".*.*."$NF}' 2>/dev/null || echo "?")
         echo "节点: ${NODE_NAME:-?} / 节点 IP: ${MASKED_IP:-?}"

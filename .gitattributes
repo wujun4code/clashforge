@@ -1,3 +1,5 @@
 # Force LF line endings for shell scripts regardless of core.autocrlf
 *.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
 scripts/clashforgectl text eol=lf
