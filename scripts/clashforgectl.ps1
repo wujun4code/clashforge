@@ -9,7 +9,7 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset -Start
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade
-#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Version v0.1.0
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Version v0.1.0-rc.1
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Mirror https://ghproxy.com
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -BaseUrl https://releases.example.com
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Purge
@@ -462,10 +462,25 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
         Log "── Step 2: Resolving latest release version..."
         try {
             $Releases = Invoke-RestMethod `
-                -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=1" `
+                -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50" `
                 -Headers @{ "Accept" = "application/vnd.github+json" } `
                 -TimeoutSec 15
-            $Tag = $Releases[0].tag_name
+            $Tags = @($Releases | ForEach-Object { $_.tag_name } | Where-Object { $_ })
+            $RcTags = @($Tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+-rc\.\d+$' })
+            if ($RcTags.Count -gt 0) {
+                $Tag = $RcTags |
+                    Sort-Object {
+                        if ($_ -match '^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$') {
+                            [string]::Format('{0:D9}.{1:D9}.{2:D9}.{3:D9}',
+                                [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+                        } else {
+                            ''
+                        }
+                    } |
+                    Select-Object -Last 1
+            } else {
+                $Tag = $Tags | Select-Object -First 1
+            }
         } catch {
             Die "Failed to resolve latest version from GitHub API: $_"
         }

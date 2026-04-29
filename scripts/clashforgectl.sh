@@ -177,6 +177,31 @@ _resolve_tag_from_json() {
   awk -F'"tag_name":"' 'NF>1{split($2,a,"\""); print a[1]; exit}'
 }
 
+_resolve_latest_rc_tag_from_json() {
+  awk -F'"tag_name":"' '
+    NF>1{
+      for (i=2; i<=NF; i++) {
+        split($i, a, "\"")
+        t=a[1]
+        if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$/) {
+          s=t
+          sub(/^v/, "", s)
+          sub(/-rc\./, ".", s)
+          n=split(s, p, ".")
+          key=sprintf("%09d.%09d.%09d.%09d", p[1], p[2], p[3], p[4])
+          if (key > best_key) {
+            best_key=key
+            best_tag=t
+          }
+        }
+      }
+    }
+    END{
+      if (best_tag != "") print best_tag
+    }
+  '
+}
+
 resolve_version() {
   if [ "$CLASHFORGE_VERSION" != "latest" ]; then
     TAG="$CLASHFORGE_VERSION"
@@ -184,16 +209,23 @@ resolve_version() {
   fi
 
   log "Resolving latest release from GitHub API..."
-  _api_path="repos/${REPO}/releases?per_page=1"
+  _api_path="repos/${REPO}/releases?per_page=50"
   TAG=""
+  _json=""
 
   if [ -n "$MIRROR" ]; then
-    TAG=$(_fetch_text "${MIRROR}/https://api.github.com/${_api_path}" | _resolve_tag_from_json)
+    _json="$(_fetch_text "${MIRROR}/https://api.github.com/${_api_path}" || true)"
+    TAG=$(printf '%s' "$_json" | _resolve_latest_rc_tag_from_json)
+    [ -n "$TAG" ] || TAG=$(printf '%s' "$_json" | _resolve_tag_from_json)
   else
-    TAG=$(_fetch_text "https://api.github.com/${_api_path}" | _resolve_tag_from_json)
+    _json="$(_fetch_text "https://api.github.com/${_api_path}" || true)"
+    TAG=$(printf '%s' "$_json" | _resolve_latest_rc_tag_from_json)
+    [ -n "$TAG" ] || TAG=$(printf '%s' "$_json" | _resolve_tag_from_json)
     if [ -z "$TAG" ]; then
       for _proxy in $GH_PROXIES; do
-        TAG=$(_fetch_text "${_proxy}/https://api.github.com/${_api_path}" | _resolve_tag_from_json)
+        _json="$(_fetch_text "${_proxy}/https://api.github.com/${_api_path}" || true)"
+        TAG=$(printf '%s' "$_json" | _resolve_latest_rc_tag_from_json)
+        [ -n "$TAG" ] || TAG=$(printf '%s' "$_json" | _resolve_tag_from_json)
         if [ -n "$TAG" ]; then
           log "Version resolved via mirror: $_proxy"
           break
@@ -202,7 +234,7 @@ resolve_version() {
     fi
   fi
 
-  [ -n "$TAG" ] || die "Could not resolve latest version. Use: clashforgectl upgrade --version v0.1.0"
+  [ -n "$TAG" ] || die "Could not resolve latest version. Use: clashforgectl upgrade --version v0.1.0-rc.1"
 }
 
 download_ipk() {
