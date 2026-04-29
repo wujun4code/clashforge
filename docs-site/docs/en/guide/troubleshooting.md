@@ -1,86 +1,96 @@
 # Troubleshooting
 
-Protect network availability first, then collect evidence. If takeover breaks connectivity, stop takeover before deeper debugging.
+Recover networking first, then investigate. Avoid changing many settings while the LAN is already broken.
 
-## Restore Network Quickly
+## First Step: Stop Takeover
+
+Windows:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-Router-side:
+macOS / Linux:
 
 ```sh
-clashforgectl stop
+./scripts/clashforgectl --router 192.168.20.1 stop
 ```
 
-## Startup Failure
+Router-local:
 
-| Symptom | Possible cause | Action |
-| --- | --- | --- |
-| Web UI does not open | Service down or port unreachable | Check init status and `logread` |
-| Repeated restart | Invalid config, PID lock or procd issue | Collect diagnostics and inspect logs |
-| mihomo fails | Invalid YAML, port conflict or wrong binary path | Inspect generated config and mihomo logs |
+```sh
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh stop
+```
+
+Wait 10 to 20 seconds and test domestic/LAN access again.
+
+## Web UI Does Not Open
+
+Check:
 
 ```sh
 /etc/init.d/clashforge status
-logread | grep -i clashforge
-logread | grep -i mihomo
-ps | grep -E 'clashforge|mihomo'
-```
-
-## Port Conflicts
-
-```sh
-netstat -lntup | grep -E '7777|7890|7891|7892|7893|7895|7874|9090|17890|17891|17892|17893|17895|17874|19090'
-```
-
-## DNS Problems
-
-```sh
-nslookup example.com 127.0.0.1
-nslookup github.com 127.0.0.1
-logread | grep -i dnsmasq
+/etc/init.d/clashforge restart
 logread | grep -i clashforge
 ```
 
-Recommended approach:
+| Symptom | Possible cause | Action |
+| --- | --- | --- |
+| Wrong address | Router IP changed | Check default gateway |
+| Timeout | Service not running | Restart init.d service |
+| Port conflict | Port `7777` occupied | Inspect listening ports |
+| SSH works but UI fails | Service/firewall issue | Collect diagnostics |
 
-1. Disable DNS takeover.
-2. Confirm native OpenWrt dnsmasq works.
-3. Enable mihomo DNS.
-4. Re-enable dnsmasq cooperation.
+## Subscription Has No Nodes
 
-## Transparent Proxy Not Working
+Check URL completeness, trailing spaces, required User-Agent, account status and router outbound connectivity. Try opening the subscription URL from your computer first.
 
-```sh
-nft list ruleset | grep -i clashforge
-iptables-save | grep -i clashforge
-```
+## Nodes Exist but Sites Fail
 
-Check firewall backend, LAN bypass rules, client gateway/DNS and stale rules.
+Most common causes:
 
-## Subscription Update Failure
+| Cause | Signal | Action |
+| --- | --- | --- |
+| Bad node | Another node works | Switch node |
+| Low IP reputation | reCAPTCHA or account verification | Use Worker or VPS for work devices |
+| DNS/rule mismatch | Domestic/overseas routes look wrong | Update GeoData and rule-providers |
+| Provider outage | All provider nodes fail | Check provider status |
 
-Common causes:
+## Full LAN Breaks After Takeover
 
-1. Router time is wrong, breaking TLS.
-2. DNS cannot resolve the subscription host.
-3. The provider requires a specific User-Agent.
-4. Router direct access cannot reach the subscription endpoint.
+Run `stop`, then restart in stages:
 
-```sh
-date
-nslookup github.com
-logread | grep -i subscription
-```
+1. Start only the mihomo core.
+2. Verify dashboard probes.
+3. Test one device.
+4. Enable transparent proxying.
+5. Enable DNS takeover.
+6. Expand to more devices.
 
-## Diagnostic Report
+## Per-device Routing Does Not Work
+
+Check whether the client IP changed. Bind DHCP static leases for critical devices, update device groups, save, restart the generated config and verify egress IP again.
+
+## Worker Node Fails
+
+Check Cloudflare Worker existence, custom domain binding, API token permissions, request quota and whether the client config was exported after the latest deployment.
+
+## VPS/SSH Deployment Fails
+
+| Stage | Check |
+| --- | --- |
+| SSH | Host, port, user, key authorization |
+| GOST | Server OS and permissions |
+| Cloudflare DNS | Token permissions and Zone |
+| TLS | Domain points to VPS, ports are reachable |
+| Probe | Server firewall and DNS propagation |
+
+## Collect Diagnostics
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-## Before Opening an Issue
-
-Provide version, OpenWrt/Kwrt version, architecture, install method, redacted diagnostics, reproduction steps and whether transparent proxy or DNS takeover was enabled.
+Share the redacted report only. Do not publish subscription URLs, Cloudflare tokens, SSH keys or passwords.

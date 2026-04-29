@@ -2,618 +2,396 @@
 
 ![ClashForge](./clashforge_brand_assets/readme-hero-1200x630.png)
 
-**ClashForge** is a modern management and control plane for [mihomo](https://github.com/MetaCubeX/mihomo) on OpenWrt routers.
+ClashForge is an OpenWrt control plane for [mihomo](https://github.com/MetaCubeX/mihomo): a router-side management layer that centralizes subscriptions, egress nodes, per-device routing, DNS/transparent proxy takeover, diagnostics and release-based operations behind a Web UI and a set of remote control scripts.
 
-> **ClashForge** 是一个为 OpenWrt 路由器上的 [mihomo](https://github.com/MetaCubeX/mihomo) 构建的现代管理与控制层。
+ClashForge 是一个面向 OpenWrt 路由器的 [mihomo](https://github.com/MetaCubeX/mihomo) 控制面，也就是运行在路由器上的 mihomo 管理层。它把订阅、出口节点、设备分流、DNS/透明代理接管、诊断恢复和版本化运维集中到 Web UI 与远程控制脚本中。
 
----
-
-<details open>
-<summary><b>中文文档</b></summary>
-
-## 项目定位
-
-ClashForge 的目标不是再造代理内核，而是重新做一遍 OpenWrt 上的 Mihomo 管理体验，让它更轻、更稳、更现代、更容易长期维护。
-
-它解决的是路由器场景里围绕 mihomo 的管理层问题：
-
-- mihomo 进程生命周期管理
-- 订阅拉取、缓存与多源合并
-- 配置生成、保存与运行时热重载
-- nftables / iptables 透明代理规则管理
-- DNS 接管与 dnsmasq 协作
-- 规则集同步与域名/IP 规则搜索
-- Web UI、REST API、SSE 实时状态流
-- OpenWrt init.d / IPK 打包与发布
-
-## 当前能力
-
-项目已进入**可运行的早期预发布阶段**，具备完整的前后端和打包流程。
-
-### 概览仪表盘
-
-- mihomo 内核状态实时监控（PID、运行时长、CPU/内存）
-- 实时流量速率（上传/下载）与活跃连接数
-- 子模块状态一览：透明代理、nftables 防火墙、DNS 入口、DNS 解析器
-- **双侧连通性探测**：路由器侧（经代理转发）与浏览器侧（客户端直连）对比检测，出口 IP 显示、访问可达性检查
-- 系统与进程资源占用（CPU、内存、磁盘）
-- 内嵌节点切换器：支持 Selector 手动切换、一键测速（latency test）
-
-### 配置管理
-
-- **配置向导**（Setup）：引导式首次配置流程，支持上传或粘贴 YAML、添加订阅
-- **配置文件管理**：保存多份配置文件，支持一键切换激活配置（运行中自动提示停止服务）
-- **订阅管理**：添加/删除/更新订阅，支持自定义 User-Agent 与更新间隔，按需触发单源或全量更新
-- **规则集管理**（需内核运行）：查看所有 rule-provider，显示规则条数与文件大小，支持单个或全量强制同步
-- **规则搜索**：输入域名或 IP，实时搜索匹配的规则集与规则条目
-- **运行中配置预览**：查看 ClashForge 生成并写入的实际 mihomo 配置（只读）
-- YAML Overrides：deep-merge 覆盖机制，优先级最高，支持直接编辑
-
-### 节点与连接
-
-- 节点分组展示（Selector / Fallback / URLTest / LoadBalance），一键切换，支持延迟可视化进度条
-- 切换节点后自动触发连通性探测，验证出口是否正常
-- 活跃连接实时列表（每 2 秒刷新）：目标地址、协议、代理链、上传/下载量
-- 一键清理全部连接
-
-### 日志与活动
-
-- mihomo 实时日志：SSE 推送 + 3 秒轮询，按级别过滤（ALL / INFO / WARNING / ERROR），支持自动滚动
-- 连接与日志合并在「活动」页面的 Tab 中
-
-### 系统设置
-
-- 常规配置：mihomo 二进制路径、最大重启次数、日志级别
-- 网络配置：透明代理模式（tproxy / redir / tun / none）、防火墙后端（nftables / iptables / auto）、启动时自动接管开关、LAN 与中国大陆 IP 绕过
-- DNS 配置：启用/禁用、fake-ip / redir-host 模式、dnsmasq 共存模式（none / upstream / replace）、启动时自动接管开关
-
-### 安全默认
-
-启动时默认**不自动接管**透明代理和 DNS，降低首次部署风险，待节点与内核确认正常后再手动开启。
-
-## 快速开始
-
-### 1. 从 Releases 安装 OpenWrt 包
-
-推送 `v*` tag 会自动构建并发布以下架构的 IPK 包：
-
-- `x86_64`
-- `aarch64_generic`
-- `aarch64_cortex-a53`
-
-在路由器上直接安装最新版本：
-
-```sh
-wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
-```
-
-国内加速（通过 ghproxy）：
-
-```sh
-wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
-```
-
-安装指定版本：
-
-```sh
-wget -qO- .../install.sh | sh -s -- --version v0.1.0-rc.1
-```
-
-### 2. 启动服务
-
-```sh
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
-```
-
-Web UI 默认地址：
-
-```
-http://<router-ip>:7777
-```
-
-### 3. 添加配置源
-
-通过配置向导（Setup 页面）完成首次配置：
-
-- 上传或粘贴 Clash 兼容的 YAML 配置文件
-- 添加订阅链接（支持 Clash / SS / Trojan / VLESS / VMess 格式）
-
-### 4. 按需开启接管
-
-确认节点和内核运行正常后，再从**设置页面**或**概览仪表盘**手动开启透明代理和 DNS 接管。
-
-## 路由器管理命令（clashforgectl）
-
-`clashforgectl` 是 ClashForge 的统一运维入口，安装包会自动部署到路由器上。
-
-### 本机操作（在路由器 SSH 终端中执行）
-
-```sh
-# 查看当前运行状态（只读，不修改任何设置）
-clashforgectl status
-
-# 停止 ClashForge，完全退出透明代理接管模式
-# 自动恢复 dnsmasq 配置、清理 nftables、策略路由
-clashforgectl stop
-
-# 重置为初始安装状态（保留已安装的包版本）
-# 清除订阅、规则集、生成配置、缓存、运行时数据与日志
-clashforgectl reset
-
-# 重置并自动重启服务
-clashforgectl reset --start
-
-# 升级到最新版本
-clashforgectl upgrade
-
-# 升级到指定版本
-clashforgectl upgrade --version v0.1.0-rc.1
-
-# 使用国内镜像升级
-clashforgectl upgrade --mirror https://ghproxy.com
-
-# 完全重置后升级（--purge）
-clashforgectl upgrade --purge
-
-# 收集诊断报告（输出至 /tmp/cf-diag.txt）
-clashforgectl diag
-
-# 收集诊断报告并打印到终端
-clashforgectl diag --stdout
-
-# 收集诊断报告并对敏感信息做脱敏处理
-clashforgectl diag --redact
-
-# 完全卸载 ClashForge
-clashforgectl uninstall
-
-# 完全卸载，但保留 /etc/metaclash 配置数据
-clashforgectl uninstall --keep-config
-```
-
-### 远程操作（从 Windows 主机控制路由器）
-
-```powershell
-# 查看状态
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 status
-
-# 停止 ClashForge
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 stop
-
-# 重置为初始状态
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset
-
-# 升级到最新版本
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade
-
-# 收集诊断报告并下载到本地
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch
-
-# 收集脱敏报告并下载
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
-
-# 卸载（保留配置）
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -KeepConfig
-```
-
-指定 SSH 用户、端口或密钥：
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
-```
-
-### 远程操作（从 macOS / Linux 主机控制路由器）
-
-```sh
-# 查看状态
-./scripts/clashforgectl --router 192.168.1.1 status
-
-# 停止 ClashForge
-./scripts/clashforgectl --router 192.168.1.1 stop
-
-# 升级
-./scripts/clashforgectl --router 192.168.1.1 upgrade --version latest
-
-# 收集脱敏诊断报告并下载
-./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
-
-# 卸载
-./scripts/clashforgectl --router 192.168.1.1 uninstall
-```
-
-## 故障排查
-
-### DNS 断连 / 无法上网
-
-ClashForge 退出接管后 DNS 未恢复：
-
-```sh
-# 强制恢复 dnsmasq 配置并重启
-clashforgectl stop
-
-# 验证 dnsmasq 是否监听 53 端口
-netstat -lnup | grep :53
-
-# 如仍有问题，手动恢复 UCI 设置
-uci delete dhcp.@dnsmasq[0].port
-uci delete dhcp.@dnsmasq[0].server
-uci delete dhcp.@dnsmasq[0].noresolv
-uci commit dhcp
-/etc/init.d/dnsmasq restart
-```
-
-### nftables 规则残留
-
-```sh
-# 查看是否有残留表
-nft list tables
-
-# 手动清除（clashforgectl stop 会自动处理）
-nft delete table inet metaclash
-nft delete table inet dnsmasq
-```
-
-### 策略路由规则残留
-
-```sh
-# 查看
-ip rule list | grep 0x1a3
-
-# 手动清除
-while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-ip route flush table 100
-while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-ip -6 route flush table 100
-```
-
-### opkg 安装 / 升级失败
-
-```sh
-# 更新包列表后重试
-opkg update
-opkg install --nodeps --force-downgrade clashforge_*.ipk
-
-# 检查磁盘空间
-df -h /tmp /overlay
-```
-
-### 收集完整诊断报告
-
-```sh
-# 在路由器上收集（含所有探测信息，输出至 /tmp/cf-diag.txt）
-clashforgectl diag --redact
-
-# 从 Windows 远程拉取报告到本地
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
-```
-
-## 本地开发
-
-构建前端：
-
-```sh
-cd ui
-npm ci
-npm run build
-```
-
-构建服务端：
-
-```sh
-go build ./cmd/clashforge
-```
-
-推送 `v*` 格式的 tag 会自动触发 GitHub Actions，完成 UI 构建、二进制交叉编译、IPK 打包和 GitHub Release 发布。
-
-## 项目文档
-
-架构与设计文档：[`docs/CLASH_REPLACEMENT_DESIGN.md`](./docs/CLASH_REPLACEMENT_DESIGN.md)
-
-**Fork 后自托管分发：** 如果你 fork 了本仓库并希望将 IPK 文件同步到自己的 Cloudflare R2，请参考 [`docs/guides/fork-r2-setup.md`](./docs/guides/fork-r2-setup.md)。
-
-## 上游项目
-
-- [vernesong/openclash](https://github.com/vernesong/openclash)
-- [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)
-
-ClashForge 建立在对这些优秀上游项目的学习与继承之上，目标是为 OpenWrt 提供一套更现代、更工程化的管理体验。
-
-</details>
-
----
-
-<details>
-<summary><b>English Documentation</b></summary>
-
-## What ClashForge Is
-
-ClashForge is not another proxy core. It is a router-focused management and control plane for mihomo on OpenWrt — designed to make the OpenWrt experience cleaner and more maintainable.
-
-It handles everything *around* mihomo:
-
-- mihomo lifecycle management
-- subscription fetch, cache, and multi-source merge
-- config generation, persistence, and hot reload
-- nftables / iptables transparent proxy orchestration
-- DNS takeover and dnsmasq integration
-- rule-set sync and domain/IP rule search
-- Web UI, REST API, and SSE-based live status updates
-- OpenWrt init scripts and IPK packaging
-
-## Current Status
-
-The repository is in an **early runnable prerelease state** with a working backend, a full web UI, and an automated OpenWrt packaging pipeline.
-
-### Overview Dashboard
-
-- Real-time mihomo core status (PID, uptime, CPU/memory)
-- Live traffic rates (upload/download) and active connection count
-- Module status overview: transparent proxy, nftables firewall, DNS entry, DNS resolver
-- **Dual-side connectivity probing**: router-side (via proxy) vs. browser-side (direct) — compare egress IPs and access reachability side by side
-- System and process resource usage (CPU, memory, disk)
-- Embedded proxy switcher: manual Selector switching with one-click latency testing
-
-### Config Management
-
-- **Setup wizard**: guided first-run flow — upload or paste a YAML config, or add a subscription URL
-- **Config file management**: store multiple configs, switch active config with one click (prompts to stop the running service if needed)
-- **Subscription management**: add/delete/update subscriptions, custom User-Agent and update interval, per-source or batch update
-- **Rule-set management** (requires core running): list all rule-providers with rule counts and file sizes, force-sync individual or all providers
-- **Rule search**: type a domain or IP to instantly search for matching rule-sets and entries
-- **Running config viewer**: read-only view of the actual mihomo config generated and written by ClashForge
-- YAML Overrides: deep-merge override mechanism with highest priority, editable directly in the UI
-
-### Proxies and Connections
-
-- Proxy groups (Selector / Fallback / URLTest / LoadBalance) with inline node switcher and latency bar visualization
-- Auto-trigger connectivity probe after switching nodes to verify egress health
-- Live connection list with auto-refresh (every 2 s): destination, protocol, proxy chain, upload/download
-- One-click close-all connections
-
-### Logs and Activity
-
-- Real-time mihomo logs: SSE push + 3-second polling, filterable by level (ALL / INFO / WARNING / ERROR), with auto-scroll
-- Connections and logs combined under the Activity page with tab switching
-
-### System Settings
-
-- General: mihomo binary path, max restart count, log level
-- Network: transparent proxy mode (tproxy / redir / tun / none), firewall backend (nftables / iptables / auto), apply-on-start toggle, LAN and China-IP bypass
-- DNS: enable/disable, fake-ip / redir-host mode, dnsmasq coexistence (none / upstream / replace), apply-on-start toggle
-
-### Safe Defaults
-
-Transparent proxy and DNS takeover are **disabled by default at startup** to reduce risk on first deployment. Enable them manually from the settings page or dashboard once nodes and the core are confirmed healthy.
-
-## Quick Start
-
-### 1. Install from Releases
-
-Each `v*` tag triggers release builds for:
-
-- `x86_64`
-- `aarch64_generic`
-- `aarch64_cortex-a53`
-
-Install the latest release on OpenWrt:
-
-```sh
-wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
-```
-
-China mirror (via ghproxy):
-
-```sh
-wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
-```
-
-Install a specific version:
-
-```sh
-wget -qO- .../install.sh | sh -s -- --version v0.1.0-rc.1
-```
-
-### 2. Enable and start the service
-
-```sh
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
-```
-
-Open the UI at:
-
-```
-http://<router-ip>:7777
-```
-
-### 3. Add your proxy source
-
-Use the Setup wizard to complete first-run configuration:
-
-- Upload or paste a Clash-compatible YAML config
-- Add a subscription URL (Clash / SS / Trojan / VLESS / VMess)
-
-### 4. Enable takeover when ready
-
-Once nodes and core status are confirmed healthy, enable transparent proxy and DNS takeover manually from the **Settings page** or the **Overview dashboard**.
-
-## Router Management (`clashforgectl`)
-
-`clashforgectl` is the unified operations entry point for ClashForge. The IPK package deploys it automatically.
-
-### On the router (over SSH)
-
-```sh
-# Read-only status check
-clashforgectl status
-
-# Stop ClashForge and exit takeover mode
-# Restores dnsmasq, removes nftables tables and policy routing rules
-clashforgectl stop
-
-# Reset to first-install state (keeps installed package version)
-# Clears subscriptions, rule-sets, generated configs, caches, runtime data, logs
-clashforgectl reset
-
-# Reset and auto-start the service
-clashforgectl reset --start
-
-# Upgrade to the latest version
-clashforgectl upgrade
-
-# Upgrade to a specific version
-clashforgectl upgrade --version v0.1.0-rc.1
-
-# Upgrade via China mirror
-clashforgectl upgrade --mirror https://ghproxy.com
-
-# Full reset before upgrading
-clashforgectl upgrade --purge
-
-# Collect a diagnostic report (saved to /tmp/cf-diag.txt)
-clashforgectl diag
-
-# Print diagnostic report to terminal
-clashforgectl diag --stdout
-
-# Collect report with sensitive values redacted
-clashforgectl diag --redact
-
-# Fully uninstall ClashForge
-clashforgectl uninstall
-
-# Uninstall but keep /etc/metaclash config data
-clashforgectl uninstall --keep-config
-```
-
-### Remote control from Windows
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 status
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 stop
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -KeepConfig
-```
-
-Specify SSH user, port, or key:
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
-```
-
-### Remote control from macOS / Linux
-
-```sh
-./scripts/clashforgectl --router 192.168.1.1 status
-./scripts/clashforgectl --router 192.168.1.1 stop
-./scripts/clashforgectl --router 192.168.1.1 upgrade --version latest
-./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
-./scripts/clashforgectl --router 192.168.1.1 uninstall
-```
-
-## Troubleshooting
-
-### DNS drops after ClashForge stops
-
-```sh
-# Force dnsmasq config restore and restart
-clashforgectl stop
-
-# Verify dnsmasq is listening on port 53
-netstat -lnup | grep :53
-
-# Manual UCI restore if needed
-uci delete dhcp.@dnsmasq[0].port
-uci delete dhcp.@dnsmasq[0].server
-uci delete dhcp.@dnsmasq[0].noresolv
-uci commit dhcp
-/etc/init.d/dnsmasq restart
-```
-
-### Leftover nftables rules
-
-```sh
-# Check for leftover tables
-nft list tables
-
-# Remove manually (clashforgectl stop handles this automatically)
-nft delete table inet metaclash
-nft delete table inet dnsmasq
-```
-
-### Leftover policy routing rules
-
-```sh
-# Check
-ip rule list | grep 0x1a3
-
-# Remove manually
-while ip rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-ip route flush table 100
-while ip -6 rule del fwmark 0x1a3 table 100 2>/dev/null; do :; done
-ip -6 route flush table 100
-```
-
-### opkg install / upgrade failure
-
-```sh
-# Update package list and retry
-opkg update
-opkg install --nodeps --force-downgrade clashforge_*.ipk
-
-# Check disk space
-df -h /tmp /overlay
-```
-
-### Collect a full diagnostic report
-
-```sh
-# On the router
-clashforgectl diag --redact
-
-# Pull report to local machine from Windows
-.\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -Redact
-```
-
-## Local Development
-
-Build the UI:
-
-```sh
-cd ui
-npm ci
-npm run build
-```
-
-Build the backend:
-
-```sh
-go build ./cmd/clashforge
-```
-
-Pushing a tag matching `v*` triggers the GitHub Actions release pipeline: UI build, cross-compiled binaries, OpenWrt IPK packaging, and GitHub Release creation.
+> ClashForge is not a proxy provider and does not sell nodes. You bring your own subscription, Cloudflare account or VPS.
+>
+> ClashForge 不是代理服务商，也不出售节点。你需要自备机场订阅、Cloudflare 账号或 VPS。
 
 ## Documentation
 
-Architecture and design document: [`docs/CLASH_REPLACEMENT_DESIGN.md`](./docs/CLASH_REPLACEMENT_DESIGN.md)
+| Entry | Purpose |
+| --- | --- |
+| [Docs Site](https://wujun4code.github.io/clashforge/) | User manual: install, configure, route, operate and troubleshoot |
+| [中文文档站](https://wujun4code.github.io/clashforge/) | 面向用户的安装、配置、使用、排障手册 |
+| [Feature Modules](https://wujun4code.github.io/clashforge/guide/features) | Detailed module-by-module explanation |
+| [功能模块总览](https://wujun4code.github.io/clashforge/guide/features) | 按功能解释用途、问题、用法和价值 |
 
-**Fork & self-hosted distribution:** If you have forked this repo and want to sync IPK releases to your own Cloudflare R2 bucket, see [`docs/guides/fork-r2-setup.md`](./docs/guides/fork-r2-setup.md).
+## 中文
 
-## Upstream Projects
+### 项目定位
 
-- [vernesong/openclash](https://github.com/vernesong/openclash)
-- [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)
+ClashForge 的目标不是重写代理内核，而是为 OpenWrt 上的 mihomo 提供一个更可维护的管理层。
 
-ClashForge builds on lessons from these upstream projects while aiming for a cleaner, more maintainable OpenWrt control plane.
+它适合这些场景：
 
-</details>
+| 用户 | 常见问题 | ClashForge 的价值 |
+| --- | --- | --- |
+| 电商独立站团队 | 广告、支付、数据分析后台对出口来源敏感 | 关键设备绑定固定 VPS 出口，普通设备走共享订阅 |
+| TikTok/YouTube 自媒体团队 | 平台后台、素材上传、创作者工具访问不稳定 | 运营设备、剪辑设备、娱乐设备分出口管理 |
+| AI 资源重度用户 | OpenAI、Claude、GitHub、npm、API 工作流受 IP 和 DNS 影响 | 工作设备走更干净或固定出口，普通流量隔离 |
+| 开发者和小工作室 | 多设备、多订阅、多节点，排障成本高 | Web UI、规则搜索、日志、诊断和远程恢复 |
+| 多设备家庭和办公室 | 手机、电视、电脑、访客设备需求不同 | 路由器层统一策略，不需要逐台安装客户端 |
 
----
+### 核心能力
 
-## License
+| 模块 | 能力 |
+| --- | --- |
+| 路由器控制面 / 管理层 | Go 后端、嵌入式 React Web UI、REST API、SSE 实时事件 |
+| mihomo 生命周期 | 生成运行配置、启动/停止内核、查看 PID、资源、连接和日志 |
+| 订阅与配置 | Clash YAML、机场订阅、SS/Trojan/VLESS/VMess 解析、User-Agent、更新间隔 |
+| 设备分流 | 按源 IP/CIDR 创建设备组，生成 rule-provider、shadow proxy-group 和 AND 规则 |
+| 出口节点 | 机场节点、Cloudflare Worker VLESS-WS 节点、VPS/SSH + GOST 节点 |
+| 订阅发布 | 通过 Cloudflare Worker + KV 发布 Clash 兼容订阅链接 |
+| DNS 与透明代理 | tproxy/redir/tun/none、nftables/iptables、mihomo DNS、dnsmasq 协作 |
+| 规则与 GeoData | rule-provider 查看与同步、域名/IP 搜索、GeoIP/GeoSite 更新 |
+| 诊断恢复 | status、compat、check、stop、reset、upgrade、diag、uninstall、openclash 检查 |
+| 打包发布 | GitHub Actions 构建 UI、Go 二进制、OpenWrt IPK/APK 和 Release assets |
 
-MIT License — see [LICENSE](./LICENSE).
+### 架构概览
+
+```text
+OpenWrt Router
+  |
+  |-- /usr/bin/clashforge
+  |     |-- Embedded React Web UI
+  |     |-- REST API
+  |     |-- SSE event stream
+  |     |-- Config/subscription/geodata managers
+  |     |-- Node deployment and publishing services
+  |     |-- DNS and netfilter orchestration
+  |
+  |-- /usr/bin/mihomo-clashforge
+  |     |-- Runtime YAML generated by ClashForge
+  |     |-- Proxy ports and controller API
+  |
+  |-- OpenWrt system services
+        |-- /etc/init.d/clashforge
+        |-- dnsmasq
+        |-- nftables or iptables
+        |-- policy routing
+```
+
+运行时数据默认位于 `/etc/metaclash` 和 `/var/run/metaclash`。Web UI 默认端口是 `7777`。
+
+### 快速安装
+
+推荐从电脑远程安装。远程脚本会在本机下载 Release IPK，再上传到路由器安装，比让路由器直接访问 GitHub 更稳。
+
+Windows:
+
+```powershell
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+```
+
+macOS / Linux:
+
+```sh
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
+./scripts/clashforgectl --router 192.168.20.1 upgrade
+```
+
+路由器本机临时安装：
+
+```sh
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh compat
+sh clashforgectl.sh upgrade
+```
+
+GitHub 下载慢时：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
+
+安装完成后打开：
+
+```text
+http://<router-ip>:7777
+```
+
+完整安装和首次配置请看 [安装到路由器](https://wujun4code.github.io/clashforge/guide/install) 与 [快速开始](https://wujun4code.github.io/clashforge/guide/quick-start)。
+
+### 运维命令
+
+Windows 远程：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
+```
+
+macOS / Linux 远程：
+
+```sh
+./scripts/clashforgectl --router 192.168.20.1 status
+./scripts/clashforgectl --router 192.168.20.1 check
+./scripts/clashforgectl --router 192.168.20.1 stop
+./scripts/clashforgectl --router 192.168.20.1 diag --fetch --redact
+```
+
+路由器本机：
+
+```sh
+sh /tmp/clashforgectl.sh status
+sh /tmp/clashforgectl.sh check
+sh /tmp/clashforgectl.sh stop
+sh /tmp/clashforgectl.sh diag --redact
+```
+
+当前 IPK/APK 包不默认把 `clashforgectl` 安装到 `/usr/bin`。如需在路由器本机长期使用，可手动复制：
+
+```sh
+cp /tmp/clashforgectl.sh /usr/bin/clashforgectl
+chmod +x /usr/bin/clashforgectl
+clashforgectl status
+```
+
+### 源码结构
+
+| 路径 | 说明 |
+| --- | --- |
+| `cmd/clashforge` | 主服务入口 |
+| `cmd/genconfig` | 配置生成辅助命令 |
+| `internal/api` | HTTP API、SSE、内嵌 UI 文件 |
+| `internal/config` | 配置生成、合并、端口、设备分流 |
+| `internal/core` | mihomo 进程管理 |
+| `internal/dns` | DNS 接管与 dnsmasq 协作 |
+| `internal/netfilter` | nftables/iptables 与策略路由 |
+| `internal/subscription` | 订阅拉取、解析、过滤和存储 |
+| `internal/nodes` | VPS/SSH 节点、GOST 部署、证书和导出 |
+| `internal/workernode` | Cloudflare Worker VLESS-WS 节点 |
+| `internal/publish` | Worker + KV 订阅发布 |
+| `internal/geodata` | GeoIP/GeoSite 管理 |
+| `internal/scheduler` | 定时更新任务 |
+| `ui` | React + Vite Web UI |
+| `openwrt` | OpenWrt init.d、LuCI 菜单、生命周期脚本 |
+| `ipk` | 本地 IPK 打包 staging tree |
+| `scripts` | 打包、远程控制和维护脚本 |
+| `docs-site` | VitePress 用户文档 |
+| `docs` | 设计文档、计划和高级指南 |
+
+### 本地开发
+
+构建 Web UI:
+
+```sh
+cd ui
+npm ci
+npm run build
+```
+
+测试和构建 Go:
+
+```sh
+go test ./...
+go build ./cmd/clashforge
+```
+
+构建文档站:
+
+```sh
+cd docs-site
+npm ci
+npm run docs:build
+```
+
+开发部署到路由器:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy
+```
+
+`deploy` 会从当前源码构建 UI 和 Go 二进制，生成本地 IPK 并安装到路由器。普通用户应使用 `upgrade`。
+
+### 发布流程
+
+推送 `v*` tag 或手动触发 `.github/workflows/release.yml` 会执行：
+
+1. 构建 React Web UI。
+2. 交叉编译 Linux amd64/arm64 Go 二进制。
+3. 打包 OpenWrt IPK。
+4. 打包 OpenWrt 25.12+ APK。
+5. 上传 `clashforgectl.sh`。
+6. 生成 GitHub Release、SHA256SUMS 和资产。
+
+支持的 Release 架构：
+
+| 类型 | 架构 |
+| --- | --- |
+| IPK | `x86_64`、`aarch64_generic`、`aarch64_cortex-a53` |
+| APK | `x86_64`、`aarch64_generic`、`aarch64_cortex-a53` |
+
+Fork 后如需自托管 Release 资产到 Cloudflare R2，请看 [`docs/guides/fork-r2-setup.md`](./docs/guides/fork-r2-setup.md)。
+
+### 设计边界与限制
+
+| 项目 | 说明 |
+| --- | --- |
+| 不提供代理节点 | 需要用户自备订阅、Cloudflare 账号或 VPS |
+| 不保证目标平台放行 | IP 信誉、账号状态、平台策略仍由目标服务决定 |
+| 默认 Release 架构有限 | ARMv7、MIPS 等设备暂不提供默认包 |
+| OpenClash 不建议共存 | 两者都可能管理 DNS、防火墙、端口和 mihomo |
+| APK 自动化仍偏手动 | Release 提供 APK，但维护脚本主要围绕 IPK/opkg |
+
+### 安全注意事项
+
+| 信息 | 建议 |
+| --- | --- |
+| 订阅链接 | 通常包含 token，不要公开 |
+| Cloudflare Token | 只授予需要的最小权限，避免公开 |
+| SSH 私钥 | 不要上传到路由器以外的不可信位置 |
+| 诊断报告 | 公开求助时使用 `diag -Redact` 或 `diag --redact` |
+| 路由器权限 | ClashForge 运行在可信路由器环境中，请保护管理入口和 SSH |
+
+## English
+
+### Positioning
+
+ClashForge does not replace mihomo. It manages the operational layer around mihomo on OpenWrt: configuration, subscriptions, node sources, DNS, transparent proxying, diagnostics and release-based upgrades.
+
+It is designed for:
+
+| User | Pain point | ClashForge value |
+| --- | --- | --- |
+| Cross-border e-commerce teams | Ads, payments and analytics tools care about egress consistency | Bind business devices to stable VPS exits |
+| TikTok/YouTube creators | Creator tools and platform backends are sensitive to unstable exits | Separate creator, editing and entertainment devices |
+| Heavy AI users | OpenAI, Claude, GitHub, npm and API workflows depend on reliable access | Keep work devices on cleaner or dedicated exits |
+| Developers and studios | Many devices, subscriptions and nodes are hard to troubleshoot | Central Web UI, logs, rule search and diagnostics |
+| Small homes/offices | Devices need different routing behavior | Enforce policy at the router instead of each client |
+
+### Core Modules
+
+| Module | Capabilities |
+| --- | --- |
+| Control plane | Go backend, embedded React UI, REST API, SSE stream |
+| Core lifecycle | Generate runtime config, manage mihomo, show resources/connections/logs |
+| Config and subscriptions | Clash YAML, subscriptions, SS/Trojan/VLESS/VMess parsers |
+| Per-device routing | Source IP/CIDR groups, managed providers, shadow groups and rules |
+| Egress nodes | Airport nodes, Cloudflare Worker nodes, VPS/SSH + GOST nodes |
+| Publishing | Cloudflare Worker + KV subscription publishing |
+| DNS and takeover | tproxy/redir/tun/none, nftables/iptables, mihomo DNS, dnsmasq |
+| Rules and GeoData | rule-provider sync/search, GeoIP/GeoSite updates |
+| Operations | status, compat, check, stop, reset, upgrade, diag, uninstall |
+| Release engineering | GitHub Actions, IPK/APK packages, checksums, R2 sync guide |
+
+### Architecture
+
+```text
+OpenWrt Router
+  |
+  |-- clashforge service
+  |     |-- Embedded Web UI
+  |     |-- REST API and SSE
+  |     |-- Config, subscription and rule managers
+  |     |-- Node deployment and publish services
+  |     |-- DNS/netfilter orchestration
+  |
+  |-- bundled mihomo core
+  |     |-- Generated runtime YAML
+  |     |-- Proxy ports and controller API
+  |
+  |-- OpenWrt integration
+        |-- init.d service
+        |-- dnsmasq
+        |-- nftables/iptables
+        |-- policy routing
+```
+
+### Quick Install
+
+Windows:
+
+```powershell
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+```
+
+macOS / Linux:
+
+```sh
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
+./scripts/clashforgectl --router 192.168.20.1 upgrade
+```
+
+Router-local temporary install:
+
+```sh
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh compat
+sh clashforgectl.sh upgrade
+```
+
+Open the Web UI:
+
+```text
+http://<router-ip>:7777
+```
+
+See the [Quick Start](https://wujun4code.github.io/clashforge/en/guide/quick-start) and [Install Guide](https://wujun4code.github.io/clashforge/en/guide/install) for the full manual.
+
+### Operations
+
+Windows:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
+```
+
+macOS / Linux:
+
+```sh
+./scripts/clashforgectl --router 192.168.20.1 status
+./scripts/clashforgectl --router 192.168.20.1 check
+./scripts/clashforgectl --router 192.168.20.1 stop
+./scripts/clashforgectl --router 192.168.20.1 diag --fetch --redact
+```
+
+### Development
+
+```sh
+cd ui
+npm ci
+npm run build
+
+cd ..
+go test ./...
+go build ./cmd/clashforge
+```
+
+Developer deploy:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy
+```
+
+Normal users should use `upgrade`; `deploy` is for validating local source changes.
+
+### License
+
+MIT License. See [LICENSE](./LICENSE).
+
+## Upstream
+
+ClashForge builds on the ecosystem and lessons from:
+
+| Project | Role |
+| --- | --- |
+| [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) | Proxy core |
+| [vernesong/OpenClash](https://github.com/vernesong/OpenClash) | OpenWrt operational reference |

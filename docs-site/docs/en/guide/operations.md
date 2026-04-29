@@ -1,54 +1,87 @@
 # Operations
 
-Use `scripts\clashforgectl.ps1` from Windows and `clashforgectl` inside router SSH.
+Daily operations should be boring: observe, update, switch, verify and recover when necessary.
 
-## Command Reference
+## Daily Map
 
-| Goal | Windows remote | Router-side |
-| --- | --- | --- |
-| Status | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status` | `clashforgectl status` |
-| Check | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check` | `clashforgectl check` |
-| Stop takeover | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop` | `clashforgectl stop` |
-| Reset | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset` | `clashforgectl reset` |
-| Reset and start | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset -Start` | `clashforgectl reset --start` |
-| Upgrade | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade` | `clashforgectl upgrade` |
-| Diagnostics | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact` | `clashforgectl diag --redact` |
-| Uninstall | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall` | `clashforgectl uninstall` |
+| Goal | Recommended entry |
+| --- | --- |
+| Check health | Dashboard |
+| Update subscription | Configuration -> Subscriptions |
+| Switch node | Dashboard proxy groups |
+| Inspect connections | Activity -> Connections |
+| Inspect logs | Activity -> Logs |
+| Update GeoData | GeoData |
+| Adjust device exits | Per-device Rules |
+| Publish team subscription | Publish |
+| Recover network | `stop` command |
+| Collect diagnostics | redacted `diag` command |
 
-## Connection Parameters
+## Common Commands
 
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
-```
-
-## Diagnostics
+Windows:
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -RemoteOutput /tmp/cf-diag.txt -LocalPath .\cf-diag.txt -Redact
 ```
 
-## Configuration Change Flow
-
-1. Back up the current working configuration or subscription metadata.
-2. Change YAML, subscriptions or overrides.
-3. Start the core or reload configuration.
-4. Run `status` and `check`.
-5. Watch logs for one to three minutes.
-6. Re-enable transparent proxying or DNS takeover only after validation.
-
-## Logs
+macOS / Linux:
 
 ```sh
-logread | grep -i clashforge
-logread | grep -i mihomo
+./scripts/clashforgectl --router 192.168.20.1 status
+./scripts/clashforgectl --router 192.168.20.1 check
+./scripts/clashforgectl --router 192.168.20.1 stop
+./scripts/clashforgectl --router 192.168.20.1 diag --fetch --redact
 ```
+
+Router-local temporary use:
+
+```sh
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh status
+sh clashforgectl.sh check
+sh clashforgectl.sh stop
+sh clashforgectl.sh diag --redact
+```
+
+Optional persistent command:
+
+```sh
+cp /tmp/clashforgectl.sh /usr/bin/clashforgectl
+chmod +x /usr/bin/clashforgectl
+clashforgectl status
+```
+
+## Subscription Maintenance
+
+Update subscriptions when node count changes, a node stops working or the provider announces updates. If update fails, check URL, User-Agent, account status and router outbound connectivity.
+
+## Node Switching
+
+Use dashboard proxy groups to run latency checks and switch Selector nodes. After switching, run router-side and browser-side probes to verify the egress IP changed as expected.
+
+## Device Policy Maintenance
+
+Keep critical devices on DHCP static leases. When adding a new workstation or creator device, place it in a test group first, verify egress, then move it into the production group.
+
+## GeoData and Rule Maintenance
+
+Update `GeoIP.dat` and `GeoSite.dat` regularly, for example weekly. Use a proxy server for downloads if the router cannot reach GitHub directly.
 
 ## Uninstall
 
+Keep config:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
+```
+
+Full uninstall:
+
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
 ```
