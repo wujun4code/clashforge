@@ -1,127 +1,111 @@
-# 排障（先恢复网络，再找根因）
+# 不好用怎么办
 
-这页按“症状”组织，不按模块组织。  
-你只要先识别症状，就能快速找到第一步动作。
+排查问题时先记住一句话：**先恢复上网，再找原因**。
 
-## 0. 任何问题先做这一步
+如果已经影响家里设备上网，不要先改更多设置，先执行恢复命令。
 
-如果已经影响上网体验，先执行：
+## 先恢复网络
+
+Windows：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-或：
+路由器本机：
 
 ```sh
 clashforgectl stop
 ```
 
-`stop` 的目标是先退出接管、恢复基础网络，再继续定位。
+恢复后再慢慢判断是哪一环出问题。
 
-## 1. 症状：开启接管后全网异常
+## 管理页面打不开
 
-常见表现：
+先确认地址是否正确：
 
-1. 客户端全部断网或大量超时。
-2. 路由器后台也变慢或不可达。
-
-处理顺序：
-
-1. 先 `stop`。
-2. 确认 OpenWrt 原生网络是否恢复。
-3. 回到“只开内核，不开接管”的状态重新验证。
-
-## 2. 症状：Web UI 打不开
-
-检查：
-
-```sh
-/etc/init.d/clashforge status
-ps | grep -E 'clashforge|mihomo'
-logread | grep -i clashforge
+```text
+http://192.168.20.1:7777
 ```
 
-再看端口：
+再检查服务：
 
-```sh
-netstat -lntup | grep -E '7777|7890|7891|7892|7893|7895|7874|9090'
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
 ```
 
-如果服务在线但端口冲突，先停掉冲突进程再重启。
+常见原因：
 
-## 3. 症状：服务在线，但代理效果不对
+1. 路由器地址写错。
+2. ClashForge 没有启动。
+3. 电脑和路由器不在同一个网络。
+4. 端口被其他程序占用。
 
-先做快速验收：
+## 添加订阅后没有节点
+
+可能原因：
+
+1. 订阅链接复制错了。
+2. 订阅需要特殊 User-Agent。
+3. 路由器无法访问订阅地址。
+4. 订阅本身已经过期或不可用。
+
+建议：
+
+1. 在浏览器里确认订阅服务仍然可用。
+2. 重新复制订阅链接。
+3. 在 ClashForge 里重新更新订阅。
+
+## 节点有，但网站打不开
+
+先换一个节点试试。  
+如果换节点后正常，说明原节点可能不可用。
+
+如果所有节点都不行：
+
+1. 确认订阅没有过期。
+2. 确认路由器时间正确。
+3. 执行一次检查：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
 ```
 
-重点看：
+## 打开开关后全家网络异常
 
-1. 出口 IP 是否变化。
-2. 目标站点是否可达。
-3. 失败集中在代理层还是 DNS 层。
+先恢复：
 
-## 4. 症状：DNS 解析异常
-
-检查命令：
-
-```sh
-nslookup github.com 127.0.0.1
-logread | grep -i dnsmasq
-logread | grep -i clashforge
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-建议动作：
+恢复后按这个顺序重新尝试：
 
-1. 先关闭 DNS 接管。
-2. 确认路由器原生 dnsmasq 正常。
-3. 再逐步恢复 ClashForge DNS 能力。
+1. 只启动代理服务。
+2. 只用一台设备测试。
+3. 确认没问题后，再让更多设备使用。
 
-## 5. 症状：透明代理规则没生效
+## 有些网站走代理，有些不走
 
-```sh
-nft list ruleset | grep -i clashforge
-iptables-save | grep -i clashforge
-```
+这通常和你的订阅规则有关。  
+你可以先切换节点、更新订阅，确认是否是服务商规则变化。
 
-如果看不到规则或重复堆叠：
+如果你熟悉 Clash 规则，再考虑修改高级规则。
 
-1. `stop` 清理现场。
-2. 重新开启透明代理。
-3. 立即复验一次 `check`。
+## 需要发 Issue 求助
 
-## 6. 症状：订阅更新失败
-
-优先排查：
-
-```sh
-date
-nslookup github.com
-logread | grep -i subscription
-```
-
-常见根因：
-
-1. 系统时间不准（TLS 失败）。
-2. DNS 不通。
-3. 供应商限制 User-Agent 或请求频率。
-
-## 7. 一键收集证据
+先生成脱敏诊断报告：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-拿到报告后再提交 Issue，效率会高很多。
+提交 Issue 时建议提供：
 
-## 8. 提交 Issue 最少信息
+1. 你想做什么。
+2. 实际发生了什么。
+3. 路由器型号和 OpenWrt 版本。
+4. ClashForge 版本。
+5. 脱敏诊断报告。
 
-1. ClashForge 版本。
-2. OpenWrt 版本与架构。
-3. 安装方式（`upgrade` / `deploy` / 手动 IPK）。
-4. 是否开启透明代理和 DNS 接管。
-5. 脱敏后的 `diag` 报告。
-6. 可稳定复现的步骤。
+不要公开订阅链接、Token、账号密码或私钥。

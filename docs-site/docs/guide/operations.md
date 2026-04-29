@@ -1,72 +1,78 @@
-# 日常运维（让它一直稳定，而不是偶尔能用）
+# 日常怎么用
 
-这页面向已经跑起来的用户。目标是两件事：
+ClashForge 跑起来之后，你大多数时间只需要做 4 件事：
 
-1. 日常有节奏地做小检查，提前发现问题。
-2. 变更时可控、可回退。
+1. 看是否正常运行。
+2. 更新订阅。
+3. 切换节点。
+4. 出问题时先恢复网络。
 
-## 高频命令速查
+## 常用入口
 
-| 目标 | Windows | 路由器本机 |
-| --- | --- | --- |
-| 看状态 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status` | `clashforgectl status` |
-| 看连通性 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check` | `clashforgectl check` |
-| 快速回退 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop` | `clashforgectl stop` |
-| 升级 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade` | `clashforgectl upgrade` |
-| 收集诊断 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact` | `clashforgectl diag --redact` |
-| 重置 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset` | `clashforgectl reset` |
+浏览器打开：
 
-## 推荐运维节奏
-
-| 频率 | 建议动作 |
-| --- | --- |
-| 每天 | 看一次 `status` / `check`，确认出口与连通性 |
-| 每周 | 检查日志里是否有重复报错、频繁重启 |
-| 每次改配置后 | 跑完整 [检查清单](/guide/verify) |
-| 每次升级后 | 观察 10-30 分钟稳定性再结束 |
-
-## 变更流程（非常实用）
-
-每次改订阅、规则、DNS 或接管策略，按这个顺序：
-
-1. 记录当前可用状态（版本、订阅、关键设置）。
-2. 一次只改一个变量。
-3. 改完立刻执行 `status` + `check`。
-4. 观察日志 1 到 3 分钟。
-5. 异常时先 `stop` 回退，再做下一步。
-
-## 连接参数模板
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
+```text
+http://192.168.20.1:7777
 ```
 
-常用参数：
+日常操作优先在 Web 页面里完成。命令只在需要检查、更新、恢复时使用。
 
-| 参数 | 作用 |
+## 每天怎么用
+
+| 你想做什么 | 推荐做法 |
 | --- | --- |
-| `-Router` | 路由器地址（必填） |
-| `-User` | SSH 用户（默认 `root`） |
-| `-Port` | SSH 端口（默认 `22`） |
-| `-Identity` | 私钥路径 |
-| `-Yes` | 跳过确认 |
-| `-DryRun` | 只看计划不执行 |
+| 看现在是否正常 | 打开 Web 页面看状态 |
+| 网站突然打不开 | 先换一个节点试试 |
+| 订阅节点变少 | 在页面里更新订阅 |
+| 网络明显异常 | 先执行 `stop` 恢复网络 |
+| 想确认是否生效 | 运行 `check` 或看出口 IP |
 
-## 诊断报告规范
+## 常用命令
 
-建议默认使用脱敏拉取：
+Windows：
 
 ```powershell
+# 查看状态
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
+
+# 检查是否能正常访问
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
+
+# 出问题时先恢复网络
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
+
+# 收集脱敏诊断报告
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-自定义文件路径：
+路由器本机：
 
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -RemoteOutput /tmp/cf-diag.txt -LocalPath .\cf-diag.txt -Redact
+```sh
+clashforgectl status
+clashforgectl check
+clashforgectl stop
+clashforgectl diag --redact
 ```
 
-## 卸载策略
+## 什么时候需要检查
+
+建议在这些时候检查一下：
+
+1. 刚安装完。
+2. 刚添加或更新订阅。
+3. 刚让更多设备使用代理。
+4. 刚升级 ClashForge。
+5. 家里设备反馈打不开网站。
+
+## 保持稳定的小习惯
+
+1. 不要频繁同时改很多设置。
+2. 每次只调整一个订阅、一个节点或一个开关。
+3. 调整后马上测试一台设备。
+4. 保留一个备用节点或备用订阅。
+5. 记住 `stop` 是恢复网络的第一步。
+
+## 卸载
 
 完全卸载：
 

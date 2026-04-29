@@ -31,32 +31,32 @@ export default defineConfig({
       label: "简体中文",
       lang: "zh-CN",
       title: "ClashForge 文档",
-      description: "从首次上手到长期稳定使用的 OpenWrt 代理用户指南。",
+      description: "把代理服务放到 OpenWrt 路由器上，让家里的设备更容易使用。",
       themeConfig: {
         nav: [
+          { text: "这是什么", link: "/" },
           { text: "开始使用", link: "/guide/quick-start" },
-          { text: "验证与排障", link: "/guide/verify" },
-          { text: "运维升级", link: "/guide/operations" },
+          { text: "不好用怎么办", link: "/guide/troubleshooting" },
           { text: "FAQ", link: "/guide/faq" },
           { text: "GitHub", link: repo }
         ],
         sidebar: [
           {
-            text: "首次上手",
+            text: "先用起来",
             items: [
-              { text: "快速开始", link: "/guide/quick-start" },
-              { text: "安装方式选择", link: "/guide/install" },
-              { text: "首次配置", link: "/guide/config" },
-              { text: "启动与接管", link: "/guide/run" }
+              { text: "我该怎么开始", link: "/guide/quick-start" },
+              { text: "安装到路由器", link: "/guide/install" },
+              { text: "添加代理订阅", link: "/guide/config" },
+              { text: "让设备开始使用", link: "/guide/run" }
             ]
           },
           {
-            text: "验证与维护",
+            text: "用得稳定",
             items: [
-              { text: "检查清单", link: "/guide/verify" },
-              { text: "日常运维", link: "/guide/operations" },
-              { text: "升级与回滚", link: "/guide/upgrade" },
-              { text: "排障", link: "/guide/troubleshooting" },
+              { text: "怎么知道成功了", link: "/guide/verify" },
+              { text: "日常怎么用", link: "/guide/operations" },
+              { text: "更新软件", link: "/guide/upgrade" },
+              { text: "不好用怎么办", link: "/guide/troubleshooting" },
               { text: "FAQ", link: "/guide/faq" }
             ]
           }

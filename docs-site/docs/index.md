@@ -3,67 +3,90 @@ layout: home
 
 hero:
   name: ClashForge
-  text: 面向真实代理用户的 OpenWrt 上手文档
-  tagline: 从“先能用”到“长期稳定”，按用户旅程一步步完成安装、配置、接管、验收和排障。
+  text: 把代理服务变成路由器上的一个简单开关
+  tagline: 你已经有代理订阅或配置，ClashForge 帮你把它放到 OpenWrt 路由器上，让手机、电脑、电视等设备更容易访问需要代理的资源。
   image:
     src: /logo.svg
     alt: ClashForge
   actions:
     - theme: brand
-      text: 15 分钟快速开始
+      text: 我该怎么开始
       link: /guide/quick-start
     - theme: alt
-      text: 选择安装方式
-      link: /guide/install
+      text: 添加代理订阅
+      link: /guide/config
     - theme: alt
-      text: GitHub
-      link: https://github.com/wujun4code/clashforge
+      text: 不好用怎么办
+      link: /guide/troubleshooting
 
 features:
-  - title: 用户目标优先
-    details: 每一页都围绕“我要先恢复上网、再稳定使用”来写，而不是按代码模块拆文档。
-  - title: 安全默认
-    details: 默认不自动接管透明代理和 DNS，先验证内核与节点，避免一次改动影响全网。
-  - title: 可回退
-    details: 每个关键步骤都附带回退命令，出现问题先恢复网络，再继续定位。
-  - title: 验收导向
-    details: 不是“命令执行成功”就算完成，而是用可感知的联网结果和检查清单做验收。
-  - title: 运维闭环
-    details: 覆盖安装、配置、升级、回滚、排障与诊断报告，适合长期维护家庭或小团队网络。
-  - title: 多端控制
-    details: 可以在 Windows、macOS、Linux 远程控制路由器，也能在路由器本机执行运维命令。
+  - title: 少折腾每台设备
+    details: 把代理配置放在路由器上，家里的设备接入这个网络后，就可以按你的规则使用代理。
+  - title: 用网页管理
+    details: 不需要一直 SSH 到路由器，打开浏览器就能添加订阅、启动服务、查看连接状态。
+  - title: 先试用再全家使用
+    details: 第一次不会直接改变全网流量，先确认代理可用，再让更多设备使用。
+  - title: 出问题能恢复
+    details: 网络异常时可以一键退出代理相关设置，先恢复正常上网，再慢慢排查。
+  - title: 适合长期使用
+    details: 支持更新订阅、切换节点、查看状态、升级软件和收集诊断信息。
+  - title: 面向 OpenWrt
+    details: 适合把 OpenWrt 路由器当作家庭或小办公室的代理入口。
 ---
 
-## 你现在处在哪个阶段
+## ClashForge 是什么？
 
-| 你的情况 | 先看哪里 |
+ClashForge 是一个安装在 OpenWrt 路由器上的代理管理工具。
+
+你可以把它理解成：
+
+1. 你手里有一个代理订阅或 Clash 配置。
+2. ClashForge 把这个配置放到路由器上运行。
+3. 你用网页控制它启动、停止、切换节点、查看是否生效。
+4. 你的手机、电脑、电视等设备可以更方便地使用这个代理能力。
+
+它不是代理服务商，也不会提供节点。你仍然需要自己准备可用的订阅链接或配置文件。
+
+## 它解决什么问题？
+
+如果没有 ClashForge，很多人会遇到这些麻烦：
+
+| 常见麻烦 | ClashForge 的目标 |
 | --- | --- |
-| 第一次部署，目标是尽快能用 | [快速开始](/guide/quick-start) |
-| 不确定该用哪种安装方式 | [安装方式选择](/guide/install) |
-| 已安装但不知道怎么配置更稳 | [首次配置](/guide/config) |
-| 刚开了接管，担心影响全网 | [启动与接管](/guide/run) + [检查清单](/guide/verify) |
-| 现在已经能用，想长期稳定 | [日常运维](/guide/operations) + [升级与回滚](/guide/upgrade) |
-| 突然断网或体验异常 | [排障](/guide/troubleshooting) |
+| 每台设备都要单独安装代理软件 | 尽量把配置集中到路由器上 |
+| 路由器上配置代理太复杂 | 用网页向导完成主要操作 |
+| 不知道代理到底有没有生效 | 提供状态、连接检查和出口信息 |
+| 改错设置后全家断网 | 保留快速恢复网络的办法 |
+| 订阅、规则、节点长期维护麻烦 | 在一个地方更新和管理 |
 
-## 推荐阅读路线
+## 我怎么用？
 
-### 路线 A：首次上手（推荐）
+第一次使用建议按这个顺序：
 
-1. [快速开始](/guide/quick-start)
-2. [安装方式选择](/guide/install)
-3. [首次配置](/guide/config)
-4. [启动与接管](/guide/run)
-5. [检查清单](/guide/verify)
+1. [安装到路由器](/guide/install)
+2. [添加代理订阅](/guide/config)
+3. [让设备开始使用](/guide/run)
+4. [确认是否成功](/guide/verify)
+5. [不好用时恢复网络](/guide/troubleshooting)
 
-### 路线 B：已有基础，追求稳定
+## 你需要准备什么？
 
-1. [检查清单](/guide/verify)
-2. [日常运维](/guide/operations)
-3. [升级与回滚](/guide/upgrade)
-4. [排障](/guide/troubleshooting)
+| 需要准备 | 说明 |
+| --- | --- |
+| OpenWrt 路由器 | 需要能 SSH 登录，通常使用 root 用户 |
+| 一台电脑 | Windows、macOS、Linux 都可以，用来安装和管理 |
+| 代理订阅或配置 | 订阅链接、Clash YAML 配置都可以 |
+| 路由器地址 | 例如 `192.168.20.1`，文档里都用这个作为示例 |
 
-## 三个使用原则
+## 最重要的使用原则
 
-1. **先通，再快，再优雅**：先保证核心网络可用，再做分流和细节优化。
-2. **一次只改一件事**：每次只改一个变量（订阅、DNS、接管、规则），定位会快很多。
-3. **先留回退手段**：改动前先确认 `stop`、`reset`、`diag` 怎么用，出问题就不会慌。
+第一次不要急着让所有设备都走代理。
+
+更稳的做法是：
+
+1. 先把 ClashForge 安装好。
+2. 再添加订阅并启动代理。
+3. 确认网页能打开、节点能用、出口符合预期。
+4. 最后再让家里的设备开始使用它。
+
+这样即使哪里不对，也更容易恢复。

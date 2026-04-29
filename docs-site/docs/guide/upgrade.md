@@ -1,17 +1,19 @@
-# 升级与回滚（稳定优先）
+# 更新软件
 
-升级不是“追新版本”，而是“在可控风险下获取修复和能力”。  
-建议把升级看成一个标准流程：**准备 -> 升级 -> 验收 -> 必要时回滚**。
+ClashForge 可以像普通软件一样更新。  
+更新前先确认当前网络能正常使用，并知道如何恢复。
 
-## 升级前 3 分钟准备
+## 什么时候需要更新
 
-升级前先确认：
+建议更新的情况：
 
-1. 你知道当前稳定版本号。
-2. 你知道一键回退命令（`stop`）。
-3. 你可以在异常时快速收集 `diag` 报告。
+1. 新版本修复了你遇到的问题。
+2. 新版本增加了你需要的功能。
+3. 当前版本长期稳定，但你准备做一次维护。
 
-## 标准升级（推荐）
+不建议在网络已经异常时直接更新。先恢复网络，再更新。
+
+## 更新到最新版
 
 Windows：
 
@@ -25,64 +27,56 @@ Windows：
 clashforgectl upgrade
 ```
 
-为什么推荐 Windows 远程升级：  
-IPK 在本机下载后再推送，能降低“路由器升级中失去外网”的风险。
+Windows 方式会先在电脑上下载安装包，再传到路由器，通常更稳。
 
-## 升级到指定版本
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
-```
-
-路由器本机：
-
-```sh
-clashforgectl upgrade --version v0.1.0
-```
-
-## 网络受限时
+## GitHub 下载慢
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
 ```
 
-自定义发布源：
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -BaseUrl https://releases.example.com
-```
-
-## `-Purge` 什么时候用
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
-```
-
-::: danger `-Purge` 只用于“历史状态已污染”
-它会触发更彻底清理，可能删除现有配置和运行数据。正常升级不建议使用。
-:::
-
-## 回滚策略（建议默认掌握）
-
-最简单的回滚方式是直接升回旧版本：
+## 更新到指定版本
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
 ```
 
-回滚动作建议顺序：
+这个命令也可以用来回到旧版本。
 
-1. 先 `stop`，确保退出接管。
-2. 安装目标旧版本。
-3. 启动并执行 [检查清单](/guide/verify)。
+## 更新后检查
 
-## 升级后验收必做
+更新完成后做三件事：
 
-至少确认这 6 项：
+1. 打开 `http://192.168.20.1:7777`。
+2. 确认代理服务能启动。
+3. 用一台设备测试需要代理的网站。
 
-1. Web UI 可访问。
-2. `status` 正常。
-3. `check` 结果与预期一致。
-4. 内核进程稳定、无重复重启。
-5. 接管状态符合你的配置（没有“意外全开/全关”）。
-6. 订阅与规则仍有效。
+也可以运行：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
+```
+
+## 出问题时
+
+先恢复网络：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
+```
+
+再回到旧版本：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+```
+
+把 `v0.1.0` 换成你想回到的版本。
+
+## 谨慎使用清理更新
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
+```
+
+`-Purge` 会清理更多旧数据，可能影响已有配置。只有在配置已经混乱、需要干净重装时再用。

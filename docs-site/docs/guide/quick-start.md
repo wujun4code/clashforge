@@ -1,62 +1,62 @@
-# 快速开始（15 分钟先把网络跑通）
+# 我该怎么开始
 
-这份快速开始只追求一件事：**先让你的路由器代理能力可用，并且随时能回退**。  
-示例路由器地址用 `192.168.20.1`，请替换成你的实际地址。
+这页给第一次使用 ClashForge 的用户。目标很简单：**把代理服务放到路由器上，并确认它真的能用**。
 
-## 先明确今天的目标
+文档里的路由器地址都用 `192.168.20.1` 举例。你需要替换成自己的路由器地址。
 
-本页的目标是：
+## 先看你是否适合用 ClashForge
 
-1. ClashForge 安装成功。
-2. Web UI 可打开。
-3. mihomo 内核能启动。
-4. 你知道出问题时如何一键退出接管。
+ClashForge 适合你，如果：
 
-本页不追求：
+1. 你已经有代理订阅链接，或已有 Clash 兼容配置文件。
+2. 你有一台 OpenWrt 路由器。
+3. 你希望手机、电脑、电视等设备少做单独配置。
+4. 你愿意先用浏览器管理代理，再慢慢调整高级设置。
 
-1. 一次性把所有高级规则调到最优。
-2. 第一次就全网接管所有设备。
+ClashForge 不适合你，如果：
 
-## 前置条件
+1. 你还没有任何代理服务或订阅。
+2. 你不能登录自己的路由器。
+3. 你只是想在一台电脑上临时使用代理。
 
-| 项目 | 要求 |
+## 你会经历 4 步
+
+| 步骤 | 你要做什么 | 完成后是什么样 |
+| --- | --- | --- |
+| 1 | 安装 ClashForge 到路由器 | 浏览器能打开管理页面 |
+| 2 | 添加你的订阅或配置 | 页面里能看到可用节点 |
+| 3 | 启动代理服务 | 路由器上开始运行代理 |
+| 4 | 让设备使用它 | 你的设备能访问需要代理的资源 |
+
+## 1. 准备电脑和路由器
+
+你需要：
+
+| 项目 | 说明 |
 | --- | --- |
-| 路由器 | OpenWrt / Kwrt，允许 SSH 登录 |
-| 控制端 | Windows 10/11、macOS 或 Linux |
-| 工具 | `ssh`、`scp` 可用 |
-| 权限 | 推荐 `root` 或等价权限 |
-| 配置来源 | 至少一个可用的 YAML 或订阅链接 |
+| 路由器 | OpenWrt / Kwrt，能 SSH 登录 |
+| 电脑 | Windows、macOS、Linux 都可以 |
+| 订阅 | 代理服务商给你的订阅链接，或 Clash YAML 文件 |
 
-::: tip 为什么先保守
-ClashForge 默认不自动接管透明代理和 DNS，这是为了避免第一次部署时把全网带离线。
-:::
+Windows 用户先确认电脑有 SSH：
 
-## 1. 准备控制脚本
+```powershell
+ssh -V
+```
+
+## 2. 下载 ClashForge 项目
 
 ```powershell
 git clone https://github.com/wujun4code/clashforge.git
 cd clashforge
 ```
 
-Windows 可用性检查：
+## 3. 安装到路由器
 
-```powershell
-ssh -V
-scp -V
-```
-
-## 2. 安装到路由器（推荐）
-
-推荐用 `upgrade` 路径：由你的电脑下载 IPK，再推送到路由器安装，稳定性更好。
+Windows：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
-```
-
-网络受限时可加镜像：
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
 ```
 
 macOS / Linux：
@@ -65,53 +65,56 @@ macOS / Linux：
 ./scripts/clashforgectl --router 192.168.20.1 upgrade
 ```
 
-## 3. 打开 Web UI 并导入配置
+如果 GitHub 下载慢，可以加镜像：
 
-访问：
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
+
+## 4. 打开管理页面
+
+安装成功后，在浏览器打开：
 
 ```text
 http://192.168.20.1:7777
 ```
 
-在 Setup 页面完成最小配置：
+你会看到 ClashForge 的 Web 管理页面。
 
-1. 上传 YAML 或添加订阅。
-2. 保存并激活配置。
-3. 启动 mihomo 内核。
+## 5. 添加订阅并启动
 
-## 4. 先验证，再接管
+在页面里按这个顺序做：
 
-先看运行状态：
+1. 进入 Setup 或配置页面。
+2. 添加订阅链接，或上传已有配置文件。
+3. 保存并启用这个配置。
+4. 点击启动代理服务。
+
+先不要急着让所有设备都使用代理。先确认服务本身能正常跑起来。
+
+## 6. 确认它真的能用
+
+Windows：
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
 ```
 
-确认核心流程可用后，再在 UI 中按顺序开启：
+你也可以直接用浏览器试试那些平时需要代理才能访问的网站。
 
-1. 透明代理接管。
-2. DNS 接管。
+## 7. 让设备开始使用
 
-每开一步都执行一次 `check`，不要两步同时开。
+确认代理可用后，再到 Web 页面里打开“让设备使用代理”的相关开关。  
+建议先让一台手机或一台电脑测试，没问题后再给更多设备使用。
 
-## 5. 出问题时的立即回退
+## 不对劲时先恢复网络
 
-如果开启接管后体验变差或断网，先执行：
+如果打开开关后家里设备不好上网，先运行：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-这会尝试退出接管并恢复系统网络基线，再继续排障。
+这会尽量关闭代理相关设置，让网络先回到普通状态。
 
-## 完成标志
-
-满足以下 4 条，就算首次上手成功：
-
-1. `status` 显示服务状态正常。
-2. Web UI 能稳定访问。
-3. `check` 能返回有效连通性与出口信息。
-4. 你已经验证过 `stop` 可以作为回退手段。
-
-下一步建议阅读 [启动与接管](/guide/run) 和 [检查清单](/guide/verify)。
+下一步可以看：[不好用怎么办](/guide/troubleshooting)。
