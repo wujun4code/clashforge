@@ -45,6 +45,84 @@ sh_quote() {
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+download_with_fallback() {
+    local name="$1" dest="$2"; shift 2
+    local url
+    for url in "$@"; do
+        log "Downloading $name from $url"
+        rm -f "$dest"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 15 --max-time 300 -o "$dest" "$url" 2>/dev/null || true
+        elif command -v wget >/dev/null 2>&1; then
+            wget --timeout=300 -qO "$dest" "$url" 2>/dev/null || true
+        else
+            warn "Neither curl nor wget is available locally"
+            return 1
+        fi
+        if [ -s "$dest" ]; then
+            ok "$name downloaded ($(wc -c < "$dest" | tr -d ' ') bytes)"
+            return 0
+        fi
+        warn "$name download failed: $url"
+    done
+    return 1
+}
+
+sync_geodata_to_router() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        warn "Skipping GeoData preload because --dry-run is set"
+        return 0
+    fi
+
+    local remote_dir="/etc/metaclash"
+    local tmpdir downloaded=0
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/clashforge-geodata.XXXXXX")" || {
+        warn "GeoData preload skipped: cannot create local temp directory"
+        return 0
+    }
+
+    log "── GeoData: downloading locally and preloading router"
+
+    if download_with_fallback "GeoIP.dat" "$tmpdir/GeoIP.dat" \
+        "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
+        "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"; then
+        downloaded=1
+    fi
+
+    if download_with_fallback "GeoSite.dat" "$tmpdir/GeoSite.dat" \
+        "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
+        "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"; then
+        downloaded=1
+    fi
+
+    if [ "$downloaded" -eq 0 ]; then
+        warn "GeoData preload skipped: no GeoData files could be downloaded locally"
+        rm -rf "$tmpdir"
+        return 0
+    fi
+
+    if ! ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p $remote_dir"; then
+        warn "GeoData preload skipped: cannot create $remote_dir on router"
+        rm -rf "$tmpdir"
+        return 0
+    fi
+
+    if [ -s "$tmpdir/GeoIP.dat" ]; then
+        scp "${SCP_OPTS[@]}" "$tmpdir/GeoIP.dat" "${TARGET}:${remote_dir}/GeoIP.dat" \
+            && ok "GeoIP.dat uploaded to ${remote_dir}/GeoIP.dat" \
+            || warn "Failed to upload GeoIP.dat to router"
+    fi
+
+    if [ -s "$tmpdir/GeoSite.dat" ]; then
+        scp "${SCP_OPTS[@]}" "$tmpdir/GeoSite.dat" "${TARGET}:${remote_dir}/GeoSite.dat" \
+            && ok "GeoSite.dat uploaded to ${remote_dir}/GeoSite.dat" \
+            || warn "Failed to upload GeoSite.dat to router"
+    fi
+
+    ssh "${SSH_OPTS[@]}" "$TARGET" "chmod 644 $remote_dir/GeoIP.dat $remote_dir/GeoSite.dat 2>/dev/null || true" >/dev/null 2>&1 || true
+    rm -rf "$tmpdir"
+}
+
 # ── locate clashforgectl.sh ───────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SH_SCRIPT="$SCRIPT_DIR/clashforgectl.sh"
@@ -341,6 +419,8 @@ if [ "$ACTION" = "deploy" ]; then
     ssh "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_INSTALL" \
         || die "Remote install failed"
 
+    sync_geodata_to_router
+
     log ""
     ok "Deploy complete: $NEW_VER  →  http://${ROUTER}:7777"
     exit 0
@@ -460,6 +540,8 @@ if [ "$ACTION" = "upgrade" ] && [ "$REMOTE_DOWNLOAD" -eq 0 ]; then
     log ""
     ssh "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_CMD" \
         || die "Remote install failed"
+
+    sync_geodata_to_router
 
     log ""
     ok "Upgrade complete: $TAG  →  http://${ROUTER}:7777"

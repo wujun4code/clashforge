@@ -82,6 +82,105 @@ function Ok   { param($Msg) Write-Host "[clashforgectl] OK  $Msg"   -ForegroundC
 function Warn { param($Msg) Write-Host "[clashforgectl] WARN $Msg"  -ForegroundColor Yellow }
 function Die  { param($Msg) Write-Host "[clashforgectl] ERROR $Msg" -ForegroundColor Red; exit 1 }
 
+function Download-WithFallback {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$OutFile,
+        [Parameter(Mandatory)][string[]]$Urls
+    )
+
+    foreach ($Url in $Urls) {
+        try {
+            Log "Downloading $Name from $Url"
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -TimeoutSec 180 -UseBasicParsing
+            if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
+                Ok "$Name downloaded ($((Get-Item $OutFile).Length) bytes)"
+                return $true
+            }
+            Warn "$Name download produced an empty file"
+        } catch {
+            Warn "$Name download failed: $_"
+        }
+        Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+    }
+    return $false
+}
+
+function Sync-GeoDataToRouter {
+    if ($DryRun) {
+        Warn "Skipping GeoData preload because -DryRun is set"
+        return
+    }
+
+    $RemoteGeoDir = "/etc/metaclash"
+    $GeoSpecs = @(
+        @{
+            Name = "GeoIP.dat"
+            File = "GeoIP.dat"
+            Urls = @(
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+            )
+        },
+        @{
+            Name = "GeoSite.dat"
+            File = "GeoSite.dat"
+            Urls = @(
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+            )
+        }
+    )
+
+    Log "── GeoData: downloading locally and preloading router"
+    $GeoTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("clashforge-geodata-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $GeoTempDir | Out-Null
+
+    try {
+        $DownloadedFiles = @()
+        foreach ($Spec in $GeoSpecs) {
+            $LocalPath = Join-Path $GeoTempDir $Spec.File
+            if (Download-WithFallback -Name $Spec.Name -OutFile $LocalPath -Urls $Spec.Urls) {
+                $DownloadedFiles += $Spec.File
+            }
+        }
+
+        if ($DownloadedFiles.Count -eq 0) {
+            Warn "GeoData preload skipped: no GeoData files could be downloaded locally"
+            return
+        }
+
+        $SshMkdirArgs = $SshBase + @($Target, "mkdir -p $RemoteGeoDir")
+        ssh @SshMkdirArgs
+        if ($LASTEXITCODE -ne 0) {
+            Warn "GeoData preload skipped: cannot create $RemoteGeoDir on router"
+            return
+        }
+
+        Push-Location $GeoTempDir
+        try {
+            foreach ($File in $DownloadedFiles) {
+                $ScpGeoArgs = $ScpBase + @(".\$File", "${Target}:${RemoteGeoDir}/$File")
+                scp @ScpGeoArgs
+                if ($LASTEXITCODE -ne 0) {
+                    Warn "Failed to upload $File to router"
+                    continue
+                }
+                Ok "$File uploaded to ${RemoteGeoDir}/$File"
+            }
+        } finally {
+            Pop-Location
+        }
+
+        $SshChmodArgs = $SshBase + @($Target, "chmod 644 $RemoteGeoDir/GeoIP.dat $RemoteGeoDir/GeoSite.dat 2>/dev/null || true")
+        ssh @SshChmodArgs | Out-Null
+    } catch {
+        Warn "GeoData preload failed: $_"
+    } finally {
+        Remove-Item $GeoTempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ── locate clashforgectl.sh ───────────────────────────────────────────────────
 # Look next to this PS1 file first, then in the scripts/ directory.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -287,6 +386,8 @@ if ($Action -eq "deploy") {
     ssh @SshInstallArgs
     if ($LASTEXITCODE -ne 0) { Die "Remote install failed (exit $LASTEXITCODE)" }
 
+    Sync-GeoDataToRouter
+
     Log ""
     Ok "Deploy complete: $NewVer  →  http://${Router}:7777"
     exit 0
@@ -430,6 +531,8 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
     $SshInstallArgs = $SshBase + @($Target, $RemoteCmd)
     ssh @SshInstallArgs
     if ($LASTEXITCODE -ne 0) { Die "Remote install failed (exit $LASTEXITCODE)" }
+
+    Sync-GeoDataToRouter
 
     Log ""
     Ok "Upgrade complete: $Tag  →  http://${Router}:7777"
