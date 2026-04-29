@@ -38,7 +38,7 @@ Windows 方式会先在电脑上下载安装包，再传到路由器，通常更
 ## 更新到指定版本
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
 ```
 
 这个命令也可以用来回到旧版本。
@@ -68,10 +68,10 @@ Windows 方式会先在电脑上下载安装包，再传到路由器，通常更
 再回到旧版本：
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
 ```
 
-把 `v0.1.0` 换成你想回到的版本。
+把 `v0.1.0-rc.1` 换成你想回到的版本。
 
 ## 谨慎使用清理更新
 

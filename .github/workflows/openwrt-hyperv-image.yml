@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       clashforge_version:
-        description: 'ClashForge tag (e.g. v0.1.0). Use latest for newest release.'
+        description: 'ClashForge tag (e.g. v0.1.0-rc.1). Use latest for newest release.'
         required: true
         default: 'latest'
       tracks:
@@ -188,7 +188,11 @@ jobs:
           fi
 
           PKG_VER="${TAG#v}"
-          PKG_FILE="clashforge-${PKG_VER}-r1_x86_64.apk"
+          # Keep APK filename derivation in sync with release.yml.
+          # Example: 0.1.0-rc.1 -> 0.1.0.1
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VER" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
+          PKG_FILE="clashforge-${APK_CORE_VERSION}-r1_x86_64.apk"
           TRACK="25.12-apk"
 
           echo "owrt_ver=$OWRT_VER" >> "$GITHUB_OUTPUT"
