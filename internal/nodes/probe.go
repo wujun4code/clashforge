@@ -1,11 +1,13 @@
 package nodes
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -33,11 +35,24 @@ func DefaultProbeTargets() []struct {
 	}
 }
 
+type ProxyProbeOptions struct {
+	ProxyScheme        string
+	InsecureSkipVerify bool
+}
+
 // TestHTTPProxy probes the target URLs through a HTTP proxy endpoint.
 func TestHTTPProxy(proxyHost string, proxyPort int, username, password string, timeout time.Duration, targets []struct {
 	Name string
 	URL  string
 }) []ProbeResult {
+	return TestHTTPProxyWithOptions(proxyHost, proxyPort, username, password, timeout, targets, ProxyProbeOptions{ProxyScheme: "http"})
+}
+
+// TestHTTPProxyWithOptions probes target URLs through proxy endpoint with explicit proxy transport settings.
+func TestHTTPProxyWithOptions(proxyHost string, proxyPort int, username, password string, timeout time.Duration, targets []struct {
+	Name string
+	URL  string
+}, options ProxyProbeOptions) []ProbeResult {
 	results := make([]ProbeResult, 0, len(targets))
 	if proxyHost == "" || proxyPort <= 0 {
 		for _, t := range targets {
@@ -56,8 +71,16 @@ func TestHTTPProxy(proxyHost string, proxyPort int, username, password string, t
 		_ = conn.Close()
 	}
 
+	scheme := strings.ToLower(strings.TrimSpace(options.ProxyScheme))
+	if scheme == "" {
+		scheme = "http"
+	}
+	if scheme != "http" && scheme != "https" {
+		scheme = "http"
+	}
+
 	proxyURL := &url.URL{
-		Scheme: "http",
+		Scheme: scheme,
 		Host:   proxyAddr,
 	}
 	if username != "" {
@@ -67,6 +90,11 @@ func TestHTTPProxy(proxyHost string, proxyPort int, username, password string, t
 	transport := &http.Transport{
 		Proxy:               http.ProxyURL(proxyURL),
 		TLSHandshakeTimeout: timeout,
+	}
+	if options.InsecureSkipVerify {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true, // only for probe diagnostics; required when probing TLS proxy by IP
+		}
 	}
 	client := &http.Client{Timeout: timeout, Transport: transport}
 

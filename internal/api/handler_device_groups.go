@@ -12,18 +12,29 @@ import (
 
 type deviceGroupsBody struct {
 	DeviceGroups []config.DeviceGroup `json:"device_groups"`
+	SourceKey    string               `json:"source_key,omitempty"`
 }
 
 func handleGetDeviceGroups(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		requestedSourceKey := strings.TrimSpace(r.URL.Query().Get("source_key"))
+		activeSourceKey := currentActiveSourceKey(deps.Config.Core.DataDir)
+		sourceKey := requestedSourceKey
+		if sourceKey == "" {
+			sourceKey = activeSourceKey
+		}
+
 		path := config.DeviceGroupsPath(deps.Config.Core.DataDir)
-		groups, err := config.LoadDeviceGroups(path)
+		groups, err := config.LoadDeviceGroupsForSource(path, sourceKey)
 		if err != nil {
 			Err(w, http.StatusInternalServerError, "DEVICE_GROUPS_READ_FAILED", err.Error())
 			return
 		}
 		JSON(w, http.StatusOK, map[string]interface{}{
-			"device_groups": groups,
+			"device_groups":       groups,
+			"source_key":          sourceKey,
+			"active_source_key":   activeSourceKey,
+			"requested_by_source": requestedSourceKey != "",
 		})
 	}
 }
@@ -54,19 +65,45 @@ func handlePutDeviceGroups(deps Dependencies) http.HandlerFunc {
 			}
 			body.DeviceGroups = plain
 		}
+		if body.SourceKey == "" {
+			body.SourceKey = strings.TrimSpace(r.URL.Query().Get("source_key"))
+		}
+
+		activeSourceKey := currentActiveSourceKey(deps.Config.Core.DataDir)
+		sourceKey := strings.TrimSpace(body.SourceKey)
+		if sourceKey == "" {
+			sourceKey = activeSourceKey
+		}
 
 		path := config.DeviceGroupsPath(deps.Config.Core.DataDir)
-		if err := config.SaveDeviceGroups(path, body.DeviceGroups); err != nil {
+		if err := config.SaveDeviceGroupsForSource(path, body.DeviceGroups, sourceKey); err != nil {
 			Err(w, http.StatusInternalServerError, "DEVICE_GROUPS_WRITE_FAILED", err.Error())
+			return
+		}
+
+		profileActive := sourceKey == "" || sourceKey == activeSourceKey
+		if !profileActive {
+			JSON(w, http.StatusOK, map[string]interface{}{
+				"updated":            true,
+				"config_generated":   false,
+				"profile_active":     false,
+				"profile_source_key": sourceKey,
+				"active_source_key":  activeSourceKey,
+				"core_running":       deps.Core != nil && deps.Core.Status().State == core.StateRunning,
+				"message":            "设备分组已全局保存，策略覆盖已写入当前配置档案；当前运行配置未变更。",
+			})
 			return
 		}
 
 		generated, genErr := generateMihomoConfig(deps)
 		if genErr != nil {
 			JSON(w, http.StatusOK, map[string]interface{}{
-				"updated":          true,
-				"config_generated": false,
-				"warning":          genErr.Error(),
+				"updated":            true,
+				"config_generated":   false,
+				"warning":            genErr.Error(),
+				"profile_active":     true,
+				"profile_source_key": sourceKey,
+				"active_source_key":  activeSourceKey,
 			})
 			return
 		}
@@ -83,10 +120,13 @@ func handlePutDeviceGroups(deps Dependencies) http.HandlerFunc {
 		}
 
 		resp := map[string]interface{}{
-			"updated":          true,
-			"config_generated": generated,
-			"core_running":     coreRunning,
-			"core_reloaded":    coreReloaded,
+			"updated":            true,
+			"config_generated":   generated,
+			"core_running":       coreRunning,
+			"core_reloaded":      coreReloaded,
+			"profile_active":     true,
+			"profile_source_key": sourceKey,
+			"active_source_key":  activeSourceKey,
 		}
 		if reloadErrText != "" {
 			resp["reload_error"] = reloadErrText

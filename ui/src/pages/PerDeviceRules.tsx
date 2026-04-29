@@ -19,14 +19,21 @@ import {
   getDeviceGroups,
   getMihomoConfig,
   getNetworkClients,
+  getSourceFile,
+  getSources,
+  getSubscriptionCache,
+  getSubscriptions,
   restartCore,
   updateDeviceGroups,
 } from '../api/client'
 import type {
+  ActiveSource,
   DeviceRouteDevice,
   DeviceRouteGroup,
   DeviceRouteOverride,
   NetworkClient,
+  SourceFile,
+  Subscription,
 } from '../api/client'
 
 const BUILTIN_PROXY_NAMES = ['DIRECT', 'REJECT', 'PASS']
@@ -48,6 +55,23 @@ interface DevicePoolClient extends NetworkClient {
 }
 
 type NoticeTone = 'info' | 'success' | 'warning' | 'danger'
+
+interface DeviceRuleSourceOption {
+  key: string
+  label: string
+  description: string
+  type: 'file' | 'subscription'
+  filename?: string
+  subscription?: Subscription
+}
+
+function sourceKeyForFile(filename: string): string {
+  return `file:${filename}`
+}
+
+function sourceKeyForSubscription(id: string): string {
+  return `subscription:${id}`
+}
 
 function createDraftID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -236,13 +260,57 @@ function newGroup(): DeviceRouteGroup {
   }
 }
 
+function sourceKeyFromActiveSource(active: ActiveSource | null): string {
+  if (!active) return ''
+  if (active.type === 'file' && active.filename) {
+    return sourceKeyForFile(active.filename)
+  }
+  if (active.type === 'subscription' && active.sub_id) {
+    return sourceKeyForSubscription(active.sub_id)
+  }
+  return ''
+}
+
+function buildDeviceRuleSourceOptions(files: SourceFile[], subscriptions: Subscription[]): DeviceRuleSourceOption[] {
+  const fileOptions = [...files]
+    .sort((a, b) => {
+      const at = Date.parse(a.created_at || '')
+      const bt = Date.parse(b.created_at || '')
+      return Number.isFinite(bt) && Number.isFinite(at) ? bt - at : 0
+    })
+    .map((file) => ({
+      key: sourceKeyForFile(file.filename),
+      label: file.filename,
+      description: '配置文件',
+      type: 'file' as const,
+      filename: file.filename,
+    }))
+
+  const subOptions = [...subscriptions]
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+    .map((subscription) => ({
+      key: sourceKeyForSubscription(subscription.id),
+      label: subscription.name,
+      description: `订阅${subscription.node_count ? ` · ${subscription.node_count} 节点` : ''}`,
+      type: 'subscription' as const,
+      subscription,
+    }))
+
+  return [...fileOptions, ...subOptions]
+}
+
 export function PerDeviceRules() {
+  const [sourceOptions, setSourceOptions] = useState<DeviceRuleSourceOption[]>([])
+  const [selectedSourceKey, setSelectedSourceKey] = useState('')
+  const [activeSourceKey, setActiveSourceKey] = useState('')
+
   const [groups, setGroups] = useState<DeviceRouteGroup[]>([])
   const [options, setOptions] = useState<PolicyOptions>({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
   const [poolClients, setPoolClients] = useState<DevicePoolClient[]>([])
   const [finalConfigContent, setFinalConfigContent] = useState('')
 
   const [loading, setLoading] = useState(true)
+  const [loadingSources, setLoadingSources] = useState(false)
   const [loadingOptions, setLoadingOptions] = useState(false)
   const [loadingClients, setLoadingClients] = useState(false)
   const [loadingFinalConfig, setLoadingFinalConfig] = useState(false)
@@ -254,32 +322,84 @@ export function PerDeviceRules() {
   const [finalConfigError, setFinalConfigError] = useState('')
   const [notice, setNotice] = useState<{ tone: NoticeTone; title: string; text: string } | null>(null)
 
-  const loadDeviceGroups = useCallback(async () => {
-    const data = await getDeviceGroups()
+  const selectedSource = useMemo(
+    () => sourceOptions.find((item) => item.key === selectedSourceKey) ?? null,
+    [selectedSourceKey, sourceOptions],
+  )
+
+  const loadSourceOptions = useCallback(async () => {
+    setLoadingSources(true)
+    try {
+      const [sourcesData, subscriptionsData] = await Promise.all([
+        getSources().catch(() => ({ files: [] as SourceFile[], active_source: null as ActiveSource | null })),
+        getSubscriptions().catch(() => ({ subscriptions: [] as Subscription[] })),
+      ])
+      const builtOptions = buildDeviceRuleSourceOptions(
+        sourcesData.files ?? [],
+        subscriptionsData.subscriptions ?? [],
+      )
+      const activeKey = sourceKeyFromActiveSource(sourcesData.active_source ?? null)
+      setSourceOptions(builtOptions)
+      setActiveSourceKey(activeKey)
+      setSelectedSourceKey((current) => {
+        if (current && builtOptions.some((item) => item.key === current)) return current
+        if (activeKey && builtOptions.some((item) => item.key === activeKey)) return activeKey
+        return builtOptions[0]?.key ?? ''
+      })
+    } finally {
+      setLoadingSources(false)
+    }
+  }, [])
+
+  const loadDeviceGroups = useCallback(async (sourceKey: string) => {
+    const data = await getDeviceGroups(sourceKey || undefined)
     const normalized = normalizeIncoming(data.device_groups ?? [])
     setGroups(normalized)
     setSnapshot(serializeSnapshot(normalized))
   }, [])
 
-  const loadPolicyOptions = useCallback(async () => {
+  const loadPolicyOptions = useCallback(async (source: DeviceRuleSourceOption | null) => {
     setLoadingOptions(true)
     setOptionsError('')
     try {
-      const data = await getMihomoConfig()
-      const content = (data.content ?? '').trim()
+      if (!source) {
+        setOptions({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
+        setOptionsError('请先在“配置管理”中准备至少一个配置文件或订阅。')
+        return
+      }
+
+      let content = ''
+      if (source.type === 'file' && source.filename) {
+        const data = await getSourceFile(source.filename)
+        content = data.content ?? ''
+      } else if (source.type === 'subscription' && source.subscription) {
+        try {
+          const data = await getSubscriptionCache(source.subscription.id)
+          content = data.content ?? ''
+        } catch (cacheError) {
+          if (source.key === activeSourceKey) {
+            const running = await getMihomoConfig()
+            content = running.content ?? ''
+          } else {
+            throw cacheError
+          }
+        }
+      }
+
+      content = content.trim()
       if (!content) {
         setOptions({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
-        setOptionsError('未检测到运行配置，请先在“配置管理”中生成配置。')
+        setOptionsError('当前来源没有可解析的配置内容，请先更新缓存或导入配置。')
         return
       }
       setOptions(parsePolicyOptions(content))
     } catch (error) {
       setOptions({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
-      setOptionsError(error instanceof Error ? error.message : '读取运行配置失败')
+      setOptionsError(error instanceof Error ? error.message : '读取策略组选项失败')
     } finally {
       setLoadingOptions(false)
     }
-  }, [])
+  }, [activeSourceKey])
 
   const loadNetworkClients = useCallback(async () => {
     setLoadingClients(true)
@@ -313,7 +433,8 @@ export function PerDeviceRules() {
     setLoading(true)
     setNotice(null)
     try {
-      await Promise.all([loadDeviceGroups(), loadPolicyOptions(), loadNetworkClients(), loadFinalConfig()])
+      await loadSourceOptions()
+      await Promise.all([loadNetworkClients(), loadFinalConfig()])
     } catch (error) {
       setNotice({
         tone: 'danger',
@@ -323,11 +444,35 @@ export function PerDeviceRules() {
     } finally {
       setLoading(false)
     }
-  }, [loadDeviceGroups, loadFinalConfig, loadNetworkClients, loadPolicyOptions])
+  }, [loadFinalConfig, loadNetworkClients, loadSourceOptions])
 
   useEffect(() => {
     void refreshAll()
   }, [refreshAll])
+
+  useEffect(() => {
+    if (!selectedSourceKey) {
+      setGroups([])
+      setSnapshot('[]')
+      setOptions({ groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] })
+      return
+    }
+
+    setLoading(true)
+    setNotice(null)
+    void Promise.all([
+      loadDeviceGroups(selectedSourceKey),
+      loadPolicyOptions(selectedSource),
+    ])
+      .catch((error) => {
+        setNotice({
+          tone: 'danger',
+          title: '加载失败',
+          text: error instanceof Error ? error.message : '读取配置失败',
+        })
+      })
+      .finally(() => setLoading(false))
+  }, [loadDeviceGroups, loadPolicyOptions, selectedSource, selectedSourceKey])
 
   const groupNamePrefixes = useMemo(
     () => groups.map((group) => group.name.trim()).filter(Boolean),
@@ -459,6 +604,10 @@ export function PerDeviceRules() {
 
   const saveGroups = async (applyMode: 'reload' | 'restart' = 'reload') => {
     setNotice(null)
+    if (!selectedSourceKey) {
+      setNotice({ tone: 'warning', title: '请选择配置来源', text: '请先选择要绑定策略覆盖的配置文件或订阅。' })
+      return
+    }
     const sanitized = sanitizeForSave(groups)
     const nameSet = new Set<string>()
     for (const group of sanitized) {
@@ -475,11 +624,17 @@ export function PerDeviceRules() {
 
     setSaving(true)
     try {
-      const data = await updateDeviceGroups(sanitized)
+      const data = await updateDeviceGroups(sanitized, selectedSourceKey)
       setGroups(sanitized)
       setSnapshot(serializeSnapshot(sanitized))
 
-      if (!data.config_generated) {
+      if (data.profile_active === false) {
+        setNotice({
+          tone: 'success',
+          title: '已保存到配置档案',
+          text: data.message || '设备分组已全局更新，当前来源的策略覆盖已保存。当前运行配置未改动。',
+        })
+      } else if (!data.config_generated) {
         setNotice({
           tone: 'warning',
           title: '已保存，但生成配置失败',
@@ -521,7 +676,7 @@ export function PerDeviceRules() {
         })
       }
 
-      await Promise.all([loadPolicyOptions(), loadFinalConfig()])
+      await Promise.all([loadPolicyOptions(selectedSource), loadFinalConfig()])
     } catch (error) {
       setNotice({
         tone: 'danger',
@@ -555,15 +710,15 @@ export function PerDeviceRules() {
             <button
               className="btn-ghost flex items-center gap-2"
               onClick={() => { void refreshAll() }}
-              disabled={saving || loadingOptions || loadingClients || loadingFinalConfig}
+              disabled={saving || loadingSources || loadingOptions || loadingClients || loadingFinalConfig}
             >
-              <RefreshCw size={14} className={(loadingOptions || loadingClients || loadingFinalConfig) ? 'animate-spin' : ''} />
+              <RefreshCw size={14} className={(loadingSources || loadingOptions || loadingClients || loadingFinalConfig) ? 'animate-spin' : ''} />
               刷新
             </button>
             <button
               className="btn-primary flex items-center gap-2"
               onClick={() => { void saveGroups('reload') }}
-              disabled={saving || !dirty}
+              disabled={saving || !dirty || !selectedSourceKey}
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               {saving ? '处理中…' : '保存并热加载'}
@@ -571,7 +726,7 @@ export function PerDeviceRules() {
             <button
               className="btn-ghost flex items-center gap-2"
               onClick={() => { void saveGroups('restart') }}
-              disabled={saving || !dirty}
+              disabled={saving || !dirty || !selectedSourceKey}
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
               {saving ? '处理中…' : '保存并重启内核'}
@@ -591,6 +746,50 @@ export function PerDeviceRules() {
           {notice.text}
         </InlineNotice>
       ) : null}
+
+      <SectionCard
+        title="策略覆盖来源"
+        description="设备分组全局共享；下方策略覆盖会按你选择的配置来源分别保存。"
+        actions={(
+          activeSourceKey && selectedSourceKey && activeSourceKey === selectedSourceKey ? (
+            <span className="badge badge-success">当前运行来源</span>
+          ) : (
+            <span className="badge badge-muted">编辑离线来源</span>
+          )
+        )}
+      >
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+          <label className="space-y-1.5 text-sm">
+            <span className="text-xs text-muted">选择配置文件 / 订阅</span>
+            <select
+              className="theme-select glass-input min-h-[40px] h-[40px] w-full"
+              value={selectedSourceKey}
+              onChange={(event) => {
+                const nextKey = event.target.value
+                if (dirty && nextKey !== selectedSourceKey) {
+                  const ok = window.confirm('当前来源有未保存修改，切换后将丢失这些修改。确定切换吗？')
+                  if (!ok) return
+                }
+                setSelectedSourceKey(nextKey)
+              }}
+              disabled={loadingSources || saving}
+            >
+              {sourceOptions.length === 0 ? (
+                <option value="">暂无可选来源</option>
+              ) : (
+                sourceOptions.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <div className="text-xs text-muted md:text-right">
+            {selectedSource ? `${selectedSource.description}` : '请先在“配置管理”导入配置来源'}
+          </div>
+        </div>
+      </SectionCard>
 
       {optionsError ? (
         <InlineNotice tone="warning" title="策略组选项不可用">

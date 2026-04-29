@@ -194,7 +194,9 @@ func handleTestNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 			return
 		}
 
-		node.Status = nodes.StatusConnected
+		if node.Status != nodes.StatusDeployed {
+			node.Status = nodes.StatusConnected
+		}
 		node.Error = ""
 		store.Update(id, node)
 
@@ -216,6 +218,12 @@ func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 		var req nodeDeployRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		mode := strings.TrimSpace(strings.ToLower(req.Mode))
+		if mode == "full" {
+			if strings.TrimSpace(node.Domain) == "" || strings.TrimSpace(node.Email) == "" || strings.TrimSpace(node.CFToken) == "" {
+				Err(w, http.StatusBadRequest, "NODE_DEPLOY_FULL_PARAMS_REQUIRED", "缺少域名、ACME 邮箱或 Cloudflare 凭据，请先完成第5步并保存")
+				return
+			}
+		}
 		deployNode := *node
 		if mode == "bootstrap" {
 			deployNode.Domain = ""
@@ -284,14 +292,23 @@ func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 		}
 
 		now := time.Now()
-		node.Status = nodes.StatusDeployed
+		if strings.EqualFold(result.Phase, "bootstrap") {
+			node.Status = nodes.StatusConnected
+		} else {
+			node.Status = nodes.StatusDeployed
+		}
+		deployLog := deployLogBuf.String()
 		node.DeployedAt = &now
 		node.ProxyUser = result.ProxyUser
 		node.ProxyPassword = result.ProxyPass
 		if strings.TrimSpace(deployNode.CFZoneID) != "" {
 			node.CFZoneID = deployNode.CFZoneID
 		}
-		node.DeployLog = ""
+		if strings.EqualFold(result.Phase, "full") && !result.CertIssued {
+			node.DeployLog = deployLog
+		} else {
+			node.DeployLog = ""
+		}
 		store.Update(id, node)
 
 		doneData, _ := json.Marshal(map[string]interface{}{
@@ -299,6 +316,7 @@ func handleDeployNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
 			"success":       true,
 			"phase":         result.Phase,
 			"cert_issued":   result.CertIssued,
+			"deploy_log":    deployLog,
 			"probe_results": result.ProbeResults,
 		})
 		fmt.Fprintf(w, "data: %s\n\n", doneData)
@@ -424,7 +442,25 @@ func handleProbeNode(store *nodes.Store) http.HandlerFunc {
 			return
 		}
 
-		results := nodes.TestHTTPProxy(proxyHost, 443, node.ProxyUser, node.ProxyPassword, 10*time.Second, nodes.DefaultProbeTargets())
+		probeOptions := nodes.ProxyProbeOptions{ProxyScheme: "http"}
+		if node.Status == nodes.StatusDeployed {
+			probeOptions.ProxyScheme = "https"
+			// Deployed mode uses TLS listener. If probing via raw IP, cert SAN may not match,
+			// so we relax verification only for this diagnostic path.
+			if mode == "ip" {
+				probeOptions.InsecureSkipVerify = true
+			}
+		}
+
+		results := nodes.TestHTTPProxyWithOptions(
+			proxyHost,
+			443,
+			node.ProxyUser,
+			node.ProxyPassword,
+			10*time.Second,
+			nodes.DefaultProbeTargets(),
+			probeOptions,
+		)
 		okCount := 0
 		for _, item := range results {
 			if item.OK {

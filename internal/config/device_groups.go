@@ -41,7 +41,8 @@ type ProxyGroupOverride struct {
 }
 
 type deviceGroupFile struct {
-	DeviceGroups []DeviceGroup `json:"device_groups"`
+	DeviceGroups      []DeviceGroup                              `json:"device_groups"`
+	OverridesBySource map[string]map[string][]ProxyGroupOverride `json:"overrides_by_source,omitempty"`
 }
 
 // DeviceRuleProviderSpec describes one generated device-group ipcidr rule-provider.
@@ -59,33 +60,103 @@ func DeviceGroupsPath(dataDir string) string {
 // LoadDeviceGroups reads device groups from JSON.
 // It supports both { "device_groups": [...] } and legacy plain array formats.
 func LoadDeviceGroups(path string) ([]DeviceGroup, error) {
+	state, err := loadDeviceGroupState(path)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeDeviceGroups(state.DeviceGroups), nil
+}
+
+// LoadDeviceGroupsForSource reads global device groups and applies source-specific
+// overrides. When the source key is empty or unknown, legacy in-group overrides are returned.
+func LoadDeviceGroupsForSource(path, sourceKey string) ([]DeviceGroup, error) {
+	state, err := loadDeviceGroupState(path)
+	if err != nil {
+		return nil, err
+	}
+
+	base := normalizeDeviceGroups(state.DeviceGroups)
+	key := strings.TrimSpace(sourceKey)
+	if key == "" || len(state.OverridesBySource) == 0 {
+		return base, nil
+	}
+
+	sourceOverrides, exists := state.OverridesBySource[key]
+	if !exists {
+		// Unknown profile falls back to legacy in-group overrides for compatibility.
+		return base, nil
+	}
+	return applySourceOverrides(base, sourceOverrides), nil
+}
+
+func loadDeviceGroupState(path string) (deviceGroupFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return deviceGroupFile{}, nil
 		}
-		return nil, fmt.Errorf("read device groups: %w", err)
+		return deviceGroupFile{}, fmt.Errorf("read device groups: %w", err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return nil, nil
+		return deviceGroupFile{}, nil
 	}
 
 	var wrapped deviceGroupFile
-	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.DeviceGroups != nil {
-		return normalizeDeviceGroups(wrapped.DeviceGroups), nil
+	if err := json.Unmarshal(data, &wrapped); err == nil && (wrapped.DeviceGroups != nil || wrapped.OverridesBySource != nil) {
+		wrapped.DeviceGroups = normalizeDeviceGroups(wrapped.DeviceGroups)
+		wrapped.OverridesBySource = normalizeOverridesBySource(wrapped.OverridesBySource, wrapped.DeviceGroups)
+		return wrapped, nil
 	}
 
 	var plain []DeviceGroup
 	if err := json.Unmarshal(data, &plain); err != nil {
-		return nil, fmt.Errorf("parse device groups: %w", err)
+		return deviceGroupFile{}, fmt.Errorf("parse device groups: %w", err)
 	}
-	return normalizeDeviceGroups(plain), nil
+	return deviceGroupFile{
+		DeviceGroups: normalizeDeviceGroups(plain),
+	}, nil
 }
 
 // SaveDeviceGroups writes device groups to JSON atomically.
+// This is kept for backward compatibility and writes legacy in-group overrides.
 func SaveDeviceGroups(path string, groups []DeviceGroup) error {
 	normalized := normalizeDeviceGroups(groups)
 	payload := deviceGroupFile{DeviceGroups: normalized}
+	return writeDeviceGroupState(path, payload)
+}
+
+// SaveDeviceGroupsForSource persists global device groups and saves the overrides
+// for one source profile. Other profile overrides are preserved.
+func SaveDeviceGroupsForSource(path string, groups []DeviceGroup, sourceKey string) error {
+	key := strings.TrimSpace(sourceKey)
+	if key == "" {
+		return SaveDeviceGroups(path, groups)
+	}
+
+	state, err := loadDeviceGroupState(path)
+	if err != nil {
+		return err
+	}
+
+	normalized := normalizeDeviceGroups(groups)
+	globalGroups, sourceOverrides := splitDeviceGroupDataForState(normalized)
+
+	if state.OverridesBySource == nil {
+		state.OverridesBySource = map[string]map[string][]ProxyGroupOverride{}
+	}
+	if len(sourceOverrides) == 0 {
+		delete(state.OverridesBySource, key)
+	} else {
+		state.OverridesBySource[key] = sourceOverrides
+	}
+
+	state.DeviceGroups = globalGroups
+	state.OverridesBySource = normalizeOverridesBySource(state.OverridesBySource, globalGroups)
+
+	return writeDeviceGroupState(path, state)
+}
+
+func writeDeviceGroupState(path string, payload deviceGroupFile) error {
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal device groups: %w", err)
@@ -114,6 +185,118 @@ func SaveDeviceGroups(path string, groups []DeviceGroup) error {
 		return fmt.Errorf("replace device groups: %w", err)
 	}
 	return nil
+}
+
+func splitDeviceGroupDataForState(groups []DeviceGroup) ([]DeviceGroup, map[string][]ProxyGroupOverride) {
+	global := make([]DeviceGroup, 0, len(groups))
+	overrides := map[string][]ProxyGroupOverride{}
+	for _, group := range groups {
+		key := deviceGroupOverrideKey(group)
+		if key != "" && len(group.Overrides) > 0 {
+			overrides[key] = normalizeOverrideList(group.Overrides)
+		}
+		group.Overrides = nil
+		global = append(global, group)
+	}
+	return global, overrides
+}
+
+func applySourceOverrides(groups []DeviceGroup, sourceOverrides map[string][]ProxyGroupOverride) []DeviceGroup {
+	result := make([]DeviceGroup, 0, len(groups))
+	for _, group := range groups {
+		next := group
+		next.Overrides = nil
+		if key := deviceGroupOverrideKey(group); key != "" {
+			if list, ok := sourceOverrides[key]; ok {
+				next.Overrides = normalizeOverrideList(list)
+			}
+		}
+		result = append(result, next)
+	}
+	return normalizeDeviceGroups(result)
+}
+
+func normalizeOverridesBySource(input map[string]map[string][]ProxyGroupOverride, groups []DeviceGroup) map[string]map[string][]ProxyGroupOverride {
+	if len(input) == 0 || len(groups) == 0 {
+		return nil
+	}
+
+	allowedGroupKeys := map[string]bool{}
+	for _, group := range groups {
+		key := deviceGroupOverrideKey(group)
+		if key != "" {
+			allowedGroupKeys[key] = true
+		}
+	}
+	if len(allowedGroupKeys) == 0 {
+		return nil
+	}
+
+	out := map[string]map[string][]ProxyGroupOverride{}
+	for sourceKey, sourceOverrides := range input {
+		sk := strings.TrimSpace(sourceKey)
+		if sk == "" || len(sourceOverrides) == 0 {
+			continue
+		}
+		groupMap := map[string][]ProxyGroupOverride{}
+		for groupKey, overrideList := range sourceOverrides {
+			gk := strings.TrimSpace(groupKey)
+			if gk == "" || !allowedGroupKeys[gk] {
+				continue
+			}
+			normalizedList := normalizeOverrideList(overrideList)
+			if len(normalizedList) == 0 {
+				continue
+			}
+			groupMap[gk] = normalizedList
+		}
+		if len(groupMap) == 0 {
+			continue
+		}
+		out[sk] = groupMap
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeOverrideList(list []ProxyGroupOverride) []ProxyGroupOverride {
+	out := make([]ProxyGroupOverride, 0, len(list))
+	for _, ov := range list {
+		original := strings.TrimSpace(ov.OriginalGroup)
+		if original == "" {
+			continue
+		}
+		proxies := make([]string, 0, len(ov.Proxies))
+		for _, item := range ov.Proxies {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			proxies = append(proxies, item)
+		}
+		proxies = dedupeStrings(proxies)
+		if len(proxies) == 0 {
+			continue
+		}
+		out = append(out, ProxyGroupOverride{
+			OriginalGroup: original,
+			Proxies:       proxies,
+		})
+	}
+	return out
+}
+
+func deviceGroupOverrideKey(group DeviceGroup) string {
+	if id := strings.TrimSpace(group.ID); id != "" {
+		return "id:" + id
+	}
+	name := strings.TrimSpace(group.Name)
+	if name == "" {
+		return ""
+	}
+	return "name:" + strings.ToLower(name)
 }
 
 // SyncDeviceRuleProviderFiles writes generated device-group rule-provider files into

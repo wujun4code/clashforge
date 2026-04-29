@@ -13,6 +13,82 @@ import (
 	"github.com/google/uuid"
 )
 
+type persistedNode struct {
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Host          string     `json:"host"`
+	Port          int        `json:"port"`
+	Username      string     `json:"username"`
+	Password      string     `json:"password,omitempty"`
+	Domain        string     `json:"domain"`
+	Email         string     `json:"email"`
+	CFToken       string     `json:"cf_token,omitempty"`
+	CFAccountID   string     `json:"cf_account_id"`
+	CFZoneID      string     `json:"cf_zone_id"`
+	ProxyUser     string     `json:"proxy_user,omitempty"`
+	ProxyPassword string     `json:"proxy_password,omitempty"`
+	Status        Status     `json:"status"`
+	DeployedAt    *time.Time `json:"deployed_at,omitempty"`
+	CertExpiry    *time.Time `json:"cert_expiry,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	DeployLog     string     `json:"deploy_log,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+func toPersistedNode(n *Node) persistedNode {
+	if n == nil {
+		return persistedNode{}
+	}
+	return persistedNode{
+		ID:            n.ID,
+		Name:          n.Name,
+		Host:          n.Host,
+		Port:          n.Port,
+		Username:      n.Username,
+		Password:      n.Password,
+		Domain:        n.Domain,
+		Email:         n.Email,
+		CFToken:       n.CFToken,
+		CFAccountID:   n.CFAccountID,
+		CFZoneID:      n.CFZoneID,
+		ProxyUser:     n.ProxyUser,
+		ProxyPassword: n.ProxyPassword,
+		Status:        n.Status,
+		DeployedAt:    n.DeployedAt,
+		CertExpiry:    n.CertExpiry,
+		Error:         n.Error,
+		DeployLog:     n.DeployLog,
+		CreatedAt:     n.CreatedAt,
+		UpdatedAt:     n.UpdatedAt,
+	}
+}
+
+func fromPersistedNode(p persistedNode) *Node {
+	return &Node{
+		ID:            p.ID,
+		Name:          p.Name,
+		Host:          p.Host,
+		Port:          p.Port,
+		Username:      p.Username,
+		Password:      p.Password,
+		Domain:        p.Domain,
+		Email:         p.Email,
+		CFToken:       p.CFToken,
+		CFAccountID:   p.CFAccountID,
+		CFZoneID:      p.CFZoneID,
+		ProxyUser:     p.ProxyUser,
+		ProxyPassword: p.ProxyPassword,
+		Status:        p.Status,
+		DeployedAt:    p.DeployedAt,
+		CertExpiry:    p.CertExpiry,
+		Error:         p.Error,
+		DeployLog:     p.DeployLog,
+		CreatedAt:     p.CreatedAt,
+		UpdatedAt:     p.UpdatedAt,
+	}
+}
+
 // Store persists encrypted node data to a JSON file.
 type Store struct {
 	mu       sync.RWMutex
@@ -80,11 +156,15 @@ func (s *Store) load() error {
 		if err != nil {
 			continue // skip corrupted entries
 		}
-		var node Node
+		var node persistedNode
 		if err := json.Unmarshal([]byte(decrypted), &node); err != nil {
 			continue
 		}
-		s.nodes[id] = &node
+		loaded := fromPersistedNode(node)
+		if loaded.ID == "" {
+			loaded.ID = id
+		}
+		s.nodes[id] = loaded
 	}
 	return nil
 }
@@ -93,7 +173,7 @@ func (s *Store) save() error {
 	s.mu.RLock()
 	encrypted := make(map[string]string, len(s.nodes))
 	for id, node := range s.nodes {
-		data, err := json.Marshal(node)
+		data, err := json.Marshal(toPersistedNode(node))
 		if err != nil {
 			s.mu.RUnlock()
 			return err

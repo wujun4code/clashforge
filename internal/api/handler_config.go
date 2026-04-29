@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/wujun4code/clashforge/internal/config"
+	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
 func handleGetConfig(deps Dependencies) http.HandlerFunc {
@@ -183,13 +185,55 @@ func handleGenerateConfig(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+func resolveGenerationInputs(deps Dependencies) ([]subscription.ProxyNode, [][]byte) {
+	nodes := deps.SubManager.GetAllCachedNodes()
+	rawYAMLs := deps.SubManager.GetRawYAMLForEnabled()
+	if deps.Config == nil {
+		return nodes, rawYAMLs
+	}
+
+	activeSource, err := readActiveSource(deps.Config.Core.DataDir)
+	if err != nil || activeSource == nil {
+		return nodes, rawYAMLs
+	}
+
+	switch strings.ToLower(strings.TrimSpace(activeSource.Type)) {
+	case "file":
+		// File source means overrides.yaml is the selected base, so do not fall back
+		// to any enabled subscription raw YAML.
+		rawYAMLs = nil
+	case "subscription":
+		subID := strings.TrimSpace(activeSource.SubID)
+		if subID == "" {
+			return nodes, rawYAMLs
+		}
+		// Prefer only the selected subscription to avoid cross-source pollution.
+		selectedNodes, err := deps.SubManager.GetCachedNodes(subID)
+		if err == nil {
+			for i := range selectedNodes {
+				selectedNodes[i].SourceSubID = subID
+			}
+			nodes = selectedNodes
+		} else {
+			nodes = nil
+		}
+		raw, err := deps.SubManager.GetRawYAML(subID)
+		if err == nil {
+			rawYAMLs = [][]byte{raw}
+		} else {
+			rawYAMLs = nil
+		}
+	}
+
+	return nodes, rawYAMLs
+}
+
 // generateMihomoConfig generates and writes the mihomo config, returns true if successful
 func generateMihomoConfig(deps Dependencies) (bool, error) {
 	if deps.SubManager == nil {
 		return false, nil
 	}
-	nodes := deps.SubManager.GetAllCachedNodes()
-	rawYAMLs := deps.SubManager.GetRawYAMLForEnabled()
+	nodes, rawYAMLs := resolveGenerationInputs(deps)
 
 	overridesPath := deps.Config.Core.DataDir + "/overrides.yaml"
 	overridesData, _ := os.ReadFile(overridesPath)
@@ -230,7 +274,8 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 	generated = config.ApplyManagedRuntimeSettings(deps.Config, generated)
 
 	deviceGroupsPath := config.DeviceGroupsPath(deps.Config.Core.DataDir)
-	deviceGroups, err := config.LoadDeviceGroups(deviceGroupsPath)
+	sourceKey := currentActiveSourceKey(deps.Config.Core.DataDir)
+	deviceGroups, err := config.LoadDeviceGroupsForSource(deviceGroupsPath, sourceKey)
 	if err != nil {
 		return false, err
 	}

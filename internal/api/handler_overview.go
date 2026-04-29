@@ -735,23 +735,33 @@ func buildAppStorage(deps Dependencies) overviewAppStorage {
 	runtimeSize := dirSize(deps.Config.Core.RuntimeDir)
 	dataSize := dirSize(deps.Config.Core.DataDir)
 	binarySize := fileOrDirSize("/usr/bin/clashforge") + fileOrDirSize(deps.Config.Core.Binary)
-	ruleSources := []struct {
+	type ruleSource struct {
 		name string
 		path string
-	}{
+	}
+	ruleSources := []ruleSource{
 		{name: "GeoIP", path: deps.Config.Core.GeoIPPath},
 		{name: "Geosite", path: deps.Config.Core.GeositePath},
 		{name: "Rule Provider", path: filepath.Join(deps.Config.Core.RuntimeDir, "rule_provider")},
+		{name: "Data Rule Provider", path: filepath.Join(deps.Config.Core.DataDir, "rule_provider")},
+		{name: "Data Ruleset", path: filepath.Join(deps.Config.Core.DataDir, "ruleset")},
+		{name: "Data Rule Set", path: filepath.Join(deps.Config.Core.DataDir, "rule-set")},
 	}
 	ruleAssets := make([]overviewRuleAsset, 0, len(ruleSources))
 	rulesSize := uint64(0)
+	seenRulePaths := make(map[string]bool, len(ruleSources))
 	for _, source := range ruleSources {
+		cleanPath := filepath.Clean(source.path)
+		if cleanPath == "" || cleanPath == "." || seenRulePaths[cleanPath] {
+			continue
+		}
+		seenRulePaths[cleanPath] = true
 		size := fileOrDirSize(source.path)
 		if size == 0 {
 			continue
 		}
 		rulesSize += size
-		ruleAssets = append(ruleAssets, overviewRuleAsset{Name: source.name, Path: source.path, SizeMB: bytesToMB(size)})
+		ruleAssets = append(ruleAssets, overviewRuleAsset{Name: source.name, Path: cleanPath, SizeMB: bytesToMB(size)})
 	}
 
 	total := runtimeSize + dataSize + binarySize + rulesSize
@@ -2004,12 +2014,12 @@ func maxInt64(value int64, fallback int64) int64 {
 // ─── DNS diagnostic helpers ──────────────────────────────────────────────────
 
 type dnsSnapshot struct {
-	Port53UDP         bool
-	Port53TCP         bool
-	MihomoPort        int
-	MihomoListening   bool
+	Port53UDP          bool
+	Port53TCP          bool
+	MihomoPort         int
+	MihomoListening    bool
 	ManagedFilePresent bool
-	UCIDnsmasqPort    string
+	UCIDnsmasqPort     string
 }
 
 type dnsResolveResult struct {

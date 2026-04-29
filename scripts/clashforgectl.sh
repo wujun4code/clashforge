@@ -37,6 +37,7 @@ YES=0
 VERBOSE=0
 DRY_RUN=0
 SUBCOMMAND=""
+KILL_OPENCLASH=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 log()  { printf "[clashforge] %s\n"      "$*" >&2; }
@@ -60,6 +61,8 @@ Subcommands:
   check                      Quick connectivity & egress IP check (lightweight)
   uninstall [--keep-config]  Completely remove ClashForge from the router
   diag                       Collect full diagnostic report
+  openclash [--kill]         Scan for OpenClash processes/services; optionally kill them
+  compat                     Pre-install compatibility check
 
 Common options:
   --yes, -y                  Skip confirmation prompts
@@ -84,6 +87,9 @@ Options for diag:
   --output <path>            Report output path (default: /tmp/cf-diag.txt)
   --stdout                   Also print report to stdout while writing to file
   --redact                   Best-effort masking of sensitive values in report
+
+Options for openclash:
+  --kill                     Stop service and kill all detected OpenClash processes
 EOF
 }
 
@@ -104,6 +110,7 @@ while [ $# -gt 0 ]; do
     --start)       AUTO_START=1; shift ;;
     --stdout)      DIAG_STDOUT=1; shift ;;
     --redact)      DIAG_REDACT=1; shift ;;
+    --kill)        KILL_OPENCLASH=1; shift ;;
     --yes|-y)      YES=1; shift ;;
     --verbose|-v)  VERBOSE=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
@@ -1050,6 +1057,316 @@ cmd_diag() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUBCOMMAND: openclash
+#
+# Scan for running OpenClash processes, installed package, and init.d service.
+# Use --kill to stop the service and kill all detected processes.
+# ══════════════════════════════════════════════════════════════════════════════
+cmd_openclash() {
+  printf "\n"
+  printf "═══════════════════════════════════════════════════════\n"
+  printf "  OpenClash Scanner\n"
+  printf "═══════════════════════════════════════════════════════\n"
+
+  _found_pids=""
+  _found_count=0
+
+  # ── Process scan via /proc ─────────────────────────────────────────────────
+  printf "\n[Processes]\n"
+  for _pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
+    _cmdline=$(cat /proc/"$_pid"/cmdline 2>/dev/null | tr '\0' ' ' || true)
+    _match=0
+    case "$_cmdline" in
+      *openclash*)            _match=1 ;;
+      */tmp/openclash_core/*) _match=1 ;;
+      */tmp/clash*)           _match=1 ;;
+      */usr/lib/openclash/*)  _match=1 ;;
+    esac
+    # Exclude clashforge itself to avoid false positives
+    case "$_cmdline" in
+      *clashforge*|*mihomo-clashforge*) _match=0 ;;
+    esac
+    if [ "$_match" = "1" ]; then
+      printf "  PID %-6s : %s\n" "$_pid" "$_cmdline"
+      _found_pids="$_found_pids $_pid"
+      _found_count=$((_found_count + 1))
+    fi
+  done
+  [ "$_found_count" = "0" ] && printf "  (none found)\n"
+
+  # ── init.d service ─────────────────────────────────────────────────────────
+  printf "\n[Service]\n"
+  _svc_present=0
+  if [ -f /etc/init.d/openclash ]; then
+    _oc_enabled=$(/etc/init.d/openclash enabled 2>/dev/null && echo "enabled" || echo "disabled")
+    printf "  /etc/init.d/openclash : present (%s)\n" "$_oc_enabled"
+    _svc_present=1
+  else
+    printf "  /etc/init.d/openclash : not found\n"
+  fi
+
+  # ── opkg package ───────────────────────────────────────────────────────────
+  printf "\n[Package]\n"
+  _pkg_present=0
+  if command -v opkg >/dev/null 2>&1; then
+    if opkg status luci-app-openclash 2>/dev/null | grep -q "^Package:"; then
+      _oc_ver=$(opkg status luci-app-openclash 2>/dev/null | awk '/^Version:/{print $2}')
+      printf "  luci-app-openclash : installed (%s)\n" "$_oc_ver"
+      _pkg_present=1
+    else
+      printf "  luci-app-openclash : not installed\n"
+    fi
+  else
+    printf "  opkg : not available\n"
+  fi
+
+  # ── data directories ───────────────────────────────────────────────────────
+  printf "\n[Directories]\n"
+  _dir_found=0
+  for _dir in /etc/openclash /tmp/openclash_core /tmp/openclash /usr/lib/openclash; do
+    if [ -d "$_dir" ]; then
+      printf "  %s : exists\n" "$_dir"
+      _dir_found=$((_dir_found + 1))
+    fi
+  done
+  [ "$_dir_found" = "0" ] && printf "  (none found)\n"
+
+  # ── kill ───────────────────────────────────────────────────────────────────
+  if [ "$KILL_OPENCLASH" = "1" ]; then
+    printf "\n[Killing OpenClash]\n"
+    if [ "$_found_count" = "0" ] && [ "$_svc_present" = "0" ]; then
+      printf "  Nothing to kill.\n"
+    else
+      # Stop service first
+      if [ "$_svc_present" = "1" ]; then
+        /etc/init.d/openclash stop    2>/dev/null && printf "  Service stopped\n"    || printf "  Service stop returned non-zero\n"
+        /etc/init.d/openclash disable 2>/dev/null && printf "  Service disabled\n"   || true
+      fi
+      # SIGTERM, wait, then SIGKILL
+      if [ -n "$_found_pids" ]; then
+        # shellcheck disable=SC2086
+        kill $_found_pids 2>/dev/null || true
+        sleep 1
+        for _pid in $_found_pids; do
+          [ -d "/proc/$_pid" ] && kill -9 "$_pid" 2>/dev/null && printf "  Force-killed PID %s\n" "$_pid" || true
+        done
+      fi
+      printf "  Done.\n"
+    fi
+  else
+    if [ "$_found_count" -gt 0 ] || [ "$_svc_present" = "1" ]; then
+      printf "\n  To kill all OpenClash processes: clashforgectl openclash --kill\n"
+    fi
+  fi
+
+  printf "\n"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUBCOMMAND: compat
+#
+# Pre-install compatibility check. Verifies architecture, memory, storage,
+# firewall backend, port availability, and existing conflicting packages.
+# ══════════════════════════════════════════════════════════════════════════════
+cmd_compat() {
+  printf "\n"
+  printf "═══════════════════════════════════════════════════════\n"
+  printf "  ClashForge Pre-Install Compatibility Check\n"
+  printf "═══════════════════════════════════════════════════════\n"
+
+  _pass=0; _warn=0; _fail=0
+
+  _compat_ok()   { printf "  [✓] %s\n" "$*"; _pass=$((_pass + 1)); }
+  _compat_warn() { printf "  [!] %s\n" "$*"; _warn=$((_warn + 1)); }
+  _compat_fail() { printf "  [✗] %s\n" "$*"; _fail=$((_fail + 1)); }
+
+  # ── CPU architecture ───────────────────────────────────────────────────────
+  printf "\n[CPU Architecture]\n"
+  _arch=$(uname -m 2>/dev/null || echo "unknown")
+  case "$_arch" in
+    x86_64|amd64)   _compat_ok "x86_64 — supported" ;;
+    aarch64|arm64)  _compat_ok "aarch64 — supported" ;;
+    armv7*|armhf)   _compat_fail "ARMv7 — not supported by ClashForge IPKs" ;;
+    mips*|mipsel*)  _compat_fail "$_arch — MIPS not supported" ;;
+    *)              _compat_fail "Unknown architecture: $_arch" ;;
+  esac
+
+  # ── Package manager ────────────────────────────────────────────────────────
+  printf "\n[Package Manager]\n"
+  if command -v opkg >/dev/null 2>&1; then
+    _compat_ok "opkg available"
+  else
+    _compat_fail "opkg not found — ClashForge requires OpenWrt"
+  fi
+
+  # ── OpenWrt release ────────────────────────────────────────────────────────
+  printf "\n[OpenWrt Release]\n"
+  if [ -f /etc/openwrt_release ]; then
+    _owrt_ver=$(grep DISTRIB_RELEASE /etc/openwrt_release 2>/dev/null | cut -d= -f2 | tr -d '"')
+    _compat_ok "OpenWrt ${_owrt_ver:-unknown}"
+  else
+    _compat_warn "/etc/openwrt_release not found — may not be genuine OpenWrt"
+  fi
+
+  # ── Kernel version (>= 5.4 for nftables tproxy) ───────────────────────────
+  printf "\n[Kernel]\n"
+  _kver=$(uname -r 2>/dev/null || echo "0.0")
+  _kmaj=$(printf '%s' "$_kver" | cut -d. -f1)
+  _kmin=$(printf '%s' "$_kver" | cut -d. -f2)
+  printf "  Version: %s\n" "$_kver"
+  if [ "$_kmaj" -ge 5 ] 2>/dev/null && [ "$_kmin" -ge 4 ] 2>/dev/null; then
+    _compat_ok "Kernel >= 5.4 — nftables tproxy fully supported"
+  elif [ "$_kmaj" -ge 5 ] 2>/dev/null; then
+    _compat_warn "Kernel ${_kver} < 5.4 — nftables tproxy support may be limited"
+  else
+    _compat_fail "Kernel ${_kver} — too old; nftables tproxy requires >= 5.4"
+  fi
+
+  # ── Firewall backends ──────────────────────────────────────────────────────
+  printf "\n[Firewall Backend]\n"
+  if command -v nft >/dev/null 2>&1; then
+    _compat_ok "nft (nftables) available — primary backend"
+  else
+    _compat_warn "nft not found — firewall_backend=nftables will not work"
+  fi
+  if command -v iptables >/dev/null 2>&1; then
+    _compat_ok "iptables available — fallback backend"
+  else
+    _compat_warn "iptables not found"
+  fi
+
+  # ── TPROXY kernel support ──────────────────────────────────────────────────
+  printf "\n[TProxy]\n"
+  _tproxy_ok=0
+  if grep -q tproxy /proc/net/ip_tables_targets 2>/dev/null; then
+    _compat_ok "TPROXY iptables target present (/proc/net/ip_tables_targets)"
+    _tproxy_ok=1
+  fi
+  if [ -f /lib/modules/"$(uname -r)"/kernel/net/netfilter/xt_TPROXY.ko ] || \
+     [ -f /lib/modules/"$(uname -r)"/kernel/net/netfilter/xt_TPROXY.ko.gz ]; then
+    _compat_ok "xt_TPROXY kernel module found"
+    _tproxy_ok=1
+  fi
+  if modinfo xt_TPROXY >/dev/null 2>&1; then
+    _tproxy_ok=1
+  fi
+  [ "$_tproxy_ok" = "0" ] && _compat_warn "TPROXY kernel module not detected — tproxy mode may not work"
+  [ "$_tproxy_ok" = "1" ] && [ "$(grep -c tproxy /proc/net/ip_tables_targets 2>/dev/null || echo 0)" = "0" ] \
+    && _compat_ok "TPROXY module loadable (not yet loaded)"
+
+  # ── Memory ─────────────────────────────────────────────────────────────────
+  printf "\n[Memory]\n"
+  _mem_free=$(awk '/MemFree/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  _mem_total=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  _mem_available=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo "$_mem_free")
+  _mem_free_mb=$((_mem_available / 1024))
+  _mem_total_mb=$((_mem_total / 1024))
+  printf "  Total: %s MB  Available: %s MB\n" "$_mem_total_mb" "$_mem_free_mb"
+  if [ "$_mem_free_mb" -ge 64 ] 2>/dev/null; then
+    _compat_ok "Available RAM >= 64 MB"
+  elif [ "$_mem_free_mb" -ge 32 ] 2>/dev/null; then
+    _compat_warn "Available RAM ${_mem_free_mb} MB — mihomo may be memory-constrained (recommend >= 64 MB)"
+  else
+    _compat_fail "Available RAM ${_mem_free_mb} MB — insufficient; minimum 32 MB required"
+  fi
+
+  # ── Disk space ─────────────────────────────────────────────────────────────
+  printf "\n[Storage]\n"
+  _df_etc=$(df /etc 2>/dev/null | awk 'NR==2{print $4}' || echo 0)
+  _df_etc_mb=$((_df_etc / 1024))
+  _df_tmp=$(df /tmp 2>/dev/null | awk 'NR==2{print $4}' || echo 0)
+  _df_tmp_mb=$((_df_tmp / 1024))
+  printf "  /etc free: %s MB   /tmp free: %s MB\n" "$_df_etc_mb" "$_df_tmp_mb"
+  if [ "$_df_etc_mb" -ge 8 ] 2>/dev/null; then
+    _compat_ok "/etc has >= 8 MB free"
+  elif [ "$_df_etc_mb" -ge 4 ] 2>/dev/null; then
+    _compat_warn "/etc has only ${_df_etc_mb} MB free — may be tight for ClashForge data"
+  else
+    _compat_fail "/etc has only ${_df_etc_mb} MB free — insufficient; need at least 8 MB"
+  fi
+  if [ "$_df_tmp_mb" -ge 20 ] 2>/dev/null; then
+    _compat_ok "/tmp has >= 20 MB free (sufficient for IPK download)"
+  else
+    _compat_warn "/tmp has only ${_df_tmp_mb} MB free — may not be enough for IPK download"
+  fi
+
+  # ── Port conflicts ─────────────────────────────────────────────────────────
+  printf "\n[Port Conflicts]\n"
+  _CF_PORTS="7777 17890 17891 17892 17893 17895 17874 19090"
+  _port_conflicts=0
+  for _p in $_CF_PORTS; do
+    if netstat -tlnp 2>/dev/null | grep -q ":$_p " || \
+       ss    -tlnp 2>/dev/null | grep -q ":$_p "; then
+      _compat_warn "Port $_p already in use"
+      _port_conflicts=$((_port_conflicts + 1))
+    fi
+  done
+  [ "$_port_conflicts" = "0" ] && _compat_ok "No port conflicts on ClashForge ports"
+
+  # ── Existing OpenClash / Clash ─────────────────────────────────────────────
+  printf "\n[Conflicts — Existing Clash/OpenClash]\n"
+  _conflicts=0
+  if command -v opkg >/dev/null 2>&1 && opkg status luci-app-openclash 2>/dev/null | grep -q "^Package:"; then
+    _compat_warn "luci-app-openclash installed — run: clashforgectl openclash --kill"
+    _conflicts=$((_conflicts + 1))
+  fi
+  for _svc in openclash clash; do
+    if [ -f "/etc/init.d/$_svc" ]; then
+      _compat_warn "/etc/init.d/$_svc exists — may conflict"
+      _conflicts=$((_conflicts + 1))
+    fi
+  done
+  for _bin in /usr/bin/clash /usr/sbin/clash /usr/bin/openclash; do
+    if [ -f "$_bin" ]; then
+      _compat_warn "Binary $_bin found — may conflict"
+      _conflicts=$((_conflicts + 1))
+    fi
+  done
+  [ "$_conflicts" = "0" ] && _compat_ok "No conflicting Clash/OpenClash installation"
+
+  # ── Internet connectivity ──────────────────────────────────────────────────
+  printf "\n[Internet Connectivity]\n"
+  _net_ok=0
+  for _host in 8.8.8.8 1.1.1.1 114.114.114.114; do
+    if ping -c 1 -W 3 "$_host" >/dev/null 2>&1; then
+      _compat_ok "Ping to $_host succeeded"
+      _net_ok=1
+      break
+    fi
+  done
+  [ "$_net_ok" = "0" ] && _compat_warn "Cannot reach external IPs — check WAN connection"
+
+  _gh_ok=0
+  if command -v curl >/dev/null 2>&1; then
+    curl -sf --max-time 8 -A "clashforgectl-compat/1.0" \
+         "https://github.com" -o /dev/null 2>/dev/null && _gh_ok=1 || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=8 --user-agent="clashforgectl-compat/1.0" \
+         -O /dev/null "https://github.com" 2>/dev/null && _gh_ok=1 || true
+  fi
+  if [ "$_gh_ok" = "1" ]; then
+    _compat_ok "github.com reachable — direct download will work"
+  else
+    _compat_warn "github.com not reachable — use --mirror flag with: clashforgectl upgrade --mirror ..."
+  fi
+
+  # ── Summary ────────────────────────────────────────────────────────────────
+  printf "\n═══════════════════════════════════════════════════════\n"
+  printf "  Result: %s passed  %s warnings  %s failed\n" "$_pass" "$_warn" "$_fail"
+  printf "═══════════════════════════════════════════════════════\n"
+  if [ "$_fail" -gt 0 ]; then
+    printf "  [✗] Compatibility check FAILED — ClashForge may not install or run correctly\n"
+    printf "\n"
+    return 1
+  elif [ "$_warn" -gt 0 ]; then
+    printf "  [!] Check passed with warnings — review items above before installing\n"
+  else
+    printf "  [✓] All checks passed — ready to install ClashForge\n"
+  fi
+  printf "\n"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN DISPATCHER
 # ══════════════════════════════════════════════════════════════════════════════
 case "$SUBCOMMAND" in
@@ -1060,6 +1377,8 @@ case "$SUBCOMMAND" in
   check)          cmd_check     ;;
   uninstall)      cmd_uninstall ;;
   diag)           cmd_diag      ;;
+  openclash)      cmd_openclash ;;
+  compat)         cmd_compat    ;;
   help|--help|-h) usage; exit 0 ;;
   *) die "Unknown subcommand: '$SUBCOMMAND'  (run clashforgectl --help for usage)" ;;
 esac
