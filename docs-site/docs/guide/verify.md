@@ -1,79 +1,59 @@
-# 检查清单
+# 检查清单（以用户体验为验收标准）
 
-每次安装、升级、修改配置或开启接管后，都建议按本页顺序检查。
+安装、升级、改配置、开启接管后，都建议跑一遍这份清单。  
+目标不是“命令执行成功”，而是“网络体验符合预期”。
 
-## 1. 服务状态
+## 一次验收看这 5 项
 
-Windows 远程：
+| 检查项 | 命令/动作 | 通过标准 | 失败先做什么 |
+| --- | --- | --- | --- |
+| 服务状态 | `status` | 服务在线，UI 可访问 | 执行 `stop`，再看日志 |
+| 连通性 | `check` | 常用站点可达、出口信息正常 | 暂停接管，回到内核验证 |
+| DNS | `nslookup` | 常用域名解析稳定 | 先关闭 DNS 接管 |
+| 防火墙接管 | `nft`/`iptables` | 规则存在且不重复堆叠 | `stop` 后重新接管 |
+| 诊断留档 | `diag -Fetch -Redact` | 报告可生成并下载 | 用报告做后续定位 |
+
+## 1. 服务与 UI
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
 ```
 
-路由器本机：
-
-```sh
-/etc/init.d/clashforge status
-ps | grep clashforge
-```
-
-期望结果：
-
-| 项目 | 正常表现 |
-| --- | --- |
-| ClashForge 服务 | 正在运行 |
-| Web UI | `http://<router-ip>:7777` 可打开 |
-| mihomo 内核 | 配置完成后可启动 |
-| 日志 | 没有持续 crash loop 或端口冲突 |
-
-## 2. Web UI 与 API
-
-浏览器访问：
+手动访问：
 
 ```text
 http://192.168.20.1:7777
 ```
 
-如需在路由器上用 curl 检查，可按实际 API 路径验证健康、状态和版本接口。
+如果 status 正常但 UI 打不开，优先排查端口占用和防火墙策略。
 
-```sh
-curl -s http://127.0.0.1:7777/api/v1/health
-curl -s http://127.0.0.1:7777/api/v1/status
-curl -s http://127.0.0.1:7777/api/v1/version
-```
-
-如果接口路径随版本变化，请以 Web UI 网络请求或 API 路由为准。
-
-## 3. 轻量连通性检查
+## 2. 连通性与出口
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
 ```
 
-路由器本机：
+看这三件事：
+
+1. 常见站点探测是否成功。
+2. 出口 IP 是否符合你当前策略。
+3. 失败是否集中在 DNS、代理端口或目标站点。
+
+## 3. DNS 验收
 
 ```sh
-clashforgectl check
-```
-
-重点看：
-
-1. 目标网站是否可达。
-2. 路由器侧出口 IP 是否符合预期。
-3. DNS 是否能解析。
-4. 代理开启后客户端出口是否发生变化。
-
-## 4. DNS 检查
-
-```sh
-nslookup example.com 127.0.0.1
 nslookup github.com 127.0.0.1
+nslookup example.com 127.0.0.1
 logread | grep -i dns
 ```
 
-如果使用 fake-ip，还要确认客户端不会直接访问 fake-ip 段导致异常。
+现象判断：
 
-## 5. netfilter 检查
+1. 全部解析慢或失败：先关 DNS 接管。
+2. 部分域名异常：检查规则或上游 DNS。
+3. 开关接管后表现差异明显：重点看 dnsmasq 协作模式。
+
+## 4. 接管规则验收
 
 nftables：
 
@@ -87,20 +67,9 @@ iptables：
 iptables-save | grep -i clashforge
 ```
 
-期望结果：规则存在、链顺序正确、没有重复堆叠的旧规则。
+预期：规则链存在、顺序合理、没有多次重复注入。
 
-## 6. 进程与端口检查
-
-```sh
-ps | grep -E 'clashforge|mihomo'
-netstat -lntup | grep -E '7777|7890|7891|7892|7893|7895|7874|9090'
-```
-
-如果默认 Clash 端口被占用，ClashForge 会优先使用社区默认端口，冲突时再回退到共存端口。
-
-## 7. 诊断报告
-
-收集脱敏报告并下载到本机：
+## 5. 诊断报告（用于复盘与求助）
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
@@ -112,6 +81,6 @@ netstat -lntup | grep -E '7777|7890|7891|7892|7893|7895|7874|9090'
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -LocalPath .\cf-diag.txt -Redact
 ```
 
-::: warning 未脱敏报告
-不加 `-Redact` 的诊断报告可能包含订阅 URL、Token 或其他敏感信息。
+::: warning 别上传未脱敏报告
+不带 `-Redact` 的报告可能包含订阅 URL、Token 或内网信息。
 :::

@@ -1,78 +1,72 @@
-# 日常运维
+# 日常运维（让它一直稳定，而不是偶尔能用）
 
-本页整理安装后的常用操作。Windows 用户优先使用 `scripts\clashforgectl.ps1`，路由器 SSH 内优先使用 `clashforgectl`。
+这页面向已经跑起来的用户。目标是两件事：
 
-## 常用命令速查
+1. 日常有节奏地做小检查，提前发现问题。
+2. 变更时可控、可回退。
 
-| 目标 | Windows 远程命令 | 路由器本机命令 |
+## 高频命令速查
+
+| 目标 | Windows | 路由器本机 |
 | --- | --- | --- |
-| 查看状态 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status` | `clashforgectl status` |
-| 轻量检查 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check` | `clashforgectl check` |
-| 停止接管 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop` | `clashforgectl stop` |
-| 重置 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset` | `clashforgectl reset` |
-| 重置并启动 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset -Start` | `clashforgectl reset --start` |
+| 看状态 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status` | `clashforgectl status` |
+| 看连通性 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check` | `clashforgectl check` |
+| 快速回退 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop` | `clashforgectl stop` |
 | 升级 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade` | `clashforgectl upgrade` |
-| 诊断 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact` | `clashforgectl diag --redact` |
-| 卸载 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall` | `clashforgectl uninstall` |
+| 收集诊断 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact` | `clashforgectl diag --redact` |
+| 重置 | `.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset` | `clashforgectl reset` |
 
-## 指定连接参数
+## 推荐运维节奏
+
+| 频率 | 建议动作 |
+| --- | --- |
+| 每天 | 看一次 `status` / `check`，确认出口与连通性 |
+| 每周 | 检查日志里是否有重复报错、频繁重启 |
+| 每次改配置后 | 跑完整 [检查清单](/guide/verify) |
+| 每次升级后 | 观察 10-30 分钟稳定性再结束 |
+
+## 变更流程（非常实用）
+
+每次改订阅、规则、DNS 或接管策略，按这个顺序：
+
+1. 记录当前可用状态（版本、订阅、关键设置）。
+2. 一次只改一个变量。
+3. 改完立刻执行 `status` + `check`。
+4. 观察日志 1 到 3 分钟。
+5. 异常时先 `stop` 回退，再做下一步。
+
+## 连接参数模板
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 -User root -Port 22 -Identity ~\.ssh\id_ed25519 status
 ```
 
-参数说明：
+常用参数：
 
-| 参数 | 说明 |
+| 参数 | 作用 |
 | --- | --- |
-| `-Router` | 路由器 IP 或主机名，必填 |
-| `-User` | SSH 用户，默认 `root` |
-| `-Port` | SSH 端口，默认 `22` |
-| `-Identity` | SSH 私钥路径 |
-| `-Yes` | 跳过确认提示 |
-| `-DryRun` | 只打印计划，不执行变更 |
+| `-Router` | 路由器地址（必填） |
+| `-User` | SSH 用户（默认 `root`） |
+| `-Port` | SSH 端口（默认 `22`） |
+| `-Identity` | 私钥路径 |
+| `-Yes` | 跳过确认 |
+| `-DryRun` | 只看计划不执行 |
 
-## 诊断报告
+## 诊断报告规范
 
-常用方式：
+建议默认使用脱敏拉取：
 
 ```powershell
-# 只在路由器生成报告
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag
-
-# 生成并下载到当前目录
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch
-
-# 下载前脱敏
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
+```
 
-# 指定远端和本地路径
+自定义文件路径：
+
+```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -RemoteOutput /tmp/cf-diag.txt -LocalPath .\cf-diag.txt -Redact
 ```
 
-## 配置变更流程
-
-建议每次配置变更按这个流程：
-
-1. 保存当前可用配置或导出订阅信息。
-2. 修改 YAML、订阅或 Overrides。
-3. 启动内核或重新加载配置。
-4. 执行 `status` 和 `check`。
-5. 观察日志 1 到 3 分钟。
-6. 再开启或恢复透明代理/DNS 接管。
-
-## 日志入口
-
-路由器系统日志：
-
-```sh
-logread | grep -i clashforge
-logread | grep -i mihomo
-```
-
-Web UI 也提供实时日志和活动视图，适合观察节点切换、规则更新和连接变化。
-
-## 卸载
+## 卸载策略
 
 完全卸载：
 

@@ -1,89 +1,104 @@
-# 安装与部署
+# 安装方式选择
 
-ClashForge 推荐使用 IPK 包部署到 OpenWrt。脚本部署本质上也是本机构建 IPK、上传 IPK、再在路由器安装。
+这页只解决一个问题：**你该用哪条安装路径最稳**。  
+在 ClashForge 里，安装、升级、回滚本质都围绕 IPK 包完成。
 
-## 部署方式选择
+## 先选路径，再执行命令
 
-| 场景 | 推荐方式 | 说明 |
+| 你的场景 | 推荐路径 | 为什么 |
 | --- | --- | --- |
-| 日常开发验证 | Windows `clashforgectl.ps1 deploy` | 本地构建并推送 IPK，最快闭环 |
-| 正式安装 | Release IPK | 从 GitHub Releases 安装稳定包 |
-| 路由器上维护 | `clashforgectl` | 已安装后在路由器 SSH 内直接操作 |
-| 故障恢复 | IPK 回滚 | 保留旧包，直接卸载后安装旧版本 |
+| 普通用户首次安装 | `upgrade`（从电脑推送到路由器） | 电脑端下载 IPK 更稳定，路由器不容易“边升级边掉网” |
+| 想安装指定版本 | `upgrade -Version` | 版本明确、可控、便于回滚 |
+| 开发者验证本地代码 | `deploy` | 本地构建 UI/Go/IPK 后直接推送安装 |
+| 路由器 SSH 本机运维 | `clashforgectl` | 不依赖控制端，适合维护现场 |
 
-## Windows 远程部署
+## 路径 A：普通用户推荐（最稳）
+
+Windows：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+```
+
+macOS / Linux：
+
+```sh
+./scripts/clashforgectl --router 192.168.20.1 upgrade
+```
+
+安装指定版本：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+```
+
+网络受限时：
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
+
+## 路径 B：开发者部署（本地源码）
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy
 ```
 
-部署流程包括：
+`deploy` 会做这些事：
 
-1. 自动提升 IPK control 文件中的 patch 版本。
-2. 构建 React Web UI。
-3. 交叉编译 Linux amd64 Go 二进制。
-4. 同步 OpenWrt helper 文件到 IPK 目录。
-5. 生成 IPK 包。
-6. 上传 IPK 和 `clashforgectl.sh` 到路由器。
-7. 通过 `upgrade --local-ipk` 在路由器安装。
+1. 自动递增 `ipk/CONTROL/control` 里的 patch 版本。
+2. 构建前端 UI。
+3. 交叉编译 Go 二进制。
+4. 生成 IPK 并上传安装。
 
-::: warning 版本会自动递增
-`deploy` 会修改 `ipk/CONTROL/control` 中的版本号。执行前如果工作区已有未提交改动，请确认这是你希望保留的构建行为。
+::: warning `deploy` 会改版本文件
+如果你工作区有未提交改动，先确认你确实希望把版本号变化纳入本次提交。
 :::
 
-## 从 Releases 升级或安装
+可选参数：
 
 ```powershell
-# 升级到最新版本，默认由本机下载 IPK 后推送到路由器
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+# 跳过 UI 构建
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip ui
 
-# 安装指定版本
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
+# 跳过 Go 构建
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip go
 
-# 通过 GitHub 镜像下载
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
-
-# 使用自定义发布源
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -BaseUrl https://releases.example.com
-
-# 完全清理旧数据后升级，谨慎使用
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
+# 清理旧数据后部署（高风险）
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Purge
 ```
 
-## 路由器本机安装与维护
+## 路径 C：路由器本机维护
 
-SSH 到路由器后可以直接使用：
+安装完成后，在路由器 SSH 里可直接执行：
 
 ```sh
 clashforgectl status
 clashforgectl upgrade
 clashforgectl upgrade --version v0.1.0
 clashforgectl upgrade --mirror https://ghproxy.com
-clashforgectl upgrade --purge
 ```
 
-## 服务入口
+## 手动安装（兜底）
 
-安装后常用 OpenWrt init 命令：
+当你需要完全手动控制时：
+
+1. 在 Releases 下载匹配架构的 IPK。
+2. 上传到路由器 `/tmp`。
+3. 执行 `opkg install --nodeps --force-downgrade /tmp/<ipk-file>.ipk`。
+
+常见架构判断：
 
 ```sh
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
-/etc/init.d/clashforge status
-/etc/init.d/clashforge restart
-/etc/init.d/clashforge stop
+uname -m
 ```
 
-## 安装后地址
+## 安装后第一件事
 
-默认 Web UI：
-
-```text
-http://<router-ip>:7777
-```
-
-例如：
+先确认 UI 能打开，再继续配置：
 
 ```text
 http://192.168.20.1:7777
 ```
+
+如果打不开，先看 [排障](/guide/troubleshooting) 的“Web UI 无法访问”章节。

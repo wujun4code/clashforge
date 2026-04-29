@@ -31,23 +31,28 @@ export default defineConfig({
       label: "简体中文",
       lang: "zh-CN",
       title: "ClashForge 文档",
-      description: "从安装、配置、启动到检查与排障的完整用户指南。",
+      description: "从首次上手到长期稳定使用的 OpenWrt 代理用户指南。",
       themeConfig: {
         nav: [
-          { text: "快速开始", link: "/guide/quick-start" },
-          { text: "部署", link: "/guide/install" },
-          { text: "运维", link: "/guide/operations" },
+          { text: "开始使用", link: "/guide/quick-start" },
+          { text: "验证与排障", link: "/guide/verify" },
+          { text: "运维升级", link: "/guide/operations" },
           { text: "FAQ", link: "/guide/faq" },
           { text: "GitHub", link: repo }
         ],
         sidebar: [
           {
-            text: "用户指南",
+            text: "首次上手",
             items: [
               { text: "快速开始", link: "/guide/quick-start" },
-              { text: "安装与部署", link: "/guide/install" },
+              { text: "安装方式选择", link: "/guide/install" },
               { text: "首次配置", link: "/guide/config" },
-              { text: "启动与接管", link: "/guide/run" },
+              { text: "启动与接管", link: "/guide/run" }
+            ]
+          },
+          {
+            text: "验证与维护",
+            items: [
               { text: "检查清单", link: "/guide/verify" },
               { text: "日常运维", link: "/guide/operations" },
               { text: "升级与回滚", link: "/guide/upgrade" },

@@ -1,10 +1,19 @@
-# 升级与回滚
+# 升级与回滚（稳定优先）
 
-ClashForge 推荐使用 IPK 进行升级和回滚。这样可以保留清晰的版本边界，也方便从故障版本回退。
+升级不是“追新版本”，而是“在可控风险下获取修复和能力”。  
+建议把升级看成一个标准流程：**准备 -> 升级 -> 验收 -> 必要时回滚**。
 
-## 升级到最新版
+## 升级前 3 分钟准备
 
-Windows 远程：
+升级前先确认：
+
+1. 你知道当前稳定版本号。
+2. 你知道一键回退命令（`stop`）。
+3. 你可以在异常时快速收集 `diag` 报告。
+
+## 标准升级（推荐）
+
+Windows：
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
@@ -16,7 +25,8 @@ Windows 远程：
 clashforgectl upgrade
 ```
 
-默认 Windows 流程会由本机下载 IPK，再上传到路由器安装。这样可以避免路由器在停止代理后失去网络，导致无法下载自己的升级包。
+为什么推荐 Windows 远程升级：  
+IPK 在本机下载后再推送，能降低“路由器升级中失去外网”的风险。
 
 ## 升级到指定版本
 
@@ -30,52 +40,49 @@ clashforgectl upgrade
 clashforgectl upgrade --version v0.1.0
 ```
 
-## 使用镜像或自定义源
+## 网络受限时
 
 ```powershell
-# GitHub 代理镜像
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
 
-# 自定义 release base URL
+自定义发布源：
+
+```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -BaseUrl https://releases.example.com
 ```
 
-## 清理升级
+## `-Purge` 什么时候用
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
 ```
 
-::: danger 谨慎使用 Purge
-`-Purge` 会触发更彻底的清理流程，可能删除已有配置、订阅和运行数据。只有在需要干净重装或排除历史配置污染时使用。
+::: danger `-Purge` 只用于“历史状态已污染”
+它会触发更彻底清理，可能删除现有配置和运行数据。正常升级不建议使用。
 :::
 
-## 回滚策略
+## 回滚策略（建议默认掌握）
 
-建议保留最近 2 到 3 个可用 IPK 包。回滚时：
+最简单的回滚方式是直接升回旧版本：
 
-1. 先停止接管。
-2. 安装旧版本 IPK。
-3. 启动服务。
-4. 执行完整检查清单。
-
-示例：
-
-```sh
-clashforgectl stop
-opkg remove clashforge
-opkg install /tmp/clashforge_0.1.0_x86_64.ipk
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0
 ```
 
-## 升级后必查
+回滚动作建议顺序：
 
-升级完成后至少检查：
+1. 先 `stop`，确保退出接管。
+2. 安装目标旧版本。
+3. 启动并执行 [检查清单](/guide/verify)。
 
-1. Web UI 能否打开。
-2. `status` 是否正常。
-3. mihomo 是否只有一个有效进程。
-4. 端口是否无冲突。
-5. DNS 和透明代理是否按预期接管或保持关闭。
-6. 订阅、规则集和 Overrides 是否仍然有效。
+## 升级后验收必做
+
+至少确认这 6 项：
+
+1. Web UI 可访问。
+2. `status` 正常。
+3. `check` 结果与预期一致。
+4. 内核进程稳定、无重复重启。
+5. 接管状态符合你的配置（没有“意外全开/全关”）。
+6. 订阅与规则仍有效。
