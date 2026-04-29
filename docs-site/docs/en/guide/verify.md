@@ -1,88 +1,81 @@
 # Verification
 
-Run this checklist after every install, upgrade, configuration change or takeover change.
+A successful deployment means the target devices can access required overseas resources, domestic and LAN access still works, and egress IPs match expectations.
 
-## 1. Service State
+## Verification Matrix
 
-Windows remote:
+| Layer | How to verify | Expected result |
+| --- | --- | --- |
+| Web UI | Open `http://<router-ip>:7777` | UI loads |
+| Core | Dashboard or `status` | PID and uptime are present |
+| Source | Configuration page | Nodes and subscriptions are visible |
+| Node | Latency/probe | At least one node works |
+| Transparent proxy | Test device browser | Overseas sites work without local proxy client |
+| DNS | Domestic/overseas domains | Routing matches rules |
+| Per-device policy | Egress IP checks | Different devices use expected exits |
+
+## Command Checks
+
+Windows:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
-```
-
-Router-side:
-
-```sh
-/etc/init.d/clashforge status
-ps | grep clashforge
-```
-
-Expected:
-
-| Item | Healthy state |
-| --- | --- |
-| ClashForge service | Running |
-| Web UI | `http://<router-ip>:7777` opens |
-| mihomo core | Starts after configuration |
-| Logs | No continuous crash loop or port conflict |
-
-## 2. Web UI and API
-
-```text
-http://192.168.20.1:7777
-```
-
-If checking with curl, use the actual API paths exposed by your version:
-
-```sh
-curl -s http://127.0.0.1:7777/api/v1/health
-curl -s http://127.0.0.1:7777/api/v1/status
-curl -s http://127.0.0.1:7777/api/v1/version
-```
-
-## 3. Connectivity Check
-
-```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
 ```
 
-Router-side:
+macOS / Linux:
 
 ```sh
-clashforgectl check
+./scripts/clashforgectl --router 192.168.20.1 status
+./scripts/clashforgectl --router 192.168.20.1 check
 ```
 
-Check reachability, router egress IP, DNS resolution and client egress after takeover.
-
-## 4. DNS
+Router-local:
 
 ```sh
-nslookup example.com 127.0.0.1
-nslookup github.com 127.0.0.1
-logread | grep -i dns
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh status
+sh clashforgectl.sh check
 ```
 
-## 5. netfilter
+## Browser Checks
 
-```sh
-nft list ruleset | grep -i clashforge
-iptables-save | grep -i clashforge
-```
+From a client connected to the router:
 
-## 6. Processes and Ports
+| Test | Expected |
+| --- | --- |
+| Overseas site | Opens normally |
+| Domestic site | Opens without obvious detour |
+| Egress IP | Matches selected node or device policy |
+| LAN service | Router/NAS/printer remains reachable |
 
-```sh
-ps | grep -E 'clashforge|mihomo'
-netstat -lntup | grep -E '7777|7890|7891|7892|7893|7895|7874|9090'
-```
+## Dashboard Probes
 
-## 7. Diagnostics
+| Probe | Meaning |
+| --- | --- |
+| Router-side | Request originates from the OpenWrt router |
+| Browser-side | Request originates from the current browser/client |
+
+If router-side succeeds but browser-side fails, the client may not be under takeover. If both fail, inspect node, DNS and router connectivity.
+
+## Per-device Routing Checks
+
+1. Confirm each critical device has a stable IP.
+2. Query egress IP from each device.
+3. Check active connections in the Activity page.
+4. Search rules for important domains.
+
+## Diagnostics
+
+Windows:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -LocalPath .\cf-diag.txt -Redact
 ```
 
-::: warning Unredacted reports
-Reports without `-Redact` may contain subscription URLs, tokens or other sensitive data.
-:::
+macOS / Linux:
+
+```sh
+./scripts/clashforgectl --router 192.168.20.1 diag --fetch --redact
+```

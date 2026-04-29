@@ -1,74 +1,96 @@
 # Run & Takeover
 
-ClashForge separates the management service, the mihomo core and transparent/DNS takeover. This makes first deployment safer.
+ClashForge separates the management service, the mihomo core and LAN takeover. This staged model keeps first deployment safer.
 
-## Start the Service
+## Three Layers
 
-```sh
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
-/etc/init.d/clashforge status
-```
+| Layer | Purpose | Recommendation |
+| --- | --- | --- |
+| Management service | Web UI and API on port `7777` | Installed and started automatically |
+| mihomo core | Loads runtime YAML and provides proxy/API ports | Start after importing a valid source |
+| Transparent/DNS takeover | Routes LAN clients through mihomo | Enable after verification |
 
-Remote status from Windows:
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
-```
-
-## Start the Core from Web UI
-
-Open:
+## Check the Management Service
 
 ```text
 http://192.168.20.1:7777
 ```
 
-Then:
+Remote status:
 
-1. Import or activate a configuration.
-2. Start the mihomo core.
-3. Confirm PID, uptime, CPU, memory and connection count.
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
+```
+
+Router service:
+
+```sh
+/etc/init.d/clashforge status
+/etc/init.d/clashforge restart
+```
+
+## Start the Core
+
+In the Web UI:
+
+1. Open Setup or Configuration.
+2. Select a config source.
+3. Preview the generated runtime config.
+4. Start mihomo.
+5. Confirm PID, uptime, CPU, memory, proxy groups and logs.
+
+## Verify Before LAN Takeover
+
+Use the dashboard:
+
+1. Run router-side probe.
+2. Run browser-side probe.
+3. Compare egress IPs.
+4. Switch a Selector node.
+5. Run a domain test.
+
+If probes fail here, do not enable full takeover yet.
 
 ## Enable Transparent Proxying
 
-Enable takeover from the overview or settings page only after node validation.
+**What it does**
+Routes client traffic into mihomo without configuring every device manually.
 
-Check:
+**How to use**
+Enable takeover from Setup or Advanced Management after the core is healthy. Keep LAN bypass enabled and test one device first.
 
-| Item | Expected result |
-| --- | --- |
-| nftables/iptables | Rules applied without errors |
-| Policy routing | Related rules and tables exist |
-| LAN bypass | Router management stays reachable |
-| Egress IP | Target clients use expected exit |
+**Value**
+Phones, TVs and other devices can follow router policy without local clients.
 
 ## Enable DNS Takeover
 
-```sh
-nslookup example.com 127.0.0.1
-logread | grep -i clashforge
-```
+**What it does**
+Keeps DNS resolution aligned with mihomo routing rules.
 
-::: tip Step-by-step takeover
-Start the core first, then transparent proxying, then DNS. Run verification after each step.
-:::
+**How to use**
+Enable DNS after transparent proxying is stable. Choose fake-ip or redir-host and the dnsmasq coexistence mode from Advanced Management.
 
-## Stop and Exit Takeover
+**Value**
+Reduces DNS leaks and incorrect rule matches.
+
+## Stop and Recover
+
+Windows:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-Router-side:
+macOS / Linux:
 
 ```sh
-clashforgectl stop
+./scripts/clashforgectl --router 192.168.20.1 stop
 ```
 
-## Reset
+Router-local:
 
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 reset -Start
+```sh
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh stop
 ```

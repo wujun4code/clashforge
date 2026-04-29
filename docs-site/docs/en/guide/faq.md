@@ -1,14 +1,34 @@
 # FAQ
 
-## Which installation method is recommended?
+## Is ClashForge a proxy provider?
 
-Use Release IPKs for production or long-term usage. Use `clashforgectl.ps1 deploy` for development validation because it builds, packages, uploads and installs an IPK from the current source tree.
+No. ClashForge does not sell nodes or accounts. It manages proxy sources you already own: subscriptions, Cloudflare Worker nodes or VPS/SSH nodes.
 
-## Why does ClashForge not automatically take over transparent proxying and DNS?
+## Do I need it for one computer?
 
-It is safer. A problem in the core, subscription, DNS or firewall layer can affect the whole LAN. Verify the core and nodes first, then enable takeover manually.
+Not necessarily. A desktop Clash/mihomo client is simpler for one temporary machine. ClashForge is more useful for many devices, router-level policy, per-device exits and operational recovery.
 
-## What is the default Web UI address?
+## Which exit type should I use?
+
+| Type | Good for | Not good for |
+| --- | --- | --- |
+| Airport subscription | Browsing, streaming, backup lines | Payment, ads, stable account operations |
+| Cloudflare Worker | Low-cost work access, general AI access, backup | Fixed IP or heavy traffic |
+| VPS/SSH node | Stable dedicated egress | Zero-maintenance streaming-only use |
+
+## Why do I still see reCAPTCHA?
+
+Usually because of egress IP reputation. Shared subscription IPs are used by many people and can be flagged by target platforms. Switch nodes, try Worker for lightweight work or use VPS for critical workflows.
+
+## Is Cloudflare Worker a fixed IP?
+
+No. Worker exits belong to Cloudflare's network and are not fixed or dedicated. Use VPS/SSH nodes when you need a stable dedicated IP.
+
+## Do all devices need local clients?
+
+Usually no. Router-level takeover lets connected devices follow router policy. You may still use client subscriptions for mobile devices outside your home/office network.
+
+## Where is the Web UI?
 
 ```text
 http://<router-ip>:7777
@@ -20,45 +40,49 @@ Example:
 http://192.168.20.1:7777
 ```
 
-## What does the Windows remote script require?
+## What is the difference between `upgrade` and `deploy`?
 
-OpenSSH Client, meaning `ssh` and `scp` must be available. Windows 10/11 can install it from Optional Features.
+| Command | Audience | Behavior |
+| --- | --- | --- |
+| `upgrade` | Normal users | Install a Release IPK |
+| `deploy` | Developers | Build local source, package an IPK and install it |
 
-## What is the difference between deploy and upgrade?
+Normal users should use `upgrade`.
 
-| Command | Purpose |
+## Why are there remote scripts and router-local scripts?
+
+| Command | Scenario |
 | --- | --- |
-| `deploy` | Build current source locally, create an IPK and install it on the router |
-| `upgrade` | Download a Release IPK, push it to the router and install it |
+| `.\scripts\clashforgectl.ps1` | Windows remote control |
+| `./scripts/clashforgectl` | macOS/Linux remote control |
+| `sh clashforgectl.sh` | Temporary router-local execution |
 
-## How do I skip UI or Go builds?
+Current packages do not install `clashforgectl` into `/usr/bin` by default. You can copy it manually if you want a persistent router-local command.
 
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip ui
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy -Skip go
-```
+## What if takeover breaks the LAN?
 
-## How do I know it works?
-
-Confirm the Web UI opens, `status` is healthy, mihomo is running, target clients use the expected egress IP, DNS follows the expected path and netfilter rules exist.
-
-## How do I uninstall safely?
+Run:
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
 ```
 
-## Can I paste diagnostic reports into GitHub Issues?
+Recover first, then investigate DNS, transparent proxy, rules and device policies.
 
-Prefer redacted reports:
+## What is subscription publishing?
+
+It publishes selected VPS/Worker nodes and templates to Cloudflare Worker + KV as a Clash-compatible subscription link. This is useful for phones, laptops and team devices outside the router network.
+
+## Can I share diagnostic reports?
+
+Share only redacted reports:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-Unredacted reports may contain subscription URLs, tokens, internal addresses or other sensitive data.
+Never publish subscription URLs, Cloudflare tokens, SSH keys or passwords.
 
-## How is GitHub Pages published?
+## Can ClashForge and OpenClash run together?
 
-The included workflow builds and deploys whenever `docs-site/**` or the Pages workflow changes on `main`. In repository Settings → Pages, choose GitHub Actions as the source.
+It is not recommended. Both may manage mihomo, ports, DNS, firewall and transparent proxy rules. Use `compat` and `openclash --kill` only when you intentionally want to remove OpenClash leftovers.

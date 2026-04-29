@@ -1,67 +1,87 @@
 # Upgrade & Rollback
 
-ClashForge upgrades and rollbacks should be IPK based for predictable version boundaries.
+Use Release packages for normal upgrades. Remote upgrade from your computer is recommended because the package is downloaded locally and then uploaded to the router.
 
-## Upgrade to Latest
+## Before Upgrading
+
+| Check | Reason |
+| --- | --- |
+| Current network is healthy | Recover first, upgrade later |
+| You know the `stop` command | Recovery path must be clear |
+| Important config is backed up | Protect subscriptions and overrides |
+| Router has enough space | Package install needs `/tmp` and overlay space |
+| Target version is known | Required for rollback |
+
+## Upgrade
+
+Windows:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
 ```
 
-Router-side:
+macOS / Linux:
 
 ```sh
-clashforgectl upgrade
+./scripts/clashforgectl --router 192.168.20.1 upgrade
 ```
 
-The Windows path downloads the IPK locally and pushes it to the router by default, avoiding router-side download failures after proxy services stop.
+Mirror:
 
-## Upgrade to a Specific Version
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
+
+Specific version:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
 ```
 
-Router-side:
+## Router-local Upgrade
 
 ```sh
-clashforgectl upgrade --version v0.1.0-rc.1
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh upgrade
 ```
 
-## Mirrors and Custom Sources
+## Verify After Upgrade
+
+1. Open `http://192.168.20.1:7777`.
+2. Confirm service and core status.
+3. Test one overseas site and one domestic site.
+4. Check egress IP.
+5. Inspect Activity logs for repeated errors.
+
+## Rollback
+
+Recover first:
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -BaseUrl https://releases.example.com
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
+```
+
+Then install a previous version:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
 ```
 
 ## Purge Upgrade
+
+Use only when you intentionally want a clean rebuild:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
 ```
 
-::: danger Be careful with purge
-`-Purge` may remove existing configuration, subscriptions and runtime data. Use it only for clean reinstalls or when old state is suspected.
-:::
+`Purge` can remove local data. It is not a normal upgrade path.
 
-## Rollback
+## APK Note
 
-Keep the last two or three known-good IPK packages. Rollback flow:
+Release assets include APK packages for OpenWrt 25.12+, but the automation currently focuses on IPK/opkg. If your system uses APK, download the matching asset and install manually:
 
 ```sh
-clashforgectl stop
-opkg remove clashforge
-opkg install /tmp/clashforge_0.1.0-rc.1_x86_64.ipk
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
+apk add --allow-untrusted /tmp/clashforge-<version>_<arch>.apk
 ```
-
-## Post-upgrade Checks
-
-1. Web UI opens.
-2. `status` is healthy.
-3. Only one mihomo instance is active.
-4. No port conflicts.
-5. DNS and transparent proxy takeover match expectations.
-6. Subscriptions, rule sets and overrides still work.

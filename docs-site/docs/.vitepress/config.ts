@@ -7,7 +7,7 @@ const base = process.env.DOCS_BASE ?? (process.env.GITHUB_ACTIONS ? "/clashforge
 
 export default defineConfig({
   title: "ClashForge Docs",
-  description: "A complete OpenWrt mihomo control-plane user guide.",
+  description: "OpenWrt mihomo management console documentation for installation, configuration, routing and operations.",
   base,
   lastUpdated: true,
   cleanUrls: true,
@@ -25,9 +25,9 @@ export default defineConfig({
     ["link", { rel: "preconnect", href: "https://fonts.googleapis.com" }],
     ["link", { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" }],
     ["link", { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" }],
-    ["meta", { name: "theme-color", content: "#7c3aed" }],
+    ["meta", { name: "theme-color", content: "#0f766e" }],
     ["meta", { property: "og:title", content: "ClashForge" }],
-    ["meta", { property: "og:description", content: "在路由器上按设备定义分流规则，统一管控家庭和小型团队的网络出口。" }],
+    ["meta", { property: "og:description", content: "OpenWrt 上的 mihomo 管理控制台：订阅、节点、设备分流、DNS 接管、诊断恢复和团队级出口管理。" }],
     ["meta", { property: "og:image", content: "/og-image.png" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
@@ -38,39 +38,42 @@ export default defineConfig({
       label: "简体中文",
       lang: "zh-CN",
       title: "ClashForge 文档",
-      description: "在路由器上按设备定义分流规则，统一管控家庭和小型团队的网络出口。支持机场订阅、Cloudflare Worker 节点、VPS 多出口并行，适合跨境团队、外贸公司、独立开发者和家庭用户。",
+      description: "面向跨境电商、自媒体团队、AI 重度用户和多设备家庭的 OpenWrt mihomo 管理控制台手册。",
       themeConfig: {
         nav: [
-          { text: "为什么 IP 质量很重要", link: "/guide/why" },
+          { text: "产品定位", link: "/guide/why" },
+          { text: "功能模块", link: "/guide/features" },
           { text: "快速开始", link: "/guide/quick-start" },
-          { text: "不好用怎么办", link: "/guide/troubleshooting" },
+          { text: "安装", link: "/guide/install" },
+          { text: "排障", link: "/guide/troubleshooting" },
           { text: "FAQ", link: "/guide/faq" },
           { text: "GitHub", link: repo }
         ],
         sidebar: [
           {
-            text: "先理解，再动手",
+            text: "先理解产品",
             items: [
-              { text: "为什么 IP 质量很重要", link: "/guide/why" }
+              { text: "产品定位与适用人群", link: "/guide/why" },
+              { text: "功能模块总览", link: "/guide/features" },
+              { text: "快速开始", link: "/guide/quick-start" }
             ]
           },
           {
-            text: "安装和配置",
+            text: "安装与首次配置",
             items: [
-              { text: "快速开始", link: "/guide/quick-start" },
               { text: "安装到路由器", link: "/guide/install" },
-              { text: "添加代理来源", link: "/guide/config" },
-              { text: "让设备开始使用", link: "/guide/run" }
+              { text: "导入来源与配置", link: "/guide/config" },
+              { text: "启动接管与设备生效", link: "/guide/run" },
+              { text: "验证是否成功", link: "/guide/verify" }
             ]
           },
           {
-            text: "长期稳定使用",
+            text: "长期运维",
             items: [
-              { text: "怎么知道成功了", link: "/guide/verify" },
               { text: "日常维护", link: "/guide/operations" },
               { text: "更新软件", link: "/guide/upgrade" },
-              { text: "不好用怎么办", link: "/guide/troubleshooting" },
-              { text: "常见问题 FAQ", link: "/guide/faq" }
+              { text: "故障排查", link: "/guide/troubleshooting" },
+              { text: "常见问题", link: "/guide/faq" }
             ]
           }
         ],
@@ -95,24 +98,39 @@ export default defineConfig({
       lang: "en-US",
       link: "/en/",
       title: "ClashForge Docs",
-      description: "A complete install, configuration, run, verification and troubleshooting guide.",
+      description: "A technical and operational manual for the ClashForge OpenWrt mihomo management console.",
       themeConfig: {
         nav: [
+          { text: "Overview", link: "/en/" },
+          { text: "Features", link: "/en/guide/features" },
           { text: "Quick Start", link: "/en/guide/quick-start" },
-          { text: "Deploy", link: "/en/guide/install" },
+          { text: "Install", link: "/en/guide/install" },
           { text: "Operations", link: "/en/guide/operations" },
           { text: "FAQ", link: "/en/guide/faq" },
           { text: "GitHub", link: repo }
         ],
         sidebar: [
           {
-            text: "User Guide",
+            text: "Product",
+            items: [
+              { text: "Overview", link: "/en/" },
+              { text: "Feature Modules", link: "/en/guide/features" },
+              { text: "Quick Start", link: "/en/guide/quick-start" }
+            ]
+          },
+          {
+            text: "Install and Configure",
             items: [
               { text: "Quick Start", link: "/en/guide/quick-start" },
               { text: "Install & Deploy", link: "/en/guide/install" },
               { text: "First Configuration", link: "/en/guide/config" },
               { text: "Run & Takeover", link: "/en/guide/run" },
-              { text: "Verification", link: "/en/guide/verify" },
+              { text: "Verification", link: "/en/guide/verify" }
+            ]
+          },
+          {
+            text: "Operations",
+            items: [
               { text: "Operations", link: "/en/guide/operations" },
               { text: "Upgrade & Rollback", link: "/en/guide/upgrade" },
               { text: "Troubleshooting", link: "/en/guide/troubleshooting" },

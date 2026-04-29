@@ -1,68 +1,110 @@
 # Install & Deploy
 
-ClashForge is designed for IPK-based deployment on OpenWrt. The development deploy script also builds and installs an IPK under the hood.
+This page describes production installation, router-local installation, manual packages and developer deployment.
 
-## Choose a Deployment Path
+## What Gets Installed
 
-| Scenario | Recommended path | Notes |
+| Component | Purpose |
+| --- | --- |
+| `clashforge` | Backend service with embedded Web UI and API |
+| `mihomo-clashforge` | Bundled mihomo core |
+| `/etc/init.d/clashforge` | OpenWrt service entry |
+| `/etc/metaclash` | Config, subscriptions, rules and runtime data |
+| Web UI | `http://<router-ip>:7777` |
+| `clashforgectl.sh` | Release asset used by remote scripts and router-local maintenance |
+
+::: warning
+Current IPK/APK packages do not install `clashforgectl` into `/usr/bin` by default. Remote wrappers upload `clashforgectl.sh` temporarily. For router-local long-term usage, copy it manually.
+:::
+
+## Supported Packages
+
+| Package | Target | Architectures |
 | --- | --- | --- |
-| Development validation | Windows `clashforgectl.ps1 deploy` | Fast local build, package and push loop |
-| Production install | Release IPK | Install a stable package from GitHub Releases |
-| Router-side maintenance | `clashforgectl` | Use after the package has been installed |
-| Recovery | IPK rollback | Keep previous packages for quick rollback |
+| IPK | Mainstream OpenWrt | `x86_64`, `aarch64_generic`, `aarch64_cortex-a53` |
+| APK | OpenWrt 25.12+ | `x86_64`, `aarch64_generic`, `aarch64_cortex-a53` |
 
-## Windows Remote Deploy
+ARMv7, MIPS and older devices are not covered by the default release packages.
+
+## Windows Remote Install
+
+```powershell
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+```
+
+Variants:
+
+```powershell
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 -Port 2222 upgrade
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 -Identity ~\.ssh\id_ed25519 upgrade
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
+.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+```
+
+## macOS / Linux Remote Install
+
+```sh
+git clone https://github.com/wujun4code/clashforge.git
+cd clashforge
+./scripts/clashforgectl --router 192.168.20.1 upgrade
+```
+
+Variants:
+
+```sh
+./scripts/clashforgectl --router 192.168.20.1 --port 2222 upgrade
+./scripts/clashforgectl --router 192.168.20.1 --identity ~/.ssh/id_ed25519 upgrade
+./scripts/clashforgectl --router 192.168.20.1 upgrade --version v0.1.0-rc.1
+./scripts/clashforgectl --router 192.168.20.1 upgrade --mirror https://ghproxy.com
+```
+
+## Router-local Install
+
+```sh
+cd /tmp
+wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
+sh clashforgectl.sh compat
+sh clashforgectl.sh upgrade
+```
+
+Mirror:
+
+```sh
+sh clashforgectl.sh upgrade --mirror https://ghproxy.com
+```
+
+Optional persistent command:
+
+```sh
+cp /tmp/clashforgectl.sh /usr/bin/clashforgectl
+chmod +x /usr/bin/clashforgectl
+clashforgectl status
+```
+
+## Manual Package Install
+
+IPK:
+
+```sh
+opkg install --nodeps --force-downgrade /tmp/clashforge_<version>_<arch>.ipk
+```
+
+APK for OpenWrt 25.12+:
+
+```sh
+apk add --allow-untrusted /tmp/clashforge-<version>_<arch>.apk
+```
+
+Manual install is more error-prone because you must choose the correct architecture.
+
+## Developer Deploy
+
+Use `deploy` only when validating local source changes:
 
 ```powershell
 .\scripts\clashforgectl.ps1 -Router 192.168.20.1 deploy
 ```
 
-The deploy flow:
-
-1. Bumps the patch version in the IPK control file.
-2. Builds the React Web UI.
-3. Cross-compiles the Linux amd64 Go binary.
-4. Syncs OpenWrt helper files into the IPK tree.
-5. Builds the IPK package.
-6. Uploads the IPK and `clashforgectl.sh` to the router.
-7. Installs with `upgrade --local-ipk` on the router.
-
-::: warning Version bump
-`deploy` modifies the version in `ipk/CONTROL/control`. Check your working tree before running it if you have unrelated changes.
-:::
-
-## Upgrade or Install from Releases
-
-```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Version v0.1.0-rc.1
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -BaseUrl https://releases.example.com
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Purge
-```
-
-## Router-side Maintenance
-
-```sh
-clashforgectl status
-clashforgectl upgrade
-clashforgectl upgrade --version v0.1.0-rc.1
-clashforgectl upgrade --mirror https://ghproxy.com
-clashforgectl upgrade --purge
-```
-
-## Service Entry Points
-
-```sh
-/etc/init.d/clashforge enable
-/etc/init.d/clashforge start
-/etc/init.d/clashforge status
-/etc/init.d/clashforge restart
-/etc/init.d/clashforge stop
-```
-
-## Web UI
-
-```text
-http://<router-ip>:7777
-```
+It builds the UI, compiles Go, creates a local IPK, uploads it and installs it. Normal users should use `upgrade`.
