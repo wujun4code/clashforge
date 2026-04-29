@@ -284,10 +284,14 @@ jobs:
         run: |
           RAW="${{ needs.build-ui.outputs.version }}"
           PKG_VERSION="${RAW#v}"
-          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9A-Za-z._+-]+/./g')"
+          # APK/OpenWrt versions should be dot-separated semantic segments.
+          # Convert prerelease separators like "-" / "+" to ".".
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[-+]/./g; s/[^0-9A-Za-z._~]/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
           APK_VERSION="${APK_CORE_VERSION}-r1"
           echo "tag=$RAW" >> "$GITHUB_OUTPUT"
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "apk_core_version=$APK_CORE_VERSION" >> "$GITHUB_OUTPUT"
           echo "apk_version=$APK_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download clashforge binary
@@ -451,8 +455,13 @@ jobs:
           else
             TAG="${{ github.ref_name }}"
           fi
+          PKG_VERSION="${TAG#v}"
+          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[-+]/./g; s/[^0-9A-Za-z._~]/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
+          APK_ASSET_VERSION="${APK_CORE_VERSION}-r1"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "pkg_version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "apk_asset_version=$APK_ASSET_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download IPK artifacts
         uses: actions/download-artifact@v4
@@ -574,20 +583,20 @@ jobs:
 
             #### x86_64
             ```sh
-            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.pkg_version }}-r1_x86_64.apk
-            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.pkg_version }}-r1_x86_64.apk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.apk_asset_version }}_x86_64.apk
+            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.apk_asset_version }}_x86_64.apk
             ```
 
             #### aarch64_generic
             ```sh
-            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_generic.apk
-            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_generic.apk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_generic.apk
+            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_generic.apk
             ```
 
             #### aarch64_cortex-a53
             ```sh
-            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_cortex-a53.apk
-            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.pkg_version }}-r1_aarch64_cortex-a53.apk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_cortex-a53.apk
+            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_cortex-a53.apk
             ```
 
             ---
