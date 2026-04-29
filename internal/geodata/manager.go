@@ -8,10 +8,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 
 	"github.com/wujun4code/clashforge/internal/config"
 )
@@ -172,7 +174,7 @@ func (m *Manager) execute(ctx context.Context, rec *UpdateRecord) {
 	cfg := m.cfg
 	m.mu.RUnlock()
 
-	proxyURL := buildProxyURL(rec.ProxyServer, cfg.Ports.Mixed)
+	proxyURL := buildProxyURL(rec.ProxyServer, cfg.Ports.Mixed, cfg.Core.RuntimeDir)
 
 	log.Info().
 		Str("side", "geodata").
@@ -311,13 +313,53 @@ func downloadFile(ctx context.Context, rawURL, destPath, proxyURL string, timeou
 }
 
 // buildProxyURL returns the HTTP proxy URL to use for downloads, or "" for direct.
-// When proxy is enabled, we route through mihomo's mixed proxy port so that
-// the download uses whichever node the user has currently selected in mihomo.
-func buildProxyURL(proxyServer string, mixedPort int) string {
-	if proxyServer == "" || proxyServer == "DIRECT" {
+// When proxy is enabled, we route through mihomo's mixed proxy port and
+// automatically include authentication from the generated mihomo config if set.
+func buildProxyURL(proxyServer string, mixedPort int, runtimeDir string) string {
+	if strings.TrimSpace(proxyServer) == "" || strings.EqualFold(strings.TrimSpace(proxyServer), "DIRECT") {
 		return ""
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d", mixedPort)
+	u := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("127.0.0.1:%d", mixedPort),
+	}
+	if user, pass := readMihomoProxyCreds(runtimeDir); user != "" {
+		u.User = url.UserPassword(user, pass)
+	}
+	return u.String()
+}
+
+// readMihomoProxyCreds reads the first mihomo authentication entry from
+// runtimeDir/mihomo-config.yaml (format: "user:pass").
+func readMihomoProxyCreds(runtimeDir string) (user, pass string) {
+	if strings.TrimSpace(runtimeDir) == "" {
+		return "", ""
+	}
+
+	data, err := os.ReadFile(filepath.Join(runtimeDir, "mihomo-config.yaml"))
+	if err != nil {
+		return "", ""
+	}
+
+	var parsed struct {
+		Authentication []string `yaml:"authentication"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return "", ""
+	}
+	if len(parsed.Authentication) == 0 {
+		return "", ""
+	}
+
+	entry := strings.TrimSpace(parsed.Authentication[0])
+	if entry == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(entry, ":", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), parts[1]
 }
 
 func buildSpecs(cfg *config.MetaclashConfig) []FileSpec {
