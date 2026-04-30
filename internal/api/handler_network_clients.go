@@ -36,9 +36,18 @@ func getWANSubnets() []*net.IPNet {
 	if err != nil {
 		return nil
 	}
+	// Only process lines that begin with "default" — these are actual default
+	// gateway routes (destination 0.0.0.0/0).  On some OpenWrt builds the
+	// busybox `ip` prints the entire main routing table when given "default",
+	// including connected LAN routes like "192.168.10.0/24 dev br-lan".
+	// Picking up br-lan here would incorrectly classify all LAN devices as WAN.
 	wanIfaces := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "default") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
 		for i, f := range fields {
 			if f == "dev" && i+1 < len(fields) {
 				wanIfaces[fields[i+1]] = true
