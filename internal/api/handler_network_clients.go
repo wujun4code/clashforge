@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -188,8 +189,14 @@ func discoverNetworkClients() []networkClient {
 	}
 
 	// Sources in priority order: DHCP gives the best hostname + IPv4 mapping.
+	// Both the lease file and ubus are tried because some OpenWrt variants store
+	// leases at a non-standard path while ubus works across all firmware forks.
+	// The MAC-merge logic deduplicates entries that appear in both.
 	if leaseData, err := os.ReadFile("/tmp/dhcp.leases"); err == nil {
 		ingest(parseDHCPLeases(leaseData))
+	}
+	if out, err := exec.Command("ubus", "call", "dhcp", "ipv4leases").Output(); err == nil {
+		ingest(parseUbusIPv4Leases(out))
 	}
 	if out, err := exec.Command("ip", "neigh", "show").Output(); err == nil {
 		ingest(parseIPNeigh(out))
@@ -392,4 +399,43 @@ func normalizeMAC(mac string) string {
 		return ""
 	}
 	return mac
+}
+
+// parseUbusIPv4Leases parses the JSON output of `ubus call dhcp ipv4leases`.
+// This works on all OpenWrt firmware variants regardless of DHCP backend or
+// lease file path, so it is used as both a complement and a fallback to the
+// dnsmasq /tmp/dhcp.leases file.
+func parseUbusIPv4Leases(data []byte) []networkClient {
+	var resp struct {
+		Device map[string]struct {
+			Leases []struct {
+				MAC      string `json:"mac"`
+				IP       string `json:"ip"`
+				Hostname string `json:"hostname"`
+			} `json:"leases"`
+		} `json:"device"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil
+	}
+	var out []networkClient
+	for iface, dev := range resp.Device {
+		for _, lease := range dev.Leases {
+			if net.ParseIP(lease.IP) == nil {
+				continue
+			}
+			hostname := lease.Hostname
+			if hostname == "*" {
+				hostname = ""
+			}
+			out = append(out, networkClient{
+				IP:        lease.IP,
+				MAC:       normalizeMAC(lease.MAC),
+				Hostname:  hostname,
+				Interface: iface,
+				Source:    "dhcp",
+			})
+		}
+	}
+	return out
 }
