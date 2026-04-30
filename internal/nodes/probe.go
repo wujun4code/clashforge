@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/wujun4code/clashforge/internal/probetargets"
 )
 
 // ProbeResult is a single proxy connectivity check result.
@@ -25,14 +27,21 @@ func DefaultProbeTargets() []struct {
 	Name string
 	URL  string
 } {
-	return []struct {
+	targets := probetargets.NodeConnectivityTargets()
+	out := make([]struct {
 		Name string
 		URL  string
-	}{
-		{Name: "Google", URL: "https://www.google.com"},
-		{Name: "YouTube", URL: "https://www.youtube.com"},
-		{Name: "GitHub", URL: "https://github.com"},
+	}, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, struct {
+			Name string
+			URL  string
+		}{
+			Name: target.Name,
+			URL:  target.URL,
+		})
 	}
+	return out
 }
 
 type ProxyProbeOptions struct {

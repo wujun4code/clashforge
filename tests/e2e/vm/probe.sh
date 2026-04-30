@@ -382,8 +382,8 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 section "连通性检查 — $PHASE_LABEL"
 
-# 目标：国内 2 个 + 国际 2 个
-TARGETS="https://www.baidu.com:百度搜索:国内 https://music.163.com:网易云音乐:国内 https://github.com:GitHub:国际 https://www.youtube.com:YouTube:国际"
+# 目标：与 internal/probetargets/targets.go::ConnectivityTargets 保持一致
+TARGETS="https://www.taobao.com:淘宝:国内 https://music.163.com:网易云音乐:国内 https://github.com:GitHub:国外 https://www.google.com:Google:国外 https://chat.openai.com:OpenAI:AI https://gemini.google.com:Gemini:AI"
 
 OK_COUNT=0; TOTAL_ACCESS=0; DETAILS=""
 for entry in $TARGETS; do
@@ -411,20 +411,20 @@ done
 
 case "$PHASE" in
     baseline|stopped)
-        DOMESTIC_OK=$(printf "%b" "$DETAILS" | grep -c "✓百度\|✓网易云" || echo 0)
+        DOMESTIC_OK=$(printf "%b" "$DETAILS" | grep -c "✓淘宝\|✓网易云音乐" || echo 0)
         if [ "$OK_COUNT" = "$TOTAL_ACCESS" ]; then
             record PASS PR-02 "连通性检查（直连）" \
-                "curl 百度/网易云/GitHub/YouTube（无代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（无代理）" \
                 "所有站点可达" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         elif [ "$DOMESTIC_OK" -ge 1 ]; then
             record WARN PR-02 "连通性检查（直连）" \
-                "curl 百度/网易云/GitHub/YouTube（无代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（无代理）" \
                 "所有站点可达" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         else
             record FAIL PR-02 "连通性检查（直连）" \
-                "curl 百度/网易云/GitHub/YouTube（无代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（无代理）" \
                 "至少国内站点可达" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         fi
@@ -432,17 +432,17 @@ case "$PHASE" in
     running)
         if [ "$OK_COUNT" = "$TOTAL_ACCESS" ]; then
             record PASS PR-02 "连通性检查（代理运行期）" \
-                "curl 百度/网易云/GitHub/YouTube（tproxy 透明拦截）" \
-                "所有站点通畅（国内直连 + 国际走代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（tproxy 透明拦截）" \
+                "所有站点通畅（国内直连 + 海外/AI 走代理）" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         elif [ "$OK_COUNT" -gt 0 ]; then
             record WARN PR-02 "连通性检查（代理运行期）" \
-                "curl 百度/网易云/GitHub/YouTube（tproxy 透明拦截）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（tproxy 透明拦截）" \
                 "所有站点通畅" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         else
             record FAIL PR-02 "连通性检查（代理运行期）" \
-                "curl 百度/网易云/GitHub/YouTube（tproxy 透明拦截）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（tproxy 透明拦截）" \
                 "所有站点通畅" \
                 "全部失败: $DETAILS"
         fi

@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wujun4code/clashforge/internal/probetargets"
 )
 
 type healthProcess struct {
@@ -67,7 +69,7 @@ func handleHealthCheck(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		targetURL := strings.TrimSpace(r.URL.Query().Get("target"))
 		if targetURL == "" {
-			targetURL = "https://www.google.com"
+			targetURL = probetargets.DefaultHealthCheckTargetURL()
 		}
 
 		coreStatus := deps.Core.Status()
@@ -507,6 +509,225 @@ type domainProbeResult struct {
 	LatencyMS  int64    `json:"latency_ms,omitempty"`
 	StatusCode int      `json:"status_code,omitempty"`
 	Error      string   `json:"error,omitempty"`
+}
+
+// proxyDiagResult holds comprehensive proxy diagnostic result.
+type proxyDiagResult struct {
+	CheckedAt         string                      `json:"checked_at"`
+	OverallOK         bool                        `json:"overall_ok"`
+	Issues            []string                    `json:"issues,omitempty"`
+	CoreStatus        string                      `json:"core_status"`
+	CoreReady         bool                        `json:"core_ready"`
+	ProxyCount        int                         `json:"proxy_count"`
+	ProxyGroups       []proxyDiagGroup            `json:"proxy_groups"`
+	DNSTest           proxyDiagDNS                `json:"dns_test"`
+	NetfilterOK       bool                        `json:"netfilter_ok"`
+	ConnectivityTests []proxyDiagConnectivityTest `json:"connectivity_tests,omitempty"`
+	RuleSummary       []string                    `json:"rule_summary,omitempty"`
+}
+
+type proxyDiagConnectivityTest struct {
+	Name  string          `json:"name"`
+	Group string          `json:"group,omitempty"`
+	URL   string          `json:"url"`
+	Test  healthProxyTest `json:"test"`
+}
+
+type proxyDiagGroup struct {
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Now        string   `json:"now,omitempty"`
+	ProxyCount int      `json:"proxy_count"`
+	Proxies    []string `json:"proxies,omitempty"`
+}
+
+type proxyDiagDNS struct {
+	MihomoDNSListening bool     `json:"mihomo_dns_listening"`
+	Port53Listening    bool     `json:"port_53_listening"`
+	Nameservers        []string `json:"nameservers,omitempty"`
+	Fallback           []string `json:"fallback,omitempty"`
+	EnhancedMode       string   `json:"enhanced_mode,omitempty"`
+}
+
+// handleProxyDiag runs a comprehensive proxy diagnostic based on shared probe targets.
+func handleProxyDiag(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var issues []string
+
+		// 1. Core status
+		coreStatus := deps.Core.Status()
+		if coreStatus.State != "running" {
+			issues = append(issues, fmt.Sprintf("mihomo 内核未运行 (状态: %s)", coreStatus.State))
+		}
+
+		// 2. Proxy count and groups via mihomo API
+		var groups []proxyDiagGroup
+		proxyCount := 0
+		if coreStatus.State == "running" {
+			proxyData, err := queryMihomoAPI(deps.Config.Ports.MihomoAPI, "/proxies")
+			if err != nil {
+				issues = append(issues, fmt.Sprintf("无法查询 mihomo 代理 API: %v", err))
+			} else {
+				if proxies, ok := proxyData["proxies"].(map[string]interface{}); ok {
+					proxyCount = len(proxies)
+					for name, v := range proxies {
+						if pm, ok2 := v.(map[string]interface{}); ok2 {
+							ptype, _ := pm["type"].(string)
+							// Only log Selector and URLTest groups (not individual proxies)
+							if ptype == "Selector" || ptype == "URLTest" || ptype == "Fallback" || ptype == "LoadBalance" {
+								now, _ := pm["now"].(string)
+								var proxyNames []string
+								if all, ok3 := pm["all"].([]interface{}); ok3 {
+									for _, p := range all {
+										if s, ok4 := p.(string); ok4 {
+											proxyNames = append(proxyNames, s)
+										}
+									}
+								}
+								groups = append(groups, proxyDiagGroup{
+									Name:       name,
+									Type:       ptype,
+									Now:        now,
+									ProxyCount: len(proxyNames),
+									Proxies:    firstNString(proxyNames, 10),
+								})
+								// Check if the active proxy is DIRECT
+								if now == "DIRECT" && (name == "Proxy" || name == "Final" || name == "🚀 节点选择") {
+									issues = append(issues, fmt.Sprintf("代理组 %q 当前选择了 DIRECT，国际流量将无法代理", name))
+								}
+							}
+						}
+					}
+				}
+				if proxyCount <= 2 { // DIRECT + REJECT are always present
+					issues = append(issues, "代理节点数量为 0！所有国际流量将走 DIRECT，谷歌等境外网站将无法访问")
+				}
+			}
+		}
+
+		// 3. DNS test
+		dnsTest := proxyDiagDNS{
+			MihomoDNSListening: isDNSPortListening(deps.Config.Ports.DNS),
+			Port53Listening:    isTCPPortListening(53),
+		}
+		if coreStatus.State == "running" {
+			dnsData, err := queryMihomoAPI(deps.Config.Ports.MihomoAPI, "/configs")
+			if err == nil {
+				if dns, ok := dnsData["dns"].(map[string]interface{}); ok {
+					dnsTest.EnhancedMode, _ = dns["enhanced-mode"].(string)
+					if ns, ok2 := dns["nameserver"].([]interface{}); ok2 {
+						for _, n := range ns {
+							if s, ok3 := n.(string); ok3 {
+								dnsTest.Nameservers = append(dnsTest.Nameservers, s)
+							}
+						}
+					}
+					if fb, ok2 := dns["fallback"].([]interface{}); ok2 {
+						for _, n := range fb {
+							if s, ok3 := n.(string); ok3 {
+								dnsTest.Fallback = append(dnsTest.Fallback, s)
+							}
+						}
+					}
+					if len(dnsTest.Fallback) == 0 && dnsTest.EnhancedMode == "fake-ip" {
+						issues = append(issues, "DNS fallback 为空且使用 fake-ip 模式，境外域名可能无法正确解析")
+					}
+				}
+			}
+		}
+		if !dnsTest.MihomoDNSListening && deps.Config.DNS.Enable {
+			issues = append(issues, fmt.Sprintf("mihomo DNS 端口 %d 未监听，DNS 解析可能失败", deps.Config.Ports.DNS))
+		}
+
+		// 4. Netfilter
+		netfilterOK := deps.Netfilter != nil && deps.Netfilter.IsApplied()
+		if deps.Config.Network.Mode != "none" && deps.Config.Network.ApplyOnStart && !netfilterOK {
+			issues = append(issues, "透明代理规则未生效，LAN 客户端流量可能绕过代理")
+		}
+
+		// 5. Proxy connectivity tests (shared probe target catalog)
+		targets := probetargets.ConnectivityTargets()
+		connectivityTests := make([]proxyDiagConnectivityTest, 0, len(targets))
+		failedTargets := make([]string, 0, len(targets))
+		for _, target := range targets {
+			test := testHTTPProxyEndpoint(target.Name, deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
+			connectivityTests = append(connectivityTests, proxyDiagConnectivityTest{
+				Name:  target.Name,
+				Group: target.Group,
+				URL:   target.URL,
+				Test:  test,
+			})
+			if !test.OK {
+				failedTargets = append(failedTargets, target.Name)
+			}
+		}
+		if len(failedTargets) > 0 {
+			issues = append(issues, "以下连通性目标探测失败: "+strings.Join(failedTargets, ", "))
+		}
+		if len(failedTargets) == len(targets) && len(targets) > 0 {
+			issues = append(issues, "所有连通性探测目标均失败，代理链路可能整体不可用")
+		}
+
+		// 6. Rule summary from mihomo API
+		var ruleSummary []string
+		if coreStatus.State == "running" {
+			rulesData, err := queryMihomoAPI(deps.Config.Ports.MihomoAPI, "/rules")
+			if err == nil {
+				if rules, ok := rulesData["rules"].([]interface{}); ok {
+					total := len(rules)
+					ruleSummary = append(ruleSummary, fmt.Sprintf("总规则数: %d", total))
+					// Find MATCH rule
+					for _, r := range rules {
+						if rm, ok2 := r.(map[string]interface{}); ok2 {
+							rtype, _ := rm["type"].(string)
+							if rtype == "MATCH" {
+								payload, _ := rm["payload"].(string)
+								proxy, _ := rm["proxy"].(string)
+								ruleSummary = append(ruleSummary, fmt.Sprintf("MATCH 规则: payload=%s proxy=%s", payload, proxy))
+							}
+						}
+					}
+				}
+			}
+		}
+
+		overallOK := len(issues) == 0
+
+		JSON(w, http.StatusOK, proxyDiagResult{
+			CheckedAt:         time.Now().UTC().Format(time.RFC3339),
+			OverallOK:         overallOK,
+			Issues:            issues,
+			CoreStatus:        string(coreStatus.State),
+			CoreReady:         coreStatus.Ready,
+			ProxyCount:        proxyCount,
+			ProxyGroups:       groups,
+			DNSTest:           dnsTest,
+			NetfilterOK:       netfilterOK,
+			ConnectivityTests: connectivityTests,
+			RuleSummary:       ruleSummary,
+		})
+	}
+}
+
+func queryMihomoAPI(port int, path string) (map[string]interface{}, error) {
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, path))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func firstNString(s []string, n int) []string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func handleProbeDomain(deps Dependencies) http.HandlerFunc {

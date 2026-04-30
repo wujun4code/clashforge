@@ -89,6 +89,79 @@ export interface HealthCheckData {
   }
 }
 
+export interface HealthBrowserIPCheck {
+  provider: string
+  group?: string
+  ok: boolean
+  ip?: string
+  location?: string
+  error?: string
+}
+
+export interface HealthBrowserAccessCheck {
+  name: string
+  group?: string
+  url?: string
+  ok: boolean
+  latency_ms?: number
+  error?: string
+  stage?: string
+}
+
+export interface HealthBrowserReportRequest {
+  session_id: string
+  checked_at: string
+  user_agent?: string
+  ip_checks: HealthBrowserIPCheck[]
+  access_checks: HealthBrowserAccessCheck[]
+}
+
+export interface HealthProbeSummary {
+  has_data: boolean
+  healthy: boolean
+  ip_ok: boolean
+  failed_access?: string[]
+  checked_at?: string
+  stale?: boolean
+  error?: string
+}
+
+export interface HealthCurrentState {
+  state: string
+  since: string
+  last_reason?: string
+  consecutive_failures: number
+  consecutive_successes: number
+  active_incident_id?: string
+  last_router_check?: string
+  last_browser_check?: string
+}
+
+export interface HealthSummaryData {
+  checked_at: string
+  current: HealthCurrentState
+  router: HealthProbeSummary
+  browser: HealthProbeSummary
+  open_incidents: number
+  pending_notifications: number
+  webhook_configured: boolean
+  notification_channel?: string
+  router_interval_sec?: number
+  browser_ttl_sec?: number
+}
+
+export interface HealthIncident {
+  id: string
+  status: string
+  state: string
+  reason: string
+  opened_at: string
+  updated_at: string
+  resolved_at?: string
+  router: HealthProbeSummary
+  browser: HealthProbeSummary
+}
+
 export interface OverviewSummary {
   core_running: boolean
   clashforge_healthy: boolean
@@ -339,6 +412,10 @@ export const getOverviewCore  = () => request<OverviewCoreData>('GET', '/overvie
 export const getOverviewProbes = () => request<OverviewProbeData>('GET', '/overview/probes')
 export const getOverviewResources = () => request<OverviewResourceData>('GET', '/overview/resources')
 export const getHealthCheck   = (target?: string) => request<HealthCheckData>('GET', `/health/check${target ? `?target=${encodeURIComponent(target)}` : ''}`)
+export const getHealthSummary = () => request<HealthSummaryData>('GET', '/health/summary')
+export const getHealthIncidents = (limit = 50) => request<{ incidents: HealthIncident[] }>('GET', `/health/incidents?limit=${limit}`)
+export const reportHealthBrowser = (payload: HealthBrowserReportRequest) =>
+  request<{ ok: boolean; browser: HealthProbeSummary; summary: HealthSummaryData }>('POST', '/health/browser-report', payload)
 export const takeoverOverviewModule = (payload: { module: string; mode?: string; stop_services?: string[] }) => request<OverviewTakeoverResponse>('POST', '/overview/takeover', payload)
 export const releaseOverviewTakeover = () => request<OverviewReleaseResponse>('POST', '/overview/release')
 export const startCore        = () => request('POST', '/core/start')

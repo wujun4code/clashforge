@@ -6,6 +6,9 @@ type Handlers = {
   onSubUpdate?:  (d: { id: string; status: string; node_count?: number; error?: string }) => void
   onLog?:        (d: { level: string; msg: string; ts: number; fields?: Record<string, unknown> }) => void
   onConnCount?:  (d: { total: number; active: number }) => void
+  onHealthState?: (d: { state: string; from?: string; reason?: string; trigger?: string; checked_at?: string }) => void
+  onHealthIncidentOpened?: (d: { id: string; state: string; reason: string; opened_at: string }) => void
+  onHealthIncidentResolved?: (d: { id: string; state: string; reason: string; resolved_at?: string }) => void
 }
 
 export function useSSE(handlers: Handlers) {
@@ -30,6 +33,9 @@ export function useSSE(handlers: Handlers) {
       on('subscription_update', d => ref.current.onSubUpdate?.(d as never))
       on('log',              d => ref.current.onLog?.(d as never))
       on('connections_count',d => ref.current.onConnCount?.(d as never))
+      on('health_state',     d => ref.current.onHealthState?.(d as never))
+      on('health_incident_opened', d => ref.current.onHealthIncidentOpened?.(d as never))
+      on('health_incident_resolved', d => ref.current.onHealthIncidentResolved?.(d as never))
 
       es.onerror = () => {
         es.close()

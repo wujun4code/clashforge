@@ -5,12 +5,25 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"gopkg.in/yaml.v3"
 )
 
 // Generate 从 MetaclashConfig + 节点列表生成 mihomo YAML 配置 map
 func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]interface{}, error) {
+	log.Info().
+		Int("node_count", len(nodes)).
+		Bool("dns_enable", cfg.DNS.Enable).
+		Str("dns_mode", cfg.DNS.Mode).
+		Str("network_mode", cfg.Network.Mode).
+		Bool("bypass_china", cfg.Network.BypassChina).
+		Msg("config: Generate 开始生成 mihomo 配置")
+
+	if len(nodes) == 0 {
+		log.Warn().Msg("config: 节点列表为空！所有国际流量将走 DIRECT，谷歌等境外网站将无法访问")
+	}
+
 	out := map[string]interface{}{}
 
 	// 基础配置
@@ -82,6 +95,12 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 		},
 	}
 
+	log.Info().
+		Strs("proxy_group_names", []string{"Proxy", "Auto", "Final"}).
+		Int("auto_proxies_count", len(autoProxies)).
+		Strs("auto_proxies_sample", firstN(autoProxies, 5)).
+		Msg("config: proxy-groups 已生成")
+
 	// Rules
 	rules := []string{
 		"DOMAIN-SUFFIX,local,DIRECT",
@@ -100,6 +119,12 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	}
 	rules = append(rules, "MATCH,Final")
 	out["rules"] = rules
+
+	log.Info().
+		Int("rule_count", len(rules)).
+		Bool("has_geosite_cn", cfg.Network.BypassChina).
+		Str("final_rule", "MATCH,Final").
+		Msg("config: 规则列表已生成 — MATCH,Final 意味着未匹配的流量走 Final 组(含 Proxy 和 DIRECT)")
 
 	return out, nil
 }
@@ -153,12 +178,21 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 // Falls back to Generate if rawYAML is empty or unparseable.
 func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscription.ProxyNode) (map[string]interface{}, error) {
 	if len(rawYAML) == 0 {
+		log.Warn().Msg("config: GenerateFromBase rawYAML 为空，回退到 Generate 模式")
 		return Generate(cfg, extraNodes)
 	}
 	var base map[string]interface{}
 	if err := yaml.Unmarshal(rawYAML, &base); err != nil || base == nil {
+		log.Warn().Err(err).Msg("config: GenerateFromBase YAML 解析失败，回退到 Generate 模式")
 		return Generate(cfg, extraNodes)
 	}
+
+	log.Info().
+		Int("raw_yaml_size", len(rawYAML)).
+		Int("extra_nodes", len(extraNodes)).
+		Bool("dns_enable", cfg.DNS.Enable).
+		Str("dns_mode", cfg.DNS.Mode).
+		Msg("config: GenerateFromBase 开始基于订阅 YAML 生成配置")
 
 	// Rewrite DNS from ClashForge config
 	if cfg.DNS.Enable {
@@ -217,6 +251,9 @@ func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscri
 	// a domestic-CIDR rule set (e.g. "lancidr") and go DIRECT instead of through proxy.
 	patchIPCIDRRulesNoResolve(base)
 
+	// 诊断日志：输出最终配置中的关键信息
+	logBaseConfigSummary(base)
+
 	return base, nil
 }
 
@@ -225,10 +262,12 @@ func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscri
 func patchIPCIDRRulesNoResolve(base map[string]interface{}) {
 	rpRaw, ok := base["rule-providers"]
 	if !ok || rpRaw == nil {
+		log.Debug().Msg("config: 未找到 rule-providers，跳过 no-resolve 补丁")
 		return
 	}
 	ruleProviders, ok := rpRaw.(map[string]interface{})
 	if !ok {
+		log.Debug().Msg("config: rule-providers 类型不是 map，跳过 no-resolve 补丁")
 		return
 	}
 
@@ -244,8 +283,13 @@ func patchIPCIDRRulesNoResolve(base map[string]interface{}) {
 		}
 	}
 	if len(ipcidrNames) == 0 {
+		log.Debug().Msg("config: 未找到 ipcidr 类型的 rule-provider，跳过 no-resolve 补丁")
 		return
 	}
+
+	log.Info().
+		Strs("ipcidr_providers", mapKeys(ipcidrNames)).
+		Msg("config: 发现 ipcidr 类型 rule-provider，将检查并添加 no-resolve 后缀")
 
 	rulesRaw, ok := base["rules"]
 	if !ok || rulesRaw == nil {
@@ -278,6 +322,10 @@ func patchIPCIDRRulesNoResolve(base map[string]interface{}) {
 		}
 		if !hasNoResolve {
 			rules[i] = rStr + ",no-resolve"
+			log.Debug().
+				Str("rule", rStr).
+				Str("patched_rule", rStr+",no-resolve").
+				Msg("config: 为 ipcidr RULE-SET 添加 no-resolve 后缀，防止境外域名被国内 CIDR 规则误匹配走 DIRECT")
 		}
 	}
 	base["rules"] = rules
@@ -341,4 +389,111 @@ func MarshalYAML(cfg map[string]interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("marshal mihomo config: %w", err)
 	}
 	return data, nil
+}
+
+// logBaseConfigSummary logs a diagnostic summary of the generated mihomo config,
+// focusing on areas that commonly cause "domestic direct works but overseas/AI sites fail" issues.
+func logBaseConfigSummary(base map[string]interface{}) {
+	// Log proxy count
+	if proxies, ok := base["proxies"].([]interface{}); ok {
+		log.Info().Int("proxy_count", len(proxies)).Msg("config: 最终配置中的代理节点数量")
+		if len(proxies) == 0 {
+			log.Error().Msg("config: ⚠️ 代理节点数量为 0！所有国际流量将走 DIRECT，谷歌等境外网站将无法访问")
+		}
+	} else {
+		log.Warn().Msg("config: 最终配置中未找到 proxies 字段")
+	}
+
+	// Log proxy-groups
+	if groups, ok := base["proxy-groups"].([]interface{}); ok {
+		for _, g := range groups {
+			if gm, ok2 := g.(map[string]interface{}); ok2 {
+				name, _ := gm["name"].(string)
+				gtype, _ := gm["type"].(string)
+				var proxyCount int
+				if proxies, ok3 := gm["proxies"].([]interface{}); ok3 {
+					proxyCount = len(proxies)
+				} else if proxies, ok3 := gm["proxies"].([]string); ok3 {
+					proxyCount = len(proxies)
+				}
+				log.Info().
+					Str("group_name", name).
+					Str("group_type", gtype).
+					Int("proxy_count", proxyCount).
+					Msg("config: proxy-group 详情")
+			}
+		}
+	}
+
+	// Log rules summary
+	if rules, ok := base["rules"].([]interface{}); ok {
+		log.Info().Int("rule_count", len(rules)).Msg("config: 最终规则数量")
+		// Log the last few rules (especially MATCH rule)
+		lastN := 5
+		if len(rules) < lastN {
+			lastN = len(rules)
+		}
+		for i := len(rules) - lastN; i < len(rules); i++ {
+			if r, ok2 := rules[i].(string); ok2 {
+				log.Info().Str("rule", r).Msg("config: 尾部规则")
+			}
+		}
+	}
+
+	// Log DNS config
+	if dnsMap, ok := base["dns"].(map[string]interface{}); ok {
+		enhancedMode, _ := dnsMap["enhanced-mode"].(string)
+		fakeIPRange, _ := dnsMap["fake-ip-range"].(string)
+		var nsCount int
+		if ns, ok2 := dnsMap["nameserver"].([]interface{}); ok2 {
+			nsCount = len(ns)
+		} else if ns, ok2 := dnsMap["nameserver"].([]string); ok2 {
+			nsCount = len(ns)
+		}
+		var fbCount int
+		if fb, ok2 := dnsMap["fallback"].([]interface{}); ok2 {
+			fbCount = len(fb)
+		} else if fb, ok2 := dnsMap["fallback"].([]string); ok2 {
+			fbCount = len(fb)
+		}
+		log.Info().
+			Str("enhanced_mode", enhancedMode).
+			Str("fake_ip_range", fakeIPRange).
+			Int("nameserver_count", nsCount).
+			Int("fallback_count", fbCount).
+			Msg("config: DNS 配置摘要")
+		if fbCount == 0 {
+			log.Warn().Msg("config: ⚠️ DNS fallback 为空！在 fake-ip 模式下，如果 nameserver 无法解析境外域名，可能导致谷歌等网站无法访问")
+		}
+	}
+
+	// Log rule-providers
+	if rpMap, ok := base["rule-providers"].(map[string]interface{}); ok {
+		for name, v := range rpMap {
+			if pMap, ok2 := v.(map[string]interface{}); ok2 {
+				behavior, _ := pMap["behavior"].(string)
+				log.Info().
+					Str("provider_name", name).
+					Str("behavior", behavior).
+					Msg("config: rule-provider 详情")
+			}
+		}
+	}
+}
+
+// firstN returns the first n elements of a string slice, or the whole slice if shorter.
+func firstN(s []string, n int) []string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// mapKeys returns the keys of a map[string]bool as a sorted string slice.
+func mapKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

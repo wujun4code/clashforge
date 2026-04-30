@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  AlertTriangle,
   Activity,
+  Clock3,
   Cpu,
   ExternalLink,
   HardDrive,
@@ -15,13 +17,18 @@ import {
   getOverviewProbes,
   getOverviewResources,
   getClashforgeVersion,
+  getHealthIncidents,
+  getHealthSummary,
   getProxies,
   selectProxy,
   testLatency,
   probeDomain,
+  reportHealthBrowser,
 } from '../api/client'
 import type { ClashforgeVersionData, DomainProbeResult } from '../api/client'
 import type {
+  HealthIncident,
+  HealthSummaryData,
   OverviewAccessCheck,
   OverviewCoreData,
   OverviewIPCheck,
@@ -31,6 +38,7 @@ import type {
 } from '../api/client'
 import type { ProxyNode } from '../api/client'
 import { PageHeader, SectionCard } from '../components/ui'
+import { BROWSER_IP_PROVIDERS, DEFAULT_DOMAIN_PROBE_INPUT, DOMAIN_PROBE_PRESETS } from '../constants/probeTargets'
 import { useSSE } from '../hooks/useSSE'
 import { useStore } from '../store'
 import { formatBytes, formatGB, formatMB, formatPercent, formatUptime, latencyColor, latencyBarColor, latencyBarWidth } from '../utils/format'
@@ -77,6 +85,146 @@ interface ProbeHealth {
   ipOK: boolean
   failedAccess: string[]
   healthy: boolean
+}
+
+type TimelineState = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+
+interface HealthTimelineSegment {
+  state: TimelineState
+  startMs: number
+  endMs: number
+  reason?: string
+  incidentId?: string
+}
+
+const TIMELINE_WINDOW_HOURS = 24
+
+function parseISOToMS(raw?: string): number | null {
+  if (!raw) return null
+  const ts = Date.parse(raw)
+  return Number.isFinite(ts) ? ts : null
+}
+
+function normalizeTimelineState(raw?: string): TimelineState {
+  const s = (raw || '').toLowerCase()
+  if (s === 'healthy' || s === 'degraded' || s === 'unhealthy' || s === 'unknown') return s
+  return 'unknown'
+}
+
+function stateLabel(state: TimelineState): string {
+  switch (state) {
+    case 'healthy': return '健康'
+    case 'degraded': return '部分异常'
+    case 'unhealthy': return '严重异常'
+    case 'unknown': return '未知'
+  }
+}
+
+function stateBarClass(state: TimelineState): string {
+  switch (state) {
+    case 'healthy': return 'bg-success/80'
+    case 'degraded': return 'bg-warning/85'
+    case 'unhealthy': return 'bg-danger/85'
+    case 'unknown': return 'bg-white/25'
+  }
+}
+
+function stateBadgeClass(state: TimelineState): string {
+  switch (state) {
+    case 'healthy': return 'border-success/25 bg-success/10 text-success'
+    case 'degraded': return 'border-warning/25 bg-warning/10 text-warning'
+    case 'unhealthy': return 'border-danger/25 bg-danger/10 text-danger'
+    case 'unknown': return 'border-white/15 bg-white/5 text-slate-300'
+  }
+}
+
+function formatTimelinePoint(tsMs: number): string {
+  return new Date(tsMs).toLocaleString()
+}
+
+function formatTimelineDuration(startMs: number, endMs: number): string {
+  const deltaSec = Math.max(0, Math.floor((endMs - startMs) / 1000))
+  if (deltaSec < 60) return `${deltaSec}s`
+  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m`
+  const h = Math.floor(deltaSec / 3600)
+  const m = Math.floor((deltaSec % 3600) / 60)
+  return `${h}h ${m}m`
+}
+
+function buildTimelineSegments(
+  summary: HealthSummaryData | null,
+  incidents: HealthIncident[],
+  nowMs: number,
+  windowHours: number,
+): HealthTimelineSegment[] {
+  const windowStart = nowMs - windowHours * 3600 * 1000
+  const normalized = [...incidents]
+    .map((item) => {
+      const opened = parseISOToMS(item.opened_at)
+      if (opened === null) return null
+      const resolved = parseISOToMS(item.resolved_at) ?? nowMs
+      return {
+        id: item.id,
+        state: normalizeTimelineState(item.state),
+        reason: item.reason || '',
+        start: opened,
+        end: resolved,
+      }
+    })
+    .filter((item): item is { id: string; state: TimelineState; reason: string; start: number; end: number } => !!item)
+    .filter((item) => item.end > windowStart && item.start < nowMs)
+    .sort((a, b) => a.start - b.start)
+
+  const segments: HealthTimelineSegment[] = []
+  let cursor = windowStart
+
+  for (const item of normalized) {
+    const segStart = Math.max(item.start, windowStart)
+    const segEnd = Math.min(item.end, nowMs)
+    if (segEnd <= segStart) continue
+    if (segStart > cursor) {
+      segments.push({ state: 'healthy', startMs: cursor, endMs: segStart })
+    }
+    const adjustedStart = Math.max(segStart, cursor)
+    if (segEnd > adjustedStart) {
+      segments.push({
+        state: item.state,
+        startMs: adjustedStart,
+        endMs: segEnd,
+        reason: item.reason,
+        incidentId: item.id,
+      })
+      cursor = segEnd
+    }
+  }
+
+  if (cursor < nowMs) {
+    segments.push({ state: 'healthy', startMs: cursor, endMs: nowMs })
+  }
+
+  if (summary) {
+    const currentState = normalizeTimelineState(summary.current.state)
+    if (currentState === 'unknown') {
+      const sinceMs = parseISOToMS(summary.current.since) ?? windowStart
+      const unknownStart = Math.max(windowStart, sinceMs)
+      if (unknownStart < nowMs) {
+        const kept: HealthTimelineSegment[] = []
+        for (const seg of segments) {
+          if (seg.endMs <= unknownStart) {
+            kept.push(seg)
+            continue
+          }
+          if (seg.startMs < unknownStart) {
+            kept.push({ ...seg, endMs: unknownStart })
+          }
+        }
+        kept.push({ state: 'unknown', startMs: unknownStart, endMs: nowMs, reason: summary.current.last_reason || '' })
+        return kept.filter((seg) => seg.endMs > seg.startMs)
+      }
+    }
+  }
+
+  return segments.filter((seg) => seg.endMs > seg.startMs)
 }
 
 function evaluateRouterProbeHealth(data: OverviewProbeData | null): ProbeHealth {
@@ -132,50 +280,28 @@ function categorizeBrowserFetchError(error: unknown, elapsedMs: number): { stage
 }
 
 async function runBrowserProbeData(targets: OverviewAccessCheck[]): Promise<BrowserProbeData> {
-  const ipProviders: { provider: string; group: string; fetch: () => Promise<{ ip: string; location: string }> }[] = [
-    {
-      provider: 'UpaiYun',
-      group: '国内',
-      fetch: async () => {
-        const res = await fetchWithTimeout('https://pubstatic.b0.upaiyun.com/?_upnode', { cache: 'no-store' }, 7000)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const payload = await res.json() as { remote_addr?: string; remote_addr_location?: { country?: string; province?: string; city?: string; isp?: string } }
-        if (!payload.remote_addr) throw new Error('empty')
-        const loc = payload.remote_addr_location
-        const location = loc ? [loc.country, loc.province, loc.city, loc.isp].filter(Boolean).join(' · ') : ''
-        return { ip: payload.remote_addr, location }
-      },
-    },
-    {
-      provider: 'IP.SB',
-      group: '国外',
-      fetch: async () => {
-        const res = await fetchWithTimeout('https://api.ip.sb/geoip', { cache: 'no-store' }, 7000)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const payload = await res.json() as { ip?: string; country?: string; city?: string; region?: string; isp?: string }
-        if (!payload.ip) throw new Error('empty')
-        const location = [payload.city, payload.region, payload.country].filter(Boolean).join(' · ')
-        return { ip: payload.ip, location }
-      },
-    },
-    {
-      provider: 'IPInfo',
-      group: '国外',
-      fetch: async () => {
-        const res = await fetchWithTimeout('https://ipinfo.io/json', { cache: 'no-store' }, 7000)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const payload = await res.json() as { ip?: string; city?: string; region?: string; country?: string; org?: string }
-        if (!payload.ip) throw new Error('empty')
-        const location = [payload.city, payload.region, payload.country, payload.org].filter(Boolean).join(' · ')
-        return { ip: payload.ip, location }
-      },
-    },
-  ]
-
   const ip_checks: BrowserIPCheck[] = await Promise.all(
-    ipProviders.map(async (p) => {
+    BROWSER_IP_PROVIDERS.map(async (p) => {
       try {
-        const { ip, location } = await p.fetch()
+        const res = await fetchWithTimeout(p.url, { cache: 'no-store' }, 7000)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        let ip = ''
+        let location = ''
+        if (p.parse === 'upaiyun') {
+          const payload = await res.json() as { remote_addr?: string; remote_addr_location?: { country?: string; province?: string; city?: string; isp?: string } }
+          ip = payload.remote_addr || ''
+          const loc = payload.remote_addr_location
+          location = loc ? [loc.country, loc.province, loc.city, loc.isp].filter(Boolean).join(' · ') : ''
+        } else if (p.parse === 'ipsb') {
+          const payload = await res.json() as { ip?: string; country?: string; city?: string; region?: string }
+          ip = payload.ip || ''
+          location = [payload.city, payload.region, payload.country].filter(Boolean).join(' · ')
+        } else {
+          const payload = await res.json() as { ip?: string; city?: string; region?: string; country?: string; org?: string }
+          ip = payload.ip || ''
+          location = [payload.city, payload.region, payload.country, payload.org].filter(Boolean).join(' · ')
+        }
+        if (!ip) throw new Error('empty')
         return { provider: p.provider, group: p.group, ok: true, ip, location }
       } catch (error) {
         return { provider: p.provider, group: p.group, ok: false, error: error instanceof Error ? error.message : '获取失败' }
@@ -539,7 +665,7 @@ interface DomainProbeState {
   browser: { ok: boolean; latency_ms?: number; error?: string } | null
 }
 
-const PRESET_DOMAINS = ['google.com', 'youtube.com', 'github.com', 'openai.com']
+const PRESET_DOMAINS = DOMAIN_PROBE_PRESETS
 
 function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
   domain: string
@@ -624,6 +750,100 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
           <Loader2 size={12} className="animate-spin" />
           正在同时从路由器和浏览器发起探测…
         </div>
+      )}
+    </div>
+  )
+}
+
+function HealthTimelinePanel({
+  summary,
+  incidents,
+  loading,
+}: {
+  summary: HealthSummaryData | null
+  incidents: HealthIncident[]
+  loading: boolean
+}) {
+  const nowMs = Date.now()
+  const windowMs = TIMELINE_WINDOW_HOURS * 3600 * 1000
+  const timeline = useMemo(
+    () => buildTimelineSegments(summary, incidents, nowMs, TIMELINE_WINDOW_HOURS),
+    [summary, incidents, nowMs]
+  )
+
+  const currentState = summary ? normalizeTimelineState(summary.current.state) : 'unknown'
+  const changes = timeline.filter((seg) => seg.state !== 'healthy').slice(-6).reverse()
+  const windowStart = nowMs - windowMs
+  const intervalText = summary?.router_interval_sec ? `每 ${summary.router_interval_sec}s 探测` : '定时探测'
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${stateBadgeClass(currentState)}`}>
+          当前状态：{stateLabel(currentState)}
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.03] px-2.5 py-1 text-[11px] text-muted">
+          <Clock3 size={11} />
+          最近 {TIMELINE_WINDOW_HOURS} 小时
+        </span>
+        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/[0.03] px-2.5 py-1 text-[11px] text-muted">
+          {intervalText}
+        </span>
+      </div>
+
+      {!summary && incidents.length === 0 && !loading ? (
+        <div className="rounded-xl border border-dashed border-white/12 bg-black/15 px-4 py-6 text-sm text-muted">
+          暂无健康时间轴数据，等待定时 probe 采样。
+        </div>
+      ) : (
+        <>
+          <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20 p-3">
+            <div className="h-5 overflow-hidden rounded-lg border border-white/8 bg-white/[0.04]">
+              <div className="flex h-full w-full">
+                {timeline.map((seg, idx) => {
+                  const widthPct = Math.max(0.5, ((seg.endMs - seg.startMs) / windowMs) * 100)
+                  const title = `${stateLabel(seg.state)} | ${formatTimelinePoint(seg.startMs)} - ${formatTimelinePoint(seg.endMs)} | 持续 ${formatTimelineDuration(seg.startMs, seg.endMs)}${seg.reason ? ` | ${seg.reason}` : ''}`
+                  return (
+                    <div
+                      key={`${seg.state}-${seg.startMs}-${seg.endMs}-${idx}`}
+                      className={`${stateBarClass(seg.state)} ${idx > 0 ? 'border-l border-black/25' : ''}`}
+                      style={{ width: `${widthPct}%` }}
+                      title={title}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-[10px] text-muted/70">
+              <span>{new Date(windowStart).toLocaleTimeString()}</span>
+              <span>{new Date(windowStart + windowMs / 2).toLocaleTimeString()}</span>
+              <span>{new Date(nowMs).toLocaleTimeString()}</span>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-black/15">
+            <div className="border-b border-white/8 px-3 py-2 text-[11px] uppercase tracking-[0.16em] text-muted">状态变化记录</div>
+            {changes.length === 0 ? (
+              <div className="px-3 py-3 text-sm text-muted">最近 {TIMELINE_WINDOW_HOURS} 小时未出现异常状态切换。</div>
+            ) : (
+              <div className="divide-y divide-white/6">
+                {changes.map((item, idx) => (
+                  <div key={`${item.startMs}-${item.endMs}-${idx}`} className="px-3 py-2.5 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${stateBarClass(item.state)}`} />
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] ${stateBadgeClass(item.state)}`}>{stateLabel(item.state)}</span>
+                      <span className="text-muted">{formatTimelineDuration(item.startMs, item.endMs)}</span>
+                    </div>
+                    <div className="mt-1 text-muted">
+                      {new Date(item.startMs).toLocaleString()} - {new Date(item.endMs).toLocaleString()}
+                    </div>
+                    {item.reason && <div className="mt-1 text-slate-300 break-all">{item.reason}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   )
@@ -762,14 +982,18 @@ export function Dashboard() {
   const [probeData, setProbeData] = useState<OverviewProbeData | null>(null)
   const [browserProbeData, setBrowserProbeData] = useState<BrowserProbeData | null>(null)
   const [resourceData, setResourceData] = useState<OverviewResourceData | null>(null)
+  const [healthSummary, setHealthSummary] = useState<HealthSummaryData | null>(null)
+  const [healthIncidents, setHealthIncidents] = useState<HealthIncident[]>([])
 
   const [queryingCore, setQueryingCore] = useState(true)
   const [loadingProbes, setLoadingProbes] = useState(false)
   const [loadingBrowserProbe, setLoadingBrowserProbe] = useState(false)
   const [loadingResources, setLoadingResources] = useState(false)
+  const [loadingHealthTimeline, setLoadingHealthTimeline] = useState(false)
 
   const [versionData, setVersionData] = useState<ClashforgeVersionData | null>(null)
   const [showBanner, setShowBanner] = useState(false)
+  const [liveHealthAlert, setLiveHealthAlert] = useState<{ state: string; reason: string; checkedAt?: string } | null>(null)
 
   // proxy switcher state
   const [proxies, setProxies] = useState<ProxyMap>({})
@@ -781,17 +1005,25 @@ export function Dashboard() {
   const [lastSwitchedProxy, setLastSwitchedProxy] = useState<{ group: string; proxy: string } | null>(null)
 
   // domain probe state (tab 3)
-  const [domainInput, setDomainInput] = useState('google.com')
+  const [domainInput, setDomainInput] = useState<string>(DEFAULT_DOMAIN_PROBE_INPUT)
   const [domainLoading, setDomainLoading] = useState(false)
   const [domainResult, setDomainResult] = useState<DomainProbeState | null>(null)
 
   // prevents auto-running probes more than once per mount
   const probesAutoRanRef = useRef(false)
+  const browserSessionID = useId()
 
   useSSE({
     onCoreState: (data) => setCoreState(data.state, data.pid),
     onTraffic: (data) => pushTraffic(data),
     onConnCount: (data) => setConnCount(data.total),
+    onHealthState: (data) => {
+      const next = { state: data.state, reason: data.reason ?? '', checkedAt: data.checked_at }
+      setLiveHealthAlert(next)
+      if (data.state === 'healthy') {
+        window.setTimeout(() => setLiveHealthAlert((prev) => (prev?.state === 'healthy' ? null : prev)), 5000)
+      }
+    },
   })
 
   const refreshCore = useCallback(async (silent = false) => {
@@ -825,12 +1057,36 @@ export function Dashboard() {
       setLoadingBrowserProbe(true)
       const browser = await runBrowserProbeData(next.access_checks).catch(() => null)
       setBrowserProbeData(browser)
+      if (browser) {
+        void reportHealthBrowser({
+          session_id: `dashboard-${browserSessionID}`,
+          checked_at: browser.checked_at,
+          user_agent: navigator.userAgent,
+          ip_checks: browser.ip_checks.map((item) => ({
+            provider: item.provider,
+            group: item.group,
+            ok: item.ok,
+            ip: item.ip,
+            location: item.location,
+            error: item.error,
+          })),
+          access_checks: browser.access_checks.map((item) => ({
+            name: item.name,
+            group: item.group,
+            url: item.url,
+            ok: item.ok,
+            latency_ms: item.latency_ms,
+            error: item.error,
+            stage: item.stage,
+          })),
+        }).catch(() => null)
+      }
       return { router: next, browser }
     } finally {
       setLoadingBrowserProbe(false)
       setLoadingProbes(false)
     }
-  }, [])
+  }, [browserSessionID])
 
   const refreshResources = useCallback(async () => {
     setLoadingResources(true)
@@ -839,11 +1095,31 @@ export function Dashboard() {
     setLoadingResources(false)
   }, [])
 
+  const refreshHealthTimeline = useCallback(async (silent = false) => {
+    if (!silent) setLoadingHealthTimeline(true)
+    try {
+      const [summaryRes, incidentsRes] = await Promise.all([
+        getHealthSummary().catch(() => null),
+        getHealthIncidents(120).catch(() => null),
+      ])
+      if (summaryRes) setHealthSummary(summaryRes)
+      if (incidentsRes) setHealthIncidents(incidentsRes.incidents ?? [])
+    } finally {
+      if (!silent) setLoadingHealthTimeline(false)
+    }
+  }, [])
+
   useEffect(() => {
     const bootstrap = setTimeout(() => { void refreshCore(false) }, 0)
     const timer = setInterval(() => { void refreshCore(true) }, 8000)
     return () => { clearTimeout(bootstrap); clearInterval(timer) }
   }, [refreshCore])
+
+  useEffect(() => {
+    const bootstrap = setTimeout(() => { void refreshHealthTimeline(false) }, 0)
+    const timer = setInterval(() => { void refreshHealthTimeline(true) }, 15000)
+    return () => { clearTimeout(bootstrap); clearInterval(timer) }
+  }, [refreshHealthTimeline])
 
   // Only fetch proxies when we know the core is running — avoids 502 spam when Mihomo is stopped
   useEffect(() => {
@@ -969,6 +1245,17 @@ export function Dashboard() {
           { label: '下行速率', value: formatBytes(currentDown) },
         ]}
       />
+      {liveHealthAlert && liveHealthAlert.state !== 'healthy' && (
+        <div className="hero-panel border-danger/25 bg-[linear-gradient(145deg,rgba(239,68,68,0.18),rgba(255,255,255,0.03))]">
+          <div className="flex items-start gap-3 text-sm">
+            <AlertTriangle size={16} className="mt-0.5 text-danger" />
+            <div className="min-w-0">
+              <p className="font-semibold text-white">健康检查告警：{liveHealthAlert.state === 'unhealthy' ? '严重异常' : '部分异常'}</p>
+              <p className="mt-1 text-danger/90 leading-6 break-all">{liveHealthAlert.reason || '检测到链路异常，请查看概览与日志。'}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 子模块状态 (compact chips strip) ─────────────────────────────── */}
       {visibleModules.length > 0 && (
@@ -1133,6 +1420,27 @@ export function Dashboard() {
             )}
           </div>
         </div>
+      </SectionCard>
+
+      <SectionCard
+        title="网络状态时间轴"
+        description="基于定时 probe 任务，展示最近 24 小时网络状态的开始、结束与切换。"
+        actions={(
+          <button
+            className="btn-ghost flex items-center gap-2"
+            onClick={() => { void refreshHealthTimeline(false) }}
+            disabled={loadingHealthTimeline}
+          >
+            <RefreshCw size={14} className={loadingHealthTimeline ? 'animate-spin' : ''} />
+            {loadingHealthTimeline ? '刷新中…' : '刷新'}
+          </button>
+        )}
+      >
+        <HealthTimelinePanel
+          summary={healthSummary}
+          incidents={healthIncidents}
+          loading={loadingHealthTimeline}
+        />
       </SectionCard>
 
       {/* ── Resource Drawer ───────────────────────────────────────────────── */}

@@ -160,6 +160,36 @@ jobs:
           ls -lh "$PKG_NAME"
           echo "ipk_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
 
+      - name: Download GeoData test fixtures
+        run: |
+          mkdir -p /tmp/geodata
+          dl() {
+            local dest="$1"; shift
+            for url in "$@"; do
+              if curl -fsSL --max-time 60 "$url" -o "$dest" 2>/dev/null; then
+                echo "✓ $(basename $dest): $(wc -c < $dest) bytes"
+                return 0
+              fi
+            done
+            echo "⚠️  $(basename $dest) download failed — e2e will skip pre-seed"
+            rm -f "$dest"
+          }
+          dl /tmp/geodata/GeoIP.dat \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+          dl /tmp/geodata/GeoSite.dat \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+          ls -lh /tmp/geodata/ || true
+
+      - name: Upload GeoData fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodata-fixtures
+          path: /tmp/geodata/
+          retention-days: 1
+          if-no-files-found: warn
+
       - name: Upload IPK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -323,6 +353,37 @@ jobs:
             < tests/e2e/vm/install-verify.sh
 
           _ssh "sh /tmp/e2e-install-verify.sh"
+
+      # ── Step 4.5: Pre-seed GeoData fixtures to router ────────────────────────
+      # Download the dat files built in the build job and copy them into the
+      # router's data directory so setup/launch finds them pre-existing and
+      # skips the in-VM network download (which can fail on restricted runners).
+      - name: "[Step 4.5] Download GeoData fixtures"
+        id: geodata_artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: geodata-fixtures
+          path: /tmp/e2e-geodata/
+
+      - name: "[Step 4.5] Pre-seed GeoData to router"
+        continue-on-error: true
+        run: |
+          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+          _ssh "mkdir -p /etc/metaclash"
+          seeded=0
+          for f in GeoIP.dat GeoSite.dat; do
+            src="/tmp/e2e-geodata/$f"
+            if [ -f "$src" ] && [ "$(wc -c < "$src")" -gt 10000 ]; then
+              _ssh "cat > /etc/metaclash/$f" < "$src"
+              size=$(_ssh "wc -c < /etc/metaclash/$f 2>/dev/null || echo 0")
+              echo "✓ $f → /etc/metaclash/$f (${size} bytes)"
+              seeded=$((seeded + 1))
+            else
+              echo "⚠️  $f fixture unavailable, setup/launch will attempt download"
+            fi
+          done
+          echo "Pre-seeded ${seeded}/2 geodata files"
 
       # ── Scenario 1/2: dnsmasq_mode=upstream ──────────────────────────────────
       - name: "[Scenario 1/2] dnsmasq_mode=upstream"

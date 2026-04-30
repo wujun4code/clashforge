@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
@@ -15,8 +15,10 @@ import {
   saveSource, setActiveSource, getSourceFile, getSources,
   checkSetupPorts, getSubscriptionCache, previewSetupFinalConfig, getDeviceGroups, updateDeviceGroups,
   getActiveSource, previewDeviceGroupsConfig,
+  reportHealthBrowser,
 } from '../api/client'
 import type {
+  OverviewAccessCheck,
   OverviewProbeData,
   OverviewModule,
   LogEntry,
@@ -26,6 +28,7 @@ import type {
   DeviceRouteGroup,
   ActiveSource,
 } from '../api/client'
+import { BROWSER_IP_PROVIDERS } from '../constants/probeTargets'
 import { ModalShell } from '../components/ui'
 
 type InitStatus = 'checking' | 'running' | 'ready'
@@ -684,37 +687,33 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, ms:
 
 interface BrowserProbeResult {
   ipOK: boolean; ip?: string; ipError?: string
-  accessOK: boolean; accessChecks: { name: string; group?: string; ok: boolean; latency_ms?: number; error?: string }[]
+  accessOK: boolean; accessChecks: { name: string; group?: string; url: string; ok: boolean; latency_ms?: number; error?: string; stage?: string }[]
 }
 
-async function runBrowserProbe(): Promise<BrowserProbeResult> {
+async function runBrowserProbe(targets: Array<Pick<OverviewAccessCheck, 'name' | 'group' | 'url'>>): Promise<BrowserProbeResult> {
   let ipOK = false, ip: string | undefined, ipError: string | undefined
+  const ipProvider = BROWSER_IP_PROVIDERS.find((item) => item.provider === 'IP.SB') ?? BROWSER_IP_PROVIDERS[0]
   try {
-    const r = await fetchWithTimeout('https://api.ip.sb/geoip', { cache: 'no-store' }, 7000)
+    const r = await fetchWithTimeout(ipProvider.url, { cache: 'no-store' }, 7000)
     const d = await r.json() as { ip?: string }
     ipOK = !!d.ip; ip = d.ip
   } catch (e) {
     ipError = e instanceof Error ? e.message : '获取失败'
   }
 
-  const targets = [
-    { name: '淘宝',      group: '国内', url: 'https://www.taobao.com' },
-    { name: '网易云音乐',  group: '国内', url: 'https://music.163.com' },
-    { name: 'Google',    group: '国外', url: 'https://www.google.com' },
-    { name: 'GitHub',    group: '国外', url: 'https://github.com' },
-    { name: 'OpenAI',    group: 'AI',   url: 'https://chat.openai.com' },
-    { name: 'Gemini',    group: 'AI',   url: 'https://gemini.google.com' },
-  ]
-  const accessChecks = await Promise.all(targets.map(async t => {
+  const accessChecks = await Promise.all(targets.map(async (t) => {
     const start = performance.now()
     try {
       await fetchWithTimeout(t.url, { mode: 'no-cors', cache: 'no-store' }, 8000)
-      return { name: t.name, group: t.group, ok: true, latency_ms: Math.round(performance.now() - start) }
+      return { name: t.name, group: t.group, url: t.url, ok: true, latency_ms: Math.round(performance.now() - start) }
     } catch (e) {
-      return { name: t.name, group: t.group, ok: false, error: e instanceof Error ? e.message : '访问失败' }
+      const err = e instanceof Error ? e.message : '访问失败'
+      const lower = err.toLowerCase()
+      const stage = lower.includes('abort') || lower.includes('timeout') ? 'timeout' : 'connect'
+      return { name: t.name, group: t.group, url: t.url, ok: false, error: err, stage }
     }
   }))
-  return { ipOK, ip, ipError, accessOK: accessChecks.every(c => c.ok), accessChecks }
+  return { ipOK, ip, ipError, accessOK: accessChecks.length > 0 && accessChecks.every(c => c.ok), accessChecks }
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -733,6 +732,7 @@ export function Setup() {
     ?? (activateSub ? { kind: 'sub' as const, id: activateSub.id, name: activateSub.name, url: activateSub.url } : undefined)
     ?? (activateFile ? { kind: 'file' as const, filename: activateFile.filename } : undefined)
   const fileRef = useRef<HTMLInputElement>(null)
+  const browserSessionID = useId()
 
   // ── init guard: check if core is already running ──
   const [initStatus, setInitStatus] = useState<InitStatus>('checking')
@@ -998,7 +998,7 @@ export function Setup() {
     } finally {
       setSubCacheModalLoading(false)
     }
-  }, [])
+  }, [browserSessionID])
 
   const refreshRunningConfigPreview = useCallback(async () => {
     setRunningConfigLoading(true)
@@ -1405,12 +1405,37 @@ export function Setup() {
   const handleCheck = useCallback(async () => {
     setChecking(true); setRouterProbe(null); setBrowserProbe(null); setProbeLogs([])
     try {
-      const [rp, bp] = await Promise.all([
-        getOverviewProbes().catch(() => null),
-        runBrowserProbe(),
-      ])
+      const browserIPProvider = BROWSER_IP_PROVIDERS.find((item) => item.provider === 'IP.SB') ?? BROWSER_IP_PROVIDERS[0]
+      const rp = await getOverviewProbes().catch(() => null)
+      const browserTargets = (rp?.access_checks ?? []).map((item) => ({
+        name: item.name,
+        group: item.group,
+        url: item.url,
+      }))
+      const bp = await runBrowserProbe(browserTargets)
       setRouterProbe(rp)
       setBrowserProbe(bp)
+      void reportHealthBrowser({
+        session_id: `setup-${browserSessionID}`,
+        checked_at: new Date().toISOString(),
+        user_agent: navigator.userAgent,
+        ip_checks: [{
+          provider: browserIPProvider.provider,
+          group: browserIPProvider.group,
+          ok: bp.ipOK,
+          ip: bp.ip,
+          error: bp.ipError,
+        }],
+        access_checks: bp.accessChecks.map((item) => ({
+          name: item.name,
+          group: item.group,
+          url: item.url,
+          ok: item.ok,
+          latency_ms: item.latency_ms,
+          error: item.error,
+          stage: item.stage,
+        })),
+      }).catch(() => null)
 
       const routerOK = rp ? rp.ip_checks.some(c => c.ok) : false
       const browserOK = bp.ipOK
@@ -1421,7 +1446,7 @@ export function Setup() {
       }
       setCheckDone(true)
     } finally { setChecking(false) }
-  }, [])
+  }, [browserSessionID])
 
   const overallOK = routerProbe
     ? routerProbe.ip_checks.some(c => c.ok) && (browserProbe?.ipOK ?? false)

@@ -36,6 +36,10 @@ const (
 
 // Setup configures dnsmasq coexistence according to mode.
 func Setup(mode DnsmasqMode, mihmoDNSPort int) error {
+	log.Info().
+		Str("mode", string(mode)).
+		Int("mihomo_dns_port", mihmoDNSPort).
+		Msg("dns: 开始配置 DNS 接管")
 	switch mode {
 	case ModeReplace:
 		return setupReplace()

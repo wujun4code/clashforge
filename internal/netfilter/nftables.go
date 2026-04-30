@@ -133,6 +133,15 @@ func (n *NftablesBackend) Apply() error {
 		EnableIPv6:         n.EnableIPv6,
 		BypassIPv4Elements: buildBypassIPv4Elements(n.BypassFakeIP, n.BypassCIDR),
 	}
+
+	log.Info().
+		Int("tproxy_port", n.TProxyPort).
+		Int("dns_port", n.DNSPort).
+		Bool("dns_redirect", n.EnableDNSRedirect).
+		Bool("bypass_fakeip", n.BypassFakeIP).
+		Bool("enable_ipv6", n.EnableIPv6).
+		Strs("bypass_cidr", n.BypassCIDR).
+		Msg("netfilter: 开始应用 nftables 规则")
 	var buf bytes.Buffer
 	if err := nftTableTemplate.Execute(&buf, vars); err != nil {
 		return fmt.Errorf("render nft template: %w", err)
@@ -160,8 +169,10 @@ func (n *NftablesBackend) Apply() error {
 	cmd.Stdin = &buf
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		log.Error().Err(err).Str("output", string(out)).Msg("netfilter: ⚠️ nft apply 失败！透明代理规则未生效，所有流量将绕过代理")
 		return fmt.Errorf("nft apply: %w: %s", err, string(out))
 	}
+	log.Info().Msg("netfilter: nftables 规则已成功应用 ✓")
 
 	// Setup policy routing (IPv4)
 	_ = exec.Command("ip", "rule", "add", "fwmark", fwMark, "table", routeTable).Run()
@@ -177,6 +188,13 @@ func (n *NftablesBackend) Apply() error {
 	// tproxy_output only marks IPv4 fake-IP destinations, so only IPv4 rules needed.
 	_ = exec.Command("ip", "rule", "add", "fwmark", fwMarkOutput, "table", routeTableOutput).Run()
 	_ = exec.Command("ip", "route", "add", "local", "default", "dev", "lo", "table", routeTableOutput).Run()
+
+	log.Info().
+		Str("fwmark", fwMark).
+		Str("route_table", routeTable).
+		Str("fwmark_output", fwMarkOutput).
+		Str("route_table_output", routeTableOutput).
+		Msg("netfilter: 策略路由已设置 ✓ — fwmark 匹配的流量将通过 TProxy 端口转发")
 
 	return nil
 }

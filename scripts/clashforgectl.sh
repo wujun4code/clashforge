@@ -830,10 +830,12 @@ cmd_check() {
     fi
   }
 
-  _check_url "baidu.com"         "https://www.baidu.com"
+  _check_url "taobao.com"        "https://www.taobao.com"
+  _check_url "music.163.com"     "https://music.163.com"
   _check_url "github.com"        "https://github.com"
-  _check_url "youtube.com"       "https://www.youtube.com"
   _check_url "google.com"        "https://www.google.com"
+  _check_url "chat.openai.com"   "https://chat.openai.com"
+  _check_url "gemini.google.com" "https://gemini.google.com"
 
   # ── nftables takeover ──────────────────────────────────────────────────────
   printf "\n[Takeover]\n"

@@ -241,15 +241,24 @@ func (m *Manager) GetAllCachedNodes() []ProxyNode {
 }
 
 func (m *Manager) doUpdate(sub Subscription) error {
-	log.Info().Str("id", sub.ID).Str("name", sub.Name).Msg("updating subscription")
+	log.Info().Str("id", sub.ID).Str("name", sub.Name).Str("url", sub.URL).Msg("updating subscription")
 	content, err := Fetch(sub.URL, sub.UserAgent)
 	if err != nil {
+		log.Error().Err(err).Str("id", sub.ID).Str("name", sub.Name).
+			Msg("subscription: ⚠️ 订阅下载失败！无法获取代理节点，国际流量可能无法代理")
 		return fmt.Errorf("fetch: %w", err)
 	}
 	nodes, err := Parse(content)
 	if err != nil {
+		log.Error().Err(err).Str("id", sub.ID).Str("name", sub.Name).Int("content_size", len(content)).
+			Msg("subscription: ⚠️ 订阅内容解析失败！")
 		return fmt.Errorf("parse: %w", err)
 	}
+	log.Info().
+		Str("id", sub.ID).
+		Int("parsed_nodes", len(nodes)).
+		Msg("subscription: 订阅解析完成，开始过滤")
+
 	filtered := ApplyFilter(nodes, sub.Filter)
 
 	cacheDir := filepath.Join(m.dataDir, "cache")
