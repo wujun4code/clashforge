@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/dns"
+	"github.com/wujun4code/clashforge/internal/geodata"
 )
 
 // setupLaunchRequest is the POST body for the streaming launch endpoint.
@@ -305,32 +306,58 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 				dlStep := "geodata-dl-" + gf.Filename
 				emitStep(dlStep, "running", fmt.Sprintf("正在下载 %s…", gf.Name), "")
 
-				var lastErr error
-				for i, dlURL := range gf.URLs {
-					host := urlHost(dlURL)
-					emitInfo(dlStep, fmt.Sprintf("尝试镜像 %d/%d: %s", i+1, len(gf.URLs), host))
-
-					start := time.Now()
-					size, err := downloadGeodata(dlURL, path, 120*time.Second)
-					if err == nil {
-						elapsed := time.Since(start)
-						emitStep(dlStep, "ok",
-							fmt.Sprintf("%s 下载完成 (%.1f MB, %.1fs)", gf.Name, float64(size)/1024/1024, elapsed.Seconds()),
-							fmt.Sprintf("来源: %s", host))
-						lastErr = nil
-						break
+				// tryDownload attempts all mirrors with an optional HTTP proxy.
+				tryDownload := func(proxyURL string) (int64, error) {
+					var lastErr error
+					isProxy := proxyURL != ""
+					for i, dlURL := range gf.URLs {
+						host := urlHost(dlURL)
+						if isProxy {
+							emitInfo(dlStep, fmt.Sprintf("通过代理重试 %d/%d: %s", i+1, len(gf.URLs), host))
+						} else {
+							emitInfo(dlStep, fmt.Sprintf("尝试镜像 %d/%d: %s", i+1, len(gf.URLs), host))
+						}
+						size, err := downloadGeodataWith(dlURL, path, proxyURL, 120*time.Second)
+						if err == nil {
+							return size, nil
+						}
+						if isProxy {
+							emitInfo(dlStep, fmt.Sprintf("代理镜像 %s 下载失败: %v", host, err))
+						} else {
+							emitInfo(dlStep, fmt.Sprintf("镜像 %s 下载失败: %v", host, err))
+						}
+						lastErr = err
 					}
-					emitInfo(dlStep, fmt.Sprintf("镜像 %s 下载失败: %v", host, err))
-					lastErr = err
+					return 0, lastErr
 				}
 
-				if lastErr != nil {
+				dlStart := time.Now()
+				size, dlErr := tryDownload("")
+
+				// Fallback: if direct download failed, start mihomo and retry via local proxy.
+				if dlErr != nil && deps.Core != nil {
+					emitInfo(dlStep, "直连全部失败，正在通过本地代理重试…")
+					startCtx, startCancel := context.WithTimeout(context.Background(), 20*time.Second)
+					startErr := deps.Core.Start(startCtx)
+					startCancel()
+					if startErr == nil || startErr == core.ErrAlreadyRunning {
+						proxyURL := geodata.BuildLocalProxyURL(deps.Config.Ports.Mixed, deps.Config.Core.RuntimeDir)
+						size, dlErr = tryDownload(proxyURL)
+					}
+				}
+
+				if dlErr != nil {
 					emitStep(dlStep, "error",
 						fmt.Sprintf("%s 下载失败，所有镜像均不可用", gf.Name),
-						lastErr.Error())
-					emitDone(false, fmt.Sprintf("下载 %s 失败: %v", gf.Name, lastErr))
+						dlErr.Error())
+					emitDone(false, fmt.Sprintf("下载 %s 失败: %v", gf.Name, dlErr))
 					return
 				}
+
+				elapsed := time.Since(dlStart)
+				emitStep(dlStep, "ok",
+					fmt.Sprintf("%s 下载完成 (%.1f MB, %.1fs)", gf.Name, float64(size)/1024/1024, elapsed.Seconds()),
+					"")
 			}
 
 			emitStep("geodata-check", "ok", "所有 GeoData 文件下载完成 ✓", "")
@@ -412,10 +439,22 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// downloadGeodata downloads url to destPath atomically (write to tmp then rename).
-// Returns the number of bytes written.
+// downloadGeodata downloads rawURL to destPath directly (no proxy).
 func downloadGeodata(rawURL, destPath string, timeout time.Duration) (int64, error) {
-	client := &http.Client{Timeout: timeout}
+	return downloadGeodataWith(rawURL, destPath, "", timeout)
+}
+
+// downloadGeodataWith downloads rawURL to destPath atomically, optionally routing
+// through proxyURL (an HTTP proxy address, e.g. "http://127.0.0.1:7893").
+func downloadGeodataWith(rawURL, destPath, proxyURL string, timeout time.Duration) (int64, error) {
+	transport := &http.Transport{}
+	if proxyURL != "" {
+		if pURL, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(pURL)
+		}
+	}
+	client := &http.Client{Timeout: timeout, Transport: transport}
+
 	resp, err := client.Get(rawURL)
 	if err != nil {
 		return 0, err

@@ -187,8 +187,17 @@ func (m *Manager) execute(ctx context.Context, rec *UpdateRecord) {
 	var results []FileResult
 	var firstErr string
 
+	// localProxy is always the local mihomo proxy, used as fallback when direct download fails.
+	localProxy := BuildLocalProxyURL(cfg.Ports.Mixed, cfg.Core.RuntimeDir)
+
 	for _, spec := range specs {
 		res := downloadSpec(ctx, spec, cfg.Core.DataDir, proxyURL)
+		// If direct download failed and no explicit proxy was configured, retry via local mihomo.
+		if res.Status == "error" && proxyURL == "" && localProxy != "" {
+			log.Info().Str("side", "geodata").Str("file", spec.Name).
+				Msg("direct download failed; retrying via local mihomo proxy")
+			res = downloadSpec(ctx, spec, cfg.Core.DataDir, localProxy)
+		}
 		results = append(results, res)
 		if res.Status == "error" && firstErr == "" {
 			firstErr = fmt.Sprintf("%s: %s", spec.Name, res.Error)
@@ -319,6 +328,12 @@ func buildProxyURL(proxyServer string, mixedPort int, runtimeDir string) string 
 	if strings.TrimSpace(proxyServer) == "" || strings.EqualFold(strings.TrimSpace(proxyServer), "DIRECT") {
 		return ""
 	}
+	return BuildLocalProxyURL(mixedPort, runtimeDir)
+}
+
+// BuildLocalProxyURL returns the HTTP proxy URL for the locally running mihomo instance,
+// including any configured authentication credentials.
+func BuildLocalProxyURL(mixedPort int, runtimeDir string) string {
 	u := &url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("127.0.0.1:%d", mixedPort),
