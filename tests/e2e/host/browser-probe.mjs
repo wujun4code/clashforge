@@ -4,7 +4,7 @@
  *
  * 模拟 Dashboard.tsx 里的 runBrowserProbeData()：
  *   - IP 检查：UpaiYun / IP.SB / IPInfo（直连，不走代理）
- *   - Access 检查：百度 / 网易云 / GitHub / YouTube
+ *   - Access 检查：淘宝 / 网易云 / GitHub / Google / OpenAI / Gemini
  *     - 直连模式：不走代理（模拟普通用户浏览器直连）
  *     - 代理模式：通过 OpenWrt VM 的 mixed 端口（模拟用户配了网关代理）
  *
@@ -193,12 +193,14 @@ const IP_PROVIDERS = [
   },
 ]
 
-// ── Access 检查目标（与 probes.json 一致）─────────────────────────────────────
+// ── Access 检查目标（与 unified ConnectivityTargets 口径一致）──────────────────
 const ACCESS_TARGETS = [
-  { name: '百度搜索',    url: 'https://www.baidu.com',     group: '国内' },
-  { name: '网易云音乐',  url: 'https://music.163.com',     group: '国内' },
-  { name: 'GitHub',      url: 'https://github.com',         group: '国际' },
-  { name: 'YouTube',     url: 'https://www.youtube.com',    group: '国际' },
+  { name: '淘宝',        url: 'https://www.taobao.com',      group: '国内' },
+  { name: '网易云音乐',  url: 'https://music.163.com',       group: '国内' },
+  { name: 'GitHub',      url: 'https://github.com',           group: '国外' },
+  { name: 'Google',      url: 'https://www.google.com',       group: '国外' },
+  { name: 'OpenAI',      url: 'https://chat.openai.com',      group: 'AI' },
+  { name: 'Gemini',      url: 'https://gemini.google.com',    group: 'AI' },
 ]
 
 // ── 主逻辑 ─────────────────────────────────────────────────────────────────────
@@ -289,11 +291,11 @@ async function main() {
   const directTotal = directAccess.length
   const directDetail = directAccess.map(r => `${r.ok ? '✓' : '✗'} ${r.name} HTTP ${r.status || 'ERR'} ${r.latency_ms || '?'}ms`).join(' | ')
   if (directOK === directTotal) {
-    recordTC('PASS', 'BC-02', '直连可访问性检查', '不走代理，访问百度/网易云/GitHub/YouTube', '所有站点 HTTP 2xx/3xx', `${directOK}/${directTotal} 成功: ${directDetail}`)
+    recordTC('PASS', 'BC-02', '直连可访问性检查', '不走代理，访问淘宝/网易云/GitHub/Google/OpenAI/Gemini', '所有站点 HTTP 2xx/3xx', `${directOK}/${directTotal} 成功: ${directDetail}`)
   } else if (directOK > 0) {
-    recordTC('WARN', 'BC-02', '直连可访问性检查', '不走代理，访问百度/网易云/GitHub/YouTube', '所有站点 HTTP 2xx/3xx', `${directOK}/${directTotal} 成功: ${directDetail}`)
+    recordTC('WARN', 'BC-02', '直连可访问性检查', '不走代理，访问淘宝/网易云/GitHub/Google/OpenAI/Gemini', '所有站点 HTTP 2xx/3xx', `${directOK}/${directTotal} 成功: ${directDetail}`)
   } else {
-    recordTC('FAIL', 'BC-02', '直连可访问性检查', '不走代理，访问百度/网易云/GitHub/YouTube', '所有站点 HTTP 2xx/3xx', `全部失败: ${directDetail}`)
+    recordTC('FAIL', 'BC-02', '直连可访问性检查', '不走代理，访问淘宝/网易云/GitHub/Google/OpenAI/Gemini', '所有站点 HTTP 2xx/3xx', `全部失败: ${directDetail}`)
   }
 
   // ── 3. 代理模式检查（如果提供了 PROXY_URL）
@@ -302,11 +304,11 @@ async function main() {
     proxyIP = await runIPChecks('通过代理', PROXY_URL)
     proxyAccess = await runAccessChecks('通过代理', PROXY_URL)
 
-    const intlViaProxy = proxyAccess.filter(r => {
+    const nonDomesticViaProxy = proxyAccess.filter(r => {
       const t = ACCESS_TARGETS.find(t => t.name === r.name)
-      return t && t.group === '国际' && r.ok
+      return t && t.group !== '国内' && r.ok
     })
-    const intlTargets = ACCESS_TARGETS.filter(t => t.group === '国际')
+    const nonDomesticTargets = ACCESS_TARGETS.filter(t => t.group !== '国内')
     const domTargets = ACCESS_TARGETS.filter(t => t.group === '国内')
     const domViaProxy = proxyAccess.filter(r => {
       const t = ACCESS_TARGETS.find(t => t.name === r.name)
@@ -373,20 +375,20 @@ async function main() {
     const domDetail = proxyAccess.filter(r => domTargets.find(t => t.name === r.name))
       .map(r => `${r.ok ? '✓' : '✗'} ${r.name} HTTP ${r.status || 'ERR'} ${r.latency_ms || '?'}ms`).join(' | ')
     if (domViaProxy.length === domTargets.length) {
-      recordTC('PASS', 'BC-05', '代理模式国内站点可访问性', '通过代理访问百度/网易云', '国内站点正常回落直连，HTTP 2xx/3xx', `${domViaProxy.length}/${domTargets.length} 成功: ${domDetail}`)
+      recordTC('PASS', 'BC-05', '代理模式国内站点可访问性', '通过代理访问淘宝/网易云', '国内站点正常回落直连，HTTP 2xx/3xx', `${domViaProxy.length}/${domTargets.length} 成功: ${domDetail}`)
     } else {
-      recordTC('WARN', 'BC-05', '代理模式国内站点可访问性', '通过代理访问百度/网易云', '国内站点正常回落直连，HTTP 2xx/3xx', `${domViaProxy.length}/${domTargets.length} 成功: ${domDetail}`)
+      recordTC('WARN', 'BC-05', '代理模式国内站点可访问性', '通过代理访问淘宝/网易云', '国内站点正常回落直连，HTTP 2xx/3xx', `${domViaProxy.length}/${domTargets.length} 成功: ${domDetail}`)
     }
 
-    // BC-06 国际站点通过代理
-    const intlDetail = proxyAccess.filter(r => intlTargets.find(t => t.name === r.name))
+    // BC-06 海外/AI 站点通过代理
+    const nonDomesticDetail = proxyAccess.filter(r => nonDomesticTargets.find(t => t.name === r.name))
       .map(r => `${r.ok ? '✓' : '✗'} ${r.name} HTTP ${r.status || 'ERR'} ${r.latency_ms || '?'}ms`).join(' | ')
-    if (intlViaProxy.length === intlTargets.length) {
-      recordTC('PASS', 'BC-06', '代理模式国际站点可访问性', '通过代理访问 GitHub / YouTube', '国际站点通过代理节点可达，HTTP 2xx/3xx', `${intlViaProxy.length}/${intlTargets.length} 成功: ${intlDetail}`)
-    } else if (intlViaProxy.length > 0) {
-      recordTC('WARN', 'BC-06', '代理模式国际站点可访问性', '通过代理访问 GitHub / YouTube', '国际站点通过代理节点可达，HTTP 2xx/3xx', `${intlViaProxy.length}/${intlTargets.length} 成功: ${intlDetail}`)
+    if (nonDomesticViaProxy.length === nonDomesticTargets.length) {
+      recordTC('PASS', 'BC-06', '代理模式海外/AI站点可访问性', '通过代理访问 GitHub/Google/OpenAI/Gemini', '海外/AI 站点通过代理节点可达，HTTP 2xx/3xx', `${nonDomesticViaProxy.length}/${nonDomesticTargets.length} 成功: ${nonDomesticDetail}`)
+    } else if (nonDomesticViaProxy.length > 0) {
+      recordTC('WARN', 'BC-06', '代理模式海外/AI站点可访问性', '通过代理访问 GitHub/Google/OpenAI/Gemini', '海外/AI 站点通过代理节点可达，HTTP 2xx/3xx', `${nonDomesticViaProxy.length}/${nonDomesticTargets.length} 成功: ${nonDomesticDetail}`)
     } else {
-      recordTC('FAIL', 'BC-06', '代理模式国际站点可访问性', '通过代理访问 GitHub / YouTube', '国际站点通过代理节点可达，HTTP 2xx/3xx', `全部失败: ${intlDetail}`)
+      recordTC('FAIL', 'BC-06', '代理模式海外/AI站点可访问性', '通过代理访问 GitHub/Google/OpenAI/Gemini', '海外/AI 站点通过代理节点可达，HTTP 2xx/3xx', `全部失败: ${nonDomesticDetail}`)
     }
   }
 

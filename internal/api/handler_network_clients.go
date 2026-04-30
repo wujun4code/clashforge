@@ -207,10 +207,12 @@ func parseDHCPLeases(data []byte) []networkClient {
 	return out
 }
 
-// activeNeighStates are NUD states that confirm a device is currently present.
-// STALE means the entry has expired and the device may be long gone — excluded.
+// activeNeighStates are NUD states treated as usable client hints.
+// STALE is included because many OpenWrt routers keep active LAN devices in STALE
+// between traffic bursts; we only exclude clearly incomplete/failed entries.
 var activeNeighStates = map[string]bool{
 	"REACHABLE": true,
+	"STALE":     true,
 	"DELAY":     true,
 	"PROBE":     true,
 	"PERMANENT": true,

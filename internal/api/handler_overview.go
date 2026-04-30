@@ -27,6 +27,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/dns"
 	"github.com/wujun4code/clashforge/internal/netfilter"
+	"github.com/wujun4code/clashforge/internal/probetargets"
 	"gopkg.in/yaml.v3"
 )
 
@@ -776,17 +777,7 @@ func buildAppStorage(deps Dependencies) overviewAppStorage {
 }
 
 func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
-	providers := []struct {
-		Name  string
-		Group string
-		URL   string
-		GBK   bool
-	}{
-		{Name: "太平洋", Group: "国内", URL: "https://whois.pconline.com.cn/ipJson.jsp?json=true", GBK: true},
-		{Name: "UpaiYun", Group: "国内", URL: "https://pubstatic.b0.upaiyun.com/?_upnode"},
-		{Name: "IP.SB", Group: "国外", URL: "https://api.ip.sb/geoip"},
-		{Name: "IPInfo", Group: "国外", URL: "https://ipinfo.io/json"},
-	}
+	providers := probetargets.IPProviderTargets()
 	batch := shortBatchID()
 	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
 	logDNSSnapshot(snap, batch, "router")
@@ -794,10 +785,7 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 	var wg sync.WaitGroup
 	for index, provider := range providers {
 		wg.Add(1)
-		go func(i int, spec struct {
-			Name, Group, URL string
-			GBK              bool
-		}) {
+		go func(i int, spec probetargets.IPProviderTarget) {
 			defer wg.Done()
 			log.Info().Str("batch", batch).Str("side", "router").Str("provider", spec.Name).Str("url", spec.URL).Msg("ip_check start")
 			logResolveResult(resolveForDebug(spec.URL, deps.Config.Ports.DNS), batch, "router")
@@ -819,19 +807,7 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 }
 
 func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
-	targets := []struct {
-		Name        string
-		Group       string
-		URL         string
-		Description string
-	}{
-		{Name: "淘宝", Group: "国内", URL: "https://www.taobao.com", Description: "用于验证国内主要电商平台的直连可达性。"},
-		{Name: "网易云音乐", Group: "国内", URL: "https://music.163.com", Description: "用于验证国内常见内容站点延迟。"},
-		{Name: "GitHub", Group: "国外", URL: "https://github.com", Description: "用于验证国际开发站点的代理访问效果。"},
-		{Name: "Google", Group: "国外", URL: "https://www.google.com", Description: "用于验证 Google 搜索是否可通过代理访问。"},
-		{Name: "OpenAI", Group: "AI", URL: "https://chat.openai.com", Description: "用于验证 ChatGPT / OpenAI 是否可通过代理访问。"},
-		{Name: "Gemini", Group: "AI", URL: "https://gemini.google.com", Description: "用于验证 Google Gemini 是否可通过代理访问。"},
-	}
+	targets := probetargets.ConnectivityTargets()
 	batch := shortBatchID()
 	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
 	logDNSSnapshot(snap, batch, "router")

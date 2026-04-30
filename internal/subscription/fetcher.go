@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const defaultUserAgent = "clash-meta"
@@ -22,10 +24,24 @@ func Fetch(url, userAgent string) ([]byte, error) {
 		}
 		data, err := doFetch(client, url, userAgent)
 		if err == nil {
+			log.Info().
+				Str("url", url).
+				Int("size", len(data)).
+				Int("attempt", attempt+1).
+				Msg("subscription: 订阅下载成功")
 			return data, nil
 		}
 		lastErr = err
+		log.Warn().
+			Str("url", url).
+			Int("attempt", attempt+1).
+			Err(err).
+			Msg("subscription: 订阅下载失败，将重试")
 	}
+	log.Error().
+		Str("url", url).
+		Err(lastErr).
+		Msg("subscription: ⚠️ 订阅下载全部失败！无法获取代理节点，国际流量将无法代理")
 	return nil, fmt.Errorf("fetch subscription: %w", lastErr)
 }
 

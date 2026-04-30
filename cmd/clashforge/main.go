@@ -23,9 +23,9 @@ import (
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
-	"github.com/wujun4code/clashforge/internal/workernode"
 	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/subscription"
+	"github.com/wujun4code/clashforge/internal/workernode"
 )
 
 const version = "0.1.0-dev"
@@ -192,23 +192,31 @@ func main() {
 	sched := scheduler.New(cfg, subManager, geoManager)
 	sched.Start()
 
-	// HTTP server
-	router := api.NewRouter(api.Dependencies{
-		Version:      buildVersion,
-		StartedAt:    time.Now(),
-		ConfigPath:   *cfgPath,
-		Config:       cfg,
-		Core:         coreManager,
-		SubManager:   subManager,
-		Netfilter:    nfManager,
-		SSEBroker:    sseBroker,
-		LogBuffer:    logBuf,
+	deps := api.Dependencies{
+		Version:         buildVersion,
+		StartedAt:       time.Now(),
+		ConfigPath:      *cfgPath,
+		Config:          cfg,
+		Core:            coreManager,
+		HealthMonitor:   nil,
+		SubManager:      subManager,
+		Netfilter:       nfManager,
+		SSEBroker:       sseBroker,
+		LogBuffer:       logBuf,
 		NodeStore:       nodeStore,
 		NodeKeyPair:     nodeKeyPair,
 		PublishStore:    publishStore,
 		WorkerNodeStore: workerNodeStore,
 		GeoDataManager:  geoManager,
-	})
+	}
+	healthMonitor := api.NewHealthMonitor(deps)
+	if healthMonitor != nil {
+		healthMonitor.Start()
+		deps.HealthMonitor = healthMonitor
+	}
+
+	// HTTP server
+	router := api.NewRouter(deps)
 
 	addr := cfg.UIListenAddr()
 	httpServer := &http.Server{
@@ -229,6 +237,9 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutdown requested")
 
 	sched.Stop()
+	if healthMonitor != nil {
+		healthMonitor.Stop()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

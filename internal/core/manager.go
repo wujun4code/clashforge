@@ -218,8 +218,10 @@ func (m *CoreManager) Reload(configFile string) error {
 	if m.state != StateRunning {
 		return ErrNotRunning
 	}
+	log.Info().Str("config_file", configFile).Msg("core: 开始重新加载 mihomo 配置")
 	out, err := exec.Command(m.cfg.Binary, "-t", "-d", filepath.Dir(configFile), "-f", configFile).CombinedOutput()
 	if err != nil {
+		log.Error().Err(err).Str("output", string(out)).Msg("core: ⚠️ mihomo 配置验证失败！配置未生效，当前运行配置继续使用")
 		return fmt.Errorf("config validation failed: %s", string(out))
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/configs?force=false", m.cfg.APIPort)
@@ -231,13 +233,16 @@ func (m *CoreManager) Reload(configFile string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		log.Error().Err(err).Msg("core: ⚠️ mihomo reload API 请求失败！配置未生效")
 		return fmt.Errorf("reload request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(resp.Body)
+		log.Error().Int("status", resp.StatusCode).Str("body", string(b)).Msg("core: ⚠️ mihomo reload 被拒绝！配置未生效")
 		return fmt.Errorf("reload rejected by mihomo: %s", string(b))
 	}
+	log.Info().Str("config_file", configFile).Msg("core: mihomo 配置重新加载成功 ✓")
 	return nil
 }
 

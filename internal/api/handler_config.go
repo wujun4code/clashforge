@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
@@ -231,9 +232,19 @@ func resolveGenerationInputs(deps Dependencies) ([]subscription.ProxyNode, [][]b
 // generateMihomoConfig generates and writes the mihomo config, returns true if successful
 func generateMihomoConfig(deps Dependencies) (bool, error) {
 	if deps.SubManager == nil {
+		log.Warn().Msg("config-gen: SubManager 为空，无法生成配置")
 		return false, nil
 	}
 	nodes, rawYAMLs := resolveGenerationInputs(deps)
+
+	log.Info().
+		Int("node_count", len(nodes)).
+		Int("raw_yaml_count", len(rawYAMLs)).
+		Msg("config-gen: 开始生成 mihomo 配置")
+
+	if len(nodes) == 0 && len(rawYAMLs) == 0 {
+		log.Warn().Msg("config-gen: ⚠️ 没有可用的代理节点和订阅 YAML！生成的配置将缺少代理，国际流量将走 DIRECT")
+	}
 
 	overridesPath := deps.Config.Core.DataDir + "/overrides.yaml"
 	overridesData, _ := os.ReadFile(overridesPath)
@@ -296,6 +307,12 @@ func generateMihomoConfig(deps Dependencies) (bool, error) {
 	if err := os.WriteFile(outPath, data, 0o644); err != nil {
 		return false, err
 	}
+
+	log.Info().
+		Str("path", outPath).
+		Int("size", len(data)).
+		Msg("config-gen: mihomo 配置文件已写入 ✓")
+
 	return true, nil
 }
 
