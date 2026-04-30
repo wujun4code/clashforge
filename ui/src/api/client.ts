@@ -318,6 +318,13 @@ export interface DeviceGroupsResponse {
   requested_by_source?: boolean
 }
 
+export interface DeviceGroupsPreviewResponse {
+  source_key: string
+  active_source_key?: string
+  profile_active?: boolean
+  content: string
+}
+
 export interface NetworkClient {
   ip: string
   mac?: string
@@ -397,6 +404,8 @@ export const updateDeviceGroups = (device_groups: DeviceRouteGroup[], source_key
     active_source_key?: string
     message?: string
   }>('PUT', '/config/device-groups', source_key ? { device_groups, source_key } : { device_groups })
+export const previewDeviceGroupsConfig = (device_groups: DeviceRouteGroup[], source_key?: string) =>
+  request<DeviceGroupsPreviewResponse>('POST', '/config/device-groups/preview', source_key ? { device_groups, source_key } : { device_groups })
 export const getNetworkClients = () => request<{clients: NetworkClient[]}>('GET', '/network/clients')
 export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
 export const clearLogs        = () => request<{ok: boolean}>('DELETE', '/logs')

@@ -48,6 +48,11 @@ function fmtDuration(a?: string, b?: string) {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
 
+function normalizeProxyValue(v?: string) {
+  if (!v || v === 'DIRECT') return ''
+  return v
+}
+
 // ── Proxy selector ───────────────────────────────────────────────────
 
 function ProxySelect({
@@ -62,12 +67,11 @@ function ProxySelect({
   return (
     <div className="relative">
       <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
+        value={normalizeProxyValue(value)}
+        onChange={e => onChange(normalizeProxyValue(e.target.value))}
         className="w-full appearance-none bg-surface-2 border border-white/10 rounded-xl px-3 py-2.5 pr-8 text-sm text-white outline-none focus:border-brand transition-colors cursor-pointer"
       >
         <option value="">DIRECT（直连，不走代理）</option>
-        <option value="DIRECT">DIRECT（直连，不走代理）</option>
         {proxies.map(p => (
           <option key={p} value={p}>{p}</option>
         ))}
@@ -154,7 +158,7 @@ function RecordRow({ rec }: { rec: GeoDataUpdateRecord }) {
 
 // ── Main page ────────────────────────────────────────────────────────
 
-export function GeoData() {
+export function GeoData({ embedded = false }: { embedded?: boolean }) {
   const [status, setStatus] = useState<GeoDataStatus | null>(null)
   const [cfg, setCfg] = useState<GeoDataConfig | null>(null)
   const [logs, setLogs] = useState<GeoDataUpdateRecord[]>([])
@@ -174,7 +178,7 @@ export function GeoData() {
     if (s.status === 'fulfilled') setStatus(s.value)
     if (c.status === 'fulfilled') {
       setCfg(c.value)
-      setSelectedProxy(c.value.proxy_server ?? '')
+      setSelectedProxy(normalizeProxyValue(c.value.proxy_server))
     }
     if (l.status === 'fulfilled') setLogs(l.value.records)
   }, [])
@@ -188,7 +192,8 @@ export function GeoData() {
             ['Selector', 'URLTest', 'Fallback', 'LoadBalance'].includes(v.type)
           )
           .map(([name]) => name)
-        setProxies(groups)
+          .filter(name => name && name !== 'DIRECT')
+        setProxies([...new Set(groups)])
       })
       .catch(() => null)
   }, [load])
@@ -215,7 +220,7 @@ export function GeoData() {
   const handleSaveProxy = async () => {
     setSavingCfg(true)
     try {
-      await updateGeoDataConfig({ ...cfgDraft, proxy_server: selectedProxy })
+      await updateGeoDataConfig({ ...cfgDraft, proxy_server: normalizeProxyValue(selectedProxy) })
       setCfgDraft({})
       await load()
     } finally {
@@ -233,17 +238,19 @@ export function GeoData() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <Database size={20} className="text-brand" />
-            路由数据文件
-          </h1>
-          <p className="text-sm text-muted mt-1">
-            GeoIP.dat 和 GeoSite.dat 是 mihomo 规则路由所需的数据文件，建议定期更新。
-          </p>
+      {!embedded && (
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-white flex items-center gap-2">
+              <Database size={20} className="text-brand" />
+              路由数据文件
+            </h1>
+            <p className="text-sm text-muted mt-1">
+              GeoIP.dat 和 GeoSite.dat 是 mihomo 规则路由所需的数据文件，建议定期更新。
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* File status cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -329,8 +336,8 @@ export function GeoData() {
           <div>
             <label className="text-xs text-muted font-medium block mb-1.5">定时下载代理</label>
             <ProxySelect
-              value={merged.proxy_server ?? ''}
-              onChange={v => patchCfg({ proxy_server: v })}
+              value={normalizeProxyValue(merged.proxy_server)}
+              onChange={v => patchCfg({ proxy_server: normalizeProxyValue(v) })}
               proxies={proxies}
             />
             <p className="text-xs text-muted mt-1">定时任务使用的代理，手动更新也以此为默认值</p>

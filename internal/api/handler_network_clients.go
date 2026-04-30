@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -26,7 +27,68 @@ func handleGetNetworkClients(_ Dependencies) http.HandlerFunc {
 	}
 }
 
+// getWANSubnets returns the IP subnets assigned to WAN interfaces (those carrying the default route).
+// Devices in these subnets are upstream of the router and cannot be managed by it.
+func getWANSubnets() []*net.IPNet {
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return nil
+	}
+	wanIfaces := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		for i, f := range fields {
+			if f == "dev" && i+1 < len(fields) {
+				wanIfaces[fields[i+1]] = true
+			}
+		}
+	}
+	if len(wanIfaces) == 0 {
+		return nil
+	}
+
+	addrOut, err := exec.Command("ip", "addr", "show").Output()
+	if err != nil {
+		return nil
+	}
+
+	var subnets []*net.IPNet
+	var currentIface string
+	for _, line := range strings.Split(string(addrOut), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+			fields := strings.Fields(trimmed)
+			if len(fields) >= 2 {
+				currentIface = strings.TrimSuffix(fields[1], ":")
+			}
+		} else if wanIfaces[currentIface] && strings.HasPrefix(trimmed, "inet ") {
+			fields := strings.Fields(trimmed)
+			if len(fields) >= 2 {
+				_, ipNet, err := net.ParseCIDR(fields[1])
+				if err == nil {
+					subnets = append(subnets, ipNet)
+				}
+			}
+		}
+	}
+	return subnets
+}
+
 func discoverNetworkClients() []networkClient {
+	wanSubnets := getWANSubnets()
+	isWANIP := func(ipStr string) bool {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return false
+		}
+		for _, subnet := range wanSubnets {
+			if subnet.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+
 	merged := map[string]networkClient{}
 	merge := func(items []networkClient) {
 		for _, item := range items {
@@ -76,6 +138,10 @@ func discoverNetworkClients() []networkClient {
 	result := make([]networkClient, 0, len(merged))
 	for _, c := range merged {
 		if strings.TrimSpace(c.IP) == "" {
+			continue
+		}
+		// Skip devices in the WAN subnet — they are upstream of this router.
+		if isWANIP(c.IP) {
 			continue
 		}
 		result = append(result, c)
@@ -141,6 +207,15 @@ func parseDHCPLeases(data []byte) []networkClient {
 	return out
 }
 
+// activeNeighStates are NUD states that confirm a device is currently present.
+// STALE means the entry has expired and the device may be long gone — excluded.
+var activeNeighStates = map[string]bool{
+	"REACHABLE": true,
+	"DELAY":     true,
+	"PROBE":     true,
+	"PERMANENT": true,
+}
+
 func parseIPNeigh(data []byte) []networkClient {
 	lines := bytes.Split(data, []byte{'\n'})
 	out := make([]networkClient, 0, len(lines))
@@ -150,9 +225,7 @@ func parseIPNeigh(data []byte) []networkClient {
 			continue
 		}
 		fields := strings.Fields(text)
-		// Examples:
-		// 192.168.1.10 dev br-lan lladdr aa:bb:cc:dd:ee:ff REACHABLE
-		// 192.168.1.9 dev br-lan INCOMPLETE
+		// Format: <ip> dev <iface> [lladdr <mac>] <STATE>
 		if len(fields) < 4 {
 			continue
 		}
@@ -160,12 +233,12 @@ func parseIPNeigh(data []byte) []networkClient {
 		if net.ParseIP(ip) == nil {
 			continue
 		}
-		if strings.Contains(strings.ToUpper(text), "FAILED") || strings.Contains(strings.ToUpper(text), "INCOMPLETE") {
+		// State is always the last token; skip anything not in our allowlist.
+		if !activeNeighStates[strings.ToUpper(fields[len(fields)-1])] {
 			continue
 		}
 
-		var dev string
-		var mac string
+		var dev, mac string
 		for i := 1; i < len(fields)-1; i++ {
 			if fields[i] == "dev" && i+1 < len(fields) {
 				dev = fields[i+1]
@@ -199,6 +272,12 @@ func parseProcARP(data []byte) []networkClient {
 		}
 		ip := fields[0]
 		if net.ParseIP(ip) == nil {
+			continue
+		}
+		// fields[2] is the flags column (hex). ATF_COM (0x02) must be set,
+		// meaning the entry is complete — the MAC was confirmed via ARP reply.
+		flagVal, err := strconv.ParseUint(strings.TrimPrefix(fields[2], "0x"), 16, 32)
+		if err != nil || flagVal&0x02 == 0 {
 			continue
 		}
 		mac := normalizeMAC(fields[3])

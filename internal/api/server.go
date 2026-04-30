@@ -25,20 +25,20 @@ var uiDist embed.FS
 
 // Dependencies holds all injected services.
 type Dependencies struct {
-	Version      string
-	StartedAt    time.Time
-	ConfigPath   string
-	Config       *config.MetaclashConfig
-	Core         *core.CoreManager
-	SubManager   *subscription.Manager
-	Netfilter    *netfilter.Manager
-	SSEBroker    *SSEBroker
-	LogBuffer    *LogBuffer
-	NodeStore        *nodes.Store
-	NodeKeyPair      *nodes.KeyPair
-	PublishStore     *publish.Store
-	WorkerNodeStore  *workernode.Store
-	GeoDataManager   *geodata.Manager
+	Version         string
+	StartedAt       time.Time
+	ConfigPath      string
+	Config          *config.MetaclashConfig
+	Core            *core.CoreManager
+	SubManager      *subscription.Manager
+	Netfilter       *netfilter.Manager
+	SSEBroker       *SSEBroker
+	LogBuffer       *LogBuffer
+	NodeStore       *nodes.Store
+	NodeKeyPair     *nodes.KeyPair
+	PublishStore    *publish.Store
+	WorkerNodeStore *workernode.Store
+	GeoDataManager  *geodata.Manager
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -67,6 +67,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Put("/config/overrides", handleUpdateOverrides(deps))
 		api.Get("/config/device-groups", handleGetDeviceGroups(deps))
 		api.Put("/config/device-groups", handlePutDeviceGroups(deps))
+		api.Post("/config/device-groups/preview", handlePreviewDeviceGroupsConfig(deps))
 		api.Post("/config/generate", handleGenerateConfig(deps))
 		api.Get("/network/clients", handleGetNetworkClients(deps))
 		api.Get("/config/sources", handleGetSources(deps))

@@ -3,7 +3,6 @@ import { NavLink } from 'react-router-dom'
 import {
   Activity,
   ChevronRight,
-  Database,
   LayoutDashboard,
   Loader2,
   Network,
@@ -25,7 +24,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     label: '路由引擎',
     items: [
       { to: '/',           icon: LayoutDashboard,  label: '概览',   caption: '运行状态 · 核心监控' },
-      { to: '/config',     icon: SlidersHorizontal, label: '配置管理', caption: '来源导入 · 运行配置' },
+      { to: '/config',     icon: SlidersHorizontal, label: '配置管理', caption: '来源导入 · 运行配置 · 路由数据' },
       { to: '/device-rules', icon: Network,         label: '设备分流', caption: '设备出口 · 策略覆盖' },
     ],
   },
@@ -34,7 +33,6 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     items: [
       { to: '/nodes',   icon: Server,    label: '出口节点', caption: '服务器部署 · 代理管理' },
       { to: '/publish', icon: Rss,       label: '订阅定制', caption: '模板编排 · 链接生成' },
-      { to: '/geodata', icon: Database,  label: '路由数据', caption: 'GeoIP · GeoSite 更新' },
     ],
   },
   {
