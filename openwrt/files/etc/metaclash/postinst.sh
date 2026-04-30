@@ -66,6 +66,16 @@ for pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
 done
 rm -f /var/run/metaclash/metaclash.pid
 
+# Warn if iproute2 full (ip rule/route with fwmark+table) is unavailable.
+# ip-full is NOT declared as an opkg Depends because on most OpenWrt x86_64
+# images it is baked into the base firmware and absent from the package index,
+# which caused a spurious "cannot find dependency" warning on every install.
+if ! ip rule add fwmark 0x1 table 1 2>/dev/null; then
+  echo "⚠ ClashForge: iproute2 (ip-full) not available — transparent proxy (tproxy) will not work." >&2
+else
+  ip rule del fwmark 0x1 table 1 2>/dev/null || true
+fi
+
 /etc/init.d/clashforge enable 2>/dev/null || true
 /etc/init.d/clashforge start 2>/dev/null || true
 

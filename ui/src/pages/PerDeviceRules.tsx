@@ -390,6 +390,7 @@ function normalizeNetworkClients(clients: NetworkClient[]): DevicePoolClient[] {
       ip,
       ...(mac ? { mac } : {}),
       ...(hostname ? { hostname } : {}),
+      ...(client.ips?.length ? { ips: client.ips } : {}),
       ...(client.interface ? { interface: client.interface } : {}),
       ...(client.source ? { source: client.source } : {}),
       label: parts.join(' · '),
@@ -834,6 +835,7 @@ function VisualMode({
               const type = detectDeviceType(client.hostname || '')
               const assignedGroup = assignedIPs.get(client.ip)
               const isDragging = draggingIP === client.ip
+              const extraIPv6 = (client.ips ?? []).filter(ip => ip.includes(':')).length
               return (
                 <div
                   key={client.ip}
@@ -845,35 +847,51 @@ function VisualMode({
                   }}
                   onDragEnd={() => setDraggingIP(null)}
                   className={[
-                    'flex flex-col items-center gap-1.5 rounded-xl border w-[110px] pt-3 pb-2.5 px-2 text-xs transition-all select-none',
+                    'flex items-center gap-2.5 rounded-xl border w-[200px] px-3 py-2.5 text-xs transition-all select-none',
                     isDragging
                       ? 'opacity-30 scale-95 border-brand/40 bg-brand/10'
                       : 'border-white/12 bg-white/3 cursor-grab active:cursor-grabbing hover:border-white/22 hover:bg-white/6',
                   ].join(' ')}
                 >
-                  {/* Big device icon */}
+                  {/* Device icon */}
                   <div className={[
-                    'w-12 h-12 rounded-xl border flex items-center justify-center flex-shrink-0',
+                    'w-9 h-9 rounded-lg border flex items-center justify-center flex-shrink-0',
                     DEVICE_TYPE_BG[type],
                   ].join(' ')}>
-                    <DeviceTypeIcon type={type} size={28} />
+                    <DeviceTypeIcon type={type} size={20} />
                   </div>
-                  {/* Device type label */}
-                  <span className="text-[9px] uppercase tracking-[0.14em] text-slate-500 font-medium">
-                    {DEVICE_TYPE_LABEL[type]}
-                  </span>
-                  {/* Hostname */}
-                  <span className="font-semibold text-slate-200 text-[11px] text-center leading-tight truncate w-full text-center">
-                    {client.hostname || '未知设备'}
-                  </span>
-                  {/* IP */}
-                  <span className="text-[9px] font-mono text-slate-500">{client.ip}</span>
-                  {/* Assigned badge */}
-                  {assignedGroup && (
-                    <span className="rounded-full bg-brand/20 border border-brand/25 px-1.5 py-0.5 text-[9px] text-brand-light font-medium leading-none">
-                      {assignedGroup}
+                  {/* Info column */}
+                  <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                    {/* Hostname */}
+                    <span className="font-semibold text-slate-200 text-[11px] truncate leading-tight">
+                      {client.hostname || '未知设备'}
                     </span>
-                  )}
+                    {/* Device type label */}
+                    <span className="text-[9px] text-slate-500 uppercase tracking-wide leading-none">
+                      {DEVICE_TYPE_LABEL[type]}
+                    </span>
+                    {/* IPv4 address */}
+                    <span className="text-[10px] font-mono text-slate-400 leading-none mt-0.5">{client.ip}</span>
+                    {/* MAC address */}
+                    {client.mac && (
+                      <span className="text-[9px] font-mono text-slate-600 leading-none">{client.mac}</span>
+                    )}
+                    {/* Bottom row: assigned badge + IPv6 indicator */}
+                    {(assignedGroup || extraIPv6 > 0) && (
+                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                        {assignedGroup && (
+                          <span className="rounded-full bg-brand/20 border border-brand/25 px-1.5 py-0.5 text-[9px] text-brand-light font-medium leading-none">
+                            {assignedGroup}
+                          </span>
+                        )}
+                        {extraIPv6 > 0 && (
+                          <span className="rounded-full bg-slate-700/60 border border-white/10 px-1.5 py-0.5 text-[9px] text-slate-400 font-mono leading-none">
+                            +{extraIPv6} IPv6
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )
             })}
