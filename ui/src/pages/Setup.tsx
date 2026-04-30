@@ -834,6 +834,14 @@ export function Setup() {
   const [launchPolicyError, setLaunchPolicyError] = useState('')
   const [launchDeviceGroups, setLaunchDeviceGroups] = useState<DeviceRouteGroup[]>([])
   const [launchDeviceSnapshot, setLaunchDeviceSnapshot] = useState('[]')
+  // Ref always pointing to the latest launchDeviceGroups so that
+  // refreshLaunchConfigPreview can read current groups without needing
+  // launchDeviceGroups in its useCallback dep array.  Including it there
+  // caused an infinite render loop: loadLaunchDeviceGroups() sets a new
+  // array reference → refreshLaunchConfigPreview gets a new reference →
+  // the launch-step init effect re-fires → repeat.
+  const launchDeviceGroupsRef = useRef(launchDeviceGroups)
+  launchDeviceGroupsRef.current = launchDeviceGroups
   const [launchDeviceLoading, setLaunchDeviceLoading] = useState(false)
   const [launchDeviceSaving, setLaunchDeviceSaving] = useState(false)
   const [launchDeviceError, setLaunchDeviceError] = useState('')
@@ -962,7 +970,7 @@ export function Setup() {
       if (activeSourceKey) {
         try {
           const merged = await previewDeviceGroupsConfig(
-            sanitizeDeviceGroupsForSetup(launchDeviceGroups),
+            sanitizeDeviceGroupsForSetup(launchDeviceGroupsRef.current),
             activeSourceKey,
           )
           policyContent = merged.content ?? content
@@ -983,7 +991,7 @@ export function Setup() {
     } finally {
       setLaunchConfigLoading(false)
     }
-  }, [buildLaunchPayload, launchDeviceGroups, resolveActiveSourceKey])
+  }, [buildLaunchPayload, resolveActiveSourceKey])
 
   const handleViewCachedSubscription = useCallback(async (sub: Subscription) => {
     setSubCacheModalOpen(true)
