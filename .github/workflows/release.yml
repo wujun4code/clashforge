@@ -225,7 +225,7 @@ jobs:
           Maintainer: wujun4code
           Section: net
           Priority: optional
-          Depends: ca-bundle, ip-full
+          Depends: ca-bundle
           Source: https://github.com/wujun4code/clashforge
           Description: Mihomo (Clash.Meta) proxy manager for OpenWrt.
            Includes bundled mihomo ${MIHOMO_VER_CLEAN}. Web UI on port 7777.
@@ -400,7 +400,7 @@ jobs:
                 --info "origin:https://github.com/wujun4code/clashforge" \
                 --info "url:https://github.com/wujun4code/clashforge" \
                 --info "maintainer:wujun4code" \
-                --info "depends:ca-bundle ip-full" \
+                --info "depends:ca-bundle" \
                 --script "post-install:/work/apk-scripts/post-install" \
                 --script "pre-upgrade:/work/apk-scripts/pre-upgrade" \
                 --script "post-upgrade:/work/apk-scripts/post-upgrade" \
