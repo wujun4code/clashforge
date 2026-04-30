@@ -189,14 +189,25 @@ func discoverNetworkClients() []networkClient {
 	}
 
 	// Sources in priority order: DHCP gives the best hostname + IPv4 mapping.
-	// Both the lease file and ubus are tried because some OpenWrt variants store
-	// leases at a non-standard path while ubus works across all firmware forks.
-	// The MAC-merge logic deduplicates entries that appear in both.
-	if leaseData, err := os.ReadFile("/tmp/dhcp.leases"); err == nil {
+	//
+	// The dnsmasq lease file path is configurable via UCI; ask UCI first so we
+	// find it even when the operator changed it from the /tmp/dhcp.leases default.
+	leaseFile := "/tmp/dhcp.leases"
+	if out, err := exec.Command("uci", "-q", "get", "dhcp.@dnsmasq[0].leasefile").Output(); err == nil {
+		if p := strings.TrimSpace(string(out)); p != "" {
+			leaseFile = p
+		}
+	}
+	if leaseData, err := os.ReadFile(leaseFile); err == nil {
 		ingest(parseDHCPLeases(leaseData))
 	}
-	if out, err := exec.Command("ubus", "call", "dhcp", "ipv4leases").Output(); err == nil {
-		ingest(parseUbusIPv4Leases(out))
+	// ubus ipv4leases: service is named "dnsmasq" on most OpenWrt builds
+	// (requires dnsmasq-full) and "dhcp" on some forks.  Try both.
+	for _, svc := range []string{"dnsmasq", "dhcp"} {
+		if out, err := exec.Command("ubus", "call", svc, "ipv4leases").Output(); err == nil {
+			ingest(parseUbusIPv4Leases(out))
+			break
+		}
 	}
 	if out, err := exec.Command("ip", "neigh", "show").Output(); err == nil {
 		ingest(parseIPNeigh(out))
