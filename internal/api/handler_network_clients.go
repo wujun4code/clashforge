@@ -12,11 +12,12 @@ import (
 )
 
 type networkClient struct {
-	IP        string `json:"ip"`
-	MAC       string `json:"mac,omitempty"`
-	Hostname  string `json:"hostname,omitempty"`
-	Interface string `json:"interface,omitempty"`
-	Source    string `json:"source,omitempty"`
+	IP        string   `json:"ip"`
+	MAC       string   `json:"mac,omitempty"`
+	Hostname  string   `json:"hostname,omitempty"`
+	IPs       []string `json:"ips,omitempty"` // all addresses: IPv4 first, then IPv6
+	Interface string   `json:"interface,omitempty"`
+	Source    string   `json:"source,omitempty"`
 }
 
 func handleGetNetworkClients(_ Dependencies) http.HandlerFunc {
@@ -74,6 +75,54 @@ func getWANSubnets() []*net.IPNet {
 	return subnets
 }
 
+// mergedDevice accumulates all addresses and metadata for one physical device.
+type mergedDevice struct {
+	mac      string
+	hostname string
+	iface    string
+	source   string
+	v4s      []string // IPv4 addresses, deduped
+	v6s      []string // IPv6 addresses, deduped
+}
+
+func (d *mergedDevice) addIP(rawIP string) {
+	ip := net.ParseIP(rawIP)
+	if ip == nil {
+		return
+	}
+	if ip.To4() != nil {
+		for _, x := range d.v4s {
+			if x == rawIP {
+				return
+			}
+		}
+		d.v4s = append(d.v4s, rawIP)
+	} else {
+		for _, x := range d.v6s {
+			if x == rawIP {
+				return
+			}
+		}
+		d.v6s = append(d.v6s, rawIP)
+	}
+}
+
+func (d *mergedDevice) absorb(item networkClient) {
+	d.addIP(item.IP)
+	if d.mac == "" && item.MAC != "" {
+		d.mac = item.MAC
+	}
+	if d.hostname == "" && item.Hostname != "" {
+		d.hostname = item.Hostname
+	}
+	if d.iface == "" && item.Interface != "" {
+		d.iface = item.Interface
+	}
+	if d.source == "" && item.Source != "" {
+		d.source = item.Source
+	}
+}
+
 func discoverNetworkClients() []networkClient {
 	wanSubnets := getWANSubnets()
 	isWANIP := func(ipStr string) bool {
@@ -89,62 +138,101 @@ func discoverNetworkClients() []networkClient {
 		return false
 	}
 
-	merged := map[string]networkClient{}
-	merge := func(items []networkClient) {
+	// byMAC groups all addresses for one physical device by its MAC address.
+	// ipToMAC is a reverse index so MAC-less neighbor entries can be attached to
+	// an existing device once its MAC is known from a later source.
+	byMAC   := map[string]*mergedDevice{}
+	ipToMAC := map[string]string{}
+	// noMAC holds entries whose MAC address is not yet known.
+	noMAC := map[string]*mergedDevice{}
+
+	ingest := func(items []networkClient) {
 		for _, item := range items {
-			ip := strings.TrimSpace(item.IP)
-			if ip == "" {
-				continue
-			}
-			if net.ParseIP(ip) == nil {
+			rawIP := strings.TrimSpace(item.IP)
+			if net.ParseIP(rawIP) == nil {
 				continue
 			}
 
-			current := merged[ip]
-			if current.IP == "" {
-				current.IP = ip
+			if item.MAC != "" {
+				// Find or create the MAC-keyed device.
+				dev := byMAC[item.MAC]
+				if dev == nil {
+					dev = &mergedDevice{mac: item.MAC}
+					byMAC[item.MAC] = dev
+				}
+				dev.absorb(item)
+				ipToMAC[rawIP] = item.MAC
+
+				// Absorb any previously MAC-less entry for the same IP.
+				if prev, ok := noMAC[rawIP]; ok {
+					dev.absorb(networkClient{
+						IP:        rawIP,
+						Hostname:  prev.hostname,
+						Interface: prev.iface,
+					})
+					delete(noMAC, rawIP)
+				}
+			} else if mac, ok := ipToMAC[rawIP]; ok {
+				// This IP is already owned by a known MAC device.
+				byMAC[mac].absorb(item)
+			} else {
+				// No MAC known yet — store under IP for later merging.
+				dev := noMAC[rawIP]
+				if dev == nil {
+					dev = &mergedDevice{}
+					noMAC[rawIP] = dev
+				}
+				dev.absorb(item)
 			}
-			if current.MAC == "" {
-				current.MAC = item.MAC
-			}
-			if current.Hostname == "" {
-				current.Hostname = item.Hostname
-			}
-			if current.Interface == "" {
-				current.Interface = item.Interface
-			}
-			if current.Source == "" {
-				current.Source = item.Source
-			}
-			merged[ip] = current
 		}
 	}
 
-	// OpenWrt DHCP leases: best source for hostname + IP.
+	// Sources in priority order: DHCP gives the best hostname + IPv4 mapping.
 	if leaseData, err := os.ReadFile("/tmp/dhcp.leases"); err == nil {
-		merge(parseDHCPLeases(leaseData))
+		ingest(parseDHCPLeases(leaseData))
 	}
-
-	// Runtime neighbor table: active LAN devices.
 	if out, err := exec.Command("ip", "neigh", "show").Output(); err == nil {
-		merge(parseIPNeigh(out))
+		ingest(parseIPNeigh(out))
 	}
-
-	// Fallback for systems lacking iproute2.
 	if arpData, err := os.ReadFile("/proc/net/arp"); err == nil {
-		merge(parseProcARP(arpData))
+		ingest(parseProcARP(arpData))
 	}
 
-	result := make([]networkClient, 0, len(merged))
-	for _, c := range merged {
-		if strings.TrimSpace(c.IP) == "" {
-			continue
+	toClient := func(dev *mergedDevice) (networkClient, bool) {
+		// Primary address: first IPv4 (most readable), or first IPv6 as fallback.
+		var primary string
+		if len(dev.v4s) > 0 {
+			primary = dev.v4s[0]
+		} else if len(dev.v6s) > 0 {
+			primary = dev.v6s[0]
 		}
-		// Skip devices in the WAN subnet — they are upstream of this router.
-		if isWANIP(c.IP) {
-			continue
+		if primary == "" || isWANIP(primary) {
+			return networkClient{}, false
 		}
-		result = append(result, c)
+		allIPs := append(append([]string{}, dev.v4s...), dev.v6s...)
+		c := networkClient{
+			IP:        primary,
+			MAC:       dev.mac,
+			Hostname:  dev.hostname,
+			Interface: dev.iface,
+			Source:    dev.source,
+		}
+		if len(allIPs) > 1 {
+			c.IPs = allIPs
+		}
+		return c, true
+	}
+
+	var result []networkClient
+	for _, dev := range byMAC {
+		if c, ok := toClient(dev); ok {
+			result = append(result, c)
+		}
+	}
+	for _, dev := range noMAC {
+		if c, ok := toClient(dev); ok {
+			result = append(result, c)
+		}
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -162,7 +250,6 @@ func discoverNetworkClients() []networkClient {
 				return b1[idx] < b2[idx]
 			}
 		}
-
 		h1 := strings.ToLower(strings.TrimSpace(result[i].Hostname))
 		h2 := strings.ToLower(strings.TrimSpace(result[j].Hostname))
 		if h1 != h2 {

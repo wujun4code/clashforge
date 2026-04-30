@@ -402,6 +402,7 @@ export interface NetworkClient {
   ip: string
   mac?: string
   hostname?: string
+  ips?: string[]
   interface?: string
   source?: string
 }
