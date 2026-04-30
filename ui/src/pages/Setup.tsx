@@ -14,8 +14,18 @@ import {
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
   saveSource, setActiveSource, getSourceFile, getSources,
   checkSetupPorts, getSubscriptionCache, previewSetupFinalConfig, getDeviceGroups, updateDeviceGroups,
+  getActiveSource, previewDeviceGroupsConfig,
 } from '../api/client'
-import type { OverviewProbeData, OverviewModule, LogEntry, SourceFile, Subscription, SetupPortCheck, DeviceRouteGroup } from '../api/client'
+import type {
+  OverviewProbeData,
+  OverviewModule,
+  LogEntry,
+  SourceFile,
+  Subscription,
+  SetupPortCheck,
+  DeviceRouteGroup,
+  ActiveSource,
+} from '../api/client'
 import { ModalShell } from '../components/ui'
 
 type InitStatus = 'checking' | 'running' | 'ready'
@@ -425,6 +435,13 @@ function parseRoutePolicyOptions(content: string): RoutePolicyOptions {
   } catch {
     return { groups: [], knownProxyNames: [...BUILTIN_PROXY_NAMES] }
   }
+}
+
+function sourceKeyFromActiveSource(active: ActiveSource | null): string {
+  if (!active) return ''
+  if (active.type === 'file' && active.filename) return `file:${active.filename}`
+  if (active.type === 'subscription' && active.sub_id) return `subscription:${active.sub_id}`
+  return ''
 }
 
 function ConfigPreview({ content, onContinue }: { content: string; onContinue: () => void }) {
@@ -928,6 +945,11 @@ export function Setup() {
     network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
   }), [dns, net])
 
+  const resolveActiveSourceKey = useCallback(async () => {
+    const { active_source } = await getActiveSource().catch(() => ({ active_source: null as ActiveSource | null }))
+    return sourceKeyFromActiveSource(active_source ?? null)
+  }, [])
+
   const refreshLaunchConfigPreview = useCallback(async () => {
     setLaunchConfigLoading(true)
     setLaunchConfigError('')
@@ -935,9 +957,23 @@ export function Setup() {
     try {
       const { content } = await previewSetupFinalConfig(buildLaunchPayload())
       setLaunchConfigPreview(content)
-      const parsed = parseRoutePolicyOptions(content)
+      let policyContent = content
+      const activeSourceKey = await resolveActiveSourceKey()
+      if (activeSourceKey) {
+        try {
+          const merged = await previewDeviceGroupsConfig(
+            sanitizeDeviceGroupsForSetup(launchDeviceGroups),
+            activeSourceKey,
+          )
+          policyContent = merged.content ?? content
+        } catch {
+          // Fall back to setup preview content when source-cache preview is unavailable.
+        }
+      }
+
+      const parsed = parseRoutePolicyOptions(policyContent)
       setLaunchPolicyOptions(parsed)
-      if (content.trim() && parsed.groups.length === 0) {
+      if (policyContent.trim() && parsed.groups.length === 0) {
         setLaunchPolicyError('当前即将运行的配置中未发现可覆盖的策略组或可选节点。')
       }
     } catch (e: unknown) {
@@ -947,7 +983,7 @@ export function Setup() {
     } finally {
       setLaunchConfigLoading(false)
     }
-  }, [buildLaunchPayload])
+  }, [buildLaunchPayload, launchDeviceGroups, resolveActiveSourceKey])
 
   const handleViewCachedSubscription = useCallback(async (sub: Subscription) => {
     setSubCacheModalOpen(true)
@@ -983,7 +1019,8 @@ export function Setup() {
     setLaunchDeviceError('')
     setLaunchDeviceNotice('')
     try {
-      const { device_groups } = await getDeviceGroups()
+      const activeSourceKey = await resolveActiveSourceKey()
+      const { device_groups } = await getDeviceGroups(activeSourceKey || undefined)
       const normalized = normalizeDeviceGroupsForSetup(device_groups ?? [])
       setLaunchDeviceGroups(normalized)
       setLaunchDeviceSnapshot(serializeDeviceGroupsForSetup(normalized))
@@ -994,7 +1031,7 @@ export function Setup() {
     } finally {
       setLaunchDeviceLoading(false)
     }
-  }, [])
+  }, [resolveActiveSourceKey])
 
   const setLaunchGroupField = useCallback((groupID: string, updater: (group: DeviceRouteGroup) => DeviceRouteGroup) => {
     setLaunchDeviceGroups((prev) => prev.map((group) => (group.id === groupID ? updater(group) : group)))
@@ -1013,7 +1050,8 @@ export function Setup() {
     setLaunchDeviceSaving(true)
     try {
       const sanitized = sanitizeDeviceGroupsForSetup(launchDeviceGroups)
-      const resp = await updateDeviceGroups(sanitized)
+      const activeSourceKey = await resolveActiveSourceKey()
+      const resp = await updateDeviceGroups(sanitized, activeSourceKey || undefined)
       setLaunchDeviceGroups(sanitized)
       setLaunchDeviceSnapshot(serializeDeviceGroupsForSetup(sanitized))
 
@@ -1040,7 +1078,7 @@ export function Setup() {
     } finally {
       setLaunchDeviceSaving(false)
     }
-  }, [launchDeviceGroups, refreshLaunchConfigPreview])
+  }, [launchDeviceGroups, refreshLaunchConfigPreview, resolveActiveSourceKey])
 
   // ── fill forms from parsed Clash YAML ──
   const applyClashParsed = useCallback((parsed: ClashParsed) => {

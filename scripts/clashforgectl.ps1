@@ -24,6 +24,8 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -LocalPath .\cf-diag.txt -Redact
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 openclash
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 openclash -Kill
 #
 # Requirements:
 #   - ssh and scp must be available (OpenSSH bundled with Windows 10/11)
@@ -34,7 +36,7 @@
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "uninstall", "diag", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "uninstall", "diag", "openclash", "help")]
     [string]$Action,
 
     # Connection parameters
@@ -67,6 +69,9 @@ param(
     [string]$RemoteOutput = "/tmp/cf-diag.txt",  # Remote report path
     [string]$LocalPath    = "",           # Local path for fetched report
     [switch]$Redact,                      # Best-effort masking of sensitive values
+
+    # openclash options
+    [switch]$Kill,                        # Stop OpenClash service and kill detected OpenClash processes
 
     # common options
     [switch]$Yes,
@@ -623,6 +628,9 @@ switch ($Action) {
         if ($Redact) { $RemoteCmd += " --redact" }
         # Always capture to file; --stdout only needed when not fetching
         if (-not $Fetch) { $RemoteCmd += " --stdout" }
+    }
+    "openclash" {
+        if ($Kill) { $RemoteCmd += " --kill" }
     }
 }
 

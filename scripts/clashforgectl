@@ -24,6 +24,8 @@
 #   ./scripts/clashforgectl --router 192.168.1.1 diag
 #   ./scripts/clashforgectl --router 192.168.1.1 diag --fetch
 #   ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --local-path ./cf-diag.txt --redact
+#   ./scripts/clashforgectl --router 192.168.1.1 openclash
+#   ./scripts/clashforgectl --router 192.168.1.1 openclash --kill
 #
 # Requirements:
 #   - ssh and scp must be available (standard OpenSSH)
@@ -199,6 +201,8 @@ REMOTE_OUTPUT="/tmp/cf-diag.txt"
 LOCAL_PATH=""
 REDACT=0
 
+KILL_OPENCLASH=0
+
 YES=0
 DRY_RUN=0
 
@@ -206,7 +210,7 @@ DRY_RUN=0
 # First positional arg that is not a flag is the ACTION.
 while [ $# -gt 0 ]; do
     case "$1" in
-        status|stop|reset|upgrade|deploy|check|uninstall|diag|help)
+        status|stop|reset|upgrade|deploy|check|uninstall|diag|openclash|help)
             ACTION="$1"; shift ;;
         --router)     ROUTER="$2";      shift 2 ;;
         --router=*)   ROUTER="${1#*=}"; shift ;;
@@ -241,6 +245,8 @@ while [ $# -gt 0 ]; do
         --local-path) LOCAL_PATH="$2";  shift 2 ;;
         --local-path=*) LOCAL_PATH="${1#*=}"; shift ;;
         --redact)     REDACT=1;         shift ;;
+        # openclash options
+        --kill)       KILL_OPENCLASH=1; shift ;;
         # common options
         --yes|-y)     YES=1;            shift ;;
         --dry-run)    DRY_RUN=1;        shift ;;
@@ -267,6 +273,7 @@ SUBCOMMANDS
     deploy      Build locally, package as IPK, upload and install on router
     uninstall   Completely remove ClashForge from the router
     diag        Collect a full diagnostic report
+    openclash   Scan OpenClash processes/services; optionally kill them
     help        Show this help
 
 CONNECTION OPTIONS
@@ -299,6 +306,9 @@ DIAG OPTIONS
     --local-path <path>  Local path for fetched report (default: cf-diag_<router>_<timestamp>.txt)
     --redact             Best-effort masking of sensitive values
 
+OPENCLASH OPTIONS
+    --kill               Stop OpenClash service and kill detected OpenClash processes
+
 COMMON OPTIONS
     --yes                Skip confirmation prompts
     --dry-run            Print planned actions without making changes
@@ -316,6 +326,8 @@ EXAMPLES
     ./scripts/clashforgectl --router 192.168.1.1 check
     ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
     ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
+    ./scripts/clashforgectl --router 192.168.1.1 openclash
+    ./scripts/clashforgectl --router 192.168.1.1 openclash --kill
 EOF
 }
 
@@ -634,6 +646,9 @@ case "$ACTION" in
         [ "$REDACT" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --redact"
         # Print to stdout only when not fetching
         [ "$FETCH" -eq 0 ] && REMOTE_CMD="$REMOTE_CMD --stdout"
+        ;;
+    openclash)
+        [ "$KILL_OPENCLASH" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --kill"
         ;;
 esac
 

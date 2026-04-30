@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { GeoData } from './GeoData'
 import {
   getSubscriptions,
   addSubscription,
@@ -20,7 +21,7 @@ import type { Subscription, RuleProvider, RuleSearchResult, SourceFile, ActiveSo
 import {
   List, RefreshCw, Plus, Trash2, MoreVertical, Zap, Eye,
   Shield, Search, ChevronDown, ChevronRight, Play, FileText, Database,
-  Radio, AlertCircle, X,
+  Radio, AlertCircle, X, HardDrive,
 } from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -850,9 +851,10 @@ function RulesPanel() {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-type Tab = 'sources' | 'rules' | 'subscriptions' | 'running'
+type Tab = 'sources' | 'rules' | 'subscriptions' | 'geodata'
 
 export function ConfigManagement() {
+  const location = useLocation()
   const [tab, setTab] = useState<Tab>('sources')
   const [coreRunning, setCoreRunning] = useState(false)
   const [activeSource, setActiveSourceData] = useState<ActiveSource | null>(null)
@@ -868,9 +870,19 @@ export function ConfigManagement() {
       .catch(() => null)
   }, [])
 
+  useEffect(() => {
+    const requestedTab = new URLSearchParams(location.search).get('tab')
+    if (requestedTab === 'sources' || requestedTab === 'subscriptions' || requestedTab === 'geodata') {
+      setTab(requestedTab)
+    }
+    if (requestedTab === 'rules') {
+      setTab(coreRunning ? 'rules' : 'sources')
+    }
+  }, [location.search, coreRunning])
+
   // Auto-switch away from runtime-only tabs if core is not running
   useEffect(() => {
-    if (coreChecked && !coreRunning && (tab === 'rules' || tab === 'running')) {
+    if (coreChecked && !coreRunning && tab === 'rules') {
       setTab('sources')
     }
   }, [coreRunning, coreChecked, tab])
@@ -896,33 +908,44 @@ export function ConfigManagement() {
         >
           <List size={14} /> 订阅
         </button>
+        <button
+          className={`btn-ghost flex items-center gap-2 ${tab === 'geodata' ? 'border-brand/40 text-white' : ''}`}
+          onClick={() => setTab('geodata')}
+        >
+          <HardDrive size={14} /> 路由数据
+        </button>
         {coreRunning && (
-          <>
-            <button
-              className={`btn-ghost flex items-center gap-2 ${tab === 'rules' ? 'border-brand/40 text-white' : ''}`}
-              onClick={() => setTab('rules')}
-            >
-              <Shield size={14} /> 规则集
-            </button>
-            <button
-              className={`btn-ghost flex items-center gap-2 ${tab === 'running' ? 'border-brand/40 text-white' : ''}`}
-              onClick={() => setTab('running')}
-            >
-              <Eye size={14} /> 运行中配置
-            </button>
-          </>
+          <button
+            className={`btn-ghost flex items-center gap-2 ${tab === 'rules' ? 'border-brand/40 text-white' : ''}`}
+            onClick={() => setTab('rules')}
+          >
+            <Shield size={14} /> 规则集
+          </button>
         )}
         {!coreRunning && coreChecked && (
           <span className="flex items-center gap-1.5 text-xs text-muted ml-1">
-            <AlertCircle size={12} /> 服务未运行，规则集和运行配置不可用
+            <AlertCircle size={12} /> 服务未运行，规则集不可用
           </span>
         )}
       </div>
 
-      {tab === 'sources'       && <SourceFilesPanel coreRunning={coreRunning} />}
+      {tab === 'sources'       && (
+        <div className="space-y-6">
+          <SourceFilesPanel coreRunning={coreRunning} />
+          {coreRunning && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Eye size={14} className="text-muted" />
+                <h2 className="text-sm font-semibold text-white">运行中的配置</h2>
+              </div>
+              <RunningConfigPanel activeSource={activeSource} />
+            </section>
+          )}
+        </div>
+      )}
       {tab === 'subscriptions' && <SubscriptionsPanel coreRunning={coreRunning} activeSource={activeSource} />}
       {tab === 'rules'         && coreRunning && <RulesPanel />}
-      {tab === 'running'       && coreRunning && <RunningConfigPanel activeSource={activeSource} />}
+      {tab === 'geodata'       && <GeoData embedded />}
     </div>
   )
 }
