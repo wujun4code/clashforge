@@ -32,22 +32,18 @@ func handleGetNetworkClients(_ Dependencies) http.HandlerFunc {
 // getWANSubnets returns the IP subnets assigned to WAN interfaces (those carrying the default route).
 // Devices in these subnets are upstream of the router and cannot be managed by it.
 func getWANSubnets() []*net.IPNet {
-	out, err := exec.Command("ip", "route", "show", "default").Output()
+	// Use the explicit CIDR form so that only actual default routes (0.0.0.0/0)
+	// are returned.  `ip route show default` is ambiguous: some OpenWrt builds
+	// interpret "default" as the table name and print the entire main routing
+	// table, which includes connected LAN routes like "192.168.10.0/24 dev
+	// br-lan" — causing LAN interfaces to be mis-classified as WAN.
+	out, err := exec.Command("ip", "route", "show", "0.0.0.0/0").Output()
 	if err != nil {
 		return nil
 	}
-	// Only process lines that begin with "default" — these are actual default
-	// gateway routes (destination 0.0.0.0/0).  On some OpenWrt builds the
-	// busybox `ip` prints the entire main routing table when given "default",
-	// including connected LAN routes like "192.168.10.0/24 dev br-lan".
-	// Picking up br-lan here would incorrectly classify all LAN devices as WAN.
 	wanIfaces := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "default") {
-			continue
-		}
-		fields := strings.Fields(trimmed)
+		fields := strings.Fields(strings.TrimSpace(line))
 		for i, f := range fields {
 			if f == "dev" && i+1 < len(fields) {
 				wanIfaces[fields[i+1]] = true
