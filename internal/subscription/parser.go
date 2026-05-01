@@ -10,8 +10,16 @@ import (
 func Parse(content []byte) ([]ProxyNode, error) {
 	trimmed := bytes.TrimSpace(content)
 
-	// 1. Try Clash YAML
+	// 1a. Full Clash YAML (has proxies: key)
 	if bytes.Contains(trimmed, []byte("proxies:")) {
+		nodes, err := parseClashYAML(trimmed)
+		if err == nil && len(nodes) > 0 {
+			return nodes, nil
+		}
+	}
+
+	// 1b. Bare YAML sequence (starts with "- ", no proxies: wrapper)
+	if bytes.HasPrefix(trimmed, []byte("- ")) || bytes.HasPrefix(trimmed, []byte("-\n")) {
 		nodes, err := parseClashYAML(trimmed)
 		if err == nil && len(nodes) > 0 {
 			return nodes, nil

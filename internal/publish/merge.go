@@ -57,7 +57,26 @@ func buildProxyList(nodes []MergeNode) ([]interface{}, []string, error) {
 
 		var proxy map[string]interface{}
 
-		if n.NodeType == "worker" {
+		if n.NodeType == "imported" {
+			// Raw imported proxy — pass through as-is, just deduplicate the name.
+			if n.ImportedProxy == nil {
+				return nil, nil, fmt.Errorf("导入节点 %q 缺少代理数据", n.Name)
+			}
+			if baseName == "" {
+				if s, ok := n.ImportedProxy["name"].(string); ok && s != "" {
+					baseName = s
+				} else {
+					baseName = "imported"
+				}
+			}
+			name := dedupeName(baseName, usedName)
+			proxyNames = append(proxyNames, name)
+			proxy = make(map[string]interface{}, len(n.ImportedProxy))
+			for k, v := range n.ImportedProxy {
+				proxy[k] = v
+			}
+			proxy["name"] = name
+		} else if n.NodeType == "worker" {
 			hostname := strings.TrimSpace(n.WorkerHostname)
 			if hostname == "" {
 				return nil, nil, fmt.Errorf("Worker 节点 %q 缺少域名", n.Name)
@@ -194,4 +213,72 @@ func removeInjectedGroups(groups []interface{}) []interface{} {
 		out = append(out, item)
 	}
 	return out
+}
+
+// InjectRuleProviders merges hosted RuleSet entries into an already-merged YAML config.
+// For each rule set it adds a rule-providers entry (type: http, behavior: classical) and
+// prepends a RULE-SET rule routing traffic to the master proxy group.
+func InjectRuleProviders(yamlStr string, ruleSets []RuleSet) (string, error) {
+	if len(ruleSets) == 0 {
+		return yamlStr, nil
+	}
+	var root map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlStr), &root); err != nil {
+		return yamlStr, fmt.Errorf("parse yaml for rule-providers injection: %w", err)
+	}
+	if root == nil {
+		return yamlStr, nil
+	}
+
+	existing, _ := root["rule-providers"].(map[string]interface{})
+	if existing == nil {
+		existing = map[string]interface{}{}
+	}
+
+	ruleKeys := make([]string, 0, len(ruleSets))
+	for _, rs := range ruleSets {
+		key := sanitizeRuleSetKey(rs.Name)
+		existing[key] = map[string]interface{}{
+			"type":     "http",
+			"behavior": "classical",
+			"url":      rs.AccessURL,
+			"interval": 86400,
+			"format":   "text",
+		}
+		ruleKeys = append(ruleKeys, key)
+	}
+	root["rule-providers"] = existing
+
+	existingRules, _ := root["rules"].([]interface{})
+	newRules := make([]interface{}, 0, len(ruleKeys)+len(existingRules))
+	for _, key := range ruleKeys {
+		newRules = append(newRules, fmt.Sprintf("RULE-SET,%s,%s", key, masterGroupName))
+	}
+	newRules = append(newRules, existingRules...)
+	root["rules"] = newRules
+
+	out, err := yaml.Marshal(root)
+	if err != nil {
+		return yamlStr, fmt.Errorf("marshal yaml after rule-providers injection: %w", err)
+	}
+	return string(out), nil
+}
+
+func sanitizeRuleSetKey(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	key := strings.Trim(b.String(), "_")
+	for strings.Contains(key, "__") {
+		key = strings.ReplaceAll(key, "__", "_")
+	}
+	if key == "" {
+		key = "ruleset"
+	}
+	return key
 }

@@ -15,7 +15,6 @@ import {
   saveSource, setActiveSource, getSourceFile, getSources,
   checkSetupPorts, getSubscriptionCache, previewSetupFinalConfig, getDeviceGroups, updateDeviceGroups,
   getActiveSource, previewDeviceGroupsConfig,
-  reportHealthBrowser,
 } from '../api/client'
 import type {
   OverviewAccessCheck,
@@ -1413,7 +1412,6 @@ export function Setup() {
   const handleCheck = useCallback(async () => {
     setChecking(true); setRouterProbe(null); setBrowserProbe(null); setProbeLogs([])
     try {
-      const browserIPProvider = BROWSER_IP_PROVIDERS.find((item) => item.provider === 'IP.SB') ?? BROWSER_IP_PROVIDERS[0]
       const rp = await getOverviewProbes().catch(() => null)
       const browserTargets = (rp?.access_checks ?? []).map((item) => ({
         name: item.name,
@@ -1423,27 +1421,6 @@ export function Setup() {
       const bp = await runBrowserProbe(browserTargets)
       setRouterProbe(rp)
       setBrowserProbe(bp)
-      void reportHealthBrowser({
-        session_id: `setup-${browserSessionID}`,
-        checked_at: new Date().toISOString(),
-        user_agent: navigator.userAgent,
-        ip_checks: [{
-          provider: browserIPProvider.provider,
-          group: browserIPProvider.group,
-          ok: bp.ipOK,
-          ip: bp.ip,
-          error: bp.ipError,
-        }],
-        access_checks: bp.accessChecks.map((item) => ({
-          name: item.name,
-          group: item.group,
-          url: item.url,
-          ok: item.ok,
-          latency_ms: item.latency_ms,
-          error: item.error,
-          stage: item.stage,
-        })),
-      }).catch(() => null)
 
       const routerOK = rp ? rp.ip_checks.some(c => c.ok) : false
       const browserOK = bp.ipOK

@@ -2,6 +2,28 @@ package publish
 
 import "time"
 
+// RuleSet is a hosted mihomo rule-provider file stored in Cloudflare Worker KV.
+// The KV key (and therefore the access URL) is fixed at creation and never changes.
+type RuleSet struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	WorkerConfigID string    `json:"worker_config_id"`
+	WorkerName     string    `json:"worker_name"`
+	Hostname       string    `json:"hostname"`
+	KVKey          string    `json:"kv_key"`   // permanent KV key, never changes
+	AccessURL      string    `json:"access_url"` // permanent URL, never changes
+	Rules          []string  `json:"rules"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type RuleSetInput struct {
+	ID             string   `json:"id,omitempty"` // empty = create, non-empty = update
+	Name           string   `json:"name"`
+	WorkerConfigID string   `json:"worker_config_id"`
+	Rules          []string `json:"rules"`
+}
+
 type TemplatePreset struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -13,6 +35,7 @@ type PublishPreviewRequest struct {
 	TemplateMode    string   `json:"template_mode"` // builtin | runtime | custom
 	TemplateID      string   `json:"template_id,omitempty"`
 	TemplateContent string   `json:"template_content,omitempty"`
+	RuleSetIDs      []string `json:"rule_set_ids,omitempty"`
 }
 
 type MergeNode struct {
@@ -24,9 +47,11 @@ type MergeNode struct {
 	ProxyUser     string
 	ProxyPassword string
 	// Worker/VLESS-WS fields (NodeType == "worker")
-	NodeType       string // "ssh" | "worker"
+	NodeType       string // "ssh" | "worker" | "imported"
 	WorkerUUID     string
 	WorkerHostname string
+	// Imported proxy fields (NodeType == "imported"): raw Clash proxy map
+	ImportedProxy map[string]interface{}
 }
 
 type WorkerConfig struct {
@@ -181,4 +206,5 @@ type PublishUploadRequest struct {
 	TemplateMode    string   `json:"template_mode,omitempty"`
 	TemplateID      string   `json:"template_id,omitempty"`
 	TemplateContent string   `json:"template_content,omitempty"`
+	RuleSetIDs      []string `json:"rule_set_ids,omitempty"`
 }

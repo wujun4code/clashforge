@@ -28,6 +28,26 @@ func handleGetSubscriptions(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+// handleGetNodeImports returns imported proxy node sets (type=static), stored
+// separately from URL-based config subscriptions.
+func handleGetNodeImports(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		imports := deps.SubManager.GetAllImports()
+		type importWithCache struct {
+			subscription.Subscription
+			HasCache bool `json:"has_cache"`
+		}
+		result := make([]importWithCache, len(imports))
+		for i, s := range imports {
+			result[i] = importWithCache{
+				Subscription: s,
+				HasCache:     deps.SubManager.HasCache(s.ID),
+			}
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{"subscriptions": result})
+	}
+}
+
 func handleAddSubscription(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sub subscription.Subscription
@@ -130,5 +150,54 @@ func handleTriggerUpdateAll(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_ = deps.SubManager.TriggerUpdateAll()
 		JSON(w, http.StatusAccepted, map[string]string{"message": "update all started"})
+	}
+}
+
+// handleImportSubscription parses inline Clash YAML and creates a static subscription.
+// The subscription name is auto-derived from the parsed node names; no name input required.
+func handleImportSubscription(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+			return
+		}
+		if req.Content == "" {
+			Err(w, http.StatusBadRequest, "CONTENT_REQUIRED", "content is required")
+			return
+		}
+		id, count, nodes, err := deps.SubManager.ImportStatic(req.Content)
+		if err != nil {
+			Err(w, http.StatusUnprocessableEntity, "PARSE_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusCreated, map[string]interface{}{
+			"id":         id,
+			"node_count": count,
+			"nodes":      nodes,
+		})
+	}
+}
+
+// handleGetSubscriptionNodes returns the cached []ProxyNode for a subscription.
+func handleGetSubscriptionNodes(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if _, ok := deps.SubManager.GetByID(id); !ok {
+			Err(w, http.StatusNotFound, "SUB_NOT_FOUND", "subscription not found")
+			return
+		}
+		nodes, err := deps.SubManager.GetCachedNodes(id)
+		if err != nil {
+			if os.IsNotExist(err) {
+				JSON(w, http.StatusOK, map[string]interface{}{"id": id, "nodes": []interface{}{}})
+				return
+			}
+			Err(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{"id": id, "nodes": nodes})
 	}
 }

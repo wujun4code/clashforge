@@ -150,7 +150,8 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 	if len(cfg.DNS.Fallback) > 0 {
 		dnsMap["fallback"] = cfg.DNS.Fallback
 	}
-	// default-nameserver must be pure IPs (Mihomo requirement).
+	// default-nameserver must be pure IPs (Mihomo requirement): used to bootstrap
+	// DoH/DoT resolvers and resolve the nameserver hostnames themselves.
 	var bootstrapIPs []string
 	for _, ns := range cfg.DNS.Nameservers {
 		if !strings.HasPrefix(ns, "https://") && !strings.HasPrefix(ns, "tls://") && !strings.HasPrefix(ns, "tcp://") {
@@ -159,6 +160,25 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 	}
 	if len(bootstrapIPs) > 0 {
 		dnsMap["default-nameserver"] = bootstrapIPs
+	}
+
+	// proxy-server-nameserver resolves proxy node server hostnames, bypassing the
+	// fake-ip mapping layer so Mihomo can reach the actual proxy servers.
+	//
+	// Pure-IP UDP-53 entries work when there is no upstream DNS hijacking, but fail
+	// in multi-layer router topologies where an upstream OpenClash/dnsmasq intercepts
+	// all UDP port 53 traffic and returns fake-ip answers.
+	//
+	// DoH (https://<ip>/dns-query) uses TCP 443 with TLS, which cannot be intercepted
+	// by upstream "udp dport 53 redirect" rules and whose content cannot be replaced
+	// even if the TCP stream is transparently proxied.  By including DoH entries here
+	// (in addition to plain IPs as fallback), proxy node resolution stays reliable
+	// regardless of how many OpenClash layers sit upstream.
+	var proxyServerNS []string
+	proxyServerNS = append(proxyServerNS, bootstrapIPs...)
+	proxyServerNS = append(proxyServerNS, cfg.DNS.DoH...)
+	if len(proxyServerNS) > 0 {
+		dnsMap["proxy-server-nameserver"] = proxyServerNS
 	}
 	if len(cfg.DNS.DoH) > 0 {
 		if existing, ok := dnsMap["nameserver"].([]string); ok {
@@ -497,3 +517,4 @@ func mapKeys(m map[string]bool) []string {
 	}
 	return keys
 }
+

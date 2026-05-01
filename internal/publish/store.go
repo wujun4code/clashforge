@@ -24,17 +24,20 @@ type publishRecordFile struct {
 type Store struct {
 	mu           sync.RWMutex
 	key          []byte
-	keyPath      string
-	configsPath  string
-	recordsPath  string
+	keyPath       string
+	configsPath   string
+	recordsPath   string
+	rulesetsPath  string
 	workerConfig map[string]WorkerConfig
 	records      map[string]PublishRecord
+	rulesets      map[string]RuleSet
 }
 
 func NewStore(dataDir string) (*Store, error) {
 	keyPath := filepath.Join(dataDir, "publish.key")
 	configsPath := filepath.Join(dataDir, "publish-worker-configs.json")
 	recordsPath := filepath.Join(dataDir, "publish-records.json")
+	rulesetsPath := filepath.Join(dataDir, "publish-rulesets.json")
 
 	key, err := loadOrGenerateKey(keyPath)
 	if err != nil {
@@ -46,14 +49,19 @@ func NewStore(dataDir string) (*Store, error) {
 		keyPath:      keyPath,
 		configsPath:  configsPath,
 		recordsPath:  recordsPath,
+		rulesetsPath: rulesetsPath,
 		workerConfig: make(map[string]WorkerConfig),
 		records:      make(map[string]PublishRecord),
+		rulesets:     make(map[string]RuleSet),
 	}
 
 	if err := s.loadWorkerConfigs(); err != nil {
 		return nil, err
 	}
 	if err := s.loadPublishRecords(); err != nil {
+		return nil, err
+	}
+	if err := s.loadRuleSets(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -414,3 +422,143 @@ func (s *Store) GetPublishRecord(id string) (PublishRecord, bool) {
 	rec, ok := s.records[id]
 	return rec, ok
 }
+
+// ---- RuleSet ----
+
+type ruleSetFile struct {
+	RuleSets []RuleSet `json:"rule_sets"`
+}
+
+func (s *Store) loadRuleSets() error {
+	data, err := os.ReadFile(s.rulesetsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read rule sets: %w", err)
+	}
+	var wrapped ruleSetFile
+	if err := json.Unmarshal(data, &wrapped); err != nil {
+		return fmt.Errorf("parse rule sets: %w", err)
+	}
+	for _, rs := range wrapped.RuleSets {
+		if strings.TrimSpace(rs.ID) == "" {
+			continue
+		}
+		s.rulesets[rs.ID] = rs
+	}
+	return nil
+}
+
+func (s *Store) saveRuleSetsLocked() error {
+	items := make([]RuleSet, 0, len(s.rulesets))
+	for _, rs := range s.rulesets {
+		items = append(items, rs)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	payload := ruleSetFile{RuleSets: items}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal rule sets: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(s.rulesetsPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir rule sets dir: %w", err)
+	}
+	f, err := os.CreateTemp(filepath.Dir(s.rulesetsPath), ".publish-rulesets-*.json")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, s.rulesetsPath)
+}
+
+func (s *Store) ListRuleSets() []RuleSet {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]RuleSet, 0, len(s.rulesets))
+	for _, rs := range s.rulesets {
+		items = append(items, rs)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items
+}
+
+func (s *Store) GetRuleSet(id string) (RuleSet, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return RuleSet{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rs, ok := s.rulesets[id]
+	return rs, ok
+}
+
+func (s *Store) CreateRuleSet(input RuleSetInput, workerName, hostname, kvKey, accessURL string) (RuleSet, error) {
+	now := time.Now()
+	rs := RuleSet{
+		ID:             "rs_" + uuid.NewString(),
+		Name:           strings.TrimSpace(input.Name),
+		WorkerConfigID: strings.TrimSpace(input.WorkerConfigID),
+		WorkerName:     workerName,
+		Hostname:       hostname,
+		KVKey:          kvKey,
+		AccessURL:      accessURL,
+		Rules:          input.Rules,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rulesets[rs.ID] = rs
+	if err := s.saveRuleSetsLocked(); err != nil {
+		return RuleSet{}, err
+	}
+	return rs, nil
+}
+
+
+func (s *Store) UpdateRuleSetRules(id string, rules []string) (RuleSet, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return RuleSet{}, fmt.Errorf("rule set id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rs, ok := s.rulesets[id]
+	if !ok {
+		return RuleSet{}, fmt.Errorf("rule set %s not found", id)
+	}
+	rs.Rules = rules
+	rs.UpdatedAt = time.Now()
+	s.rulesets[id] = rs
+	if err := s.saveRuleSetsLocked(); err != nil {
+		return RuleSet{}, err
+	}
+	return rs, nil
+}
+
+func (s *Store) DeleteRuleSet(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("rule set id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rulesets, id)
+	return s.saveRuleSetsLocked()
+}
+

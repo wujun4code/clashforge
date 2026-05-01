@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var nonFileNameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
@@ -40,3 +42,9 @@ func PickWorkerBaseURL(workerURL, workerDevURL string) string {
 	}
 	return strings.TrimRight(strings.TrimSpace(workerDevURL), "/")
 }
+
+// NewRuleSetKVKey generates a permanent, unique KV key for a new rule set.
+func NewRuleSetKVKey() string {
+	return fmt.Sprintf("rules-%s.yaml", uuid.NewString()[:8])
+}
+

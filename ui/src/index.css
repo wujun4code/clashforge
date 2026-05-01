@@ -754,10 +754,12 @@
     line-height: 1.7;
     transition:
       border-color var(--dur-fast) var(--ease-default),
+      background   var(--dur-fast) var(--ease-default),
       box-shadow   var(--dur-fast) var(--ease-default);
   }
   .glass-textarea:focus {
     border-color: rgb(var(--brand) / 0.45);
+    background: rgb(var(--brand-subtle-rgb) / 0.06);
     box-shadow: 0 0 0 3px rgb(var(--brand) / 0.10);
   }
 

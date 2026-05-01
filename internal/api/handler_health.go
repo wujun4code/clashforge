@@ -288,7 +288,7 @@ func testHTTPProxyEndpoint(name string, port int, targetURL string, runtimeDir s
 		return healthProxyTest{Name: name, Port: port, Listening: false, OK: false, Error: "port is not listening"}
 	}
 	client := http.Client{
-		Timeout:   8 * time.Second,
+		Timeout:   4 * time.Second,
 		Transport: &http.Transport{Proxy: http.ProxyURL(mihomoProxyURL(port, runtimeDir))},
 	}
 	req, err := http.NewRequest(http.MethodHead, targetURL, nil)
