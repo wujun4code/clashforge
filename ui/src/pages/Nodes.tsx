@@ -16,6 +16,7 @@ import {
   RotateCw,
   Copy,
   Check,
+  Upload,
 } from 'lucide-react'
 import {
   getNodes,
@@ -30,8 +31,12 @@ import {
   deleteWorkerNode,
   redeployWorkerNode,
   getWorkerNodeClashConfig,
+  importSubscription,
+  getNodeImports,
+  deleteSubscription,
+  getSubscriptionNodes,
 } from '../api/client'
-import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone, WorkerNodeListItem } from '../api/client'
+import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone, WorkerNodeListItem, Subscription } from '../api/client'
 import { PageHeader, SectionCard, ModalShell, EmptyState } from '../components/ui'
 import {
   CFGate,
@@ -1445,6 +1450,132 @@ function WorkerExportModal({ node, onClose }: { node: WorkerNodeListItem; onClos
   )
 }
 
+// ── Import Clash Proxy Modal ──────────────────────────────────────────────────
+
+function ImportClashModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
+  const [content, setContent] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [imported, setImported] = useState<{ id: string; node_count: number; nodes: { name: string; type: string; server: string; port: number }[] } | null>(null)
+  const dragRef = useRef<HTMLDivElement>(null)
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => { setContent(ev.target?.result as string ?? ''); setError('') }
+    reader.readAsText(file)
+  }
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => { setContent(ev.target?.result as string ?? ''); setError('') }
+    reader.readAsText(file)
+  }
+
+  const handleImport = async () => {
+    if (!content.trim()) return
+    setSaving(true); setError('')
+    try {
+      const res = await importSubscription(content)
+      setImported({
+        id: res.id,
+        node_count: res.node_count,
+        nodes: (res.nodes as { name: string; type: string; server: string; port: number }[]) ?? [],
+      })
+      onImported()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '导入失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell
+      title="导入 Clash 代理配置"
+      onClose={onClose}
+      size="lg"
+      icon={<Upload size={18} />}
+    >
+      {imported ? (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
+              <p className="text-sm font-semibold text-emerald-300">导入成功，共 {imported.node_count} 个节点</p>
+            </div>
+            {imported.nodes.length > 0 && (
+              <div className="rounded-lg border border-white/8 bg-black/20 max-h-52 overflow-y-auto divide-y divide-white/5">
+                {imported.nodes.slice(0, 100).map((n, i) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                    <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-mono uppercase">{n.type || '?'}</span>
+                    <span className="flex-1 truncate text-slate-300">{n.name}</span>
+                    <span className="shrink-0 font-mono text-[11px] text-muted">{n.server}:{n.port}</span>
+                  </div>
+                ))}
+                {imported.nodes.length > 100 && (
+                  <div className="px-3 py-1.5 text-xs text-muted">…还有 {imported.nodes.length - 100} 个节点</div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <button className="btn-ghost" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Drop zone / textarea */}
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Clash 代理配置 (YAML)</label>
+            <div
+              ref={dragRef}
+              onDragOver={e => e.preventDefault()}
+              onDrop={handleFileDrop}
+              className="relative rounded-xl border border-white/10 bg-black/20 transition-colors hover:border-brand/30"
+            >
+              <textarea
+                className="w-full bg-transparent rounded-xl px-3 py-3 font-mono text-xs text-slate-300 placeholder:text-muted resize-none outline-none min-h-[180px]"
+                value={content}
+                onChange={e => { setContent(e.target.value); setError('') }}
+                placeholder={"粘贴 Clash YAML 配置，或拖拽 .yaml 文件到此处\n\n支持完整 Clash 配置（含 proxies: 块）或纯代理列表"}
+                spellCheck={false}
+                autoFocus
+              />
+              <label className="absolute bottom-2 right-2 btn-ghost h-7 px-2.5 text-xs cursor-pointer">
+                <Upload size={11} /> 选择文件
+                <input type="file" accept=".yaml,.yml,.txt" className="hidden" onChange={handleFileInput} />
+              </label>
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400 flex items-center gap-2">
+              <AlertCircle size={12} /> {error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button className="btn-ghost" onClick={onClose} disabled={saving}>取消</button>
+            <button
+              className="btn-primary"
+              onClick={handleImport}
+              disabled={saving || !content.trim()}
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+              {saving ? '导入中…' : '确认导入'}
+            </button>
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  )
+}
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export function Nodes() {
@@ -1473,6 +1604,37 @@ export function Nodes() {
   // ── Worker nodes state ───────────────────────────────────────────────────
   const [workerNodes, setWorkerNodes] = useState<WorkerNodeListItem[]>([])
   const [showWorkerWizard, setShowWorkerWizard] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
+
+  // ── Static (imported) subscriptions ─────────────────────────────────────
+  type StaticNodeRow = { subId: string; name: string; type: string; server: string; port: number }
+  const [importedNodes, setImportedNodes] = useState<StaticNodeRow[]>([])
+
+  const loadStaticSubs = useCallback(async () => {
+    try {
+      const data = await getNodeImports()
+      const rows: StaticNodeRow[] = []
+      await Promise.all((data.subscriptions ?? []).map(async (sub: Subscription) => {
+        try {
+          const res = await getSubscriptionNodes(sub.id)
+          for (const n of res.nodes) {
+            rows.push({ subId: sub.id, name: n.name, type: n.type, server: n.server, port: n.port })
+          }
+        } catch { /* non-fatal */ }
+      }))
+      setImportedNodes(rows)
+    } catch { /* non-fatal */ }
+  }, [])
+
+  useEffect(() => { void loadStaticSubs() }, [loadStaticSubs])
+
+  const handleStaticSubDelete = async (subId: string) => {
+    const count = importedNodes.filter(n => n.subId === subId).length
+    const label = count > 1 ? `这组导入节点（${count} 个）` : '这个导入节点'
+    if (!confirm(`确定删除${label}？`)) return
+    try { await deleteSubscription(subId); void loadStaticSubs() }
+    catch (e) { alert(e instanceof Error ? e.message : '删除失败') }
+  }
 
   const loadWorkerNodes = useCallback(async () => {
     try {
@@ -1559,7 +1721,7 @@ export function Nodes() {
       <PageHeader
         eyebrow="代理资源 · 中继节点"
         title="节点服务器"
-        description="管理远程 Linux 服务器，部署 GOST 代理 + TLS 证书，导出 Clash 配置文件"
+        description="托管节点（VPS + GOST）· 导入节点（Clash YAML）· Worker 节点（CF Workers）"
         metrics={[
           { label: '节点总数', value: String(totalNodes) },
           { label: '已连接', value: String(connectedNodes) },
@@ -1567,6 +1729,9 @@ export function Nodes() {
         ]}
         actions={cfGlobal?.cf_token ? (
           <div className="flex items-center gap-2">
+            <button className="btn-ghost flex items-center gap-2" onClick={() => setShowImportModal(true)}>
+              <Upload size={14} /> 导入节点
+            </button>
             <button className="btn-ghost flex items-center gap-2" onClick={() => setShowWorkerWizard(true)}>
               <CloudCog size={14} /> Worker 节点
             </button>
@@ -1586,22 +1751,26 @@ export function Nodes() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={24} className="animate-spin text-brand" />
-        </div>
+        <SectionCard title="托管节点" description="远程 Linux 服务器，通过 GOST + TLS 提供代理转发">
+          <div className="flex items-center justify-center py-12">
+            <Loader2 size={24} className="animate-spin text-brand" />
+          </div>
+        </SectionCard>
       ) : nodes.length === 0 ? (
-        <EmptyState
-          title="暂无节点"
-          description="添加一台远程 Linux 服务器，ClashForge 将自动部署 GOST 代理并签发 TLS 证书。"
-          action={
-            <button className="btn-primary" onClick={() => openWizard()}>
-              <Plus size={14} /> 添加第一台服务器
-            </button>
-          }
-          icon={<Server size={18} />}
-        />
+        <SectionCard title="托管节点" description="远程 Linux 服务器，通过 GOST + TLS 提供代理转发">
+          <EmptyState
+            title="暂无托管节点"
+            description="添加一台远程 Linux 服务器，ClashForge 将自动部署 GOST 代理并签发 TLS 证书。"
+            action={
+              <button className="btn-primary" onClick={() => openWizard()}>
+                <Plus size={14} /> 添加第一台服务器
+              </button>
+            }
+            icon={<Server size={18} />}
+          />
+        </SectionCard>
       ) : (
-        <SectionCard>
+        <SectionCard title="托管节点" description="远程 Linux 服务器，通过 GOST + TLS 提供代理转发">
           <div className="table-shell">
             {/* Table header */}
             <div className="grid grid-cols-12 gap-3 px-4 py-3 table-header-row">
@@ -1697,6 +1866,57 @@ export function Nodes() {
           </div>
         </SectionCard>
       )}
+
+      {/* ── Imported (static) Nodes ──────────────────────────────────── */}
+      <SectionCard
+        title="导入节点"
+        description="通过粘贴 Clash YAML 配置导入的代理节点组，参与 mihomo 配置生成"
+        actions={
+          <button className="btn-ghost h-7 px-2.5 text-xs flex items-center gap-1.5" onClick={() => setShowImportModal(true)}>
+            <Upload size={12} /> 导入配置
+          </button>
+        }
+      >
+        {importedNodes.length === 0 ? (
+          <EmptyState
+            title="暂无导入节点"
+            description="点击「导入配置」粘贴 Clash YAML，将代理节点加入 mihomo 路由配置。"
+            action={
+              <button className="btn-primary" onClick={() => setShowImportModal(true)}>
+                <Upload size={14} /> 导入 Clash 配置
+              </button>
+            }
+            icon={<Upload size={18} />}
+          />
+        ) : (
+          <div className="table-shell">
+            <div className="grid grid-cols-12 gap-3 px-4 py-3 table-header-row">
+              <span className="col-span-5">节点名称</span>
+              <span className="col-span-2">类型</span>
+              <span className="col-span-3">服务器</span>
+              <span className="col-span-2 text-right">操作</span>
+            </div>
+            {importedNodes.map((node, i) => (
+              <div key={i} className="grid grid-cols-12 gap-3 px-4 py-3 table-row items-center">
+                <div className="col-span-5">
+                  <p className="text-sm font-semibold text-white truncate">{node.name}</p>
+                </div>
+                <div className="col-span-2">
+                  <span className="rounded px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-mono uppercase">{node.type || '?'}</span>
+                </div>
+                <div className="col-span-3">
+                  <span className="text-xs font-mono text-muted truncate">{node.server}:{node.port}</span>
+                </div>
+                <div className="col-span-2 flex items-center justify-end">
+                  <button className="btn-icon-sm btn-ghost" title="删除此导入组" onClick={() => handleStaticSubDelete(node.subId)}>
+                    <Trash2 size={14} className="text-muted hover:text-red-400" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       {/* ── Worker Nodes ─────────────────────────────────────────────── */}
       <SectionCard
@@ -1805,6 +2025,13 @@ export function Nodes() {
         <WorkerExportModal
           node={workerExportNode}
           onClose={() => setWorkerExportNode(null)}
+        />
+      )}
+
+      {showImportModal && (
+        <ImportClashModal
+          onClose={() => setShowImportModal(false)}
+          onImported={() => { void loadStaticSubs() }}
         />
       )}
     </CFGate>

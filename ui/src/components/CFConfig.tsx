@@ -2,55 +2,19 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { AlertCircle, CheckCircle2, CloudCog, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { ModalShell } from './ui'
 
-// ── crypto helpers ────────────────────────────────────────────────────────────
-
-export async function encryptForLocalStorage(raw: string, secret: string): Promise<string> {
-  const eff = secret || 'clashforge-local-key'
-  if (!window.crypto?.subtle) return raw
-  const enc = new TextEncoder()
-  const iv = window.crypto.getRandomValues(new Uint8Array(12))
-  const km = await window.crypto.subtle.importKey('raw', enc.encode(eff), 'PBKDF2', false, ['deriveKey'])
-  const key = await window.crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: enc.encode('cf-wizard-salt'), iterations: 100000, hash: 'SHA-256' },
-    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt'],
-  )
-  const cipher = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(raw))
-  return `${btoa(String.fromCharCode(...iv))}.${btoa(String.fromCharCode(...new Uint8Array(cipher)))}`
-}
-
-export async function decryptFromLocalStorage(payload: string, secret: string): Promise<string> {
-  const eff = secret || 'clashforge-local-key'
-  if (!payload) return ''
-  if (!payload.includes('.') || !window.crypto?.subtle) return payload
-  const [ivB64, cipherB64] = payload.split('.')
-  const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0))
-  const cipher = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0))
-  const enc = new TextEncoder()
-  const dec = new TextDecoder()
-  const km = await window.crypto.subtle.importKey('raw', enc.encode(eff), 'PBKDF2', false, ['deriveKey'])
-  const key = await window.crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: enc.encode('cf-wizard-salt'), iterations: 100000, hash: 'SHA-256' },
-    km, { name: 'AES-GCM', length: 256 }, false, ['decrypt'],
-  )
-  return dec.decode(await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher))
-}
-
 export function maskSecret(v: string) {
   if (!v) return ''
   if (v.length <= 8) return '*'.repeat(v.length)
   return `${v.slice(0, 4)}****${v.slice(-4)}`
 }
 
-// ── types & storage keys ──────────────────────────────────────────────────────
+// ── types ─────────────────────────────────────────────────────────────────────
 
 export interface CFConfig {
   cf_token: string
   cf_account_id: string
   acme_email: string
 }
-
-const CF_CONFIG_KEY = 'cf_global_config_v1'
-const CF_LEGACY_KEY = 'cf_nodes_wizard_v1'
 
 interface CFPermissionRow {
   scope: 'Zone' | 'Account'
@@ -109,7 +73,25 @@ export function CFPermissionTable({ compact = false, className = '' }: { compact
   )
 }
 
-// ── hook ──────────────────────────────────────────────────────────────────────
+// ── hook — all data lives on the router at /etc/metaclash/cf-config.json ──────
+
+const BASE = '/api/v1'
+
+async function apiFetch<T>(method: string, body?: unknown): Promise<T> {
+  const secret = localStorage.getItem('cf_secret') || ''
+  const res = await fetch(`${BASE}/cf-config`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  })
+  if (res.status === 204) return undefined as T
+  const json = await res.json()
+  if (!json.ok) throw new Error(json.error?.message ?? `HTTP ${res.status}`)
+  return json.data as T
+}
 
 export function useCFConfig() {
   const [config, setConfig] = useState<CFConfig | null>(null)
@@ -117,55 +99,30 @@ export function useCFConfig() {
 
   const reload = useCallback(async () => {
     setLoading(true)
-    const secret = localStorage.getItem('cf_secret') || ''
-    let raw = localStorage.getItem(CF_CONFIG_KEY)
-
-    // One-time migration from the old per-wizard key
-    if (!raw) {
-      const legacy = localStorage.getItem(CF_LEGACY_KEY)
-      if (legacy) {
-        try {
-          const plain = await decryptFromLocalStorage(legacy, secret)
-          const d = JSON.parse(plain) as Partial<CFConfig>
-          if (d.cf_token) {
-            const enc = await encryptForLocalStorage(
-              JSON.stringify({ cf_token: d.cf_token, cf_account_id: d.cf_account_id ?? '', acme_email: d.acme_email ?? '' }),
-              secret,
-            )
-            localStorage.setItem(CF_CONFIG_KEY, enc)
-            localStorage.removeItem(CF_LEGACY_KEY)
-            raw = enc
-          }
-        } catch { /* ignore migration failure */ }
-      }
-    }
-
-    if (!raw) { setConfig(null); setLoading(false); return }
-
     try {
-      const plain = await decryptFromLocalStorage(raw, secret)
-      const d = JSON.parse(plain) as Partial<CFConfig>
-      setConfig({ cf_token: d.cf_token ?? '', cf_account_id: d.cf_account_id ?? '', acme_email: d.acme_email ?? '' })
-    } catch { setConfig(null) }
+      const data = await apiFetch<CFConfig>('GET')
+      setConfig(data.cf_token ? data : null)
+    } catch {
+      setConfig(null)
+    }
     setLoading(false)
   }, [])
 
   useEffect(() => { void reload() }, [reload])
 
   const save = useCallback(async (cfg: CFConfig) => {
-    const secret = localStorage.getItem('cf_secret') || ''
-    const enc = await encryptForLocalStorage(JSON.stringify(cfg), secret)
-    localStorage.setItem(CF_CONFIG_KEY, enc)
-    setConfig(cfg)
+    const saved = await apiFetch<CFConfig>('PUT', cfg)
+    setConfig(saved.cf_token ? saved : null)
   }, [])
 
-  const clear = useCallback(() => {
-    localStorage.removeItem(CF_CONFIG_KEY)
+  const clear = useCallback(async () => {
+    await apiFetch<void>('DELETE')
     setConfig(null)
   }, [])
 
   return { config, loading, isConfigured: Boolean(config?.cf_token && config?.cf_account_id), save, clear, reload }
 }
+
 
 // ── CFConfigModal ─────────────────────────────────────────────────────────────
 

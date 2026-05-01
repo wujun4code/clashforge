@@ -265,7 +265,7 @@ export function ModalShell({
   /** Return false to cancel close (e.g. dirty-form confirmation). Only fires on backdrop click. */
   onBeforeClose?: () => boolean
   children: ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
   dismissible?: boolean
 }) {
   const maxWidth = size === 'sm'
@@ -274,7 +274,9 @@ export function ModalShell({
       ? 'max-w-2xl'
       : size === 'xl'
         ? 'max-w-3xl'
-        : 'max-w-md'
+        : size === '2xl'
+          ? 'max-w-5xl'
+          : 'max-w-md'
 
   return (
     <div
@@ -283,13 +285,15 @@ export function ModalShell({
       onClick={dismissible ? () => { if (onBeforeClose && !onBeforeClose()) return; onClose?.() } : undefined}
     >
       <div
-        className={cn('glass-modal w-full overflow-hidden shadow-glass-lg', maxWidth)}
+        className={cn('glass-modal w-full flex flex-col shadow-glass-lg', maxWidth)}
         style={{
           border: '1px solid rgb(var(--border-color) / calc(var(--border-alpha) + 0.04))',
+          maxHeight: '90dvh',
         }}
         onClick={(event) => event.stopPropagation()}
       >
         <div
+          className="flex-shrink-0"
           style={{
             borderBottom: '1px solid rgb(var(--border-color) / var(--border-alpha))',
             padding: 'var(--space-md) var(--space-lg)',
@@ -322,7 +326,7 @@ export function ModalShell({
             </div>
           </div>
         </div>
-        <div style={{ padding: 'var(--space-md) var(--space-lg)' }}>{children}</div>
+        <div className="min-h-0 overflow-y-auto" style={{ padding: 'var(--space-md) var(--space-lg)' }}>{children}</div>
       </div>
     </div>
   )

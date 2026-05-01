@@ -30,7 +30,6 @@ type Dependencies struct {
 	ConfigPath      string
 	Config          *config.MetaclashConfig
 	Core            *core.CoreManager
-	HealthMonitor   *HealthMonitor
 	SubManager      *subscription.Manager
 	Netfilter       *netfilter.Manager
 	SSEBroker       *SSEBroker
@@ -60,11 +59,11 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/overview/takeover", handleTakeoverOverviewModule(deps))
 		api.Post("/overview/release", handleReleaseOverviewTakeover(deps))
 		api.Get("/health/check", handleHealthCheck(deps))
-		api.Get("/health/summary", handleHealthSummary(deps))
-		api.Get("/health/incidents", handleHealthIncidents(deps))
-		api.Post("/health/browser-report", handleHealthBrowserReport(deps))
 		api.Post("/health/probe-domain", handleProbeDomain(deps))
 		api.Get("/health/proxy-diag", handleProxyDiag(deps))
+		api.Get("/cf-config", handleGetCFConfig(deps))
+		api.Put("/cf-config", handlePutCFConfig(deps))
+		api.Delete("/cf-config", handleDeleteCFConfig(deps))
 		api.Get("/config", handleGetConfig(deps))
 		api.Put("/config", handleUpdateConfig(deps))
 		api.Get("/config/mihomo", handleGetMihomoConfig(deps))
@@ -98,11 +97,14 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/subscriptions", handleGetSubscriptions(deps))
 		api.Post("/subscriptions", handleAddSubscription(deps))
 		api.Post("/subscriptions/update-all", handleTriggerUpdateAll(deps))
+		api.Post("/subscriptions/import", handleImportSubscription(deps))
 		api.Put("/subscriptions/{id}", handleUpdateSubscription(deps))
 		api.Delete("/subscriptions/{id}", handleDeleteSubscription(deps))
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
 		api.Post("/subscriptions/{id}/sync-update", handleSyncSubscriptionUpdate(deps))
 		api.Get("/subscriptions/{id}/cache", handleGetSubscriptionCache(deps))
+		api.Get("/subscriptions/{id}/nodes", handleGetSubscriptionNodes(deps))
+		api.Get("/node-imports", handleGetNodeImports(deps))
 		api.Get("/logs", handleGetLogs(deps))
 		api.Delete("/logs", handleClearLogs(deps))
 		api.Post("/logs/pause", handlePauseLogs(deps))
@@ -154,6 +156,11 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/publish/upload", handlePublishUpload(deps))
 		api.Get("/publish/records", handleGetPublishRecords(deps))
 		api.Delete("/publish/records/{id}", handleDeletePublishRecord(deps))
+		// Rule provider hosting
+		api.Get("/publish/rulesets", handleListRuleSets(deps))
+		api.Post("/publish/rulesets", handleCreateRuleSet(deps))
+		api.Put("/publish/rulesets/{id}", handleUpdateRuleSet(deps))
+		api.Delete("/publish/rulesets/{id}", handleDeleteRuleSet(deps))
 		// GeoData management
 		if deps.GeoDataManager != nil {
 			api.Get("/geodata/status", handleGetGeoDataStatus(deps))

@@ -198,7 +198,6 @@ func main() {
 		ConfigPath:      *cfgPath,
 		Config:          cfg,
 		Core:            coreManager,
-		HealthMonitor:   nil,
 		SubManager:      subManager,
 		Netfilter:       nfManager,
 		SSEBroker:       sseBroker,
@@ -209,12 +208,6 @@ func main() {
 		WorkerNodeStore: workerNodeStore,
 		GeoDataManager:  geoManager,
 	}
-	healthMonitor := api.NewHealthMonitor(deps)
-	if healthMonitor != nil {
-		healthMonitor.Start()
-		deps.HealthMonitor = healthMonitor
-	}
-
 	// HTTP server
 	router := api.NewRouter(deps)
 
@@ -237,9 +230,6 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutdown requested")
 
 	sched.Stop()
-	if healthMonitor != nil {
-		healthMonitor.Stop()
-	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

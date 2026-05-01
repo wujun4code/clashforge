@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -20,44 +19,23 @@ type KeyPair struct {
 }
 
 const keyFilename = "clashforge_ed25519"
-const keyDirOverrideEnv = "CLASHFORGE_SSH_KEY_DIR"
 
-// preferredKeyDir returns the directory where the SSH key should live.
-// /root/.ssh is outside the opkg-managed /etc/metaclash tree and survives
-// package upgrades without any backup/restore ceremony.
-// Falls back to dataDir when /root is inaccessible (e.g. non-root dev runs).
-func preferredKeyDir(dataDir string) string {
-	if override := strings.TrimSpace(os.Getenv(keyDirOverrideEnv)); override != "" {
-		return override
-	}
-	if runtime.GOOS == "windows" {
-		return dataDir
-	}
-	const sshDir = "/root/.ssh"
-	if err := os.MkdirAll(sshDir, 0o700); err == nil {
-		return sshDir
-	}
-	return dataDir
-}
-
-// LoadOrGenerateKeyPair loads the router's ED25519 key pair, generating one on
-// first run. The key is stored in /root/.ssh/clashforge_ed25519 (preferred) or
-// dataDir/clashforge_ed25519 (fallback). On first run after an upgrade from an
-// older version the key is migrated from the legacy dataDir location in-process,
-// so no shell-script backup/restore is needed.
+// LoadOrGenerateKeyPair loads the router's ED25519 key pair from dataDir,
+// generating one on first run. The key lives at dataDir/clashforge_ed25519
+// (i.e. /etc/metaclash/clashforge_ed25519) and is backed up / restored by the
+// IPK prerm/postinst scripts so it survives opkg upgrades.
+//
+// Legacy migration: if the key was previously stored in /root/.ssh/ it is
+// moved into dataDir on first run of a new binary.
 func LoadOrGenerateKeyPair(dataDir string) (*KeyPair, error) {
-	keyDir := preferredKeyDir(dataDir)
-	privPath := filepath.Join(keyDir, keyFilename)
+	privPath := filepath.Join(dataDir, keyFilename)
 
-	// Migrate from legacy location (dataDir) the first time the new binary runs.
-	if keyDir != dataDir {
-		legacyPath := filepath.Join(dataDir, keyFilename)
-		if _, err := os.Stat(privPath); os.IsNotExist(err) {
-			if data, err := os.ReadFile(legacyPath); err == nil {
-				_ = os.MkdirAll(keyDir, 0o700)
-				if writeErr := os.WriteFile(privPath, data, 0o600); writeErr == nil {
-					_ = os.Remove(legacyPath) // clean up old location
-				}
+	// One-time migration from the old /root/.ssh location.
+	legacyPath := "/root/.ssh/" + keyFilename
+	if _, err := os.Stat(privPath); os.IsNotExist(err) {
+		if data, err := os.ReadFile(legacyPath); err == nil {
+			if writeErr := os.WriteFile(privPath, data, 0o600); writeErr == nil {
+				_ = os.Remove(legacyPath)
 			}
 		}
 	}
@@ -96,7 +74,7 @@ func LoadOrGenerateKeyPair(dataDir string) (*KeyPair, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal SSH private key: %w", err)
 		}
-		if err := os.MkdirAll(keyDir, 0o700); err != nil {
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
 			return nil, err
 		}
 		if err := os.WriteFile(privPath, pem.EncodeToMemory(block), 0o600); err != nil {
@@ -116,6 +94,7 @@ func LoadOrGenerateKeyPair(dataDir string) (*KeyPair, error) {
 		pubKeyStr: pubKeyStr,
 	}, nil
 }
+
 
 // PublicKeyString returns the public key in authorized_keys format.
 func (kp *KeyPair) PublicKeyString() string {

@@ -32,7 +32,12 @@ func handleGetNetworkClients(_ Dependencies) http.HandlerFunc {
 // getWANSubnets returns the IP subnets assigned to WAN interfaces (those carrying the default route).
 // Devices in these subnets are upstream of the router and cannot be managed by it.
 func getWANSubnets() []*net.IPNet {
-	out, err := exec.Command("ip", "route", "show", "default").Output()
+	// Use the explicit CIDR form so that only actual default routes (0.0.0.0/0)
+	// are returned.  `ip route show default` is ambiguous: some OpenWrt builds
+	// interpret "default" as the table name and print the entire main routing
+	// table, which includes connected LAN routes like "192.168.10.0/24 dev
+	// br-lan" — causing LAN interfaces to be mis-classified as WAN.
+	out, err := exec.Command("ip", "route", "show", "0.0.0.0/0").Output()
 	if err != nil {
 		return nil
 	}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { GeoData } from './GeoData'
 import {
   getSubscriptions,
@@ -436,8 +436,13 @@ function SubCard({ sub, isRunning, onDelete, onUpdate, onActivate }: {
   )
 }
 
-function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
-  const [form, setForm] = useState({ name: '', url: '', user_agent: 'clash-meta', interval: '6h', enabled: true })
+function AddModal({ onClose, onAdded, initialUrl = '', initialName = '' }: {
+  onClose: () => void
+  onAdded: () => void
+  initialUrl?: string
+  initialName?: string
+}) {
+  const [form, setForm] = useState({ name: initialName, url: initialUrl, user_agent: 'clash-meta', interval: '6h', enabled: true })
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
@@ -484,8 +489,11 @@ function AddModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
 
 function SubscriptionsPanel({ coreRunning, activeSource }: { coreRunning: boolean; activeSource: ActiveSource | null }) {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [subs, setSubs] = useState<Subscription[]>([])
   const [showAdd, setShowAdd] = useState(false)
+  const [addInitialUrl, setAddInitialUrl] = useState('')
+  const [addInitialName, setAddInitialName] = useState('')
   const [loading, setLoading] = useState(true)
   const [pendingActivate, setPendingActivate] = useState<PendingActivate | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<ConfirmDelete | null>(null)
@@ -496,6 +504,20 @@ function SubscriptionsPanel({ coreRunning, activeSource }: { coreRunning: boolea
     .catch(() => setLoading(false))
 
   useEffect(() => { refresh() }, [])
+
+  // Open AddModal pre-filled when navigating from /publish with ?addSub=<url>&subName=<name>
+  useEffect(() => {
+    const url = searchParams.get('addSub')
+    if (!url) return
+    const name = searchParams.get('subName') ?? ''
+    setAddInitialUrl(url)
+    setAddInitialName(name)
+    setShowAdd(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('addSub')
+    next.delete('subName')
+    setSearchParams(next, { replace: true })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- only run once on mount
 
   const isSubRunning = (id: string) =>
     activeSource?.type === 'subscription' && activeSource.sub_id === id && coreRunning
@@ -558,7 +580,14 @@ function SubscriptionsPanel({ coreRunning, activeSource }: { coreRunning: boolea
         />
       ))}
 
-      {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdded={refresh} />}
+      {showAdd && (
+        <AddModal
+          onClose={() => { setShowAdd(false); setAddInitialUrl(''); setAddInitialName('') }}
+          onAdded={refresh}
+          initialUrl={addInitialUrl}
+          initialName={addInitialName}
+        />
+      )}
 
       {pendingActivate && (
         <StopAndSwitchDialog

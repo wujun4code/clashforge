@@ -89,79 +89,6 @@ export interface HealthCheckData {
   }
 }
 
-export interface HealthBrowserIPCheck {
-  provider: string
-  group?: string
-  ok: boolean
-  ip?: string
-  location?: string
-  error?: string
-}
-
-export interface HealthBrowserAccessCheck {
-  name: string
-  group?: string
-  url?: string
-  ok: boolean
-  latency_ms?: number
-  error?: string
-  stage?: string
-}
-
-export interface HealthBrowserReportRequest {
-  session_id: string
-  checked_at: string
-  user_agent?: string
-  ip_checks: HealthBrowserIPCheck[]
-  access_checks: HealthBrowserAccessCheck[]
-}
-
-export interface HealthProbeSummary {
-  has_data: boolean
-  healthy: boolean
-  ip_ok: boolean
-  failed_access?: string[]
-  checked_at?: string
-  stale?: boolean
-  error?: string
-}
-
-export interface HealthCurrentState {
-  state: string
-  since: string
-  last_reason?: string
-  consecutive_failures: number
-  consecutive_successes: number
-  active_incident_id?: string
-  last_router_check?: string
-  last_browser_check?: string
-}
-
-export interface HealthSummaryData {
-  checked_at: string
-  current: HealthCurrentState
-  router: HealthProbeSummary
-  browser: HealthProbeSummary
-  open_incidents: number
-  pending_notifications: number
-  webhook_configured: boolean
-  notification_channel?: string
-  router_interval_sec?: number
-  browser_ttl_sec?: number
-}
-
-export interface HealthIncident {
-  id: string
-  status: string
-  state: string
-  reason: string
-  opened_at: string
-  updated_at: string
-  resolved_at?: string
-  router: HealthProbeSummary
-  browser: HealthProbeSummary
-}
-
 export interface OverviewSummary {
   core_running: boolean
   clashforge_healthy: boolean
@@ -413,10 +340,6 @@ export const getOverviewCore  = () => request<OverviewCoreData>('GET', '/overvie
 export const getOverviewProbes = () => request<OverviewProbeData>('GET', '/overview/probes')
 export const getOverviewResources = () => request<OverviewResourceData>('GET', '/overview/resources')
 export const getHealthCheck   = (target?: string) => request<HealthCheckData>('GET', `/health/check${target ? `?target=${encodeURIComponent(target)}` : ''}`)
-export const getHealthSummary = () => request<HealthSummaryData>('GET', '/health/summary')
-export const getHealthIncidents = (limit = 50) => request<{ incidents: HealthIncident[] }>('GET', `/health/incidents?limit=${limit}`)
-export const reportHealthBrowser = (payload: HealthBrowserReportRequest) =>
-  request<{ ok: boolean; browser: HealthProbeSummary; summary: HealthSummaryData }>('POST', '/health/browser-report', payload)
 export const takeoverOverviewModule = (payload: { module: string; mode?: string; stop_services?: string[] }) => request<OverviewTakeoverResponse>('POST', '/overview/takeover', payload)
 export const releaseOverviewTakeover = () => request<OverviewReleaseResponse>('POST', '/overview/release')
 export const startCore        = () => request('POST', '/core/start')
@@ -454,7 +377,12 @@ export const testLatency      = async (proxies: string[]): Promise<Record<string
 export const getConnections   = () => request<{connections: Connection[]}>('GET', '/connections')
 export const closeAllConns    = () => request('DELETE', '/connections')
 export const getSubscriptions = () => request<{subscriptions: Subscription[]}>('GET', '/subscriptions')
+export const getNodeImports   = () => request<{subscriptions: Subscription[]}>('GET', '/node-imports')
 export const addSubscription  = (s: Partial<Subscription>) => request<{id:string}>('POST', '/subscriptions', s)
+export const importSubscription = (content: string) =>
+  request<{id: string; node_count: number; nodes: unknown[]}>('POST', '/subscriptions/import', { content })
+export const getSubscriptionNodes = (id: string) =>
+  request<{id: string; nodes: {name: string; type: string; server: string; port: number; source_sub_id?: string}[]}>('GET', `/subscriptions/${id}/nodes`)
 export const updateSubscription = (id: string, p: Partial<Subscription>) => request('PUT', `/subscriptions/${id}`, p)
 export const deleteSubscription = (id: string) => request('DELETE', `/subscriptions/${id}`)
 export const triggerSubUpdate   = (id: string) => request('POST', `/subscriptions/${id}/update`)
@@ -677,7 +605,7 @@ export interface PublishNode {
   domain: string
   status: string
   has_credentials: boolean
-  node_type?: 'ssh' | 'worker'
+  node_type?: 'ssh' | 'worker' | 'imported'
 }
 
 export interface PublishTemplatePreset {
@@ -691,6 +619,7 @@ export interface PublishPreviewPayload {
   template_mode: PublishTemplateMode
   template_id?: string
   template_content?: string
+  rule_set_ids?: string[]
 }
 
 export interface PublishPreviewResponse {
@@ -770,6 +699,7 @@ export interface PublishUploadPayload {
   template_mode?: PublishTemplateMode
   template_id?: string
   template_content?: string
+  rule_set_ids?: string[]
 }
 
 export const getPublishNodes = () => request<{ nodes: PublishNode[] }>('GET', '/publish/nodes')
@@ -818,6 +748,34 @@ export const uploadPublishConfig = (payload: PublishUploadPayload) =>
 export const getPublishRecords = () => request<{ records: PublishRecord[] }>('GET', '/publish/records')
 export const deletePublishRecord = (id: string) =>
   request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/records/${encodeURIComponent(id)}`)
+
+// ---- rule set hosting ----
+export interface RuleSet {
+  id: string
+  name: string
+  worker_config_id: string
+  worker_name: string
+  hostname: string
+  kv_key: string
+  access_url: string
+  rules: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface RuleSetInput {
+  name: string
+  worker_config_id: string
+  rules: string[]
+}
+
+export const getRuleSets = () => request<{ rule_sets: RuleSet[] }>('GET', '/publish/rulesets')
+export const createRuleSet = (payload: RuleSetInput) =>
+  request<{ rule_set: RuleSet }>('POST', '/publish/rulesets', payload)
+export const updateRuleSet = (id: string, rules: string[]) =>
+  request<{ rule_set: RuleSet }>('PUT', `/publish/rulesets/${encodeURIComponent(id)}`, { rules })
+export const deleteRuleSet = (id: string) =>
+  request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/rulesets/${encodeURIComponent(id)}`)
 
 // ---- geodata management ----
 export interface GeoDataFileStatus {

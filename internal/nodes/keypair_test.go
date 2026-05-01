@@ -14,8 +14,6 @@ import (
 
 func TestLoadOrGenerateKeyPair_PersistsExistingKey(t *testing.T) {
 	dataDir := t.TempDir()
-	keyDir := t.TempDir()
-	t.Setenv(keyDirOverrideEnv, keyDir)
 
 	kp1, err := LoadOrGenerateKeyPair(dataDir)
 	if err != nil {
@@ -25,7 +23,7 @@ func TestLoadOrGenerateKeyPair_PersistsExistingKey(t *testing.T) {
 		t.Fatalf("expected non-empty public key")
 	}
 
-	privPath := filepath.Join(keyDir, keyFilename)
+	privPath := filepath.Join(dataDir, keyFilename)
 	firstBytes, err := os.ReadFile(privPath)
 	if err != nil {
 		t.Fatalf("read generated key failed: %v", err)
@@ -49,38 +47,33 @@ func TestLoadOrGenerateKeyPair_PersistsExistingKey(t *testing.T) {
 }
 
 func TestLoadOrGenerateKeyPair_MigratesLegacyDataDirKey(t *testing.T) {
+	// In the new model the key lives in dataDir, so "migration" means:
+	// a pre-existing key in dataDir is loaded as-is (no move needed).
 	dataDir := t.TempDir()
-	keyDir := t.TempDir()
-	t.Setenv(keyDirOverrideEnv, keyDir)
 
 	expectedPub, err := writeED25519PrivateKey(filepath.Join(dataDir, keyFilename))
 	if err != nil {
-		t.Fatalf("write legacy key failed: %v", err)
+		t.Fatalf("write pre-existing key failed: %v", err)
 	}
 
 	kp, err := LoadOrGenerateKeyPair(dataDir)
 	if err != nil {
-		t.Fatalf("load with legacy key failed: %v", err)
+		t.Fatalf("load with pre-existing key failed: %v", err)
 	}
 
 	if kp.PublicKeyString() != expectedPub {
-		t.Fatalf("migrated key mismatch:\nexpected: %s\ngot:      %s", expectedPub, kp.PublicKeyString())
+		t.Fatalf("loaded key mismatch:\nexpected: %s\ngot:      %s", expectedPub, kp.PublicKeyString())
 	}
 
-	if _, err := os.Stat(filepath.Join(keyDir, keyFilename)); err != nil {
-		t.Fatalf("migrated key missing in target dir: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dataDir, keyFilename)); !os.IsNotExist(err) {
-		t.Fatalf("legacy key should be removed after migration; stat err=%v", err)
+	if _, err := os.Stat(filepath.Join(dataDir, keyFilename)); err != nil {
+		t.Fatalf("key missing in dataDir: %v", err)
 	}
 }
 
 func TestLoadOrGenerateKeyPair_InvalidExistingKeyReturnsError(t *testing.T) {
 	dataDir := t.TempDir()
-	keyDir := t.TempDir()
-	t.Setenv(keyDirOverrideEnv, keyDir)
 
-	privPath := filepath.Join(keyDir, keyFilename)
+	privPath := filepath.Join(dataDir, keyFilename)
 	if err := os.WriteFile(privPath, []byte("not-a-valid-private-key"), 0o600); err != nil {
 		t.Fatalf("write invalid key failed: %v", err)
 	}

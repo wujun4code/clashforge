@@ -195,6 +195,7 @@ REPO_ROOT=""  # for deploy: auto-detected from script location
 
 START=0
 KEEP_CONFIG=0
+PURGE_ALL=0
 
 FETCH=0
 REMOTE_OUTPUT="/tmp/cf-diag.txt"
@@ -210,7 +211,7 @@ DRY_RUN=0
 # First positional arg that is not a flag is the ACTION.
 while [ $# -gt 0 ]; do
     case "$1" in
-        status|stop|reset|upgrade|deploy|check|uninstall|diag|openclash|help)
+        status|stop|reset|upgrade|deploy|check|uninstall|diag|openclash|flush-dns|help)
             ACTION="$1"; shift ;;
         --router)     ROUTER="$2";      shift 2 ;;
         --router=*)   ROUTER="${1#*=}"; shift ;;
@@ -238,6 +239,7 @@ while [ $# -gt 0 ]; do
         --start)      START=1;          shift ;;
         # uninstall options
         --keep-config) KEEP_CONFIG=1;   shift ;;
+        --purge-all)   PURGE_ALL=1;     shift ;;
         # diag options
         --fetch)      FETCH=1;          shift ;;
         --output)     REMOTE_OUTPUT="$2"; shift 2 ;;
@@ -274,6 +276,7 @@ SUBCOMMANDS
     uninstall   Completely remove ClashForge from the router
     diag        Collect a full diagnostic report
     openclash   Scan OpenClash processes/services; optionally kill them
+    flush-dns   Flush dnsmasq DNS cache (and Mihomo fake-ip cache if core is running)
     help        Show this help
 
 CONNECTION OPTIONS
@@ -299,6 +302,9 @@ RESET OPTIONS
 
 UNINSTALL OPTIONS
     --keep-config        Preserve /etc/metaclash after removal
+    --purge-all          Delete EVERYTHING: config, keys, Cloudflare tokens, GeoData, binaries.
+                         Cannot be combined with --keep-config.
+                         Use this to fully reset the router to a clean state.
 
 DIAG OPTIONS
     --fetch              Download report to local machine after collection
@@ -325,9 +331,11 @@ EXAMPLES
     ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
     ./scripts/clashforgectl --router 192.168.1.1 check
     ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
+    ./scripts/clashforgectl --router 192.168.1.1 uninstall --purge-all
     ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
     ./scripts/clashforgectl --router 192.168.1.1 openclash
     ./scripts/clashforgectl --router 192.168.1.1 openclash --kill
+    ./scripts/clashforgectl --router 192.168.1.1 flush-dns
 EOF
 }
 
@@ -640,6 +648,7 @@ case "$ACTION" in
         ;;
     uninstall)
         [ "$KEEP_CONFIG" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --keep-config"
+        [ "${PURGE_ALL:-0}" -eq 1 ] && REMOTE_CMD="$REMOTE_CMD --purge-all"
         ;;
     diag)
         REMOTE_CMD="$REMOTE_CMD --output $(sh_quote "$REMOTE_OUTPUT")"

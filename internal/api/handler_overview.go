@@ -415,18 +415,14 @@ func buildOverviewData(deps Dependencies) overviewData {
 	resources := buildOverviewResources(deps, coreStatus)
 	influences := detectInfluences(listeners)
 	modules := buildOverviewModules(deps, listeners, influences, coreStatus)
-	ipChecks := buildOverviewIPChecks(deps)
-	accessChecks := buildOverviewAccessChecks(deps)
 	summary := buildOverviewSummary(coreStatus, modules, influences)
 
 	return overviewData{
-		CheckedAt:    time.Now().UTC().Format(time.RFC3339),
-		Summary:      summary,
-		Resources:    resources,
-		IPChecks:     ipChecks,
-		AccessChecks: accessChecks,
-		Modules:      modules,
-		Influences:   influences,
+		CheckedAt:  time.Now().UTC().Format(time.RFC3339),
+		Summary:    summary,
+		Resources:  resources,
+		Modules:    modules,
+		Influences: influences,
 	}
 }
 
@@ -485,10 +481,17 @@ func fetchMihomoConnectionCount(port int) int {
 }
 
 func buildOverviewProbeData(deps Dependencies) overviewProbeData {
+	var ipChecks []overviewIPCheck
+	var accessChecks []overviewAccessCheck
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); ipChecks = buildOverviewIPChecks(deps) }()
+	go func() { defer wg.Done(); accessChecks = buildOverviewAccessChecks(deps) }()
+	wg.Wait()
 	return overviewProbeData{
 		CheckedAt:    time.Now().UTC().Format(time.RFC3339),
-		IPChecks:     buildOverviewIPChecks(deps),
-		AccessChecks: buildOverviewAccessChecks(deps),
+		IPChecks:     ipChecks,
+		AccessChecks: accessChecks,
 	}
 }
 
@@ -788,7 +791,7 @@ func buildOverviewIPChecks(deps Dependencies) []overviewIPCheck {
 		go func(i int, spec probetargets.IPProviderTarget) {
 			defer wg.Done()
 			log.Info().Str("batch", batch).Str("side", "router").Str("provider", spec.Name).Str("url", spec.URL).Msg("ip_check start")
-			logResolveResult(resolveForDebug(spec.URL, deps.Config.Ports.DNS), batch, "router")
+			go func(u string) { logResolveResult(resolveForDebug(u, deps.Config.Ports.DNS), batch, "router") }(spec.URL)
 			start := time.Now()
 			check, err := fetchIPCheck(deps, spec.Name, spec.URL, spec.GBK)
 			latency := time.Since(start)
@@ -811,74 +814,87 @@ func buildOverviewAccessChecks(deps Dependencies) []overviewAccessCheck {
 	batch := shortBatchID()
 	snap := captureDNSSnapshot(deps.Config.Ports.DNS)
 	logDNSSnapshot(snap, batch, "router")
-	checks := make([]overviewAccessCheck, 0, len(targets))
-	for _, target := range targets {
-		log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("group", target.Group).Str("url", target.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
+	checks := make([]overviewAccessCheck, len(targets))
+	var wg sync.WaitGroup
+	for i, target := range targets {
+		wg.Add(1)
+		go func(idx int, t probetargets.HTTPTarget) {
+			defer wg.Done()
+			log.Info().Str("batch", batch).Str("side", "router").Str("name", t.Name).Str("group", t.Group).Str("url", t.URL).Int("proxy_port", deps.Config.Ports.Mixed).Msg("access_check start")
 
-		// Resolve DNS first for diagnostic info
-		dnsResult := resolveForDebug(target.URL, deps.Config.Ports.DNS)
-		logResolveResult(dnsResult, batch, "router")
-		dnsStr := ""
-		if len(dnsResult.Addrs) > 0 {
-			dnsStr = strings.Join(dnsResult.Addrs, ", ")
-			if dnsResult.IsFakeIP {
-				dnsStr += " (fake-ip)"
+			// DNS and HTTP run concurrently; DNS result is display-only.
+			var dnsResult dnsResolveResult
+			var dnsWg sync.WaitGroup
+			dnsWg.Add(1)
+			go func() {
+				defer dnsWg.Done()
+				dnsResult = resolveForDebug(t.URL, deps.Config.Ports.DNS)
+				logResolveResult(dnsResult, batch, "router")
+			}()
+
+			start := time.Now()
+			probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, t.URL, deps.Config.Core.RuntimeDir)
+			latency := time.Since(start)
+			dnsWg.Wait()
+
+			dnsStr := ""
+			if len(dnsResult.Addrs) > 0 {
+				dnsStr = strings.Join(dnsResult.Addrs, ", ")
+				if dnsResult.IsFakeIP {
+					dnsStr += " (fake-ip)"
+				}
+			} else if dnsResult.Err != "" {
+				dnsStr = "解析失败: " + dnsResult.Err
 			}
-		} else if dnsResult.Err != "" {
-			dnsStr = "解析失败: " + dnsResult.Err
-		}
 
-		start := time.Now()
-		probe := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, target.URL, deps.Config.Core.RuntimeDir)
-		latency := time.Since(start)
+			stage := ""
+			if !probe.OK {
+				errLower := strings.ToLower(probe.Error)
+				if !probe.Listening {
+					stage = "proxy_port"
+				} else if strings.Contains(errLower, "no such host") || strings.Contains(errLower, "name resolution") || strings.Contains(errLower, "dns") || (dnsResult.Err != "" && !dnsResult.IsFakeIP) {
+					stage = "dns"
+				} else if strings.Contains(errLower, "deadline exceeded") || strings.Contains(errLower, "timeout") || strings.Contains(errLower, "i/o timeout") {
+					stage = "timeout"
+				} else {
+					stage = "connect"
+				}
+			}
 
-		// Determine which stage failed for UI diagnostics
-		stage := ""
-		if !probe.OK {
-			errLower := strings.ToLower(probe.Error)
-			if !probe.Listening {
-				stage = "proxy_port"
-			} else if strings.Contains(errLower, "no such host") || strings.Contains(errLower, "name resolution") || strings.Contains(errLower, "dns") || (dnsResult.Err != "" && !dnsResult.IsFakeIP) {
-				stage = "dns"
-			} else if strings.Contains(errLower, "deadline exceeded") || strings.Contains(errLower, "timeout") || strings.Contains(errLower, "i/o timeout") {
-				stage = "timeout"
+			if probe.OK {
+				log.Info().Str("batch", batch).Str("side", "router").Str("name", t.Name).Str("url", t.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("dns", dnsStr).Msg("access_check ok")
 			} else {
-				stage = "connect"
+				log.Info().Str("batch", batch).Str("side", "router").Str("name", t.Name).Str("url", t.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Str("stage", stage).Str("dns", dnsStr).Msg("access_check failed")
 			}
-		}
-
-		if probe.OK {
-			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", probe.OK).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("dns", dnsStr).Msg("access_check ok")
-		} else {
-			log.Info().Str("batch", batch).Str("side", "router").Str("name", target.Name).Str("url", target.URL).Bool("ok", false).Int("status_code", probe.StatusCode).Int64("latency_ms", latency.Milliseconds()).Str("error", probe.Error).Str("stage", stage).Str("dns", dnsStr).Msg("access_check failed")
-		}
-		checks = append(checks, overviewAccessCheck{
-			Name:        target.Name,
-			Group:       target.Group,
-			URL:         target.URL,
-			Description: target.Description,
-			Via:         fmt.Sprintf("通过 ClashForge mixed 端口 %d 检查", deps.Config.Ports.Mixed),
-			OK:          probe.OK,
-			StatusCode:  probe.StatusCode,
-			LatencyMS:   probe.DurationMS,
-			Error:       probe.Error,
-			Stage:       stage,
-			DNSResult:   dnsStr,
-		})
+			checks[idx] = overviewAccessCheck{
+				Name:        t.Name,
+				Group:       t.Group,
+				URL:         t.URL,
+				Description: t.Description,
+				Via:         fmt.Sprintf("通过 ClashForge mixed 端口 %d 检查", deps.Config.Ports.Mixed),
+				OK:          probe.OK,
+				StatusCode:  probe.StatusCode,
+				LatencyMS:   probe.DurationMS,
+				Error:       probe.Error,
+				Stage:       stage,
+				DNSResult:   dnsStr,
+			}
+		}(i, target)
 	}
+	wg.Wait()
 	return checks
 }
 
 func fetchIPCheck(deps Dependencies, provider, rawURL string, gbk bool) (overviewIPCheck, error) {
 	var client *http.Client
 	if isTCPPortListening(deps.Config.Ports.Mixed) {
-		client = overviewProxyClient(deps.Config.Ports.Mixed, deps.Config.Core.RuntimeDir, 6*time.Second)
+		client = overviewProxyClient(deps.Config.Ports.Mixed, deps.Config.Core.RuntimeDir, 4*time.Second)
 	} else {
 		// Mihomo is stopped; use a direct client. TLS verification is skipped because
 		// OpenWrt may not have a CA bundle accessible to Go's x509 pool, and these
 		// requests only check the router's exit IP — no sensitive data is at risk.
 		client = &http.Client{
-			Timeout: 6 * time.Second,
+			Timeout: 4 * time.Second,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 			},

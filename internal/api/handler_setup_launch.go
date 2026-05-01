@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,12 +45,22 @@ type setupLaunchNetwork struct {
 type launchEvent struct {
 	Type    string `json:"type"`             // step | info | done
 	Step    string `json:"step,omitempty"`   // step identifier
-	Status  string `json:"status,omitempty"` // running | ok | error | skip
+	Status  string `json:"status,omitempty"` // running | ok | error | skip | warn
 	Message string `json:"message"`
 	Detail  string `json:"detail,omitempty"`
+	// dns-probe specific
+	DNSProbe *dnsProbeEventData `json:"dns_probe,omitempty"`
 	// done-only fields
 	Success bool   `json:"success,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// dnsProbeEventData carries the DNS hijack detection result for the frontend to highlight.
+type dnsProbeEventData struct {
+	HijackedNameservers []string `json:"hijacked_nameservers,omitempty"`
+	WorkingNameservers  []string `json:"working_nameservers,omitempty"`
+	SuggestedFallbacks  []string `json:"suggested_fallbacks,omitempty"`
+	AutoApplied         []string `json:"auto_applied,omitempty"`
 }
 
 // geodataSpec describes a single geodata file to check/download.
@@ -268,6 +279,72 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		configPath := filepath.Join(deps.Config.Core.RuntimeDir, "mihomo-config.yaml")
 		emitStep("config-gen", "ok", fmt.Sprintf("配置文件已写入 %s", configPath), "")
 
+		// ── Step 3.5: dns-probe — detect fake-ip hijacking of proxy-server-nameserver ──
+
+		emitStep("dns-probe", "running", "正在检测 proxy-server-nameserver 是否被上游路由劫持…", "")
+		nodeHostnames := extractProxyHostnames(deps)
+		udpNameservers := deps.Config.DNS.Nameservers
+
+		switch {
+		case len(nodeHostnames) == 0:
+			emitStep("dns-probe", "skip", "暂无已缓存的代理节点，跳过 DNS 劫持检测", "")
+		case len(udpNameservers) == 0:
+			emitStep("dns-probe", "skip", "未配置 UDP nameserver，跳过检测", "")
+		default:
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			report := dns.ProbeNameservers(probeCtx, udpNameservers, nodeHostnames)
+			probeCancel()
+
+			if report.AllClear {
+				emitStep("dns-probe", "ok",
+					fmt.Sprintf("proxy-server-nameserver 正常 ✓（测试了 %d 个节点域名）", len(report.Results)), "")
+			} else {
+				probeData := &dnsProbeEventData{
+					HijackedNameservers: report.HijackedNameservers,
+					WorkingNameservers:  report.WorkingNameservers,
+					SuggestedFallbacks:  report.SuggestedFallbacks,
+				}
+
+				hijackedList := strings.Join(report.HijackedNameservers, ", ")
+
+				if len(report.SuggestedFallbacks) > 0 {
+					// Auto-apply: merge working DoH fallbacks into cfg.DNS.DoH
+					deps.Config.DNS.DoH = mergeDNSList(deps.Config.DNS.DoH, report.SuggestedFallbacks)
+					probeData.AutoApplied = report.SuggestedFallbacks
+
+					if err := saveRuntimeConfig(deps); err != nil {
+						log.Warn().Err(err).Msg("dns-probe: 自动更新 DoH 配置保存失败")
+					} else if _, err := generateMihomoConfig(deps); err != nil {
+						log.Warn().Err(err).Msg("dns-probe: 自动修复后重新生成配置失败")
+					}
+
+					sendSSE(launchEvent{
+						Type:   "step",
+						Step:   "dns-probe",
+						Status: "warn",
+						Message: fmt.Sprintf(
+							"⚠️ 检测到 %d 个 nameserver 被上游路由劫持（返回 fake-ip），已自动追加 DoH 到 proxy-server-nameserver",
+							len(report.HijackedNameservers)),
+						Detail: fmt.Sprintf("被劫持: %s → 已追加: %s",
+							hijackedList, strings.Join(report.SuggestedFallbacks, ", ")),
+						DNSProbe: probeData,
+					})
+				} else {
+					// Hijacked but no fallback reachable — warn and continue
+					sendSSE(launchEvent{
+						Type:   "step",
+						Step:   "dns-probe",
+						Status: "warn",
+						Message: fmt.Sprintf(
+							"⚠️ 检测到 %d 个 nameserver 被上游劫持，且所有备用 DoH 也无法访问，建议检查网络环境",
+							len(report.HijackedNameservers)),
+						Detail:   fmt.Sprintf("被劫持: %s", hijackedList),
+						DNSProbe: probeData,
+					})
+				}
+			}
+		}
+
 		// ── Step 4: geodata check + download ──────────────────────────────────
 
 		emitStep("geodata-check", "running", "正在检查 GeoData 文件完整性…", "")
@@ -458,4 +535,46 @@ func urlHost(rawURL string) string {
 		return rawURL
 	}
 	return u.Host
+}
+
+// extractProxyHostnames returns deduplicated non-IP server hostnames from all cached subscription nodes.
+func extractProxyHostnames(deps Dependencies) []string {
+	if deps.SubManager == nil {
+		return nil
+	}
+	nodes := deps.SubManager.GetAllCachedNodes()
+	seen := make(map[string]bool)
+	var hosts []string
+	for _, n := range nodes {
+		host := n.Server
+		if host == "" {
+			continue
+		}
+		// Skip bare IPs — no DNS lookup needed.
+		if net.ParseIP(host) != nil {
+			continue
+		}
+		if !seen[host] {
+			seen[host] = true
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+// mergeDNSList appends entries from extra into base, deduplicating by value.
+func mergeDNSList(base, extra []string) []string {
+	seen := make(map[string]bool, len(base))
+	result := make([]string, len(base))
+	copy(result, base)
+	for _, v := range base {
+		seen[v] = true
+	}
+	for _, v := range extra {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
+		}
+	}
+	return result
 }

@@ -21,11 +21,13 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 check
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -KeepConfig
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 uninstall -PurgeAll
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 diag -Fetch -LocalPath .\cf-diag.txt -Redact
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 openclash
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 openclash -Kill
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 flush-dns
 #
 # Requirements:
 #   - ssh and scp must be available (OpenSSH bundled with Windows 10/11)
@@ -36,7 +38,7 @@
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "uninstall", "diag", "openclash", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "uninstall", "diag", "openclash", "flush-dns", "help")]
     [string]$Action,
 
     # Connection parameters
@@ -63,6 +65,7 @@ param(
 
     # uninstall options
     [switch]$KeepConfig,
+    [switch]$PurgeAll,                    # Delete EVERYTHING: config, keys, tokens, GeoData, binaries
 
     # diag options
     [switch]$Fetch,                       # Download report to local machine after collection
@@ -622,6 +625,7 @@ switch ($Action) {
     }
     "uninstall" {
         if ($KeepConfig) { $RemoteCmd += " --keep-config" }
+        if ($PurgeAll)   { $RemoteCmd += " --purge-all" }
     }
     "diag" {
         $RemoteCmd += " --output $(ShQuote $RemoteOutput)"

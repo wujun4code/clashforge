@@ -15,7 +15,6 @@ import {
   saveSource, setActiveSource, getSourceFile, getSources,
   checkSetupPorts, getSubscriptionCache, previewSetupFinalConfig, getDeviceGroups, updateDeviceGroups,
   getActiveSource, previewDeviceGroupsConfig,
-  reportHealthBrowser,
 } from '../api/client'
 import type {
   OverviewAccessCheck,
@@ -834,6 +833,14 @@ export function Setup() {
   const [launchPolicyError, setLaunchPolicyError] = useState('')
   const [launchDeviceGroups, setLaunchDeviceGroups] = useState<DeviceRouteGroup[]>([])
   const [launchDeviceSnapshot, setLaunchDeviceSnapshot] = useState('[]')
+  // Ref always pointing to the latest launchDeviceGroups so that
+  // refreshLaunchConfigPreview can read current groups without needing
+  // launchDeviceGroups in its useCallback dep array.  Including it there
+  // caused an infinite render loop: loadLaunchDeviceGroups() sets a new
+  // array reference → refreshLaunchConfigPreview gets a new reference →
+  // the launch-step init effect re-fires → repeat.
+  const launchDeviceGroupsRef = useRef(launchDeviceGroups)
+  launchDeviceGroupsRef.current = launchDeviceGroups
   const [launchDeviceLoading, setLaunchDeviceLoading] = useState(false)
   const [launchDeviceSaving, setLaunchDeviceSaving] = useState(false)
   const [launchDeviceError, setLaunchDeviceError] = useState('')
@@ -962,7 +969,7 @@ export function Setup() {
       if (activeSourceKey) {
         try {
           const merged = await previewDeviceGroupsConfig(
-            sanitizeDeviceGroupsForSetup(launchDeviceGroups),
+            sanitizeDeviceGroupsForSetup(launchDeviceGroupsRef.current),
             activeSourceKey,
           )
           policyContent = merged.content ?? content
@@ -983,7 +990,7 @@ export function Setup() {
     } finally {
       setLaunchConfigLoading(false)
     }
-  }, [buildLaunchPayload, launchDeviceGroups, resolveActiveSourceKey])
+  }, [buildLaunchPayload, resolveActiveSourceKey])
 
   const handleViewCachedSubscription = useCallback(async (sub: Subscription) => {
     setSubCacheModalOpen(true)
@@ -1405,7 +1412,6 @@ export function Setup() {
   const handleCheck = useCallback(async () => {
     setChecking(true); setRouterProbe(null); setBrowserProbe(null); setProbeLogs([])
     try {
-      const browserIPProvider = BROWSER_IP_PROVIDERS.find((item) => item.provider === 'IP.SB') ?? BROWSER_IP_PROVIDERS[0]
       const rp = await getOverviewProbes().catch(() => null)
       const browserTargets = (rp?.access_checks ?? []).map((item) => ({
         name: item.name,
@@ -1415,27 +1421,6 @@ export function Setup() {
       const bp = await runBrowserProbe(browserTargets)
       setRouterProbe(rp)
       setBrowserProbe(bp)
-      void reportHealthBrowser({
-        session_id: `setup-${browserSessionID}`,
-        checked_at: new Date().toISOString(),
-        user_agent: navigator.userAgent,
-        ip_checks: [{
-          provider: browserIPProvider.provider,
-          group: browserIPProvider.group,
-          ok: bp.ipOK,
-          ip: bp.ip,
-          error: bp.ipError,
-        }],
-        access_checks: bp.accessChecks.map((item) => ({
-          name: item.name,
-          group: item.group,
-          url: item.url,
-          ok: item.ok,
-          latency_ms: item.latency_ms,
-          error: item.error,
-          stage: item.stage,
-        })),
-      }).catch(() => null)
 
       const routerOK = rp ? rp.ip_checks.some(c => c.ok) : false
       const browserOK = bp.ipOK

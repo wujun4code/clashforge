@@ -29,6 +29,7 @@ MIRROR=""
 BASE_URL=""
 LOCAL_IPK=""
 KEEP_CONFIG=0
+PURGE_ALL=0
 AUTO_START=0
 DIAG_OUTPUT="/tmp/cf-diag.txt"
 DIAG_STDOUT=0
@@ -63,6 +64,7 @@ Subcommands:
   diag                       Collect full diagnostic report
   openclash [--kill]         Scan for OpenClash processes/services; optionally kill them
   compat                     Pre-install compatibility check
+  flush-dns                  Flush dnsmasq DNS cache (and Mihomo fake-ip cache if core is running)
 
 Common options:
   --yes, -y                  Skip confirmation prompts
@@ -107,6 +109,7 @@ while [ $# -gt 0 ]; do
     --purge)       PURGE=1; shift ;;
     --local-ipk)   [ -n "${2:-}" ] || die "--local-ipk requires a path"; LOCAL_IPK="$2"; shift 2 ;;
     --keep-config) KEEP_CONFIG=1; shift ;;
+    --purge-all)   PURGE_ALL=1;   shift ;;
     --start)       AUTO_START=1; shift ;;
     --stdout)      DIAG_STDOUT=1; shift ;;
     --redact)      DIAG_REDACT=1; shift ;;
@@ -650,10 +653,22 @@ cmd_upgrade() {
 # SUBCOMMAND: uninstall
 # ══════════════════════════════════════════════════════════════════════════════
 cmd_uninstall() {
-  log "Uninstalling ClashForge..."
+  if [ "$PURGE_ALL" = "1" ]; then
+    log "Uninstalling ClashForge (--purge-all: ALL data, keys, and secrets will be permanently deleted)..."
+  elif [ "$KEEP_CONFIG" = "1" ]; then
+    log "Uninstalling ClashForge (--keep-config: /etc/metaclash will be preserved)..."
+  else
+    log "Uninstalling ClashForge..."
+  fi
 
   if [ "$YES" != "1" ]; then
-    printf "[clashforge] This will completely remove ClashForge and all its data. Continue? [y/N] "
+    if [ "$PURGE_ALL" = "1" ]; then
+      printf "[clashforge] ⚠️  --purge-all will permanently delete ALL ClashForge data including\n" >&2
+      printf "             Cloudflare API tokens, encryption keys, subscriptions, and node configs.\n" >&2
+      printf "             This CANNOT be undone. Continue? [y/N] "
+    else
+      printf "[clashforge] This will completely remove ClashForge and all its data. Continue? [y/N] "
+    fi
     read -r _reply
     case "$_reply" in
       y|Y|yes|YES) ;;
@@ -667,7 +682,53 @@ cmd_uninstall() {
   # 2. Disable init script to prevent auto-start on reboot
   /etc/init.d/clashforge disable 2>/dev/null || true
 
-  # 3. Remove opkg package (runs prerm/postrm scripts)
+  # 3. Wipe config/data BEFORE opkg remove, so opkg conffiles mechanism
+  #    cannot resurrect any files after the rm.
+  #    ALSO delete the /tmp/clashforge-*.bak files that prerm creates during
+  #    upgrades.  These persist across reboots on tmpfs and postinst will
+  #    restore them on the next install, silently un-doing our wipe.
+  if [ "$PURGE_ALL" = "1" ]; then
+    step "Purging ALL ClashForge data (--purge-all)..."
+    rm -rf /etc/metaclash        && ok "Removed /etc/metaclash (config + keys + secrets)" || true
+    rm -rf /usr/share/metaclash  && ok "Removed /usr/share/metaclash (GeoData)"           || true
+    rm -rf /var/run/metaclash    && ok "Removed /var/run/metaclash (runtime)"              || true
+    rm -f  /var/log/clashforge.log && ok "Removed /var/log/clashforge.log"                 || true
+    # Remove legacy SSH key location (older versions stored it in /root/.ssh/)
+    rm -f  /root/.ssh/clashforge_ed25519 2>/dev/null && ok "Removed legacy /root/.ssh/clashforge_ed25519" || true
+    # Wipe prerm upgrade-backup files so postinst cannot resurrect data on re-install
+    rm -f /tmp/clashforge-config.bak \
+          /tmp/clashforge-ed25519.bak \
+          /tmp/clashforge-nodes.bak \
+          /tmp/clashforge-nodes-key.bak \
+          /tmp/clashforge-cf-config.bak \
+          2>/dev/null && ok "Cleared /tmp prerm upgrade backups" || true
+    # Belt-and-suspenders: also wipe any other tmpfs caches
+    rm -rf /tmp/metaclash 2>/dev/null && ok "Removed /tmp/metaclash" || true
+    rm -f  /tmp/clashforge*.log /tmp/clashforge*.tmp 2>/dev/null || true
+  elif [ "$KEEP_CONFIG" = "1" ]; then
+    step "Removing runtime and geodata (preserving /etc/metaclash)..."
+    rm -rf /usr/share/metaclash  && ok "Removed /usr/share/metaclash" || true
+    rm -rf /var/run/metaclash    && ok "Removed /var/run/metaclash"   || true
+    rm -f  /var/log/clashforge.log && ok "Removed clashforge.log"     || true
+    ok "/etc/metaclash preserved (--keep-config)"
+  else
+    step "Removing runtime, geodata and config..."
+    rm -rf /etc/metaclash        && ok "Removed /etc/metaclash"       || true
+    rm -rf /usr/share/metaclash  && ok "Removed /usr/share/metaclash" || true
+    rm -rf /var/run/metaclash    && ok "Removed /var/run/metaclash"   || true
+    rm -f  /var/log/clashforge.log && ok "Removed clashforge.log"     || true
+    # Also clear prerm upgrade backups so a subsequent fresh install won't
+    # silently restore the old config/nodes/keys
+    rm -f /tmp/clashforge-config.bak \
+          /tmp/clashforge-ed25519.bak \
+          /tmp/clashforge-nodes.bak \
+          /tmp/clashforge-nodes-key.bak \
+          /tmp/clashforge-cf-config.bak \
+          2>/dev/null || true
+  fi
+
+  # 4. Remove opkg package (runs prerm/postrm scripts)
+  #    Done AFTER data removal so opkg's conffiles mechanism cannot restore files.
   step "Removing opkg package..."
   if command -v opkg >/dev/null 2>&1 && opkg status clashforge 2>/dev/null | grep -q "^Package:"; then
     opkg remove clashforge 2>/dev/null \
@@ -677,22 +738,20 @@ cmd_uninstall() {
     ok "opkg package not installed, skipping"
   fi
 
-  # 4. Wipe all data directories
-  step "Removing runtime and geodata..."
-  rm -rf /usr/share/metaclash && ok "Removed /usr/share/metaclash" || true
-  rm -rf /var/run/metaclash   && ok "Removed /var/run/metaclash"   || true
-  rm -f  /var/log/clashforge.log && ok "Removed clashforge.log"    || true
-
-  if [ "$KEEP_CONFIG" = "1" ]; then
-    ok "/etc/metaclash preserved (--keep-config)"
-  else
-    rm -rf /etc/metaclash && ok "Removed /etc/metaclash" || true
+  # 5. Final belt-and-suspenders: remove binaries that opkg may have left behind
+  if [ "$PURGE_ALL" = "1" ]; then
+    rm -f /usr/bin/clashforge /usr/bin/mihomo-clashforge 2>/dev/null || true
+    ok "Removed binaries (/usr/bin/clashforge, /usr/bin/mihomo-clashforge)"
   fi
 
-  # 5. Final verification
+  # 6. Final verification
   print_state_summary
   echo "" >&2
-  ok "ClashForge uninstalled. Router restored to pre-install state."
+  if [ "$PURGE_ALL" = "1" ]; then
+    ok "ClashForge fully purged. All data, keys and secrets have been deleted."
+  else
+    ok "ClashForge uninstalled. Router restored to pre-install state."
+  fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1401,6 +1460,66 @@ cmd_compat() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUBCOMMAND: flush-dns
+#
+# Flush dnsmasq DNS cache by sending SIGHUP to the dnsmasq process.
+# If the Mihomo core is running, also clears the fake-ip mapping cache via the
+# Mihomo API (DELETE /cache/fakeip).
+# ══════════════════════════════════════════════════════════════════════════════
+cmd_flush_dns() {
+  step "Flushing DNS cache"
+
+  # ── dnsmasq ────────────────────────────────────────────────────────────────
+  _dnsmasq_pid="$(pidof dnsmasq 2>/dev/null | awk '{print $1}')"
+  if [ -z "$_dnsmasq_pid" ]; then
+    _dnsmasq_pid="$(pgrep -x dnsmasq 2>/dev/null | head -1)"
+  fi
+
+  if [ -n "$_dnsmasq_pid" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      warn "dry-run: would send SIGHUP to dnsmasq (pid $_dnsmasq_pid)"
+    else
+      kill -HUP "$_dnsmasq_pid" \
+        && ok "dnsmasq cache flushed (SIGHUP → pid $_dnsmasq_pid)" \
+        || warn "Failed to send SIGHUP to dnsmasq (pid $_dnsmasq_pid)"
+    fi
+  elif [ -f /etc/init.d/dnsmasq ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      warn "dry-run: would run /etc/init.d/dnsmasq reload"
+    else
+      /etc/init.d/dnsmasq reload \
+        && ok "dnsmasq reloaded via init script (cache cleared)" \
+        || warn "dnsmasq reload failed"
+    fi
+  else
+    warn "dnsmasq not found or not running — skipping dnsmasq flush"
+  fi
+
+  # ── Mihomo fake-ip cache ───────────────────────────────────────────────────
+  _cf_cfg="/etc/metaclash/config.toml"
+  _api_port="9090"
+  if [ -f "$_cf_cfg" ]; then
+    _parsed="$(grep -m1 'mihomo_api' "$_cf_cfg" | grep -o '[0-9]*$')"
+    [ -n "$_parsed" ] && _api_port="$_parsed"
+  fi
+
+  _core_pid="$(pgrep -f 'mihomo-clashforge' 2>/dev/null | head -1)"
+  if [ -n "$_core_pid" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      warn "dry-run: would DELETE http://127.0.0.1:${_api_port}/cache/fakeip"
+    else
+      _resp="$(curl -sS --max-time 3 -X DELETE \
+        "http://127.0.0.1:${_api_port}/cache/fakeip" 2>/dev/null || true)"
+      ok "Mihomo fake-ip cache flushed (api :${_api_port}, response: ${_resp:-<empty>})"
+    fi
+  else
+    log "Mihomo core not running — skipping fake-ip cache flush"
+  fi
+
+  printf "\n"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN DISPATCHER
 # ══════════════════════════════════════════════════════════════════════════════
 case "$SUBCOMMAND" in
@@ -1413,6 +1532,7 @@ case "$SUBCOMMAND" in
   diag)           cmd_diag      ;;
   openclash)      cmd_openclash ;;
   compat)         cmd_compat    ;;
+  flush-dns)      cmd_flush_dns ;;
   help|--help|-h) usage; exit 0 ;;
   *) die "Unknown subcommand: '$SUBCOMMAND'  (run clashforgectl --help for usage)" ;;
 esac

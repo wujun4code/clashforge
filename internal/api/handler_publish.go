@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
+	"github.com/wujun4code/clashforge/internal/subscription"
 	"github.com/wujun4code/clashforge/internal/workernode"
 	"gopkg.in/yaml.v3"
 )
@@ -61,6 +62,31 @@ func handleGetPublishNodes(deps Dependencies) http.HandlerFunc {
 					HasCredentials: hasCred,
 					NodeType:       "ssh",
 				})
+			}
+		}
+
+		// Imported proxy node sets — each ProxyNode becomes its own selectable item.
+		// ID format: "imported:{subID}/{index}"
+		if deps.SubManager != nil {
+			for _, sub := range deps.SubManager.GetAllImports() {
+				if !sub.Enabled {
+					continue
+				}
+				nodes, err := deps.SubManager.GetCachedNodes(sub.ID)
+				if err != nil {
+					continue
+				}
+				for idx, pn := range nodes {
+					items = append(items, publishNodeItem{
+						ID:             fmt.Sprintf("imported:%s/%d", sub.ID, idx),
+						Name:           pn.Name,
+						Host:           pn.Server,
+						Domain:         pn.Server,
+						Status:         "imported",
+						HasCredentials: true,
+						NodeType:       "imported",
+					})
+				}
 			}
 		}
 
@@ -372,6 +398,7 @@ func handlePublishUpload(deps Dependencies) http.HandlerFunc {
 				TemplateMode:    req.TemplateMode,
 				TemplateID:      req.TemplateID,
 				TemplateContent: req.TemplateContent,
+				RuleSetIDs:      req.RuleSetIDs,
 			})
 			if err != nil {
 				Err(w, http.StatusBadRequest, "PUBLISH_CONTENT_BUILD_FAILED", err.Error())
@@ -503,13 +530,57 @@ func normalizePublishNodeIDs(raw []string) []string {
 	return out
 }
 
-func buildPublishMergeNodes(sshStore *nodes.Store, wStore *workernode.Store, nodeIDs []string) ([]publish.MergeNode, error) {
+func buildPublishMergeNodes(sshStore *nodes.Store, wStore *workernode.Store, subMgr interface {
+	GetAllImports() []subscription.Subscription
+	GetCachedNodes(string) ([]subscription.ProxyNode, error)
+}, nodeIDs []string) ([]publish.MergeNode, error) {
 	ids := normalizePublishNodeIDs(nodeIDs)
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("at least one node must be selected")
 	}
 	out := make([]publish.MergeNode, 0, len(ids))
 	for _, id := range ids {
+		// Imported node: "imported:{subID}/{index}"
+		if strings.HasPrefix(id, "imported:") {
+			parts := strings.SplitN(strings.TrimPrefix(id, "imported:"), "/", 2)
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid imported node id: %s", id)
+			}
+			subID := parts[0]
+			idxStr := parts[1]
+			var idx int
+			if _, err := fmt.Sscanf(idxStr, "%d", &idx); err != nil {
+				return nil, fmt.Errorf("invalid imported node index in id: %s", id)
+			}
+			if subMgr == nil {
+				return nil, fmt.Errorf("subscription manager not available")
+			}
+			cachedNodes, err := subMgr.GetCachedNodes(subID)
+			if err != nil {
+				return nil, fmt.Errorf("cannot load imported node cache for sub %s: %w", subID, err)
+			}
+			if idx < 0 || idx >= len(cachedNodes) {
+				return nil, fmt.Errorf("imported node index %d out of range for sub %s", idx, subID)
+			}
+			pn := cachedNodes[idx]
+			// Reconstruct the raw proxy map from ProxyNode fields.
+			rawProxy := map[string]interface{}{
+				"name":   pn.Name,
+				"type":   pn.Type,
+				"server": pn.Server,
+				"port":   pn.Port,
+			}
+			for k, v := range pn.Extra {
+				rawProxy[k] = v
+			}
+			out = append(out, publish.MergeNode{
+				ID:            id,
+				Name:          pn.Name,
+				NodeType:      "imported",
+				ImportedProxy: rawProxy,
+			})
+			continue
+		}
 		// Try SSH store first
 		if sshStore != nil {
 			if n, ok := sshStore.Get(id); ok {
@@ -553,7 +624,7 @@ func buildPublishMergedYAML(
 	deps Dependencies,
 	req publish.PublishPreviewRequest,
 ) (string, int, string, error) {
-	mergeNodes, err := buildPublishMergeNodes(deps.NodeStore, deps.WorkerNodeStore, req.NodeIDs)
+	mergeNodes, err := buildPublishMergeNodes(deps.NodeStore, deps.WorkerNodeStore, deps.SubManager, req.NodeIDs)
 	if err != nil {
 		return "", 0, "", err
 	}
@@ -583,6 +654,23 @@ func buildPublishMergedYAML(
 	if err != nil {
 		return "", 0, mode, err
 	}
+
+	// Inject hosted rule-providers if requested
+	if len(req.RuleSetIDs) > 0 && deps.PublishStore != nil {
+		ruleSets := make([]publish.RuleSet, 0, len(req.RuleSetIDs))
+		for _, id := range req.RuleSetIDs {
+			if rs, ok := deps.PublishStore.GetRuleSet(id); ok {
+				ruleSets = append(ruleSets, rs)
+			}
+		}
+		if len(ruleSets) > 0 {
+			merged, err = publish.InjectRuleProviders(merged, ruleSets)
+			if err != nil {
+				return "", 0, mode, err
+			}
+		}
+	}
+
 	return merged, len(mergeNodes), mode, nil
 }
 
