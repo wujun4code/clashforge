@@ -72,9 +72,9 @@ function StatusBadge({ status }: { status: NodeStatus }) {
   )
 }
 
-function suggestSubdomains(zone: string) {
+function suggestSubdomains(_zone: string) {
   const prefixes = ['market', 'sales', 'trials', 'blog', 'cdn', 'edge']
-  return prefixes.map(p => `${p}-${Math.floor(Math.random() * 90 + 10)}.${zone}`)
+  return prefixes.map(p => `${p}-${Math.floor(Math.random() * 90 + 10)}`)
 }
 
 
@@ -525,7 +525,9 @@ function NodeWizard({
   // Step 5: domain selection
   const [zones, setZones] = useState<CloudflareZone[]>([])
   const [cfZoneId, setCFZoneId] = useState('')
+  const [selectedZoneName, setSelectedZoneName] = useState('')
   const [domain, setDomain] = useState(initialNode?.domain ?? '')
+  const [domainPrefix, setDomainPrefix] = useState('')
   const [email, setEmail] = useState(cfConfig?.acme_email ?? '')
   const [domainSuggestions, setDomainSuggestions] = useState<string[]>([])
 
@@ -661,11 +663,15 @@ function NodeWizard({
       const matched = normalizedDomain
         ? r.zones.find((z) => normalizedDomain === z.name.toLowerCase() || normalizedDomain.endsWith(`.${z.name.toLowerCase()}`))
         : null
-      if (matched) {
-        setCFZoneId(matched.id)
-        setDomainSuggestions(suggestSubdomains(matched.name))
-      } else if (r.zones[0]?.name) {
-        setDomainSuggestions(suggestSubdomains(r.zones[0].name))
+      const autoZone = matched ?? r.zones[0]
+      if (autoZone) {
+        setCFZoneId(autoZone.id)
+        setSelectedZoneName(autoZone.name)
+        setDomainSuggestions(suggestSubdomains(autoZone.name))
+        // Extract existing prefix if the stored domain ends with this zone
+        if (normalizedDomain.endsWith(`.${autoZone.name.toLowerCase()}`)) {
+          setDomainPrefix(domain.trim().slice(0, -(autoZone.name.length + 1)))
+        }
       }
       setMessage({ text: `获取到 ${r.zones.length} 个 Zone`, ok: true })
     } catch (e) {
@@ -677,7 +683,9 @@ function NodeWizard({
     if (!node) return
     setBusy(true); setMessage(null)
     try {
-      const nextDomain = domain.trim()
+      const nextDomain = (selectedZoneName && domainPrefix.trim())
+        ? `${domainPrefix.trim()}.${selectedZoneName}`
+        : domain.trim()
       const nextEmail = email.trim()
       await updateNode(node.id, { domain: nextDomain, email: nextEmail, cf_token: cfToken.trim(), cf_account_id: cfAccountId.trim(), cf_zone_id: cfZoneId.trim() })
       await onSaveCF({ cf_token: cfToken, cf_account_id: cfAccountId, acme_email: email })
@@ -956,40 +964,88 @@ function NodeWizard({
         {/* ── Step 5: 选择域名 ── */}
         {step === 5 && (
           <div className="space-y-3">
-            <p className="text-xs text-slate-400 leading-relaxed">选择 Cloudflare 托管的域名，或手动输入二级域名，将用于 TLS 证书签发。</p>
+            <p className="text-xs text-slate-400 leading-relaxed">选择 Cloudflare 托管的顶级域名，再填写子域前缀，将用于 TLS 证书签发。</p>
             <div className="flex gap-2">
               <button className="btn-ghost flex-1" disabled={busy || !cfToken} onClick={handleFetchZones}>
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />} 拉取 Zone 列表
               </button>
             </div>
             {zones.length > 0 && (
-              <select className="glass-input" value={cfZoneId} onChange={e => {
-                setCFZoneId(e.target.value)
-                const z = zones.find(v => v.id === e.target.value)
-                if (z) setDomainSuggestions(suggestSubdomains(z.name))
-              }}>
-                <option value="">选择 Zone</option>
-                {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
-              </select>
-            )}
-            {domainSuggestions.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {domainSuggestions.map(s => (
-                  <button key={s} className={`px-2.5 py-0.5 rounded-full border text-[10px] font-mono transition-colors ${domain === s ? 'border-brand/40 bg-brand/10 text-brand' : 'border-white/10 text-muted hover:text-slate-300 hover:border-white/20'}`} onClick={() => setDomain(s)}>{s}</button>
-                ))}
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">顶级域名（Zone）</label>
+                <select className="glass-input" value={cfZoneId} onChange={e => {
+                  const zoneId = e.target.value
+                  setCFZoneId(zoneId)
+                  const z = zones.find(v => v.id === zoneId)
+                  if (z) {
+                    setSelectedZoneName(z.name)
+                    setDomainSuggestions(suggestSubdomains(z.name))
+                    // Re-derive prefix if stored domain ends with the new zone
+                    if (domain.toLowerCase().endsWith(`.${z.name.toLowerCase()}`)) {
+                      setDomainPrefix(domain.slice(0, -(z.name.length + 1)))
+                    } else {
+                      setDomainPrefix('')
+                    }
+                  }
+                }}>
+                  <option value="">选择 Zone</option>
+                  {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                </select>
               </div>
             )}
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">二级域名</label>
-              <input className="glass-input font-mono" value={domain} onChange={e => setDomain(e.target.value)} placeholder="如: edge-01.example.com" />
-            </div>
+            {selectedZoneName ? (
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">子域名前缀 <span className="text-red-400">*</span></label>
+                {domainSuggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {domainSuggestions.map(s => (
+                      <button
+                        key={s}
+                        className={`px-2.5 py-0.5 rounded-full border text-[10px] font-mono transition-colors ${
+                          domainPrefix === s
+                            ? 'border-brand/40 bg-brand/10 text-brand'
+                            : 'border-white/10 text-muted hover:text-slate-300 hover:border-white/20'
+                        }`}
+                        onClick={() => setDomainPrefix(s)}
+                      >{s}</button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-stretch rounded-xl border border-white/10 bg-white/[0.04] overflow-hidden focus-within:border-white/20 transition-colors">
+                  <input
+                    className="flex-1 bg-transparent px-3 py-2 outline-none font-mono text-sm text-white placeholder:text-muted"
+                    value={domainPrefix}
+                    onChange={e => setDomainPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                    placeholder="edge-01"
+                    autoFocus
+                  />
+                  <span className="flex items-center px-3 border-l border-white/10 bg-white/[0.03] font-mono text-sm text-muted shrink-0 select-none">
+                    .{selectedZoneName}
+                  </span>
+                </div>
+                {domainPrefix && (
+                  <p className="text-[10px] text-muted mt-1">
+                    完整域名: <span className="font-mono text-slate-300">{domainPrefix}.{selectedZoneName}</span>
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">完整域名</label>
+                <input className="glass-input font-mono" value={domain} onChange={e => setDomain(e.target.value)} placeholder="edge-01.example.com" />
+              </div>
+            )}
             <div>
               <label className="block text-xs text-slate-400 mb-1">ACME 邮箱 (Let's Encrypt)</label>
               <input className="glass-input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@example.com" />
             </div>
             <div className="flex gap-3">
               {canGoBack && <button className="btn-ghost shrink-0" onClick={goBack} disabled={busy}>← 上一步</button>}
-              <button className="btn-primary flex-1" disabled={!domain || !email || !cfToken || busy} onClick={handleSaveDomain}>
+              <button
+                className="btn-primary flex-1"
+                disabled={!(selectedZoneName ? domainPrefix.trim() : domain.trim()) || !email || !cfToken || busy}
+                onClick={handleSaveDomain}
+              >
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 确认并进入下一步
               </button>
             </div>

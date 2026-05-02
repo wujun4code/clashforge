@@ -270,6 +270,17 @@ run_root systemctl is-active gost
 		}
 		progress("systemd", "ok", "GOST 服务已启动", "systemctl status gost")
 
+		// Open port 443 in the VM-local firewall if ufw is active, then
+		// give GOST a moment to fully bind the port before probing.
+		_, _ = client.Run(`
+set +e
+if command -v ufw >/dev/null 2>&1 && (ufw status 2>/dev/null | grep -q "Status: active"); then
+  ufw allow 443/tcp 2>/dev/null || sudo ufw allow 443/tcp 2>/dev/null
+  ufw allow 443/udp 2>/dev/null || sudo ufw allow 443/udp 2>/dev/null
+fi
+sleep 2
+`)
+
 		progress("probe", "running", "IP 直连探测中...", "通过代理访问 Google / YouTube / GitHub")
 		probeResults = TestHTTPProxy(node.Host, 443, proxyUser, proxyPass, 10*time.Second, DefaultProbeTargets())
 		probeOK := 0
@@ -401,6 +412,9 @@ run_root systemctl is-active gost
 			return &DeployResult{Success: false, Error: "systemd service failed to start", Phase: phase, ProbeResults: probeResults}, startErr
 		}
 		progress("systemd-restart", "ok", "GOST 服务已重启", "TLS 模式已生效")
+
+		// Give GOST a moment to bind port 443 after restart.
+		_, _ = client.Run("sleep 2")
 
 		progress("probe-domain", "running", "域名链路探测中...", "通过代理访问 Google / YouTube / GitHub")
 		probeResults = TestHTTPProxyWithOptions(
