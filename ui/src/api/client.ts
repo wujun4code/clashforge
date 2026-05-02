@@ -622,6 +622,43 @@ export const deleteWorkerNode = (id: string) =>
 export const getWorkerNodeClashConfig = (id: string) =>
   request<{ yaml: string; name: string }>('GET', `/worker-nodes/${encodeURIComponent(id)}/clash-config`)
 
+// ---- Azure VM provisioning ----
+export interface AzureLocation {
+  name: string
+  display_name: string
+}
+
+export interface AzureResourceGroup {
+  name: string
+  location: string
+}
+
+export interface AzureVMSize {
+  name: string
+  cores: number
+  memory_gb: string
+}
+
+export interface AzureCreateVMRequest {
+  location: string
+  resource_group: string
+  vm_name: string
+  vm_size: string
+  admin_username: string
+  node_name?: string
+}
+
+export const getAzureLocations = () =>
+  request<{ locations: AzureLocation[] }>('GET', '/azure/locations')
+export const getAzureResourceGroups = () =>
+  request<{ resource_groups: AzureResourceGroup[] }>('GET', '/azure/resource-groups')
+export const getAzureVMSizes = (location: string) =>
+  request<{ vm_sizes: AzureVMSize[] }>('POST', '/azure/vm-sizes', { location })
+export const validateAzureCredentials = (payload?: {
+  tenant_id?: string; client_id?: string; client_secret?: string; subscription_id?: string
+}) =>
+  request<{ ok: boolean; subscription_id: string }>('POST', '/azure/validate', payload ?? {})
+
 // ---- publish workflow ----
 export type PublishTemplateMode = 'builtin' | 'runtime' | 'custom'
 

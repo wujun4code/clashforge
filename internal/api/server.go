@@ -125,6 +125,15 @@ func NewRouter(deps Dependencies) http.Handler {
 		// Node server management
 		api.Get("/nodes/ssh-pubkey", handleGetSSHPubKey(deps.NodeKeyPair))
 		api.Post("/nodes/cloudflare/zones", handleCloudflareZones())
+		// Azure VM provisioning
+		api.Get("/azure-config", handleGetAzureConfig(deps))
+		api.Put("/azure-config", handlePutAzureConfig(deps))
+		api.Delete("/azure-config", handleDeleteAzureConfig(deps))
+		api.Post("/azure/validate", handleValidateAzureCredentials(deps))
+		api.Get("/azure/locations", handleListAzureLocations(deps))
+		api.Get("/azure/resource-groups", handleListAzureResourceGroups(deps))
+		api.Post("/azure/vm-sizes", handleListAzureVMSizes(deps))
+		api.Post("/azure/vms", handleCreateAzureVM(deps))
 		api.Get("/nodes", handleListNodes(deps.NodeStore))
 		api.Post("/nodes", handleCreateNode(deps.NodeStore))
 		api.Get("/nodes/{id}", handleGetNode(deps.NodeStore))

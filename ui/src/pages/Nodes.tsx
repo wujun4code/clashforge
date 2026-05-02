@@ -17,6 +17,7 @@ import {
   Copy,
   Check,
   Upload,
+  Cloud,
 } from 'lucide-react'
 import {
   getNodes,
@@ -35,8 +36,12 @@ import {
   getNodeImports,
   deleteSubscription,
   getSubscriptionNodes,
+  getAzureLocations,
+  getAzureResourceGroups,
+  getAzureVMSizes,
+  validateAzureCredentials,
 } from '../api/client'
-import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone, WorkerNodeListItem, Subscription } from '../api/client'
+import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone, WorkerNodeListItem, Subscription, AzureLocation, AzureResourceGroup, AzureVMSize } from '../api/client'
 import { PageHeader, SectionCard, ModalShell, EmptyState } from '../components/ui'
 import {
   CFGate,
@@ -46,6 +51,12 @@ import {
   maskSecret,
   useCFConfig,
 } from '../components/CFConfig'
+import {
+  AzureConfigModal,
+  AzureConfigBanner,
+  useAzureConfig,
+  type AzureConfig,
+} from '../components/AzureConfig'
 import { WorkerNodeWizard, WorkerNodeCard } from '../components/WorkerNodeWizard'
 
 const BASE = '/api/v1'
@@ -1576,11 +1587,577 @@ function ImportClashModal({ onClose, onImported }: { onClose: () => void; onImpo
   )
 }
 
+// ── Azure VM Wizard ──────────────────────────────────────────────────────────
+
+const AZURE_PROVISION_STEPS: Array<{ id: string; label: string }> = [
+  { id: 'rg',       label: '准备资源组' },
+  { id: 'vnet',     label: '创建虚拟网络' },
+  { id: 'pip',      label: '分配公网 IP' },
+  { id: 'nsg',      label: '配置安全组' },
+  { id: 'nic',      label: '创建网络接口' },
+  { id: 'vm',       label: '创建虚拟机' },
+  { id: 'ip',       label: '获取 IP 地址' },
+  { id: 'register', label: '注册托管节点' },
+]
+
+interface AzureProvisionDone {
+  type: 'done'
+  success: boolean
+  error?: string
+  node_id?: string
+  public_ip?: string
+  vm_id?: string
+}
+
+function AzureProvisionProgress({ evs }: { evs: SSEEvent[] }) {
+  const statusByStep = new Map<string, string>()
+  const eventByStep = new Map<string, SSEEvent>()
+  for (const ev of evs) {
+    statusByStep.set(ev.step, ev.status)
+    eventByStep.set(ev.step, ev)
+  }
+  const doneCount = AZURE_PROVISION_STEPS.filter(({ id }) => {
+    const s = statusByStep.get(id)
+    return s === 'ok'
+  }).length
+  const pct = Math.round((doneCount / AZURE_PROVISION_STEPS.length) * 100)
+
+  const statusIcon = (status?: string) => {
+    if (status === 'ok') return <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />
+    if (status === 'error') return <X size={12} className="text-red-400 shrink-0" />
+    if (status === 'running') return <Loader2 size={12} className="text-sky-400 shrink-0 animate-spin" />
+    return <span className="inline-block h-2 w-2 rounded-full bg-white/20 shrink-0" />
+  }
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-slate-300">创建进度</span>
+          <span className="text-slate-400 font-mono">{doneCount}/{AZURE_PROVISION_STEPS.length} · {pct}%</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full rounded-full bg-gradient-to-r from-sky-400 to-blue-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      <div className="grid gap-1.5">
+        {AZURE_PROVISION_STEPS.map(({ id, label }) => {
+          const ev = eventByStep.get(id)
+          const status = statusByStep.get(id)
+          return (
+            <div key={id} className="rounded-lg border border-white/8 bg-white/[0.03] px-2.5 py-2">
+              <div className="flex items-center gap-2 text-[11px]">
+                {statusIcon(status)}
+                <span className={status === 'error' ? 'text-red-300' : status === 'ok' ? 'text-emerald-300' : status === 'running' ? 'text-sky-300' : 'text-slate-300'}>
+                  {label}
+                </span>
+              </div>
+              {ev && (
+                <p className="mt-1 pl-5 text-[10px] text-muted break-all">
+                  {ev.message}{ev.detail ? ` · ${ev.detail}` : ''}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function AzureVMWizard({
+  azureConfig,
+  onSaveAzure,
+  onClose,
+  onDone,
+}: {
+  azureConfig: Omit<AzureConfig, 'client_secret'> | null
+  onSaveAzure: (cfg: AzureConfig) => Promise<void>
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [step, setStep] = useState<'credentials' | 'region' | 'config' | 'creating' | 'done'>('credentials')
+  const [showAzureModal, setShowAzureModal] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  // Step: region
+  const [locations, setLocations] = useState<AzureLocation[]>([])
+  const [resourceGroups, setResourceGroups] = useState<AzureResourceGroup[]>([])
+  const [selectedLocation, setSelectedLocation] = useState('')
+  const [resourceGroupMode, setResourceGroupMode] = useState<'new' | 'existing'>('new')
+  const [newResourceGroup, setNewResourceGroup] = useState('')
+  const [selectedResourceGroup, setSelectedResourceGroup] = useState('')
+
+  // Step: config
+  const [vmSizes, setVMSizes] = useState<AzureVMSize[]>([])
+  const [vmName, setVmName] = useState('')
+  const [vmSize, setVmSize] = useState('Standard_B1s')
+  const [adminUsername, setAdminUsername] = useState('clashforge')
+  const [nodeName, setNodeName] = useState('')
+
+  // Step: creating
+  const [sseEvents, setSseEvents] = useState<SSEEvent[]>([])
+  const [provisionResult, setProvisionResult] = useState<AzureProvisionDone | null>(null)
+
+  const isConfigured = Boolean(azureConfig?.tenant_id && azureConfig?.subscription_id)
+
+  // Load locations + RGs on credentials step completion
+  const loadRegionData = useCallback(async () => {
+    setBusy(true); setError('')
+    try {
+      const [locsData, rgsData] = await Promise.all([
+        getAzureLocations(),
+        getAzureResourceGroups(),
+      ])
+      setLocations(locsData.locations)
+      setResourceGroups(rgsData.resource_groups)
+      if (locsData.locations.length > 0 && !selectedLocation) {
+        // Default to East Asia
+        const eastAsia = locsData.locations.find(l => l.name === 'eastasia')
+        setSelectedLocation(eastAsia?.name ?? locsData.locations[0].name)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载失败')
+    } finally {
+      setBusy(false)
+    }
+  }, [selectedLocation])
+
+  // Load VM sizes when location changes
+  const loadVMSizes = useCallback(async (location: string) => {
+    if (!location) return
+    setBusy(true)
+    try {
+      const data = await getAzureVMSizes(location)
+      setVMSizes(data.vm_sizes)
+      if (data.vm_sizes.length > 0 && !data.vm_sizes.find(s => s.name === vmSize)) {
+        setVmSize(data.vm_sizes[0].name)
+      }
+    } catch {
+      // Ignore, use fallback list
+    } finally {
+      setBusy(false)
+    }
+  }, [vmSize])
+
+  const handleGoToRegion = async () => {
+    if (!isConfigured) { setError('请先配置 Azure 凭据'); return }
+    // Validate credentials first
+    setBusy(true); setError('')
+    try {
+      await validateAzureCredentials()
+      await loadRegionData()
+      setStep('region')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '凭据验证失败，请检查配置')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleGoToConfig = async () => {
+    const rg = resourceGroupMode === 'new' ? newResourceGroup.trim() : selectedResourceGroup
+    if (!selectedLocation) { setError('请选择区域'); return }
+    if (!rg) { setError('请输入或选择资源组名称'); return }
+    setError('')
+    await loadVMSizes(selectedLocation)
+    setStep('config')
+  }
+
+  const handleStartProvision = async () => {
+    const rg = resourceGroupMode === 'new' ? newResourceGroup.trim() : selectedResourceGroup
+    if (!vmName.trim()) { setError('请输入虚拟机名称'); return }
+    if (!adminUsername.trim()) { setError('请输入管理员用户名'); return }
+    setError(''); setSseEvents([]); setProvisionResult(null)
+    setStep('creating')
+
+    const secret = localStorage.getItem('cf_secret') || ''
+    const payload = {
+      location: selectedLocation,
+      resource_group: rg,
+      vm_name: vmName.trim().toLowerCase(),
+      vm_size: vmSize,
+      admin_username: adminUsername.trim().toLowerCase(),
+      node_name: nodeName.trim() || vmName.trim(),
+    }
+
+    try {
+      const resp = await fetch('/api/v1/azure/vms', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!resp.ok) {
+        const json = await resp.json().catch(() => ({}))
+        throw new Error(json?.error?.message ?? `HTTP ${resp.status}`)
+      }
+      const reader = resp.body?.getReader()
+      if (!reader) throw new Error('无法读取响应流')
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'done') {
+              setProvisionResult(data as AzureProvisionDone)
+              if (data.success) { onDone(); setStep('done') }
+            } else {
+              setSseEvents(prev => [...prev, data as SSEEvent])
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+    } catch (e) {
+      setProvisionResult({ type: 'done', success: false, error: e instanceof Error ? e.message : '创建失败' })
+    }
+  }
+
+  return (
+    <ModalShell
+      title="Azure 云主机"
+      description="通过 Azure API 开机一台 Linux VM，自动配置 SSH 并注册为托管节点"
+      icon={<Cloud size={18} />}
+      onClose={onClose}
+      size="xl"
+      dismissible={step !== 'creating'}
+    >
+      {/* ── Step: Credentials ── */}
+      {step === 'credentials' && (
+        <div className="space-y-4">
+          <AzureConfigBanner
+            config={azureConfig}
+            loading={false}
+            onConfigure={() => setShowAzureModal(true)}
+          />
+
+          {!isConfigured && (
+            <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-500/20 bg-sky-500/10">
+                  <Cloud size={18} className="text-sky-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-white">通过 Azure 创建代理服务器</p>
+                  <p className="text-[11px] text-muted mt-0.5">配置 Service Principal 后，ClashForge 将全程引导你在 Azure 开机云主机并注册为节点</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {['配置 Azure 凭据', '选择区域与规格', '自动开机注册'].map((s, i) => (
+                  <div key={s} className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-center">
+                    <div className="text-lg font-bold text-sky-400/60 mb-0.5">{i + 1}</div>
+                    <p className="text-[11px] text-slate-300">{s}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+              <AlertCircle size={12} className="shrink-0" />{error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button className="btn-ghost" onClick={onClose}>取消</button>
+            {!isConfigured ? (
+              <button className="btn-primary" onClick={() => setShowAzureModal(true)}>
+                <Cloud size={14} /> 配置 Azure 凭据
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={handleGoToRegion} disabled={busy}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                下一步：选择区域
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Step: Region + Resource Group ── */}
+      {step === 'region' && (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">选择 Azure 区域 <span className="text-red-400">*</span></label>
+            <select
+              className="glass-input"
+              value={selectedLocation}
+              onChange={e => setSelectedLocation(e.target.value)}
+              disabled={busy}
+            >
+              {locations.length === 0 && <option value="">加载中…</option>}
+              {locations.map(l => (
+                <option key={l.name} value={l.name}>{l.display_name} ({l.name})</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">资源组</label>
+            <div className="flex gap-2 mb-2">
+              <button
+                className={`flex-1 rounded-lg border px-3 py-2 text-xs transition-colors ${resourceGroupMode === 'new' ? 'border-sky-500/40 bg-sky-500/10 text-sky-300' : 'border-white/10 text-muted hover:text-slate-300'}`}
+                onClick={() => setResourceGroupMode('new')}
+              >
+                新建资源组
+              </button>
+              <button
+                className={`flex-1 rounded-lg border px-3 py-2 text-xs transition-colors ${resourceGroupMode === 'existing' ? 'border-sky-500/40 bg-sky-500/10 text-sky-300' : 'border-white/10 text-muted hover:text-slate-300'}`}
+                onClick={() => setResourceGroupMode('existing')}
+                disabled={resourceGroups.length === 0}
+              >
+                选择已有资源组 {resourceGroups.length > 0 ? `(${resourceGroups.length})` : ''}
+              </button>
+            </div>
+            {resourceGroupMode === 'new' ? (
+              <input
+                className="glass-input"
+                value={newResourceGroup}
+                onChange={e => setNewResourceGroup(e.target.value)}
+                placeholder="例如: clashforge-rg"
+              />
+            ) : (
+              <select
+                className="glass-input"
+                value={selectedResourceGroup}
+                onChange={e => setSelectedResourceGroup(e.target.value)}
+              >
+                <option value="">— 选择资源组 —</option>
+                {resourceGroups.map(rg => (
+                  <option key={rg.name} value={rg.name}>{rg.name} ({rg.location})</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+              <AlertCircle size={12} className="shrink-0" />{error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-1">
+            <button className="btn-ghost" onClick={() => { setStep('credentials'); setError('') }}>← 上一步</button>
+            <button className="btn-primary" onClick={handleGoToConfig} disabled={busy}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+              下一步：配置虚拟机
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step: VM Config ── */}
+      {step === 'config' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3 text-xs text-slate-300 space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-muted">区域:</span>
+              <span className="font-semibold text-white">{locations.find(l => l.name === selectedLocation)?.display_name ?? selectedLocation}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-muted">资源组:</span>
+              <span className="font-semibold text-white">{resourceGroupMode === 'new' ? newResourceGroup : selectedResourceGroup}</span>
+              {resourceGroupMode === 'new' && <span className="text-[10px] text-sky-400/70">（将自动创建）</span>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">虚拟机名称 <span className="text-red-400">*</span></label>
+              <input
+                className="glass-input font-mono text-xs"
+                value={vmName}
+                onChange={e => setVmName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                placeholder="my-proxy-vm"
+                maxLength={15}
+              />
+              <p className="text-[10px] text-muted mt-0.5">仅限小写字母、数字、连字符，最多 15 字符</p>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">节点显示名称</label>
+              <input
+                className="glass-input text-xs"
+                value={nodeName}
+                onChange={e => setNodeName(e.target.value)}
+                placeholder={vmName || '默认同虚拟机名称'}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">虚拟机规格 <span className="text-red-400">*</span></label>
+            <select
+              className="glass-input"
+              value={vmSize}
+              onChange={e => setVmSize(e.target.value)}
+            >
+              {vmSizes.length === 0 ? (
+                // Fallback hardcoded list
+                [
+                  { name: 'Standard_B1s', cores: 1, memory_gb: '1.0' },
+                  { name: 'Standard_B1ms', cores: 1, memory_gb: '2.0' },
+                  { name: 'Standard_B2s', cores: 2, memory_gb: '4.0' },
+                  { name: 'Standard_B2ms', cores: 2, memory_gb: '8.0' },
+                  { name: 'Standard_D2s_v3', cores: 2, memory_gb: '8.0' },
+                ].map(s => (
+                  <option key={s.name} value={s.name}>{s.name} · {s.cores} vCPU · {s.memory_gb} GB RAM</option>
+                ))
+              ) : vmSizes.map(s => (
+                <option key={s.name} value={s.name}>{s.name} · {s.cores} vCPU · {s.memory_gb} GB RAM</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">管理员用户名 <span className="text-red-400">*</span></label>
+            <input
+              className="glass-input font-mono text-xs"
+              value={adminUsername}
+              onChange={e => setAdminUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+              placeholder="clashforge"
+            />
+            <p className="text-[10px] text-muted mt-0.5">ClashForge 将通过内置 SSH 公钥认证访问此用户</p>
+          </div>
+
+          <div className="rounded-xl border border-sky-500/15 bg-sky-500/[0.04] px-4 py-3 space-y-1.5 text-xs">
+            <p className="font-semibold text-sky-300 flex items-center gap-1.5"><CheckCircle2 size={12} /> 自动配置的内容</p>
+            <ul className="space-y-0.5 text-sky-300/70 pl-4 list-disc">
+              <li>系统镜像: Ubuntu 24.04 LTS</li>
+              <li>SSH 公钥: ClashForge 内置密钥对（无需密码）</li>
+              <li>安全组: 开放 SSH 22 端口</li>
+              <li>公网 IP: 静态 Standard SKU</li>
+              <li>磁盘: Premium SSD</li>
+              <li>注册为托管节点（不自动部署 GOST）</li>
+            </ul>
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+              <AlertCircle size={12} className="shrink-0" />{error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-1">
+            <button className="btn-ghost" onClick={() => { setStep('region'); setError('') }}>← 上一步</button>
+            <button
+              className="btn-primary"
+              onClick={handleStartProvision}
+              disabled={!vmName.trim() || !adminUsername.trim()}
+            >
+              <Cloud size={14} /> 开始创建虚拟机
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step: Creating (SSE progress) ── */}
+      {step === 'creating' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 rounded-xl border border-sky-500/15 bg-sky-500/[0.04] px-4 py-3">
+            {provisionResult ? (
+              provisionResult.success
+                ? <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+                : <AlertCircle size={16} className="text-red-400 shrink-0" />
+            ) : (
+              <Loader2 size={16} className="text-sky-400 shrink-0 animate-spin" />
+            )}
+            <div>
+              <p className="text-sm font-semibold text-white">
+                {provisionResult
+                  ? (provisionResult.success ? '虚拟机创建完成！' : '创建失败')
+                  : '正在 Azure 创建虚拟机…'}
+              </p>
+              <p className="text-[11px] text-muted mt-0.5">
+                {provisionResult?.success
+                  ? `公网 IP: ${provisionResult.public_ip}`
+                  : provisionResult?.error
+                    ? provisionResult.error
+                    : '整个过程通常需要 3-8 分钟，请耐心等待'}
+              </p>
+            </div>
+          </div>
+
+          <AzureProvisionProgress evs={sseEvents} />
+
+          {provisionResult && !provisionResult.success && (
+            <div className="flex items-center justify-end gap-3">
+              <button className="btn-ghost" onClick={() => { setStep('config'); setError('') }}>← 返回修改</button>
+              <button className="btn-ghost" onClick={onClose}>关闭</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Step: Done ── */}
+      {step === 'done' && provisionResult?.success && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-5 space-y-3">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 size={20} className="text-emerald-400 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-emerald-300">Azure 虚拟机已创建并注册为托管节点</p>
+                <p className="text-xs text-emerald-300/60 mt-0.5">节点已以「已连接」状态加入节点列表，可随时部署 GOST 代理服务</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-lg border border-white/8 bg-black/20 px-3 py-2">
+                <p className="text-muted mb-0.5">公网 IP</p>
+                <p className="font-mono font-semibold text-white">{provisionResult.public_ip}</p>
+              </div>
+              <div className="rounded-lg border border-white/8 bg-black/20 px-3 py-2">
+                <p className="text-muted mb-0.5">管理员用户</p>
+                <p className="font-mono font-semibold text-white">{adminUsername}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-sky-500/15 bg-sky-500/[0.04] px-4 py-3 text-xs text-sky-300/80 space-y-1">
+            <p className="font-semibold text-sky-300">接下来可以做什么</p>
+            <ul className="space-y-0.5 list-disc pl-4">
+              <li>在「节点列表」找到刚创建的节点，点击 <strong>测试连接</strong> 验证 SSH 访问</li>
+              <li>点击「部署向导」完成 GOST + TLS 证书部署，使其成为代理中继节点</li>
+              <li>或直接使用此服务器的 IP 配置手动代理规则</li>
+            </ul>
+          </div>
+
+          <div className="flex items-center justify-end">
+            <button className="btn-primary" onClick={onClose}>完成</button>
+          </div>
+        </div>
+      )}
+
+      {/* Azure credentials modal */}
+      {showAzureModal && (
+        <AzureConfigModal
+          initial={azureConfig}
+          save={onSaveAzure}
+          onClose={() => setShowAzureModal(false)}
+          onSaved={() => { setShowAzureModal(false) }}
+        />
+      )}
+    </ModalShell>
+  )
+}
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export function Nodes() {
   const { config: cfGlobal, loading: cfLoading, save: saveCFGlobal, reload: reloadCF } = useCFConfig()
+  const { config: azureGlobal, save: saveAzureGlobal } = useAzureConfig()
   const [showCFModal, setShowCFModal] = useState(false)
+  const [showAzureConfigModal, setShowAzureConfigModal] = useState(false)
+  const [showAzureWizard, setShowAzureWizard] = useState(false)
 
   const [nodes, setNodes] = useState<NodeListItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -1721,7 +2298,7 @@ export function Nodes() {
       <PageHeader
         eyebrow="代理资源 · 中继节点"
         title="节点服务器"
-        description="托管节点（VPS + GOST）· 导入节点（Clash YAML）· Worker 节点（CF Workers）"
+        description="托管节点（VPS + GOST）· 导入节点（Clash YAML）· Worker 节点（CF Workers）· Azure 云主机"
         metrics={[
           { label: '节点总数', value: String(totalNodes) },
           { label: '已连接', value: String(connectedNodes) },
@@ -1734,6 +2311,9 @@ export function Nodes() {
             </button>
             <button className="btn-ghost flex items-center gap-2" onClick={() => setShowWorkerWizard(true)}>
               <CloudCog size={14} /> Worker 节点
+            </button>
+            <button className="btn-ghost flex items-center gap-2" onClick={() => setShowAzureWizard(true)}>
+              <Cloud size={14} /> Azure 云主机
             </button>
             <button className="btn-primary" onClick={() => openWizard()}>
               <Plus size={14} /> 新增节点
@@ -1966,6 +2546,24 @@ export function Nodes() {
           cfConfig={cfGlobal}
           onClose={() => setShowWorkerWizard(false)}
           onCreated={() => { void loadWorkerNodes() }}
+        />
+      )}
+
+      {showAzureWizard && (
+        <AzureVMWizard
+          azureConfig={azureGlobal}
+          onSaveAzure={saveAzureGlobal}
+          onClose={() => setShowAzureWizard(false)}
+          onDone={loadNodes}
+        />
+      )}
+
+      {showAzureConfigModal && (
+        <AzureConfigModal
+          initial={azureGlobal}
+          save={saveAzureGlobal}
+          onClose={() => setShowAzureConfigModal(false)}
+          onSaved={() => setShowAzureConfigModal(false)}
         />
       )}
 
