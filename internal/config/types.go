@@ -44,11 +44,15 @@ type NetworkConfig struct {
 	BypassChina     bool     `toml:"bypass_china" json:"bypass_china"`
 	IPv6            bool     `toml:"ipv6" json:"ipv6"`
 	BypassCIDR      []string `toml:"bypass_cidr" json:"bypass_cidr"`
+	// WANInterface is the router's WAN-facing network interface used for the
+	// dhcp:// nameserver entry so Mihomo reads ISP DNS from the DHCP lease.
+	WANInterface string `toml:"wan_interface" json:"wan_interface"`
 }
 
 type DNSConfig struct {
 	Enable       bool     `toml:"enable" json:"enable"`
 	Mode         string   `toml:"mode" json:"mode"`
+	IPv6         bool     `toml:"ipv6" json:"ipv6"`
 	Nameservers  []string `toml:"nameservers" json:"nameservers"`
 	Fallback     []string `toml:"fallback" json:"fallback"`
 	DoH          []string `toml:"doh" json:"doh"`
@@ -94,8 +98,8 @@ func Default() *MetaclashConfig {
 			MaxRestarts: 3,
 		},
 		Ports:    PortsConfig{HTTP: 17890, SOCKS: 17891, Mixed: 17893, Redir: 17892, TProxy: 17895, DNS: 17874, MihomoAPI: 19090, UI: 7777},
-		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}},
-		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"119.29.29.29", "223.5.5.5"}, Fallback: []string{"8.8.8.8", "1.1.1.1"}, DoH: []string{"https://doh.pub/dns-query"}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "none", ApplyOnStart: true},
+		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}, WANInterface: "eth1"},
+		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"223.5.5.5", "119.29.29.29"}, Fallback: []string{"tls://8.8.4.4", "tls://1.1.1.1", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, DoH: []string{}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "none", ApplyOnStart: true},
 		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"},
 		Security: SecurityConfig{APISecret: "", AllowLAN: true},
 		Log:      LogConfig{Level: "info", File: "", MaxSizeMB: 10},

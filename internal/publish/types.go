@@ -10,7 +10,7 @@ type RuleSet struct {
 	WorkerConfigID string    `json:"worker_config_id"`
 	WorkerName     string    `json:"worker_name"`
 	Hostname       string    `json:"hostname"`
-	KVKey          string    `json:"kv_key"`   // permanent KV key, never changes
+	KVKey          string    `json:"kv_key"`     // permanent KV key, never changes
 	AccessURL      string    `json:"access_url"` // permanent URL, never changes
 	Rules          []string  `json:"rules"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -39,8 +39,8 @@ type PublishPreviewRequest struct {
 }
 
 type MergeNode struct {
-	ID            string
-	Name          string
+	ID   string
+	Name string
 	// SSH/GOST HTTP-proxy fields
 	Host          string
 	Domain        string

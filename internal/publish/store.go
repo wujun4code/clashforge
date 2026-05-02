@@ -24,13 +24,13 @@ type publishRecordFile struct {
 type Store struct {
 	mu           sync.RWMutex
 	key          []byte
-	keyPath       string
-	configsPath   string
-	recordsPath   string
-	rulesetsPath  string
+	keyPath      string
+	configsPath  string
+	recordsPath  string
+	rulesetsPath string
 	workerConfig map[string]WorkerConfig
 	records      map[string]PublishRecord
-	rulesets      map[string]RuleSet
+	rulesets     map[string]RuleSet
 }
 
 func NewStore(dataDir string) (*Store, error) {
@@ -530,7 +530,6 @@ func (s *Store) CreateRuleSet(input RuleSetInput, workerName, hostname, kvKey, a
 	return rs, nil
 }
 
-
 func (s *Store) UpdateRuleSetRules(id string, rules []string) (RuleSet, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -561,4 +560,3 @@ func (s *Store) DeleteRuleSet(id string) error {
 	delete(s.rulesets, id)
 	return s.saveRuleSetsLocked()
 }
-

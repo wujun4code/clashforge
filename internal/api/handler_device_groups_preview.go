@@ -65,6 +65,14 @@ func handlePreviewDeviceGroupsConfig(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusInternalServerError, "CONFIG_PREVIEW_FAILED", err.Error())
 			return
 		}
+		// Merge overrides.yaml on top (same order as generateMihomoConfig) so baseline
+		// fields written there (sniffer, ntp, profile, experimental, etc.) appear in preview.
+		overridesPath := deps.Config.Core.DataDir + "/overrides.yaml"
+		if overridesData, readErr := os.ReadFile(overridesPath); readErr == nil && len(overridesData) > 0 {
+			if merged, mergeErr := config.MergeWithOverrides(generated, overridesData); mergeErr == nil {
+				generated = merged
+			}
+		}
 		generated = config.ApplyManagedRuntimeSettings(deps.Config, generated)
 		generated, _ = config.ApplyPerDeviceSubRulesWithProviders(generated, groups)
 

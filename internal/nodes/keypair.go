@@ -95,7 +95,6 @@ func LoadOrGenerateKeyPair(dataDir string) (*KeyPair, error) {
 	}, nil
 }
 
-
 // PublicKeyString returns the public key in authorized_keys format.
 func (kp *KeyPair) PublicKeyString() string {
 	return kp.pubKeyStr

@@ -47,4 +47,3 @@ func PickWorkerBaseURL(workerURL, workerDevURL string) string {
 func NewRuleSetKVKey() string {
 	return fmt.Sprintf("rules-%s.yaml", uuid.NewString()[:8])
 }
-

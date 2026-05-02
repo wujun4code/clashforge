@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 
@@ -130,63 +131,78 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 }
 
 // buildDNSMap constructs the Mihomo DNS config map from ClashForge's DNS settings.
+//
+// Field mapping:
+//
+//	nameserver            — dhcp://<wan_interface> (reads ISP DNS from DHCP lease)
+//	default-nameserver    — pure-IP entries from cfg.DNS.Nameservers (used to bootstrap DoH/DoT)
+//	proxy-server-nameserver — same as default-nameserver (node hostname resolution, avoids fake-ip)
+//	fallback              — cfg.DNS.Fallback (DoT/DoH for international/non-CN domains)
+//	fallback-filter       — hardcoded: geoip CN + 240.0.0.0/4
 func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
-	dnsMap := map[string]interface{}{
-		"enable":     true,
-		"listen":     fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS),
-		"ipv6":       cfg.Network.IPv6,
-		"use-hosts":  true,
-		"nameserver": cfg.DNS.Nameservers,
+	// WAN interface for dhcp:// nameserver — reads ISP-assigned DNS automatically.
+	wanIface := cfg.Network.WANInterface
+	if wanIface == "" {
+		wanIface = "eth1"
 	}
+
+	// Extract pure-IP bootstrap nameservers for default-nameserver / proxy-server-nameserver.
+	// Must be plain IPs (Mihomo requirement): used to resolve DoH/DoT resolver hostnames.
+	var bootstrapIPs []string
+	for _, ns := range cfg.DNS.Nameservers {
+		// Keep only bare IPs; skip dhcp://, https://, tls://, tcp:// entries.
+		if net.ParseIP(strings.TrimSpace(ns)) != nil {
+			bootstrapIPs = append(bootstrapIPs, ns)
+		}
+	}
+	// proxy-server-nameserver is used to resolve proxy-node hostnames.
+	// When DoH entries are present (hijack detected), use ONLY DoH so that
+	// node-hostname resolution bypasses the hijacked plain-IP nameservers.
+	// When no DoH, fall back to the bootstrap IPs.
+	var proxyServerNS []string
+	if len(cfg.DNS.DoH) > 0 {
+		proxyServerNS = cfg.DNS.DoH
+	} else {
+		proxyServerNS = append(proxyServerNS, bootstrapIPs...)
+	}
+
+	dnsMap := map[string]interface{}{
+		"enable":        true,
+		"listen":        fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS),
+		"ipv6":          cfg.DNS.IPv6,
+		"respect-rules": false,
+		// dhcp:// reads the DNS servers assigned to the WAN interface via DHCP,
+		// so Mihomo always uses the ISP-provided DNS for local domain resolution.
+		"nameserver": []string{"dhcp://\"" + wanIface + "\""},
+	}
+
 	if cfg.DNS.Mode == "fake-ip" {
 		dnsMap["enhanced-mode"] = "fake-ip"
 		dnsMap["fake-ip-range"] = "198.18.0.1/16"
+		dnsMap["fake-ip-filter-mode"] = "blacklist"
 		if len(cfg.DNS.FakeIPFilter) > 0 {
 			dnsMap["fake-ip-filter"] = cfg.DNS.FakeIPFilter
 		}
 	} else {
 		dnsMap["enhanced-mode"] = "redir-host"
 	}
-	if len(cfg.DNS.Fallback) > 0 {
-		dnsMap["fallback"] = cfg.DNS.Fallback
-	}
-	// default-nameserver must be pure IPs (Mihomo requirement): used to bootstrap
-	// DoH/DoT resolvers and resolve the nameserver hostnames themselves.
-	var bootstrapIPs []string
-	for _, ns := range cfg.DNS.Nameservers {
-		if !strings.HasPrefix(ns, "https://") && !strings.HasPrefix(ns, "tls://") && !strings.HasPrefix(ns, "tcp://") {
-			bootstrapIPs = append(bootstrapIPs, ns)
-		}
-	}
+
 	if len(bootstrapIPs) > 0 {
 		dnsMap["default-nameserver"] = bootstrapIPs
 	}
-
-	// proxy-server-nameserver resolves proxy node server hostnames, bypassing the
-	// fake-ip mapping layer so Mihomo can reach the actual proxy servers.
-	//
-	// Pure-IP UDP-53 entries work when there is no upstream DNS hijacking, but fail
-	// in multi-layer router topologies where an upstream OpenClash/dnsmasq intercepts
-	// all UDP port 53 traffic and returns fake-ip answers.
-	//
-	// DoH (https://<ip>/dns-query) uses TCP 443 with TLS, which cannot be intercepted
-	// by upstream "udp dport 53 redirect" rules and whose content cannot be replaced
-	// even if the TCP stream is transparently proxied.  By including DoH entries here
-	// (in addition to plain IPs as fallback), proxy node resolution stays reliable
-	// regardless of how many OpenClash layers sit upstream.
-	var proxyServerNS []string
-	proxyServerNS = append(proxyServerNS, bootstrapIPs...)
-	proxyServerNS = append(proxyServerNS, cfg.DNS.DoH...)
 	if len(proxyServerNS) > 0 {
 		dnsMap["proxy-server-nameserver"] = proxyServerNS
 	}
-	if len(cfg.DNS.DoH) > 0 {
-		if existing, ok := dnsMap["nameserver"].([]string); ok {
-			dnsMap["nameserver"] = append(existing, cfg.DNS.DoH...)
-		} else {
-			dnsMap["nameserver"] = cfg.DNS.DoH
+
+	if len(cfg.DNS.Fallback) > 0 {
+		dnsMap["fallback"] = cfg.DNS.Fallback
+		dnsMap["fallback-filter"] = map[string]interface{}{
+			"geoip":      true,
+			"geoip-code": "CN",
+			"ipcidr":     []string{"240.0.0.0/4"},
 		}
 	}
+
 	return dnsMap
 }
 
@@ -382,6 +398,8 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 	merged["redir-port"] = cfg.Ports.Redir
 	merged["tproxy-port"] = cfg.Ports.TProxy
 	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
+	merged["tcp-concurrent"] = true
+	merged["unified-delay"] = true
 	// ClashForge owns the mihomo API endpoint (localhost-only); strip any secret
 	// the user may have imported so our proxy handler can always reach it unauthenticated.
 	delete(merged, "secret")
@@ -517,4 +535,3 @@ func mapKeys(m map[string]bool) []string {
 	}
 	return keys
 }
-

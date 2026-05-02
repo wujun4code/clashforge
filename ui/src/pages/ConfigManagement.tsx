@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { GeoData } from './GeoData'
 import {
@@ -21,7 +22,7 @@ import type { Subscription, RuleProvider, RuleSearchResult, SourceFile, ActiveSo
 import {
   List, RefreshCw, Plus, Trash2, MoreVertical, Zap, Eye,
   Shield, Search, ChevronDown, ChevronRight, Play, FileText, Database,
-  Radio, AlertCircle, X, HardDrive,
+  Radio, AlertCircle, X, HardDrive, Copy, ExternalLink,
 } from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -383,9 +384,77 @@ function SubCard({ sub, isRunning, onDelete, onUpdate, onActivate }: {
   onActivate: () => void
 }) {
   const [menu, setMenu] = useState(false)
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 })
+  const btnRef = useRef<HTMLButtonElement>(null)
   const lastUpdated = sub.last_updated
     ? new Date(sub.last_updated).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : '从未更新'
+
+  const openMenu = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setMenuPos({
+        top: rect.bottom + window.scrollY + 4,
+        right: window.innerWidth - rect.right,
+      })
+    }
+    setMenu(m => !m)
+  }
+
+  // Close on outside click
+  useEffect(() => {
+    if (!menu) return
+    const handler = (e: MouseEvent) => {
+      if (btnRef.current && !btnRef.current.contains(e.target as Node)) setMenu(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [menu])
+
+  const menuEl = menu ? createPortal(
+    <div
+      className="fixed z-[9999] bg-surface-2 border border-white/10 rounded-xl shadow-2xl overflow-hidden w-48"
+      style={{ top: menuPos.top, right: menuPos.right }}
+      onMouseDown={e => e.stopPropagation()}
+    >
+      {!isRunning && (
+        <button
+          className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-brand hover:bg-white/5 transition-all"
+          onClick={() => { setMenu(false); onActivate() }}
+        >
+          <Play size={13} /> 切换到此配置
+        </button>
+      )}
+      {sub.url && (
+        <>
+          <button
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5 transition-all"
+            onClick={() => { setMenu(false); void navigator.clipboard.writeText(sub.url!) }}
+          >
+            <Copy size={13} /> 复制订阅链接
+          </button>
+          <a
+            href={sub.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5 transition-all"
+            onClick={() => setMenu(false)}
+          >
+            <ExternalLink size={13} /> 在浏览器中打开
+          </a>
+        </>
+      )}
+      <button
+        className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-all ${isRunning ? 'text-muted cursor-not-allowed opacity-50' : 'text-danger hover:bg-white/5'}`}
+        title={isRunning ? '正在运行中，无法删除' : undefined}
+        disabled={isRunning}
+        onClick={() => { if (!isRunning) { setMenu(false); onDelete() } }}
+      >
+        <Trash2 size={13} /> 删除
+      </button>
+    </div>,
+    document.body,
+  ) : null
 
   return (
     <div className={`card px-5 py-4 flex items-start gap-4 ${isRunning ? 'border-brand/40 bg-brand/5' : ''}`}>
@@ -400,38 +469,19 @@ function SubCard({ sub, isRunning, onDelete, onUpdate, onActivate }: {
         <p className="text-xs text-muted mt-1">
           {sub.node_count ? `${sub.node_count} 节点` : '—'} · 上次更新: {lastUpdated}
         </p>
-        {sub.url && <p className="text-xs text-muted truncate mt-0.5">{sub.url}</p>}
-      </div>
-      <div className="relative flex-shrink-0">
-        <div className="flex gap-2">
-          <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3" onClick={onUpdate}>
-            <RefreshCw size={12} /> 更新
-          </button>
-          <button className="btn-ghost p-1.5" onClick={() => setMenu(m => !m)}>
-            <MoreVertical size={15} />
-          </button>
-        </div>
-        {menu && (
-          <div className="absolute right-0 top-9 z-10 bg-surface-2 border border-white/10 rounded-xl shadow-xl overflow-hidden w-44">
-            {!isRunning && (
-              <button
-                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-brand hover:bg-white/5 transition-all"
-                onClick={() => { setMenu(false); onActivate() }}
-              >
-                <Play size={13} /> 切换到此配置
-              </button>
-            )}
-            <button
-              className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-all ${isRunning ? 'text-muted cursor-not-allowed opacity-50' : 'text-danger hover:bg-white/5'}`}
-              title={isRunning ? '正在运行中，无法删除' : undefined}
-              disabled={isRunning}
-              onClick={() => { if (!isRunning) { setMenu(false); onDelete() } }}
-            >
-              <Trash2 size={13} /> 删除
-            </button>
-          </div>
+        {sub.url && (
+          <p className="text-xs text-muted truncate mt-0.5" title={sub.url}>{sub.url}</p>
         )}
       </div>
+      <div className="flex gap-2 flex-shrink-0">
+        <button className="btn-ghost flex items-center gap-1.5 text-xs py-1.5 px-3" onClick={onUpdate}>
+          <RefreshCw size={12} /> 更新
+        </button>
+        <button ref={btnRef} className="btn-ghost p-1.5" onClick={openMenu}>
+          <MoreVertical size={15} />
+        </button>
+      </div>
+      {menuEl}
     </div>
   )
 }
