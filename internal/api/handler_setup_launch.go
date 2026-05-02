@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,23 @@ import (
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/dns"
 )
+
+// parseDNSListenPort extracts the port number from a listen string like "0.0.0.0:17874".
+// Returns 0 if the string is empty or cannot be parsed.
+func parseDNSListenPort(listen string) int {
+	if listen == "" {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(listen)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0
+	}
+	return port
+}
 
 // setupLaunchRequest is the POST body for the streaming launch endpoint.
 type setupLaunchRequest struct {
@@ -30,6 +48,14 @@ type setupLaunchDNS struct {
 	Mode         string `json:"mode"`
 	DnsmasqMode  string `json:"dnsmasq_mode"`
 	ApplyOnStart bool   `json:"apply_on_start"`
+	Listen       string `json:"listen"`
+	IPv6         bool   `json:"ipv6"`
+	// These carry the canonical ClashForge DNS values from the wizard form so
+	// the preview and launch config exactly match what the step-2 UI shows.
+	Nameservers  []string `json:"nameservers"`
+	Fallback     []string `json:"fallback"`
+	DoH          []string `json:"doh"`
+	FakeIPFilter []string `json:"fake_ip_filter"`
 }
 
 type setupLaunchNetwork struct {
@@ -90,6 +116,22 @@ func handleSetupFinalConfigPreview(deps Dependencies) http.HandlerFunc {
 		cfgCopy.DNS.Mode = req.DNS.Mode
 		cfgCopy.DNS.DnsmasqMode = req.DNS.DnsmasqMode
 		cfgCopy.DNS.ApplyOnStart = req.DNS.ApplyOnStart
+		if len(req.DNS.Nameservers) > 0 {
+			cfgCopy.DNS.Nameservers = req.DNS.Nameservers
+		}
+		if len(req.DNS.Fallback) > 0 {
+			cfgCopy.DNS.Fallback = req.DNS.Fallback
+		}
+		cfgCopy.DNS.DoH = req.DNS.DoH
+		if len(req.DNS.FakeIPFilter) > 0 {
+			cfgCopy.DNS.FakeIPFilter = req.DNS.FakeIPFilter
+		}
+		if req.DNS.Listen != "" {
+			if port := parseDNSListenPort(req.DNS.Listen); port > 0 {
+				cfgCopy.Ports.DNS = port
+			}
+		}
+		cfgCopy.DNS.IPv6 = req.DNS.IPv6
 		cfgCopy.Network.Mode = req.Network.Mode
 		cfgCopy.Network.FirewallBackend = req.Network.FirewallBackend
 		cfgCopy.Network.BypassLAN = req.Network.BypassLAN
@@ -250,6 +292,22 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		deps.Config.DNS.Mode = req.DNS.Mode
 		deps.Config.DNS.DnsmasqMode = req.DNS.DnsmasqMode
 		deps.Config.DNS.ApplyOnStart = req.DNS.ApplyOnStart
+		if len(req.DNS.Nameservers) > 0 {
+			deps.Config.DNS.Nameservers = req.DNS.Nameservers
+		}
+		if len(req.DNS.Fallback) > 0 {
+			deps.Config.DNS.Fallback = req.DNS.Fallback
+		}
+		deps.Config.DNS.DoH = req.DNS.DoH
+		if len(req.DNS.FakeIPFilter) > 0 {
+			deps.Config.DNS.FakeIPFilter = req.DNS.FakeIPFilter
+		}
+		if req.DNS.Listen != "" {
+			if port := parseDNSListenPort(req.DNS.Listen); port > 0 {
+				deps.Config.Ports.DNS = port
+			}
+		}
+		deps.Config.DNS.IPv6 = req.DNS.IPv6
 		deps.Config.Network.Mode = req.Network.Mode
 		deps.Config.Network.FirewallBackend = req.Network.FirewallBackend
 		deps.Config.Network.BypassLAN = req.Network.BypassLAN

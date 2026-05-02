@@ -1,21 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
   CheckCircle2,
   CloudCog,
   Copy,
+  Database,
   ExternalLink,
   FileCode2,
   FileText,
   ListPlus,
   Loader2,
-  Network,
   Pencil,
   Plus,
   RefreshCw,
   Rocket,
-  Save,
   Server,
   Sparkles,
   Trash2,
@@ -31,6 +30,7 @@ import {
   deletePublishRecord,
   deleteRuleSet,
   deployPublishWorkerScript,
+  destroyPublishWorkerConfig,
   getCloudflareZones,
   getPublishNodes,
   getPublishRecords,
@@ -38,6 +38,7 @@ import {
   getPublishWorkerConfigs,
   getRuleSets,
   previewPublishConfig,
+  updatePublishWorkerConfig,
   updateRuleSet,
   uploadPublishConfig,
   verifyAndSavePublishWorker,
@@ -47,7 +48,6 @@ import {
   type PublishTemplateMode,
   type PublishTemplatePreset,
   type PublishWorkerConfig,
-  type PublishWorkerVerifyResult,
   type RuleSet,
 } from '../api/client'
 import { EmptyState, InlineNotice, ModalShell, PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
@@ -117,6 +117,480 @@ async function copyText(text: string): Promise<void> {
   document.body.removeChild(input)
 }
 
+// ─── WorkerConfigEditModal ─────────────────────────────────────────────────
+
+type EditTab = 'rename' | 'rebind' | 'token'
+
+function WorkerConfigEditModal({
+  onClose,
+  config,
+  cfConfig,
+  onSaved,
+}: {
+  onClose: () => void
+  config: PublishWorkerConfig
+  cfConfig: CFConfig | null
+  onSaved: (updated: PublishWorkerConfig) => void
+}) {
+  const [tab, setTab] = useState<EditTab>('rename')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<NoticeState | null>(null)
+
+  // rename
+  const [name, setName] = useState(config.name)
+
+  // rebind
+  const [zones, setZones] = useState<CloudflareZone[]>([])
+  const [zonesLoaded, setZonesLoaded] = useState(false)
+  const [zoneID, setZoneID] = useState(config.zone_id)
+  const [subdomain, setSubdomain] = useState('')
+  const [rebindPhase, setRebindPhase] = useState<'' | 'binding' | 'saving' | 'done' | 'error'>('')
+
+  // token
+  const [newToken, setNewToken] = useState(() => randomToken('sub'))
+  const [tokenPhase, setTokenPhase] = useState<'' | 'deploying' | 'saving' | 'done' | 'error'>('')
+
+  const cfToken = cfConfig?.cf_token?.trim() ?? ''
+  const accountID = config.account_id.trim()
+
+  const selectedZone = useMemo(() => zones.find((z) => z.id === zoneID) ?? null, [zones, zoneID])
+  const newHostname = useMemo(() => {
+    const zone = selectedZone?.name?.trim().toLowerCase()
+    const sub = normalizeSubdomain(subdomain)
+    if (!zone || !sub) return ''
+    return `${sub}.${zone}`
+  }, [selectedZone?.name, subdomain])
+
+  // Load zones when rebind tab is first opened
+  useEffect(() => {
+    if (tab !== 'rebind' || zonesLoaded || !cfToken || !accountID) return
+    void (async () => {
+      try {
+        const data = await getCloudflareZones({ cf_token: cfToken, cf_account_id: accountID })
+        setZones(data.zones ?? [])
+        setZonesLoaded(true)
+        const matched = (data.zones ?? []).find((z: CloudflareZone) => z.id === config.zone_id)
+        if (matched) {
+          setZoneID(matched.id)
+          setSubdomain(parseSubdomain(config.hostname, matched.name))
+        }
+      } catch (error) {
+        setNotice({ tone: 'danger', title: '加载域名失败', text: error instanceof Error ? error.message : '请求失败' })
+      }
+    })()
+  }, [tab, zonesLoaded, cfToken, accountID, config.zone_id, config.hostname])
+
+  const runRename = async () => {
+    if (!name.trim()) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const data = await updatePublishWorkerConfig(config.id, {
+        name: name.trim(),
+        worker_name: config.worker_name,
+        worker_url: config.worker_url,
+        worker_dev_url: config.worker_dev_url,
+        hostname: config.hostname,
+        account_id: config.account_id,
+        namespace_id: config.namespace_id,
+        zone_id: config.zone_id,
+      })
+      onSaved(data.config)
+      setNotice({ tone: 'success', title: '重命名成功', text: '' })
+    } catch (error) {
+      setNotice({ tone: 'danger', title: '重命名失败', text: error instanceof Error ? error.message : '请求失败' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runRebind = async () => {
+    if (!newHostname || !cfToken) return
+    setBusy(true)
+    setRebindPhase('binding')
+    setNotice(null)
+    try {
+      const bdData = await bindPublishWorkerDomain({
+        token: cfToken,
+        account_id: accountID,
+        zone_id: zoneID,
+        worker_name: config.worker_name,
+        hostname: newHostname,
+      })
+      setRebindPhase('saving')
+      const data = await updatePublishWorkerConfig(config.id, {
+        name: config.name,
+        worker_name: config.worker_name,
+        worker_url: bdData.worker_url,
+        worker_dev_url: config.worker_dev_url,
+        hostname: bdData.hostname,
+        account_id: accountID,
+        namespace_id: config.namespace_id,
+        zone_id: zoneID,
+      })
+      setRebindPhase('done')
+      onSaved(data.config)
+      setNotice({ tone: 'success', title: '域名换绑成功', text: `新地址：${bdData.hostname}` })
+    } catch (error) {
+      setRebindPhase('error')
+      setNotice({ tone: 'danger', title: '换绑失败', text: error instanceof Error ? error.message : '请求失败' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runUpdateToken = async () => {
+    if (!newToken.trim() || !cfToken) return
+    setBusy(true)
+    setTokenPhase('deploying')
+    setNotice(null)
+    try {
+      const wkData = await deployPublishWorkerScript({
+        token: cfToken,
+        account_id: accountID,
+        worker_name: config.worker_name,
+        namespace_id: config.namespace_id,
+        access_token: newToken,
+      })
+      setTokenPhase('saving')
+      const data = await updatePublishWorkerConfig(config.id, {
+        name: config.name,
+        worker_name: config.worker_name,
+        worker_url: config.worker_url,
+        worker_dev_url: wkData.worker_dev_url,
+        hostname: config.hostname,
+        account_id: accountID,
+        namespace_id: config.namespace_id,
+        zone_id: config.zone_id,
+        token: newToken,
+      })
+      setTokenPhase('done')
+      onSaved(data.config)
+      setNotice({ tone: 'success', title: 'Token 更新成功', text: '已重新部署 Worker 脚本，旧 Token 立即失效。' })
+    } catch (error) {
+      setTokenPhase('error')
+      setNotice({ tone: 'danger', title: 'Token 更新失败', text: error instanceof Error ? error.message : '请求失败' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <ModalShell
+      title="编辑私有仓库"
+      description={`${config.name} · ${config.hostname || config.worker_name}`}
+      icon={<Database size={18} />}
+      onClose={onClose}
+      size="md"
+    >
+      <div className="space-y-4">
+        <SegmentedTabs<EditTab>
+          value={tab}
+          onChange={(v) => { setTab(v); setNotice(null) }}
+          items={[
+            { value: 'rename', label: '重命名' },
+            { value: 'rebind', label: '换绑域名' },
+            { value: 'token', label: '更换 Token' },
+          ]}
+        />
+
+        {/* Rename */}
+        {tab === 'rename' && (
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs text-muted">备注名称</label>
+              <input
+                className="glass-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Rebind domain */}
+        {tab === 'rebind' && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5">
+              <p className="text-[10px] uppercase tracking-wider text-muted">当前服务地址</p>
+              <p className="font-mono text-sm text-slate-300">{config.hostname || config.worker_url || '—'}</p>
+            </div>
+            {!cfToken ? (
+              <InlineNotice tone="warning" title="需要 Cloudflare 凭据">请先在页面顶部完成 CF 凭据配置。</InlineNotice>
+            ) : !zonesLoaded ? (
+              <div className="flex items-center gap-2 text-xs text-muted">
+                <Loader2 size={13} className="animate-spin" /> 正在加载域名列表…
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-muted">顶级域名</label>
+                    <select
+                      className="theme-select glass-input"
+                      value={zoneID}
+                      onChange={(e) => setZoneID(e.target.value)}
+                    >
+                      {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-muted">二级域名前缀</label>
+                    <input
+                      className="glass-input font-mono"
+                      value={subdomain}
+                      onChange={(e) => setSubdomain(e.target.value)}
+                      placeholder="如 sub / rules"
+                    />
+                  </div>
+                </div>
+                {newHostname && (
+                  <div className="rounded-lg border border-brand/20 bg-brand/[0.05] px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wider text-muted">新服务地址</p>
+                    <p className="font-mono text-sm text-brand-light">{newHostname}</p>
+                  </div>
+                )}
+                {rebindPhase !== '' && rebindPhase !== 'done' && rebindPhase !== 'error' && (
+                  <div className="flex items-center gap-2 text-xs text-brand-light">
+                    <Loader2 size={13} className="animate-spin" />
+                    {rebindPhase === 'binding' ? '正在绑定新域名…' : '正在保存配置…'}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Update token */}
+        {tab === 'token' && (
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2.5 text-xs text-amber-300">
+              <AlertCircle size={13} className="mt-0.5 shrink-0" />
+              <div>
+                <p className="font-semibold">更换 Token 将重新部署 Worker 脚本</p>
+                <p className="mt-0.5 text-amber-200/70">换后所有使用旧 Token 的订阅链接立即失效，请及时更新客户端配置。</p>
+              </div>
+            </div>
+            {!cfToken ? (
+              <InlineNotice tone="warning" title="需要 Cloudflare 凭据">请先在页面顶部完成 CF 凭据配置。</InlineNotice>
+            ) : (
+              <div>
+                <label className="mb-1 block text-xs text-muted">新访问 Token</label>
+                <div className="flex gap-2">
+                  <input
+                    className="glass-input font-mono"
+                    value={newToken}
+                    onChange={(e) => setNewToken(e.target.value.trim())}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost h-9 shrink-0 px-3 text-xs"
+                    onClick={() => setNewToken(randomToken('sub'))}
+                  >
+                    随机
+                  </button>
+                </div>
+              </div>
+            )}
+            {tokenPhase !== '' && tokenPhase !== 'done' && tokenPhase !== 'error' && (
+              <div className="flex items-center gap-2 text-xs text-brand-light">
+                <Loader2 size={13} className="animate-spin" />
+                {tokenPhase === 'deploying' ? '正在重新部署 Worker 脚本…' : '正在保存配置…'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {notice && (
+          <InlineNotice tone={notice.tone} title={notice.title}>{notice.text}</InlineNotice>
+        )}
+
+        <div className="flex items-center justify-between gap-2">
+          <button className="btn-ghost" onClick={onClose} disabled={busy}>
+            {notice?.tone === 'success' ? '关闭' : '取消'}
+          </button>
+          <div className="flex gap-2">
+            {tab === 'rename' && (
+              <button
+                className="btn-primary"
+                onClick={() => { void runRename() }}
+                disabled={busy || !name.trim()}
+              >
+                保存名称
+              </button>
+            )}
+            {tab === 'rebind' && cfToken && zonesLoaded && (
+              <button
+                className="btn-primary flex items-center gap-2"
+                onClick={() => { void runRebind() }}
+                disabled={busy || !newHostname}
+              >
+                {busy && rebindPhase !== 'done' ? <Loader2 size={14} className="animate-spin" /> : null}
+                重新绑定
+              </button>
+            )}
+            {tab === 'token' && cfToken && (
+              <button
+                className="btn-primary flex items-center gap-2"
+                onClick={() => { void runUpdateToken() }}
+                disabled={busy || !newToken.trim()}
+              >
+                {busy && tokenPhase !== 'done' ? <Loader2 size={14} className="animate-spin" /> : null}
+                更新 Token
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ─── WorkerConfigsModal ────────────────────────────────────────────────────
+
+function WorkerConfigsModal({
+  onClose,
+  configs,
+  cfConfig,
+  onCreateNew,
+  onRefresh,
+}: {
+  onClose: () => void
+  configs: PublishWorkerConfig[]
+  cfConfig: CFConfig | null
+  onCreateNew: () => void
+  onRefresh: () => void
+}) {
+  const [editConfig, setEditConfig] = useState<PublishWorkerConfig | null>(null)
+  const [destroyingID, setDestroyingID] = useState<string | null>(null)
+  const [notice, setNotice] = useState<NoticeState | null>(null)
+
+  const handleDestroy = async (cfg: PublishWorkerConfig) => {
+    if (!confirm(`确认彻底删除私有仓库「${cfg.name}」？\n\n将同时尝试删除 Cloudflare Worker 脚本和 KV Namespace，并移除所有关联的发布记录。`)) return
+    setDestroyingID(cfg.id)
+    setNotice(null)
+    try {
+      const data = await destroyPublishWorkerConfig(cfg.id)
+      if (!data.deleted) {
+        setNotice({ tone: 'danger', title: '删除失败', text: data.warnings?.join('\n') || '未知错误' })
+      } else if (data.warnings?.length) {
+        setNotice({
+          tone: 'warning',
+          title: '本地记录已删除，CF 云端资源清理失败',
+          text: '以下 Cloudflare 资源可能需要手动删除：\n' + data.warnings.join('\n'),
+        })
+        onRefresh()
+      } else {
+        setNotice({ tone: 'success', title: '删除成功', text: '私有仓库已彻底删除。' })
+        onRefresh()
+      }
+    } catch (error) {
+      setNotice({ tone: 'danger', title: '删除失败', text: error instanceof Error ? error.message : '请求失败' })
+    } finally {
+      setDestroyingID(null)
+    }
+  }
+
+  return (
+    <>
+      <ModalShell
+        title="私有仓库管理"
+        description="每个私有仓库对应一个 Cloudflare Worker + KV 存储，托管你的专属订阅和规则集"
+        icon={<Database size={18} />}
+        onClose={onClose}
+        size="lg"
+      >
+        <div className="space-y-4">
+          {notice && (
+            <InlineNotice tone={notice.tone} title={notice.title}>{notice.text}</InlineNotice>
+          )}
+
+          {configs.length === 0 ? (
+            <EmptyState
+              title="暂无私有仓库"
+              description="创建私有仓库后，即可发布订阅链接和托管自定义规则集。"
+              icon={<Database size={18} />}
+              action={(
+                <button className="btn-primary flex items-center gap-2" onClick={onCreateNew}>
+                  <Plus size={14} />
+                  新建私有仓库
+                </button>
+              )}
+            />
+          ) : (
+            <div className="table-shell overflow-hidden">
+              <div className="grid grid-cols-12 gap-3 px-4 py-3 table-header-row">
+                <span className="col-span-4">名称 / Worker</span>
+                <span className="col-span-4">服务地址</span>
+                <span className="col-span-2">Token</span>
+                <span className="col-span-2 text-right">操作</span>
+              </div>
+              {configs.map((cfg) => (
+                <div key={cfg.id} className="grid grid-cols-12 items-center gap-3 px-4 py-3 table-row">
+                  <div className="col-span-4 min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-100">{cfg.name}</p>
+                    <p className="truncate font-mono text-xs text-muted">{cfg.worker_name}</p>
+                  </div>
+                  <div className="col-span-4 min-w-0">
+                    <p className="truncate font-mono text-xs text-slate-300">{cfg.hostname || cfg.worker_url || '—'}</p>
+                  </div>
+                  <div className="col-span-2">
+                    {cfg.has_token
+                      ? <span className="text-xs text-emerald-400">Token ✓</span>
+                      : <span className="text-xs text-amber-400">缺失</span>}
+                  </div>
+                  <div className="col-span-2 flex items-center justify-end gap-1.5">
+                    <button
+                      className="btn-icon-sm btn-ghost"
+                      title="编辑"
+                      onClick={() => setEditConfig(cfg)}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      className="btn-icon-sm btn-ghost text-danger hover:bg-danger/10"
+                      title="彻底删除（含 CF 资源）"
+                      disabled={destroyingID === cfg.id}
+                      onClick={() => { void handleDestroy(cfg) }}
+                    >
+                      {destroyingID === cfg.id
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : <Trash2 size={14} />}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2">
+            <button className="btn-ghost flex items-center gap-2" onClick={onCreateNew}>
+              <Plus size={14} />
+              新建私有仓库
+            </button>
+            <button className="btn-ghost" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+      </ModalShell>
+
+      {editConfig && (
+        <WorkerConfigEditModal
+          onClose={() => setEditConfig(null)}
+          config={editConfig}
+          cfConfig={cfConfig}
+          onSaved={(updated) => {
+            setEditConfig(null)
+            // Update the local entry without full reload for instant feedback
+            onRefresh()
+            setNotice({ tone: 'success', title: '已保存', text: `「${updated.name}」已更新。` })
+          }}
+        />
+      )}
+    </>
+  )
+}
+
 function WorkerWizardModal({
   onClose,
   onSaved,
@@ -131,12 +605,14 @@ function WorkerWizardModal({
   const [step, setStep] = useState(1)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<NoticeState | null>(null)
-  const [verify, setVerify] = useState<PublishWorkerVerifyResult | null>(null)
   const [savedConfig, setSavedConfig] = useState<PublishWorkerConfig | null>(null)
   const [zones, setZones] = useState<CloudflareZone[]>([])
   const [domainSuggestions, setDomainSuggestions] = useState<string[]>([])
   const [subdomain, setSubdomain] = useState('')
   const [copiedWorkerURL, setCopiedWorkerURL] = useState(false)
+  const [copiedPreviewURL, setCopiedPreviewURL] = useState(false)
+  const [deployPhase, setDeployPhase] = useState<'' | 'namespace' | 'worker' | 'domain' | 'verify' | 'done' | 'error'>('')
+  const [previewURL, setPreviewURL] = useState('')
   const [logs, setLogs] = useState<Array<{
     ts: string
     step: string
@@ -195,44 +671,36 @@ function WorkerWizardModal({
   }, [selectedZone?.name, form.hostname])
 
   const runLoadZones = async () => {
+    // Called when transitioning from Step 1 → Step 2
     if (!cfToken || !form.account_id) {
-      setNotice({ tone: 'warning', title: 'Cloudflare 凭据不可用', text: '请先在页面顶部完成 Cloudflare 凭据配置。' })
-      addLog('步骤 1', 'error', 'Cloudflare 凭据不可用，无法加载域名')
+      setNotice({ tone: 'warning', title: 'Cloudflare 凭据不可用', text: '请先在页面顶部完成 Cloudflare 凭据配置后再继续。' })
       return
     }
     setBusy(true)
     setNotice(null)
-    addLog('步骤 1', 'info', '开始检测凭据并加载 Cloudflare 域名列表')
     try {
-      const data = await getCloudflareZones({
-        cf_token: cfToken,
-        cf_account_id: form.account_id,
-      })
+      const data = await getCloudflareZones({ cf_token: cfToken, cf_account_id: form.account_id })
       const list = data.zones ?? []
       setZones(list)
       if (list.length === 0) {
-        setNotice({ tone: 'warning', title: '未读取到域名', text: '当前账号下没有可用 Zone，请先在 Cloudflare 托管域名。' })
-        addLog('步骤 1', 'error', '凭据可用，但未读取到任何可用域名')
+        setNotice({ tone: 'warning', title: '未读取到域名', text: '当前账号下没有可用 Zone，请先在 Cloudflare 托管域名后再试。' })
         return
       }
       const nextZoneID = list.some((item) => item.id === form.zone_id) ? form.zone_id : list[0].id
       update('zone_id', nextZoneID)
-      const zoneName = list.find((item) => item.id === nextZoneID)?.name ?? '未知域名'
-      setNotice({ tone: 'success', title: '域名加载完成', text: `已读取 ${list.length} 个域名，默认选择 ${zoneName}。` })
-      addLog('步骤 1', 'success', `已读取 ${list.length} 个域名`, `默认域名：${zoneName}`)
       setStep(2)
     } catch (error) {
       const message = error instanceof Error ? error.message : '请求失败'
-      setNotice({ tone: 'danger', title: '加载失败', text: message })
-      addLog('步骤 1', 'error', '加载域名失败', message)
+      setNotice({ tone: 'danger', title: '凭据验证失败', text: message })
     } finally {
       setBusy(false)
     }
   }
 
-  const runCreateNamespace = async () => {
-    if (!form.worker_name) {
-      setNotice({ tone: 'warning', title: 'Worker 名称缺失', text: '请确认 Worker 名称后再继续。' })
+  // One-click full deploy: namespace → worker → bind domain → verify+save
+  const runFullDeploy = async () => {
+    if (!form.zone_id || !fullHostname) {
+      setNotice({ tone: 'warning', title: '请先选择域名', text: '请选择顶级域名并填写二级域名前缀。' })
       return
     }
     if (!cfToken || !form.account_id) {
@@ -241,134 +709,88 @@ function WorkerWizardModal({
     }
     setBusy(true)
     setNotice(null)
-    addLog('步骤 2', 'info', '开始创建（或复用）KV Namespace')
+    setLogs([])
+    setDeployPhase('namespace')
     try {
-      const data = await createPublishWorkerNamespace({
+      // 1. Create KV namespace
+      addLog('创建 KV', 'info', `创建 KV Namespace（${form.worker_name}）`)
+      const nsData = await createPublishWorkerNamespace({
         token: cfToken,
         account_id: form.account_id,
         worker_name: form.worker_name,
       })
-      update('namespace_id', data.namespace_id)
-      setNotice({
-        tone: 'success',
-        title: data.reused ? '已复用 Namespace' : 'Namespace 创建成功',
-        text: `${data.title} · ${data.namespace_id}`,
-      })
-      addLog('步骤 2', 'success', data.reused ? '复用已有 Namespace' : '创建 Namespace 成功', data.namespace_id)
-      setStep(3)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '请求失败'
-      setNotice({ tone: 'danger', title: '创建失败', text: message })
-      addLog('步骤 2', 'error', '创建 Namespace 失败', message)
-    } finally {
-      setBusy(false)
-    }
-  }
+      update('namespace_id', nsData.namespace_id)
+      addLog('创建 KV', 'success', nsData.reused ? '复用已有 Namespace' : 'Namespace 创建成功', nsData.namespace_id)
+      const namespace_id = nsData.namespace_id
 
-  const runDeployWorker = async () => {
-    if (!form.namespace_id || !form.access_token) {
-      setNotice({ tone: 'warning', title: '参数不足', text: '请先完成 Namespace 创建，并确认访问 Token。' })
-      return
-    }
-    if (!cfToken || !form.account_id) {
-      setNotice({ tone: 'warning', title: 'Cloudflare 凭据不可用', text: '请先完成凭据配置。' })
-      return
-    }
-    setBusy(true)
-    setNotice(null)
-    addLog('步骤 3', 'info', '开始部署 Worker 脚本')
-    try {
-      const data = await deployPublishWorkerScript({
+      // 2. Deploy worker script
+      setDeployPhase('worker')
+      addLog('部署 Worker', 'info', '上传 Worker 脚本至 Cloudflare')
+      const wkData = await deployPublishWorkerScript({
         token: cfToken,
         account_id: form.account_id,
         worker_name: form.worker_name,
-        namespace_id: form.namespace_id,
+        namespace_id,
         access_token: form.access_token,
       })
-      update('worker_dev_url', data.worker_dev_url)
-      setNotice({ tone: 'success', title: 'Worker 已部署', text: '请继续绑定自定义域名。' })
-      addLog('步骤 3', 'success', 'Worker 部署成功', data.worker_dev_url)
-      setStep(4)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '请求失败'
-      setNotice({ tone: 'danger', title: '部署失败', text: message })
-      addLog('步骤 3', 'error', 'Worker 部署失败', message)
-    } finally {
-      setBusy(false)
-    }
-  }
+      update('worker_dev_url', wkData.worker_dev_url)
+      addLog('部署 Worker', 'success', 'Worker 部署成功', wkData.worker_dev_url)
 
-  const runBindDomain = async () => {
-    if (!form.zone_id || !fullHostname) {
-      setNotice({ tone: 'warning', title: '请先选择域名', text: '请先选择顶级域名并填写二级域名。' })
-      return
-    }
-    if (!cfToken || !form.account_id) {
-      setNotice({ tone: 'warning', title: 'Cloudflare 凭据不可用', text: '请先完成凭据配置。' })
-      return
-    }
-    setBusy(true)
-    setNotice(null)
-    addLog('步骤 4', 'info', `开始绑定域名 ${fullHostname}`)
-    try {
-      const data = await bindPublishWorkerDomain({
+      // 3. Bind custom domain
+      setDeployPhase('domain')
+      addLog('绑定域名', 'info', `绑定 ${fullHostname}`)
+      const bdData = await bindPublishWorkerDomain({
         token: cfToken,
         account_id: form.account_id,
         zone_id: form.zone_id,
         worker_name: form.worker_name,
         hostname: fullHostname,
       })
-      update('worker_url', data.worker_url)
-      update('hostname', data.hostname)
-      setNotice({ tone: 'success', title: '域名绑定完成', text: '最后执行连通性验证并保存。' })
-      addLog('步骤 4', 'success', '域名绑定成功', `${data.hostname} -> ${data.worker_url}`)
-      setStep(5)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '请求失败'
-      setNotice({ tone: 'danger', title: '绑定失败', text: message })
-      addLog('步骤 4', 'error', '域名绑定失败', message)
-    } finally {
-      setBusy(false)
-    }
-  }
+      update('worker_url', bdData.worker_url)
+      update('hostname', bdData.hostname)
+      addLog('绑定域名', 'success', '域名绑定成功', `${bdData.hostname} → ${bdData.worker_url}`)
+      const worker_url = bdData.worker_url
+      const hostname = bdData.hostname
 
-  const runVerifyAndSave = async () => {
-    if (!form.zone_id || !form.worker_url || !form.hostname) {
-      setNotice({ tone: 'warning', title: '请先完成前置步骤', text: '请先完成 Worker 部署与域名绑定。' })
-      return
-    }
-    setBusy(true)
-    setNotice(null)
-    setVerify(null)
-    addLog('步骤 5', 'info', '开始验证托管环境并写入 ClashForge')
-    try {
-      const data = await verifyAndSavePublishWorker({
+      // 4. Verify + save
+      setDeployPhase('verify')
+      addLog('验证保存', 'info', '验证连通性并写入 ClashForge')
+      const vsData = await verifyAndSavePublishWorker({
         name: form.name || form.worker_name,
         worker_name: form.worker_name,
-        worker_url: form.worker_url,
-        worker_dev_url: form.worker_dev_url,
-        hostname: form.hostname,
+        worker_url,
+        worker_dev_url: wkData.worker_dev_url,
+        hostname,
         account_id: form.account_id,
-        namespace_id: form.namespace_id,
+        namespace_id,
         zone_id: form.zone_id,
         access_token: form.access_token,
       })
-      setVerify(data.result)
-      if (!data.result.ok || !data.config) {
-        setNotice({ tone: 'warning', title: '验证未通过', text: '请检查上面的失败项后重试。' })
-        addLog('步骤 5', 'error', '验证未通过', '请根据测试结果修复后重试')
+      if (!vsData.result.ok || !vsData.config) {
+        const failed = vsData.result.tests.filter((t) => !t.ok).map((t) => t.name).join('、')
+        addLog('验证保存', 'error', `验证未通过：${failed}`)
+        setNotice({ tone: 'warning', title: '部署完成但验证未通过', text: 'DNS 可能尚未生效，稍后关闭窗口重试即可。' })
+        setDeployPhase('error')
         return
       }
-      setSavedConfig(data.config)
-      setStep(6)
-      setNotice({ tone: 'success', title: '保存成功', text: '托管环境已写入 ClashForge，可直接创建订阅链接。' })
-      const passed = data.result.tests.filter((item) => item.ok).length
-      addLog('步骤 5', 'success', `验证通过（${passed}/${data.result.tests.length}）`, data.result.used_url || data.result.hello_url)
-      onSaved(data.config)
+      const passed = vsData.result.tests.filter((t) => t.ok).length
+      addLog('验证保存', 'success', `验证通过（${passed}/${vsData.result.tests.length}）`, vsData.result.used_url || vsData.result.hello_url)
+
+      // Build preview URL with token (strip any token already in the URL first)
+      const helloBase = vsData.result.hello_url || vsData.result.used_url || worker_url
+      const helloStripped = helloBase.replace(/([?&])token=[^&]*/g, '$1').replace(/[?&]$/, '')
+      const sep = helloStripped.includes('?') ? '&' : '?'
+      const preview = `${helloStripped}${sep}token=${encodeURIComponent(form.access_token)}`
+      setPreviewURL(preview)
+      setSavedConfig(vsData.config)
+      setDeployPhase('done')
+      setNotice(null)
+      onSaved(vsData.config)
     } catch (error) {
       const message = error instanceof Error ? error.message : '请求失败'
-      setNotice({ tone: 'danger', title: '验证失败', text: message })
-      addLog('步骤 5', 'error', '验证或保存失败', message)
+      addLog('部署', 'error', '部署失败', message)
+      setNotice({ tone: 'danger', title: '部署失败', text: message })
+      setDeployPhase('error')
     } finally {
       setBusy(false)
     }
@@ -382,14 +804,11 @@ function WorkerWizardModal({
     setTimeout(() => setCopiedWorkerURL(false), 1500)
   }
 
-  const stepLabels = ['基本配置', '选择域名', '创建 Namespace', '部署 Worker', '绑定域名', '验证保存']
-
-  const isWizardDirty = form.zone_id !== '' || step > 1
-  const handleWizardBeforeClose = () => {
-    if (busy) return false
-    if (savedConfig) return true  // save succeeded — always allow close
-    if (!isWizardDirty) return true
-    return window.confirm('确认放弃已输入的内容并关闭？')
+  const copyPreview = async () => {
+    if (!previewURL) return
+    await copyText(previewURL)
+    setCopiedPreviewURL(true)
+    setTimeout(() => setCopiedPreviewURL(false), 1500)
   }
 
   const ensureHttps = (url: string) => {
@@ -398,10 +817,30 @@ function WorkerWizardModal({
     return 'https://' + url
   }
 
+  const stepLabels = ['了解私有仓库', '配置服务域名', '一键部署'] as const
+
+  const isWizardDirty = form.zone_id !== '' || step > 1
+  const handleWizardBeforeClose = () => {
+    if (busy) return false
+    if (savedConfig) return true
+    if (!isWizardDirty) return true
+    return window.confirm('确认放弃已输入的内容并关闭？')
+  }
+
+  const phaseLabel: Record<string, string> = {
+    '': '准备就绪',
+    namespace: '正在创建 KV 存储…',
+    worker: '正在部署 Worker 脚本…',
+    domain: '正在绑定域名…',
+    verify: '正在验证连通性…',
+    done: '部署完成',
+    error: '部署遇到错误',
+  }
+
   return (
     <ModalShell
-      title="创建订阅托管环境"
-      description="按步骤操作，每步执行完毕后自动进入下一步。"
+      title="新建私有仓库"
+      description="基于 Cloudflare Worker — 为订阅分发和规则集托管提供稳定的专属地址"
       icon={<CloudCog size={18} />}
       onClose={onClose}
       onBeforeClose={handleWizardBeforeClose}
@@ -417,24 +856,18 @@ function WorkerWizardModal({
             const active = step === index
             return (
               <div key={label} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                <div
-                  className={[
-                    'flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ring-2 ring-inset',
-                    done
-                      ? 'bg-emerald-500/20 text-emerald-300 ring-emerald-500/40'
-                      : active
-                        ? 'bg-brand/20 text-brand-light ring-brand/50'
-                        : 'bg-white/5 text-muted ring-white/10',
-                  ].join(' ')}
-                >
+                <div className={[
+                  'flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ring-2 ring-inset',
+                  done ? 'bg-emerald-500/20 text-emerald-300 ring-emerald-500/40'
+                    : active ? 'bg-brand/20 text-brand-light ring-brand/50'
+                    : 'bg-white/5 text-muted ring-white/10',
+                ].join(' ')}>
                   {done ? <CheckCircle2 size={12} /> : index}
                 </div>
-                <p
-                  className={[
-                    'hidden truncate text-center text-[10px] sm:block',
-                    done ? 'text-emerald-400/70' : active ? 'text-brand-light' : 'text-muted/50',
-                  ].join(' ')}
-                >
+                <p className={[
+                  'hidden truncate text-center text-[10px] sm:block',
+                  done ? 'text-emerald-400/70' : active ? 'text-brand-light' : 'text-muted/50',
+                ].join(' ')}>
                   {label}
                 </p>
               </div>
@@ -445,69 +878,77 @@ function WorkerWizardModal({
         {/* Step content */}
         <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
 
-          {/* Step 1: Basic config + credential check */}
+          {/* ── Step 1: Explanation */}
           {step === 1 && (
             <div className="space-y-4">
-              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 1 · 基本配置</p>
-              <div
-                className={[
-                  'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs',
-                  cfToken && form.account_id
-                    ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-300'
-                    : 'border-amber-400/30 bg-amber-400/[0.07] text-amber-300',
-                ].join(' ')}
-              >
+              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 1 · 了解私有仓库</p>
+
+              {/* Credential status */}
+              <div className={[
+                'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs',
+                cfToken && form.account_id
+                  ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-300'
+                  : 'border-amber-400/30 bg-amber-400/[0.07] text-amber-300',
+              ].join(' ')}>
                 {cfToken && form.account_id ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
-                {cfToken && form.account_id ? 'Cloudflare 凭据已配置' : '请先在页面顶部完成 Cloudflare 凭据配置'}
-                {form.account_id && (
-                  <span className="ml-2 font-mono text-muted">Account: {maskSecret(form.account_id)}</span>
-                )}
+                {cfToken && form.account_id
+                  ? 'Cloudflare 凭据已配置，可以继续'
+                  : '⚠️ 请先在页面顶部完成 Cloudflare 凭据配置'}
               </div>
+
+              {/* Info cards */}
               <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs text-muted">配置名称</label>
-                  <input
-                    className="glass-input"
-                    value={form.name}
-                    onChange={(e) => update('name', e.target.value)}
-                    placeholder="自动生成，可改"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-muted">Worker 名称</label>
-                  <input
-                    className="glass-input font-mono"
-                    value={form.worker_name}
-                    onChange={(e) => update('worker_name', e.target.value.trim())}
-                    placeholder="自动生成，可改"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="mb-1 block text-xs text-muted">订阅访问 Token</label>
-                  <div className="flex gap-2">
-                    <input
-                      className="glass-input font-mono"
-                      value={form.access_token}
-                      onChange={(e) => update('access_token', e.target.value.trim())}
-                      placeholder="自动生成，可改"
-                    />
-                    <button
-                      type="button"
-                      className="btn-ghost h-10 px-3 text-xs"
-                      onClick={() => update('access_token', randomToken('sub'))}
-                    >
-                      随机
-                    </button>
+                <div className="rounded-lg border border-brand/20 bg-brand/[0.05] p-3 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-brand-light">
+                    <Server size={13} />
+                    什么是私有仓库？
                   </div>
+                  <p className="text-xs leading-relaxed text-muted">
+                    私有仓库 = 一个绑定到你自有域名的
+                    <span className="text-slate-200"> Cloudflare Worker + KV 存储</span>，
+                    让你的订阅配置和规则集拥有
+                    <strong className="text-slate-100">永久固定的专属 URL</strong>，且仅凭 Token 才可访问。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-cta/20 bg-cta/[0.05] p-3 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-cta-light">
+                    <FileCode2 size={13} />
+                    为什么发布订阅需要它？
+                  </div>
+                  <p className="text-xs leading-relaxed text-muted">
+                    Mihomo / Clash 客户端需要一个<span className="text-slate-200">公网可访问的 URL</span>
+                    才能拉取配置。私有仓库负责存储 ClashForge 推送的配置，并在客户端需要时安全返回。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-amber-400/20 bg-amber-400/[0.05] p-3 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                    <ListPlus size={13} />
+                    为什么自定义规则集需要它？
+                  </div>
+                  <p className="text-xs leading-relaxed text-muted">
+                    自定义规则集（rule-provider）同样需要稳定的 URL 供 Mihomo 定期拉取更新。KV 存储让规则集 URL
+                    <strong className="text-slate-100">写入即永久固定</strong>，修改规则内容不影响链接。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+                    <Wand2 size={13} />
+                    创建后能做什么？
+                  </div>
+                  <p className="text-xs leading-relaxed text-muted">
+                    创建完成后，即可使用「<span className="text-slate-200">发布新订阅</span>」生成订阅链接，
+                    或使用「<span className="text-slate-200">新建规则集</span>」托管自定义规则，两者都会自动选用此服务。
+                  </p>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Step 2: Domain selection */}
+          {/* ── Step 2: Domain configuration */}
           {step === 2 && (
             <div className="space-y-4">
-              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 2 · 选择域名</p>
+              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 2 · 配置服务域名</p>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs text-muted">顶级域名</label>
@@ -527,10 +968,12 @@ function WorkerWizardModal({
                     className="glass-input font-mono"
                     value={subdomain}
                     onChange={(e) => setSubdomain(e.target.value)}
-                    placeholder="例如 blog / market / sales"
+                    placeholder="例如 sub / rules / proxy"
                   />
                 </div>
               </div>
+
+              {/* Quick-pick suggestions */}
               {domainSuggestions.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {domainSuggestions.map((host) => (
@@ -549,132 +992,204 @@ function WorkerWizardModal({
                   ))}
                 </div>
               )}
-              <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                <p className="text-[11px] text-muted">将绑定域名</p>
-                <p className="text-sm font-mono text-slate-100">{fullHostname || '未选择'}</p>
+
+              {/* Hostname preview */}
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                <div>
+                  <p className="mb-0.5 text-[10px] uppercase tracking-wider text-muted">将绑定的服务地址</p>
+                  <p className="font-mono text-sm text-slate-100">{fullHostname || '请填写上方域名'}</p>
+                </div>
               </div>
+
+              {/* Root domain warning */}
+              <div className="flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2.5 text-xs text-amber-300">
+                <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="mb-0.5 font-semibold">不建议直接使用顶级域名</p>
+                  <p className="text-amber-200/70">
+                    直接绑定到{' '}
+                    <code className="rounded bg-black/20 px-1 font-mono">{selectedZone?.name || 'example.com'}</code>
+                    {' '}会把所有流量路由至 Worker，可能干扰主站、邮件等现有服务。建议使用二级域名（如{' '}
+                    <code className="rounded bg-black/20 px-1 font-mono">sub.{selectedZone?.name || 'example.com'}</code>
+                    ）以隔离影响。
+                  </p>
+                </div>
+              </div>
+
+              {/* Advanced: worker name + token */}
+              <details className="rounded-lg border border-white/10 bg-white/[0.02]">
+                <summary className="cursor-pointer select-none px-3 py-2.5 text-xs text-muted hover:text-slate-200">
+                  高级配置（Worker 名称 / 访问 Token）
+                </summary>
+                <div className="grid gap-3 border-t border-white/10 p-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-muted">Worker 名称</label>
+                    <input
+                      className="glass-input font-mono"
+                      value={form.worker_name}
+                      onChange={(e) => update('worker_name', e.target.value.trim())}
+                      placeholder="自动生成"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-muted">服务备注名称</label>
+                    <input
+                      className="glass-input"
+                      value={form.name}
+                      onChange={(e) => update('name', e.target.value)}
+                      placeholder="自动生成"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs text-muted">订阅访问 Token</label>
+                    <div className="flex gap-2">
+                      <input
+                        className="glass-input font-mono"
+                        value={form.access_token}
+                        onChange={(e) => update('access_token', e.target.value.trim())}
+                        placeholder="自动生成"
+                      />
+                      <button
+                        type="button"
+                        className="btn-ghost h-9 shrink-0 px-3 text-xs"
+                        onClick={() => update('access_token', randomToken('sub'))}
+                      >
+                        随机
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           )}
 
-          {/* Step 3: Create namespace */}
+          {/* ── Step 3: One-click deploy */}
           {step === 3 && (
             <div className="space-y-4">
-              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 3 · 创建 KV Namespace</p>
-              <div className="grid gap-2 text-xs">
-                <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                  <span className="text-muted">Worker 名称</span>
-                  <span className="font-mono text-slate-200">{form.worker_name}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                  <span className="text-muted">将绑定域名</span>
-                  <span className="font-mono text-slate-200">{fullHostname || '—'}</span>
-                </div>
-              </div>
-              <p className="text-xs text-muted">点击下方按钮为 Worker 创建（或复用）KV Namespace。</p>
-            </div>
-          )}
+              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 3 · 一键部署</p>
 
-          {/* Step 4: Deploy worker */}
-          {step === 4 && (
-            <div className="space-y-4">
-              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 4 · 部署 Worker 脚本</p>
-              <div className="grid gap-2 text-xs">
-                <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                  <span className="text-muted">Namespace ID</span>
-                  <span className="font-mono text-slate-200 text-[11px] break-all">{form.namespace_id || '—'}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                  <span className="text-muted">访问 Token</span>
-                  <span className="font-mono text-slate-200">{maskSecret(form.access_token)}</span>
-                </div>
-              </div>
-              <p className="text-xs text-muted">点击下方按钮将 Worker 脚本上传至 Cloudflare。</p>
-            </div>
-          )}
-
-          {/* Step 5: Bind domain */}
-          {step === 5 && (
-            <div className="space-y-4">
-              <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 5 · 绑定自定义域名</p>
-              <div className="grid gap-2 text-xs">
-                <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                  <span className="text-muted">将绑定域名</span>
-                  <span className="font-mono text-slate-200">{fullHostname || '—'}</span>
-                </div>
-                {form.worker_dev_url && (
+              {/* Pre-deploy summary */}
+              {deployPhase === '' && (
+                <div className="grid gap-2 text-xs">
                   <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                    <span className="text-muted">Worker Dev URL</span>
-                    <span className="font-mono text-slate-200 text-[11px] break-all">{form.worker_dev_url}</span>
+                    <span className="text-muted">服务地址</span>
+                    <span className="font-mono text-slate-200">{fullHostname}</span>
                   </div>
-                )}
-              </div>
-              <p className="text-xs text-muted">将域名 DNS 路由指向 Worker，DNS 传播可能需要数秒到数分钟。</p>
-            </div>
-          )}
-
-          {/* Step 6: Verify + save / final result */}
-          {step >= 6 ? (
-            <div className="space-y-4">
-              {step === 6 && !savedConfig && (
-                <>
-                  <p className="text-xs font-semibold text-muted uppercase tracking-widest">步骤 6 · 验证并保存</p>
-                  <div className="grid gap-2 text-xs">
-                    <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                      <span className="text-muted">Worker URL</span>
-                      <span className="font-mono text-slate-200 text-[11px] break-all">{form.worker_url || '—'}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                      <span className="text-muted">访问 Token</span>
-                      <span className="font-mono text-slate-200">{maskSecret(form.access_token)}</span>
-                    </div>
+                  <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                    <span className="text-muted">Worker 名称</span>
+                    <span className="font-mono text-slate-200">{form.worker_name}</span>
                   </div>
-                  <p className="text-xs text-muted">点击下方按钮验证连通性并写入 ClashForge。</p>
-                </>
+                  <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                    <span className="text-muted">访问 Token</span>
+                    <span className="font-mono text-slate-200">{maskSecret(form.access_token)}</span>
+                  </div>
+                  <p className="px-1 text-xs text-muted">
+                    点击「开始部署」将自动完成：创建 KV 存储 → 部署 Worker 脚本 → 绑定自定义域名 → 验证连通性。
+                  </p>
+                </div>
               )}
 
-              {verify && (
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2">验证结果</p>
-                  {verify.tests.map((item) => (
-                    <div key={item.name} className="flex items-start gap-2 text-xs">
-                      {item.ok ? (
-                        <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-success" />
-                      ) : (
-                        <AlertCircle size={13} className="mt-0.5 shrink-0 text-danger" />
-                      )}
-                      <div className="min-w-0">
-                        <p className={item.ok ? 'text-slate-200' : 'text-danger'}>{item.name}</p>
-                        {item.detail && <p className="mt-0.5 break-all text-muted">{item.detail}</p>}
-                      </div>
+              {/* Phase indicator while deploying */}
+              {deployPhase !== '' && deployPhase !== 'done' && (
+                <div className={[
+                  'flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs',
+                  deployPhase === 'error'
+                    ? 'border-danger/30 bg-danger/[0.07] text-danger'
+                    : 'border-brand/20 bg-brand/[0.05] text-brand-light',
+                ].join(' ')}>
+                  {deployPhase === 'error'
+                    ? <AlertCircle size={13} className="shrink-0" />
+                    : <Loader2 size={13} className="shrink-0 animate-spin" />}
+                  <span>{phaseLabel[deployPhase] ?? '部署中…'}</span>
+                </div>
+              )}
+
+              {/* Progress log */}
+              {logs.length > 0 && (
+                <div className="max-h-[140px] space-y-1 overflow-y-auto rounded-lg border border-white/10 bg-black/30 p-2.5 font-mono text-[11px]">
+                  {logs.map((item, idx) => (
+                    <div
+                      key={`${item.ts}-${idx}`}
+                      className={[
+                        'flex items-start gap-1.5',
+                        item.status === 'error' ? 'text-red-300'
+                          : item.status === 'success' ? 'text-emerald-300'
+                          : 'text-slate-400',
+                      ].join(' ')}
+                    >
+                      <span className="shrink-0 text-muted">[{item.ts}]</span>
+                      <span>{item.message}</span>
+                      {item.detail && <span className="truncate text-muted">{item.detail}</span>}
                     </div>
                   ))}
                 </div>
               )}
 
-              {savedConfig && (
-                <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-4 space-y-3">
+              {/* Completion panel */}
+              {deployPhase === 'done' && savedConfig && (
+                <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-4">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 size={16} className="text-emerald-400" />
-                    <p className="text-sm font-semibold text-emerald-300">托管环境已就绪</p>
+                    <p className="text-sm font-semibold text-emerald-300">私有仓库已就绪！</p>
                   </div>
-                  <p className="text-xs text-emerald-300/80">下一步回到页面点击"创建订阅"，系统会自动生成并复制订阅链接。</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <code className="max-w-full break-all rounded bg-black/30 px-2 py-1 text-xs text-emerald-200">
-                      {ensureHttps(savedConfig.worker_url)}
-                    </code>
-                    <button className="btn-ghost h-7 px-2.5 text-xs" onClick={() => { void copyWorkerEndpoint() }}>
-                      <Copy size={12} className={copiedWorkerURL ? 'text-success' : ''} />
-                      {copiedWorkerURL ? '已复制' : '复制地址'}
-                    </button>
-                    <a href={ensureHttps(savedConfig.worker_url)} target="_blank" rel="noreferrer" className="btn-ghost h-7 px-2.5 text-xs">
-                      <ExternalLink size={12} />
-                      打开
-                    </a>
+                  <p className="text-xs text-emerald-300/80">
+                    现在可以使用「发布新订阅」和「新建规则集」，系统会自动选用此服务。
+                  </p>
+
+                  {/* Token security warning */}
+                  <div className="flex items-start gap-2 rounded-lg border border-red-400/30 bg-red-400/[0.08] px-3 py-2.5 text-xs text-red-300">
+                    <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                    <div>
+                      <p className="mb-0.5 font-semibold">⚠️ 请妥善保管 Token，切勿泄漏给他人</p>
+                      <p className="text-red-200/70">
+                        Token 是访问订阅和规则集的唯一凭证。泄漏后他人可读取你的完整代理配置。
+                        建议仅在可信设备上使用带 Token 的链接。如需更换 Token，须重新部署此服务。
+                      </p>
+                    </div>
                   </div>
+
+                  {/* Service URL */}
+                  <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+                    <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted">服务地址</p>
+                    <div className="flex items-center gap-2">
+                      <code className="min-w-0 flex-1 break-all font-mono text-xs text-emerald-200">
+                        {ensureHttps(savedConfig.worker_url)}
+                      </code>
+                      <button className="btn-ghost h-7 shrink-0 px-2.5 text-xs" onClick={() => { void copyWorkerEndpoint() }}>
+                        <Copy size={12} className={copiedWorkerURL ? 'text-success' : ''} />
+                        {copiedWorkerURL ? '已复制' : '复制'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preview URL with token */}
+                  {previewURL && (
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+                      <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted">预览地址（含 Token）</p>
+                      <div className="flex items-center gap-2">
+                        <code className="min-w-0 flex-1 break-all font-mono text-xs text-slate-300">{previewURL}</code>
+                        <div className="flex shrink-0 gap-1.5">
+                          <button className="btn-ghost h-7 px-2.5 text-xs" onClick={() => { void copyPreview() }}>
+                            <Copy size={12} className={copiedPreviewURL ? 'text-success' : ''} />
+                            {copiedPreviewURL ? '已复制' : '复制'}
+                          </button>
+                          <a
+                            href={previewURL}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn-ghost flex h-7 items-center gap-1 px-2.5 text-xs"
+                          >
+                            <ExternalLink size={12} />
+                            预览
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          ) : null}
+          )}
 
         </div>
 
@@ -693,68 +1208,47 @@ function WorkerWizardModal({
 
           <div className="flex items-center gap-2">
             {step === 1 && (
-              <button className="btn-primary" onClick={runLoadZones} disabled={busy || !cfToken || !form.account_id}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                检测凭据并加载域名
+              <button
+                className="btn-primary flex items-center gap-2"
+                onClick={runLoadZones}
+                disabled={busy || !cfToken || !form.account_id}
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+                我了解了，开始配置
               </button>
             )}
             {step === 2 && (
-              <button className="btn-primary" onClick={runCreateNamespace} disabled={busy || !fullHostname}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                创建 Namespace
+              <button
+                className="btn-primary flex items-center gap-2"
+                onClick={() => setStep(3)}
+                disabled={!fullHostname}
+              >
+                <Rocket size={14} />
+                下一步：确认部署
               </button>
             )}
-            {step === 3 && (
-              <button className="btn-primary" onClick={runDeployWorker} disabled={busy}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
-                部署 Worker
+            {step === 3 && deployPhase === '' && (
+              <button className="btn-cta flex items-center gap-2" onClick={runFullDeploy} disabled={busy}>
+                <Rocket size={14} />
+                开始部署
               </button>
             )}
-            {step === 4 && (
-              <button className="btn-primary" onClick={runBindDomain} disabled={busy || !fullHostname}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />}
-                绑定域名
+            {step === 3 && deployPhase === 'error' && (
+              <button
+                className="btn-ghost flex items-center gap-2"
+                onClick={() => { setDeployPhase(''); setLogs([]); setNotice(null) }}
+              >
+                重置并重试
               </button>
             )}
-            {step === 5 && (
-              <button className="btn-cta" onClick={runVerifyAndSave} disabled={busy}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                验证并保存
-              </button>
-            )}
-            {step >= 6 && !savedConfig && (
-              <button className="btn-cta" onClick={runVerifyAndSave} disabled={busy}>
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                重试验证
-              </button>
-            )}
-            {savedConfig && (
-              <button className="btn-primary" onClick={onClose}>
+            {deployPhase === 'done' && savedConfig && (
+              <button className="btn-primary flex items-center gap-2" onClick={onClose}>
                 <CheckCircle2 size={14} />
-                完成并关闭
+                完成
               </button>
             )}
           </div>
         </div>
-
-        {/* Collapsible log */}
-        {logs.length > 0 && (
-          <details className="rounded-lg border border-white/10 bg-black/20">
-            <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted hover:text-slate-200">
-              操作日志（{logs.length} 条）
-            </summary>
-            <div className="max-h-[160px] space-y-1 overflow-y-auto border-t border-white/10 p-3 font-mono text-[11px]">
-              {logs.map((item, idx) => (
-                <div key={`${item.ts}-${idx}`} className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5">
-                  <p className={item.status === 'error' ? 'text-red-300' : item.status === 'success' ? 'text-emerald-300' : 'text-slate-300'}>
-                    [{item.ts}] [{item.step}] {item.message}
-                  </p>
-                  {item.detail && <p className="mt-0.5 break-all text-[10px] text-muted">{item.detail}</p>}
-                </div>
-              ))}
-            </div>
-          </details>
-        )}
 
       </div>
     </ModalShell>
@@ -946,7 +1440,7 @@ function PublishWizardModal({
 
   const runPublish = async () => {
     if (!selectedWorkerConfigID) {
-      setNotice({ tone: 'warning', title: '请选择托管环境', text: '' })
+      setNotice({ tone: 'warning', title: '请选择私有仓库', text: '' })
       return
     }
     if (selectedNodes.length === 0) {
@@ -979,7 +1473,7 @@ function PublishWizardModal({
 
   const removeCurrentWorker = async () => {
     if (!selectedWorkerConfigID) return
-    if (!confirm('确认删除当前托管环境？')) return
+    if (!confirm('确认删除当前私有仓库？')) return
     try {
       await deletePublishWorkerConfig(selectedWorkerConfigID)
       const next = workerConfigs.filter((c) => c.id !== selectedWorkerConfigID)
@@ -996,7 +1490,7 @@ function PublishWizardModal({
     <>
       <ModalShell
         title="发布新订阅"
-        description="按步骤生成配置并推送到 Cloudflare Worker 托管环境。"
+        description="按步骤生成配置并推送到私有仓库。"
         icon={<UploadCloud size={18} />}
         onClose={onClose}
         onBeforeClose={() => {
@@ -1189,19 +1683,19 @@ function PublishWizardModal({
               {/* Step 3: Publish */}
               {step === 3 && (
                 <div className="space-y-4">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-muted">③ 选择托管环境并发布</p>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-muted">③ 选择私有仓库并发布</p>
                   {workerConfigs.length === 0 ? (
                     <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 px-4 py-4">
-                      <p className="text-sm text-muted">需要先创建一个 Cloudflare Worker 托管环境才能发布。</p>
+                      <p className="text-sm text-muted">需要先创建一个私有仓库才能发布。</p>
                       <button className="btn-primary flex items-center gap-2" onClick={() => setShowNestedWizard(true)}>
                         <CloudCog size={14} />
-                        新建托管环境
+                        新建私有仓库
                       </button>
                     </div>
                   ) : (
                     <div className="space-y-3">
                       <div>
-                        <label className="mb-1.5 block text-xs text-muted">托管环境</label>
+                        <label className="mb-1.5 block text-xs text-muted">私有仓库</label>
                         <select
                           className="theme-select glass-input"
                           value={selectedWorkerConfigID}
@@ -1232,7 +1726,7 @@ function PublishWizardModal({
                           </div>
                           <button
                             className="text-danger transition-colors hover:text-red-300"
-                            title="删除托管环境"
+                            title="删除私有仓库"
                             onClick={() => { void removeCurrentWorker() }}
                           >
                             <Trash2 size={13} />
@@ -1396,6 +1890,7 @@ export function Publish() {
   const [copiedRecordID, setCopiedRecordID] = useState('')
   const [copiedRuleSetID, setCopiedRuleSetID] = useState('')
   const [showWizard, setShowWizard] = useState(false)
+  const [showManage, setShowManage] = useState(false)
   const [showPublishWizard, setShowPublishWizard] = useState(false)
 
   const refreshAll = useCallback(async (showRefreshing = false) => {
@@ -1516,7 +2011,7 @@ export function Publish() {
           return
         }
         if (!ruleSetWorkerID) {
-          setNotice({ tone: 'warning', title: '请选择托管环境', text: '需要选择一个 Cloudflare Worker 托管环境。' })
+          setNotice({ tone: 'warning', title: '请选择私有仓库', text: '需要选择一个私有仓库。' })
           return
         }
         await createRuleSet({ name, worker_config_id: ruleSetWorkerID, rules })
@@ -1574,7 +2069,7 @@ export function Publish() {
             description="管理已发布的订阅链接和托管规则集，或发布新订阅。"
             metrics={[
               { label: '可用节点', value: String(nodes.length) },
-              { label: '托管环境', value: String(workerConfigs.length) },
+              { label: '私有仓库', value: String(workerConfigs.length) },
               { label: '已发布', value: String(records.length) },
             ]}
             actions={(
@@ -1582,9 +2077,9 @@ export function Publish() {
                 <button className="btn-icon-sm btn-ghost" onClick={() => { void refreshAll(true) }} disabled={busyRefresh} title="刷新">
                   <RefreshCw size={14} className={busyRefresh ? 'animate-spin' : ''} />
                 </button>
-                <button className="btn-ghost flex items-center gap-2" onClick={() => setShowWizard(true)}>
-                  <CloudCog size={14} />
-                  托管环境
+                <button className="btn-ghost flex items-center gap-2" onClick={() => setShowManage(true)}>
+                  <Database size={14} />
+                  私有仓库
                 </button>
                 <button className="btn-cta flex items-center gap-2" onClick={() => setShowPublishWizard(true)}>
                   <UploadCloud size={14} />
@@ -1623,7 +2118,7 @@ export function Publish() {
               <div className="table-shell overflow-hidden">
                 <div className="grid grid-cols-12 gap-3 px-4 py-3 table-header-row">
                   <span className="col-span-3">文件</span>
-                  <span className="col-span-2">托管环境</span>
+                  <span className="col-span-2">私有仓库</span>
                   <span className="col-span-1">版本</span>
                   <span className="col-span-3">发布时间</span>
                   <span className="col-span-3 text-right">操作</span>
@@ -1696,7 +2191,7 @@ export function Publish() {
                   ) : (
                     <button className="btn-primary flex items-center gap-2" onClick={() => setShowWizard(true)}>
                       <CloudCog size={14} />
-                      先创建托管环境
+                      先创建私有仓库
                     </button>
                   )
                 }
@@ -1705,7 +2200,7 @@ export function Publish() {
               <div className="table-shell overflow-hidden">
                 <div className="grid grid-cols-12 gap-3 px-4 py-3 table-header-row">
                   <span className="col-span-4">名称 / KV Key</span>
-                  <span className="col-span-2">托管环境</span>
+                  <span className="col-span-2">私有仓库</span>
                   <span className="col-span-2">规则条数</span>
                   <span className="col-span-4 text-right">操作</span>
                 </div>
@@ -1754,6 +2249,16 @@ export function Publish() {
             />
           )}
 
+          {showManage && (
+            <WorkerConfigsModal
+              onClose={() => setShowManage(false)}
+              configs={workerConfigs}
+              cfConfig={cfGlobal}
+              onCreateNew={() => { setShowManage(false); setShowWizard(true) }}
+              onRefresh={() => { void refreshAll() }}
+            />
+          )}
+
           {showWizard && (
             <WorkerWizardModal
               onClose={() => setShowWizard(false)}
@@ -1793,7 +2298,7 @@ export function Publish() {
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs text-muted">托管环境</label>
+                      <label className="mb-1.5 block text-xs text-muted">私有仓库</label>
                       <select
                         className="glass-input theme-select w-full"
                         value={ruleSetWorkerID}

@@ -14,7 +14,7 @@ import {
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
   saveSource, setActiveSource, getSourceFile, getSources,
   checkSetupPorts, getSubscriptionCache, previewSetupFinalConfig, getDeviceGroups, updateDeviceGroups,
-  getActiveSource, previewDeviceGroupsConfig,
+  getActiveSource, previewDeviceGroupsConfig, setupDNSProbe,
 } from '../api/client'
 import type {
   OverviewAccessCheck,
@@ -26,6 +26,7 @@ import type {
   SetupPortCheck,
   DeviceRouteGroup,
   ActiveSource,
+  DNSProbeReport,
 } from '../api/client'
 import { BROWSER_IP_PROVIDERS } from '../constants/probeTargets'
 import { ModalShell } from '../components/ui'
@@ -110,6 +111,22 @@ const BLOCK_INFO: Record<string, { cat: LineCat; label: string }> = {
   'dns':       { cat: 'dns',  label: 'ClashForge 接管：DNS 配置由向导统一重写' },
   'geox-url':  { cat: 'geo',  label: 'ClashForge 接管：GeoData 路径固定到本地文件' },
 }
+// Per-field labels shown inline for lines inside the dns: block
+const DNS_FIELD_LABELS: Record<string, string> = {
+  'enable':                  '向导开关',
+  'listen':                  'ClashForge 接管：DNS 监听地址（0.0.0.0:端口）',
+  'enhanced-mode':           '解析模式：fake-ip 防止 DNS 泄漏',
+  'fake-ip-range':           'ClashForge 固定：Mihomo 虚构 IP 段',
+  'fake-ip-filter':          '不使用 fake-ip 的域名（NTP / LAN / local 等）',
+  'fake-ip-filter-mode':     'blacklist = 仅 filter 内的域名走真实 IP',
+  'default-nameserver':      '纯 IP，引导 DoH/DoT 初始解析（Mihomo 要求必须为 IP）',
+  'nameserver':              '主解析：dhcp://eth1 跟随 ISP 分配的 DNS',
+  'fallback':                '防污染境外 DoT/DoH，非 CN 域名触发时使用',
+  'fallback-filter':         '触发 fallback 的条件：GeoIP=CN 走 nameserver，否则走 fallback',
+  'proxy-server-nameserver': '节点域名专用解析，防止节点地址被 fake-ip 虚构',
+  'respect-rules':           '节点域名遵守规则集分流（false = 直接解析）',
+  'ipv6':                    'IPv6 解析开关',
+}
 const PORT_INFO: Record<string, string> = {
   'port':                'ClashForge 接管：HTTP 代理端口',
   'socks-port':          'ClashForge 接管：SOCKS5 代理端口',
@@ -161,6 +178,65 @@ function collectDevicePreviewSignals(lines: string[]): DevicePreviewSignals {
   return { providerNames, shadowGroupNames }
 }
 
+// Baseline Mihomo settings injected into overrides on every setup import.
+// These are written to overrides.yaml so they apply regardless of import mode
+// (paste / file → as base; subscription → merged on top of subscription YAML).
+const SETUP_BASELINE_OVERRIDES: Record<string, unknown> = {
+  'log-level': 'info',
+  'bind-address': '*',
+  'keep-alive-interval': 15,
+  'keep-alive-idle': 600,
+  'ipv6': false,
+  'tcp-concurrent': true,
+  'unified-delay': true,
+  'experimental': { 'quic-go-disable-gso': true },
+  'sniffer': {
+    'enable': true,
+    'override-destination': true,
+    'sniff': {
+      'QUIC': { 'ports': [443] },
+      'TLS': { 'ports': [443, '8443'] },
+      'HTTP': { 'ports': [80, '8080-8880'], 'override-destination': true },
+    },
+    'parse-pure-ip': true,
+  },
+  'profile': { 'store-selected': true, 'store-fake-ip': true },
+  'ntp': { 'enable': true, 'server': 'time.apple.com', 'port': 123, 'interval': 30, 'write-to-system': true },
+}
+
+/** Merge SETUP_BASELINE_OVERRIDES into an existing YAML string (user content wins for conflicts). */
+function mergeBaselineIntoYaml(existingYaml: string): string {
+  let base: Record<string, unknown> = {}
+  try {
+    const parsed = yaml.load(existingYaml)
+    if (parsed && typeof parsed === 'object') base = parsed as Record<string, unknown>
+  } catch { /* if existing YAML is invalid, start from scratch */ }
+  // Baseline fills in missing keys; user's existing keys take precedence
+  const merged: Record<string, unknown> = { ...SETUP_BASELINE_OVERRIDES, ...base }
+  return yaml.dump(merged, { lineWidth: 120, quotingType: '"' })
+}
+
+/** Build a minimal overrides YAML from baseline only (for subscription/saved paths). */
+function buildBaselineOverridesYaml(): string {
+  return yaml.dump(SETUP_BASELINE_OVERRIDES, { lineWidth: 120, quotingType: '"' })
+}
+
+// Extract the `dns:` top-level block from a full Mihomo YAML string.
+function extractDnsBlock(yamlContent: string): string {
+  const lines = yamlContent.split('\n')
+  const result: string[] = []
+  let inDns = false
+  for (const line of lines) {
+    if (/^dns:/.test(line)) { inDns = true; result.push(line); continue }
+    if (inDns) {
+      // Stop when we hit the next top-level key (non-empty, non-indented, non-comment)
+      if (line !== '' && !/^[\s#]/.test(line)) break
+      result.push(line)
+    }
+  }
+  return result.join('\n').trimEnd()
+}
+
 function annotateLines(content: string): AnnotatedLine[] {
   const lines = content.split('\n')
   const deviceSignals = collectDevicePreviewSignals(lines)
@@ -204,6 +280,15 @@ function annotateLines(content: string): AnnotatedLine[] {
     } else {
       let cat: LineCat = blockCat || 'preserved'
       let label: string | undefined
+
+      // Inline labels for DNS sub-keys
+      if (topLevelBlock === 'dns' && cat === 'dns') {
+        const m = trimmed.match(/^([a-z][a-z0-9-]*)[\s:]/)
+        const subKey = m?.[1] ?? ''
+        if (subKey && DNS_FIELD_LABELS[subKey]) {
+          label = DNS_FIELD_LABELS[subKey]
+        }
+      }
 
       if (hasDeviceManagedPart) {
         if (topLevelBlock === 'rule-providers') {
@@ -470,7 +555,7 @@ function ConfigPreview({ content, onContinue }: { content: string; onContinue: (
           ))}
           <span className="text-xs text-muted">无底色 = 原样保留</span>
         </div>
-        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-96 text-xs font-mono select-text">
+        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-[72rem] text-xs font-mono select-text">
           {lines.map((ln, i) => (
             <div key={i} className={`flex items-start gap-2 px-2 py-px leading-5 ${CAT_ROW[ln.cat]}`}>
               <span className="select-none text-white/20 w-7 flex-shrink-0 text-right tabular-nums">{i + 1}</span>
@@ -551,7 +636,7 @@ function LaunchConfigPreview({
       )}
 
       {!loading && !error && (
-        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-[26rem] text-xs font-mono select-text">
+        <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-[72rem] text-xs font-mono select-text">
           {lines.length === 0 && (
             <div className="px-3 py-3 text-muted">当前没有可展示的配置内容</div>
           )}
@@ -808,14 +893,23 @@ export function Setup() {
 
   // ── dns form ──
   const [dns, setDns] = useState<FormDNS>({
-    enable: true, mode: 'fake-ip', dnsmasq_mode: 'none',
-    apply_on_start: true, listen: '0.0.0.0:7874', ipv6: false,
+    enable: true, mode: 'fake-ip', dnsmasq_mode: 'upstream',
+    apply_on_start: true, listen: '0.0.0.0:17874', ipv6: false,
   })
+
+  // ── dns probe ──
+  const [dnsProbeState, setDnsProbeState] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle')
+  const [dnsProbeReport, setDnsProbeReport] = useState<DNSProbeReport | null>(null)
+  const [dnsProbeError, setDnsProbeError] = useState('')
+  const [dnsProbeNodeCount, setDnsProbeNodeCount] = useState(0)
+  // ── dns step right-panel: real backend preview of the dns block ──
+  const [dnsStepPreviewYaml, setDnsStepPreviewYaml] = useState('')
+  const [dnsStepPreviewLoading, setDnsStepPreviewLoading] = useState(false)
 
   // ── network form ──
   const [net, setNet] = useState<FormNetwork>({
     mode: 'tproxy', firewall_backend: 'auto',
-    bypass_lan: true, bypass_china: true, apply_on_start: true, ipv6: false,
+    bypass_lan: true, bypass_china: true, apply_on_start: true, ipv6: true,
   })
 
   // ── import preview ──
@@ -947,10 +1041,98 @@ export function Setup() {
   const netSet = useCallback(<K extends keyof FormNetwork>(k: K, v: FormNetwork[K]) =>
     setNet(prev => ({ ...prev, [k]: v })), [])
 
+  const runDNSProbe = useCallback(async () => {
+    setDnsProbeState('scanning')
+    setDnsProbeReport(null)
+    setDnsProbeError('')
+    try {
+      const res = await setupDNSProbe()
+      setDnsProbeReport(res.report)
+      setDnsProbeNodeCount(res.node_count)
+      setDnsProbeState('done')
+    } catch (e) {
+      setDnsProbeError(e instanceof Error ? e.message : String(e))
+      setDnsProbeState('error')
+    }
+  }, [])
+
   const buildLaunchPayload = useCallback(() => ({
-    dns: { enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode, apply_on_start: dns.apply_on_start },
+    dns: {
+      enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode,
+      apply_on_start: dns.apply_on_start, listen: dns.listen, ipv6: dns.ipv6,
+      // Canonical values that drive buildDNSMap
+      nameservers: ['223.5.5.5', '119.29.29.29'],
+      fallback: ['tls://8.8.4.4', 'tls://1.1.1.1', 'https://dns.google/dns-query', 'https://cloudflare-dns.com/dns-query'],
+      doh: (dnsProbeReport != null && !dnsProbeReport.all_clear && (dnsProbeReport.suggested_fallbacks ?? []).length > 0)
+        ? (dnsProbeReport.suggested_fallbacks ?? []) : [],
+      fake_ip_filter: ['+.lan', '+.local', 'time.*.com', 'ntp.*.com', '+.ntp.org'],
+    },
     network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
-  }), [dns, net])
+  }), [dns, net, dnsProbeReport])
+
+  // Parse the port number from a "host:port" DNS listen string.
+  const parseDnsPort = (listen: string): number | null => {
+    const m = listen.match(/:(\d+)$/)
+    const p = m ? parseInt(m[1], 10) : NaN
+    return isNaN(p) || p <= 0 || p > 65535 ? null : p
+  }
+
+  // Save DNS settings to config.toml so the step-4 preview reflects them immediately.
+  const handleDnsNext = useCallback(async () => {
+    const port = parseDnsPort(dns.listen)
+
+    // Auto-run probe if the user hasn't triggered it manually yet.
+    let effectiveReport = dnsProbeReport
+    if (dnsProbeState === 'idle') {
+      setDnsProbeState('scanning')
+      setDnsProbeReport(null)
+      setDnsProbeError('')
+      try {
+        const res = await setupDNSProbe()
+        setDnsProbeReport(res.report)
+        setDnsProbeNodeCount(res.node_count)
+        setDnsProbeState('done')
+        effectiveReport = res.report
+      } catch (e) {
+        setDnsProbeError(e instanceof Error ? e.message : String(e))
+        setDnsProbeState('error')
+        effectiveReport = null
+      }
+    }
+
+    // If hijack was detected, persist the suggested DoH into config.dns.doh so the backend
+    // also uses them for proxy-server-nameserver (makes step-4 preview match step-2 preview).
+    const hijackDetected = effectiveReport != null && !effectiveReport.all_clear &&
+      (effectiveReport.suggested_fallbacks ?? []).length > 0
+    const dohList: string[] = hijackDetected ? (effectiveReport!.suggested_fallbacks ?? []) : []
+    try {
+      await updateConfig({
+        dns: {
+          enable: dns.enable,
+          mode: dns.mode,
+          dnsmasq_mode: dns.dnsmasq_mode,
+          apply_on_start: dns.apply_on_start,
+          // Write canonical nameserver/fallback so buildDNSMap generates matching output:
+          nameservers: ['223.5.5.5', '119.29.29.29'],
+          fallback: ['tls://8.8.4.4', 'tls://1.1.1.1', 'https://dns.google/dns-query', 'https://cloudflare-dns.com/dns-query'],
+          doh: dohList,
+          ipv6: dns.ipv6,
+        },
+        ...(port != null ? { ports: { dns: port } } : {}),
+      } as Record<string, unknown>)
+    } catch { /* best-effort — wizard still proceeds */ }
+    setStep('network')
+  }, [dns, dnsProbeReport, dnsProbeState])
+
+  // Save Network settings to config.toml before entering the launch step.
+  const handleNetworkNext = useCallback(async () => {
+    try {
+      await updateConfig({
+        network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
+      } as Record<string, unknown>)
+    } catch { /* best-effort */ }
+    setStep('launch')
+  }, [net])
 
   const resolveActiveSourceKey = useCallback(async () => {
     const { active_source } = await getActiveSource().catch(() => ({ active_source: null as ActiveSource | null }))
@@ -963,7 +1145,7 @@ export function Setup() {
     setLaunchPolicyError('')
     try {
       const { content } = await previewSetupFinalConfig(buildLaunchPayload())
-      setLaunchConfigPreview(content)
+      // Start with base content; will be replaced by merged content when available.
       let policyContent = content
       const activeSourceKey = await resolveActiveSourceKey()
       if (activeSourceKey) {
@@ -977,6 +1159,8 @@ export function Setup() {
           // Fall back to setup preview content when source-cache preview is unavailable.
         }
       }
+      // Always show the most complete version available (merged device-groups if present).
+      setLaunchConfigPreview(policyContent)
 
       const parsed = parseRoutePolicyOptions(policyContent)
       setLaunchPolicyOptions(parsed)
@@ -1117,8 +1301,10 @@ export function Setup() {
   const handleImport = useCallback(async () => {
     setImporting(true); setImportError('')
     try {
+      // Show the COMPLETE final config (same as step-4) so nothing is hidden.
+      // Uses previewSetupFinalConfig with current wizard form state (DNS/network defaults).
       const showPreview = async () => {
-        const { content } = await getMihomoConfig().catch(() => ({ content: '' }))
+        const { content } = await previewSetupFinalConfig(buildLaunchPayload()).catch(() => ({ content: '' }))
         setPreviewContent(content)
       }
 
@@ -1132,7 +1318,7 @@ export function Setup() {
             if (parsed && typeof parsed === 'object') applyClashParsed(parsed)
           } catch { /* ignore */ }
           await setActiveSource({ type: 'file', filename: selectedSaved.filename })
-          await updateOverrides(content)
+          await updateOverrides(mergeBaselineIntoYaml(content))
           await generateConfig()
           setClashParsed({})
         } else {
@@ -1155,6 +1341,7 @@ export function Setup() {
             // Using cached version — no network fetch needed
           }
           await setActiveSource({ type: 'subscription', sub_id: sub.id, sub_name: sub.name })
+          await updateOverrides(buildBaselineOverridesYaml())
           await generateConfig()
           setClashParsed({})
         }
@@ -1166,6 +1353,7 @@ export function Setup() {
       if (importMode === 'existing' && activateSub) {
         await syncSubUpdate(activateSub.id)
         await setActiveSource({ type: 'subscription', sub_id: activateSub.id, sub_name: activateSub.name })
+        await updateOverrides(buildBaselineOverridesYaml())
         await generateConfig()
         setClashParsed({})
         await showPreview()
@@ -1181,7 +1369,7 @@ export function Setup() {
           // ignore YAML parse errors – backend validates
         }
         await setActiveSource({ type: 'file', filename: activateFile.filename })
-        await updateOverrides(content)
+        await updateOverrides(mergeBaselineIntoYaml(content))
         await generateConfig()
         setClashParsed({})
         await showPreview()
@@ -1198,6 +1386,7 @@ export function Setup() {
           : (await addSubscription({ name: subName, url: remoteUrl, type: 'clash', enabled: true })).id
         await syncSubUpdate(subId)
         await setActiveSource({ type: 'subscription', sub_id: subId, sub_name: subName })
+        await updateOverrides(buildBaselineOverridesYaml())
         await generateConfig()
         setClashParsed({})
         await showPreview()
@@ -1221,14 +1410,14 @@ export function Setup() {
         await setActiveSource({ type: 'file', filename })
       }
 
-      // Save as overrides and generate
-      await updateOverrides(yamlContent)
+      // Merge baseline settings into user's YAML, save as overrides and generate
+      await updateOverrides(mergeBaselineIntoYaml(yamlContent))
       await generateConfig()
       await showPreview()
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : String(e))
     } finally { setImporting(false) }
-  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved, subImportChoice])
+  }, [importMode, activateSub, activateFile, pasteContent, uploadedFileName, remoteUrl, applyClashParsed, selectedSaved, subImportChoice, buildLaunchPayload])
 
   // ── port check: verify each managed port after launch ──
   const handlePortCheck = useCallback(async () => {
@@ -1380,6 +1569,23 @@ export function Setup() {
     if (step !== 'launch') return
     void Promise.all([refreshLaunchConfigPreview(), loadLaunchDeviceGroups()])
   }, [loadLaunchDeviceGroups, refreshLaunchConfigPreview, step])
+
+  // ── dns step right-panel: call backend to get the real dns block ──
+  useEffect(() => {
+    if (step !== 'dns') return
+    const timer = setTimeout(async () => {
+      setDnsStepPreviewLoading(true)
+      try {
+        const { content } = await previewSetupFinalConfig(buildLaunchPayload())
+        setDnsStepPreviewYaml(extractDnsBlock(content))
+      } catch {
+        setDnsStepPreviewYaml('')
+      } finally {
+        setDnsStepPreviewLoading(false)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [step, buildLaunchPayload])
 
   useEffect(() => {
     if (initStatus !== 'running') return
@@ -1872,63 +2078,245 @@ export function Setup() {
         {step === 'dns' && (
           <div className="space-y-4">
             {clashParsed?.dns && (
-              <div className="glass-card px-5 py-4 bg-brand/5 border-brand/20 space-y-1">
-                <p className="text-xs font-semibold text-brand mb-2">从配置文件中读取到 DNS 设置</p>
+              <div className="glass-card px-5 py-3 bg-brand/5 border-brand/20 flex flex-wrap gap-x-4 gap-y-1 items-center">
+                <p className="text-xs font-semibold text-brand mr-1">从配置读取到 DNS 设置：</p>
                 {clashParsed.dns.enable !== undefined && <InfoBadge label="DNS 启用" value={String(clashParsed.dns.enable)} />}
-                {clashParsed.dns['enhanced-mode'] && <InfoBadge label="DNS 模式" value={clashParsed.dns['enhanced-mode']} />}
-                {clashParsed.dns.listen && <InfoBadge label="监听地址" value={clashParsed.dns.listen} />}
-                {clashParsed.dns['fake-ip-range'] && <InfoBadge label="fake-ip 段" value={clashParsed.dns['fake-ip-range']} />}
+                {clashParsed.dns['enhanced-mode'] && <InfoBadge label="模式" value={clashParsed.dns['enhanced-mode']} />}
+                {clashParsed.dns.listen && <InfoBadge label="监听" value={clashParsed.dns.listen} />}
                 {(clashParsed.dns.nameserver ?? []).length > 0 && (
                   <InfoBadge label="上游 DNS" value={(clashParsed.dns.nameserver ?? []).join(', ')} />
                 )}
               </div>
             )}
 
-            <div className="glass-card px-5 py-5 space-y-5">
-              <h2 className="text-sm font-semibold text-slate-200 border-b border-white/5 pb-3">DNS 设置</h2>
-
-              <Field label="启用 Mihomo DNS" hint="关闭时 Mihomo 使用系统 DNS，不接管查询">
-                <Toggle checked={dns.enable} onChange={v => dnsSet('enable', v)} label={dns.enable ? '已启用' : '已禁用'} />
-              </Field>
-
-              <Field label="DNS 解析模式" hint="fake-ip 模式下虚构 IP 实现规则分流">
-                <SelectInput
-                  value={dns.mode} onChange={v => dnsSet('mode', v)}
-                  options={[{ value: 'fake-ip', label: 'Fake-IP（推荐）' }, { value: 'redir-host', label: 'Redir-Host' }]}
-                />
-              </Field>
-
-              <Field label="DNS 监听地址">
-                <TextInput value={dns.listen} onChange={v => dnsSet('listen', v)} placeholder="0.0.0.0:7874" />
-              </Field>
-
-              <Field label="IPv6 DNS" hint="默认关闭，避免 IPv6 泄露">
-                <Toggle checked={dns.ipv6} onChange={v => dnsSet('ipv6', v)} label={dns.ipv6 ? '启用' : '禁用'} />
-              </Field>
-
-              <div className="border-t border-white/5 pt-4 space-y-4">
-                <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">ClashForge DNS 接管</h3>
-
-                <Field label="dnsmasq 共存模式" hint="none=不干预 dnsmasq；upstream=设为上游；replace=完全替换">
-                  <SelectInput
-                    value={dns.dnsmasq_mode} onChange={v => dnsSet('dnsmasq_mode', v)}
-                    options={[
-                      { value: 'none',     label: '不干预 dnsmasq（默认）' },
-                      { value: 'upstream', label: 'Mihomo 作为 dnsmasq 上游' },
-                      { value: 'replace',  label: '完全替换 dnsmasq' },
-                    ]}
-                  />
-                </Field>
-
-                <Field label="启动时接管 DNS" hint="开启后 ClashForge 启动时自动将 DNS 查询引向 Mihomo">
-                  <Toggle checked={dns.apply_on_start} onChange={v => dnsSet('apply_on_start', v)} label={dns.apply_on_start ? '是' : '否'} />
-                </Field>
+            {/* ── Compact settings strip ── */}
+            <div className="glass-card px-5 py-4">
+              <div className="flex flex-wrap gap-x-6 gap-y-4 items-end">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted whitespace-nowrap">启用 Mihomo DNS</span>
+                  <Toggle checked={dns.enable} onChange={v => dnsSet('enable', v)} label={dns.enable ? '已启用' : '已禁用'} />
+                </div>
+                <div className="flex items-center gap-3 min-w-[220px]">
+                  <span className="text-xs text-muted whitespace-nowrap">解析模式</span>
+                  <div className="flex-1">
+                    <SelectInput
+                      value={dns.mode} onChange={v => dnsSet('mode', v)}
+                      options={[{ value: 'fake-ip', label: 'Fake-IP（推荐）' }, { value: 'redir-host', label: 'Redir-Host' }]}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 min-w-[200px]">
+                  <span className="text-xs text-muted whitespace-nowrap">监听地址</span>
+                  <div className="flex-1">
+                    <TextInput value={dns.listen} onChange={v => dnsSet('listen', v)} placeholder="0.0.0.0:7874" />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted whitespace-nowrap">IPv6 DNS</span>
+                  <Toggle checked={dns.ipv6} onChange={v => dnsSet('ipv6', v)} label={dns.ipv6 ? '启用' : '禁用'} />
+                </div>
+                <div className="flex items-center gap-3 min-w-[280px]">
+                  <span className="text-xs text-muted whitespace-nowrap">dnsmasq 接管</span>
+                  <div className="flex-1">
+                    <SelectInput
+                      value={dns.dnsmasq_mode} onChange={v => dnsSet('dnsmasq_mode', v)}
+                      options={[
+                        { value: 'upstream', label: 'Mihomo 作为上游（推荐）' },
+                        { value: 'replace',  label: '完全替换 dnsmasq' },
+                        { value: 'none',     label: '仅启动，不修改 dnsmasq' },
+                      ]}
+                    />
+                  </div>
+                </div>
               </div>
+            </div>
+
+            {/* ── Full-width DNS config preview ── */}
+            <div className="glass-card px-4 py-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Eye size={14} className="text-brand" />
+                  <h3 className="text-sm font-semibold text-slate-200">生成的 DNS 配置预览</h3>
+                  <span className="text-[11px] text-muted">实时从后端生成 — 与第四步最终配置文件完全一致</span>
+                </div>
+                {dnsStepPreviewLoading && <Loader2 size={13} className="animate-spin text-brand flex-shrink-0" />}
+              </div>
+              <div className="flex flex-wrap gap-2 items-center text-[10px]">
+                <span className="inline-flex px-2 py-0.5 rounded-md bg-blue-500/25 text-blue-200">DNS 接管字段</span>
+                <span className="inline-flex px-2 py-0.5 rounded-md bg-amber-500/25 text-amber-200">端口 / API 接管字段</span>
+                <span className="inline-flex px-2 py-0.5 rounded-md bg-violet-500/25 text-violet-200">GeoData 接管字段</span>
+                <span className="text-[10px] text-muted">无底色 = 原样保留</span>
+              </div>
+              <div className="rounded-xl bg-black/30 border border-white/8 overflow-auto max-h-[80vh] text-xs font-mono select-text">
+                {!dnsStepPreviewLoading && !dnsStepPreviewYaml && (
+                  <div className="px-3 py-3 text-muted">正在加载…</div>
+                )}
+                {annotateLines(dnsStepPreviewYaml).map((ln, i) => (
+                  <div key={i} className={`flex items-start gap-2 px-2 py-px leading-5 ${CAT_ROW[ln.cat]}`}>
+                    <span className="select-none text-white/20 w-5 flex-shrink-0 text-right tabular-nums">{i + 1}</span>
+                    <span className="flex-1 text-slate-200 whitespace-pre">{ln.text || ' '}</span>
+                    {ln.label && (
+                      <span className={`flex-shrink-0 text-[10px] pl-3 self-center ${CAT_LABEL[ln.cat]}`}>← {ln.label}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── DNS 解析架构说明 ── */}
+            <div className="glass-card px-5 py-4 space-y-3">
+              <h3 className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-2">
+                <Network size={13} className="text-brand" />DNS 解析架构说明
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {([
+                  {
+                    key: 'default-nameserver',
+                    color: 'border-sky-500/30 bg-sky-500/[0.06]',
+                    badge: 'bg-sky-500/20 text-sky-300',
+                    title: 'default-nameserver',
+                    subtitle: '引导解析 / Bootstrap',
+                    desc: '仅用于初始化 DoH / DoT，必须填纯 IP（如 223.5.5.5）。Mihomo 启动时用它把 DoH 的域名解析成 IP，之后不再参与普通查询。',
+                  },
+                  {
+                    key: 'nameserver',
+                    color: 'border-emerald-500/30 bg-emerald-500/[0.06]',
+                    badge: 'bg-emerald-500/20 text-emerald-300',
+                    title: 'nameserver',
+                    subtitle: '主解析 / Primary',
+                    desc: '所有域名默认走这里。配置了 dhcp://eth1 表示跟随 ISP 拨号分配的 DNS，保证国内域名低延迟解析。若 fallback-filter 判定为非 CN，则额外触发 fallback。',
+                  },
+                  {
+                    key: 'fallback',
+                    color: 'border-violet-500/30 bg-violet-500/[0.06]',
+                    badge: 'bg-violet-500/20 text-violet-300',
+                    title: 'fallback',
+                    subtitle: '防污染 / Anti-Poisoning',
+                    desc: '仅对非 CN 域名生效（由 fallback-filter 决定）。使用境外 DoT / DoH（如 tls://8.8.4.4、https://dns.google）绕过 GFW 的 DNS 污染，保证境外域名解析干净。',
+                  },
+                  {
+                    key: 'proxy-server-nameserver',
+                    color: 'border-amber-500/30 bg-amber-500/[0.06]',
+                    badge: 'bg-amber-500/20 text-amber-300',
+                    title: 'proxy-server-nameserver',
+                    subtitle: '节点专用 / Node DNS',
+                    desc: '专门用于解析代理节点的域名（如 ss.example.com）。因为 fake-ip 会给代理节点域名返回虚构 IP 导致连接失败，这里单独指定真实 DNS 或 DoH，绕过 fake-ip 机制。',
+                  },
+                ] as const).map(item => (
+                  <div key={item.key} className={`rounded-xl border px-4 py-3 space-y-2 ${item.color}`}>
+                    <div className="flex items-start gap-2">
+                      <span className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded ${item.badge} flex-shrink-0 mt-0.5`}>{item.key}</span>
+                    </div>
+                    <p className="text-[11px] font-semibold text-slate-300">{item.subtitle}</p>
+                    <p className="text-[11px] text-muted/90 leading-relaxed">{item.desc}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-xl bg-black/20 border border-white/6 px-4 py-3 text-[11px] text-muted leading-relaxed">
+                <span className="text-slate-300 font-semibold">解析流程：</span>
+                收到 DNS 查询 →
+                <span className="text-amber-300/90 mx-1">proxy-server-nameserver</span>（节点域名优先） →
+                <span className="text-emerald-300/90 mx-1">nameserver</span>（主查询） →
+                fallback-filter 判断 →
+                若非 CN 域名则<span className="text-violet-300/90 mx-1">fallback</span>防污染 →
+                返回真实 IP（fake-ip 模式下客户端仍收到虚构 IP，真实 IP 由 Mihomo 内部保留建连）
+              </div>
+            </div>
+
+            {/* ── Fake-IP 劫持检测 ── */}
+            <div className="glass-card px-5 py-5 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-200">Fake-IP 劫持检测</h3>
+                  <p className="text-xs text-muted mt-1 leading-relaxed">
+                    检测上游 nameserver 是否对你的代理节点域名返回 <code className="font-mono text-amber-400/90">198.18.x.x</code> 虚拟地址，
+                    这会导致节点连接失败。检测到劫持后 ClashForge 将自动切换到 DoH。
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost text-xs flex-shrink-0 flex items-center gap-1.5 whitespace-nowrap"
+                  onClick={runDNSProbe}
+                  disabled={dnsProbeState === 'scanning'}
+                >
+                  {dnsProbeState === 'scanning'
+                    ? <><Loader2 size={12} className="animate-spin" />检测中…</>
+                    : <><Radio size={12} />{dnsProbeState === 'done' ? '重新检测' : '开始检测'}</>}
+                </button>
+              </div>
+
+              {dnsProbeState === 'idle' && (
+                <p className="text-xs text-muted/60 italic">点击右上角"开始检测"来扫描已缓存节点的 DNS 劫持情况。</p>
+              )}
+              {dnsProbeState === 'scanning' && (
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  <Loader2 size={13} className="animate-spin text-brand" />
+                  正在对节点域名发起 DNS 查询，最长等待 20 秒…
+                </div>
+              )}
+              {dnsProbeState === 'error' && (
+                <div className="flex items-center gap-2 text-xs text-danger rounded-xl bg-danger/10 border border-danger/20 px-3 py-2">
+                  <AlertCircle size={13} className="flex-shrink-0" />
+                  {dnsProbeError || '检测失败，请检查 ClashForge 是否正常运行'}
+                </div>
+              )}
+              {dnsProbeState === 'done' && dnsProbeReport && (
+                <div className="space-y-3">
+                  {dnsProbeReport.all_clear ? (
+                    <div className="flex items-center gap-2 text-xs text-success rounded-xl bg-success/10 border border-success/20 px-3 py-2.5">
+                      <CheckCircle2 size={13} className="flex-shrink-0" />
+                      <span>检测正常 — 共扫描 <strong>{dnsProbeNodeCount}</strong> 个节点域名，所有 nameserver 均未发现 fake-ip 劫持。</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2 text-xs text-warning rounded-xl bg-warning/10 border border-warning/20 px-3 py-2.5">
+                        <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold">检测到 fake-ip 劫持！</p>
+                          <p className="text-muted mt-0.5">以下 nameserver 对代理节点域名返回了 <code className="font-mono text-amber-400/90">198.18.x.x</code> 地址，已自动切换到 DoH。</p>
+                        </div>
+                      </div>
+                      {(dnsProbeReport.hijacked_nameservers ?? []).length > 0 && (
+                        <div className="rounded-xl bg-black/20 border border-white/8 px-3 py-2.5 space-y-1">
+                          <p className="text-[10px] uppercase tracking-wider text-muted font-semibold">被劫持的 Nameserver</p>
+                          {(dnsProbeReport.hijacked_nameservers ?? []).map(ns => (
+                            <div key={ns} className="flex items-center gap-2 text-xs">
+                              <XCircle size={11} className="text-danger flex-shrink-0" />
+                              <code className="font-mono text-slate-300">{ns}</code>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(dnsProbeReport.working_nameservers ?? []).length > 0 && (
+                        <div className="rounded-xl bg-black/20 border border-white/8 px-3 py-2.5 space-y-1">
+                          <p className="text-[10px] uppercase tracking-wider text-muted font-semibold">正常的 Nameserver</p>
+                          {(dnsProbeReport.working_nameservers ?? []).map(ns => (
+                            <div key={ns} className="flex items-center gap-2 text-xs">
+                              <CheckCircle2 size={11} className="text-success flex-shrink-0" />
+                              <code className="font-mono text-slate-300">{ns}</code>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(dnsProbeReport.suggested_fallbacks ?? []).length > 0 && (
+                        <div className="rounded-xl bg-brand/5 border border-brand/20 px-3 py-2 text-xs text-muted">
+                          <span className="text-brand font-semibold">自动修复：</span>
+                          已将以下 DoH 加入 proxy-server-nameserver，节点域名将走 DoH 解析，绕过劫持：
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {(dnsProbeReport.suggested_fallbacks ?? []).map(fb => (
+                              <code key={fb} className="font-mono text-[10px] bg-black/30 px-1.5 py-0.5 rounded text-brand">{fb}</code>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
               <button className="btn-ghost flex-1" onClick={() => setStep('import')}>← 返回</button>
-              <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('network')}>
+              <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => { void handleDnsNext() }}>
                 下一步：网络设置 <ChevronRight size={14} />
               </button>
             </div>
@@ -1995,7 +2383,7 @@ export function Setup() {
 
             <div className="flex gap-3">
               <button className="btn-ghost flex-1" onClick={() => setStep('dns')}>← 返回</button>
-              <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => setStep('launch')}>
+              <button className="btn-primary flex-1 flex items-center justify-center gap-2" onClick={() => { void handleNetworkNext() }}>
                 下一步：启动服务 <ChevronRight size={14} />
               </button>
             </div>

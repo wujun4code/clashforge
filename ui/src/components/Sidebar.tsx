@@ -15,6 +15,50 @@ import {
 import { getOverviewCore } from '../api/client'
 import { ThemeSwitcher } from '../theme/ThemeSwitcher'
 
+// Parses versions like "0.1.0-local.20260423.297" or "1.2.3"
+function parseVersion(v: string): { base: string; channel: string | null; date: string | null; build: string | null } {
+  const m = v.match(/^([^-]+)-([^.]+)\.(\d{8})\.(\d+)$/)
+  if (m) return { base: m[1], channel: m[2], date: m[3], build: m[4] }
+  return { base: v, channel: null, date: null, build: null }
+}
+
+function VersionBadge({ version }: { version: string }) {
+  const p = parseVersion(version)
+  const isLocal = p.channel === 'local'
+  const isPreview = p.channel && p.channel !== 'local' && p.channel !== 'stable'
+
+  return (
+    <div className="sidebar-version-row px-1" title={version}>
+      <div className="flex items-center justify-between gap-1.5">
+        <span className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/30">Version</span>
+        <span className="font-mono text-[11px] font-medium text-white/60">{p.base}</span>
+      </div>
+      {(isLocal || isPreview) && p.build && (
+        <div className="mt-1 flex items-center justify-end gap-1.5">
+          {isLocal && (
+            <span className="rounded px-1 py-px text-[9px] font-bold uppercase tracking-wider bg-amber-400/15 text-amber-300/80">
+              local
+            </span>
+          )}
+          {isPreview && (
+            <span className="rounded px-1 py-px text-[9px] font-bold uppercase tracking-wider bg-sky-400/15 text-sky-300/80">
+              {p.channel}
+            </span>
+          )}
+          {p.date && (
+            <span className="font-mono text-[10px] text-white/35">
+              {p.date.slice(0, 4)}-{p.date.slice(4, 6)}-{p.date.slice(6, 8)}
+            </span>
+          )}
+          <span className="font-mono text-[11px] font-semibold text-white/55">
+            #{p.build}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 type CoreState = 'running' | 'stopped' | 'checking'
 
 type NavItem = { to: string; icon: React.ElementType; label: string; caption: string }
@@ -254,14 +298,7 @@ export function Sidebar() {
       {/* ── Footer ────────────────────────────────────────── */}
       <div className="sidebar-footer border-t border-white/[0.06] px-3 pb-4 pt-3 space-y-2">
         <ThemeSwitcher />
-        <div className="sidebar-version-row flex items-center gap-2 px-1">
-          <span className="flex-shrink-0 text-[9.5px] font-medium uppercase tracking-[0.20em] text-white/22">
-            Version
-          </span>
-          <span className="sidebar-version-value font-mono text-[11px] text-white/40" title={__APP_VERSION__}>
-            {__APP_VERSION__}
-          </span>
-        </div>
+        <VersionBadge version={__APP_VERSION__} />
       </div>
     </aside>
   )

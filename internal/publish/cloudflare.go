@@ -383,6 +383,27 @@ func (c *CloudflareClient) DeleteWorkerScript(ctx context.Context, accountID, wo
 	return nil
 }
 
+func (c *CloudflareClient) DeleteKVNamespace(ctx context.Context, accountID, namespaceID string) error {
+	accountID = strings.TrimSpace(accountID)
+	namespaceID = strings.TrimSpace(namespaceID)
+	if accountID == "" || namespaceID == "" {
+		return fmt.Errorf("account_id and namespace_id are required")
+	}
+	path := fmt.Sprintf("/accounts/%s/storage/kv/namespaces/%s",
+		url.PathEscape(accountID), url.PathEscape(namespaceID))
+	body, status, err := c.doRequest(ctx, http.MethodDelete, path, nil, "")
+	if err != nil {
+		return err
+	}
+	if status == http.StatusNotFound {
+		return nil
+	}
+	if status < 200 || status >= 300 {
+		return c.parseStatusError(status, body)
+	}
+	return nil
+}
+
 func (c *CloudflareClient) BindWorkerDomain(ctx context.Context, accountID, zoneID, workerName, hostname string) (WorkerBindResult, error) {
 	accountID = strings.TrimSpace(accountID)
 	zoneID = strings.TrimSpace(zoneID)
@@ -394,11 +415,11 @@ func (c *CloudflareClient) BindWorkerDomain(ctx context.Context, accountID, zone
 	}
 
 	payload := map[string]any{
-		"environment":                  "production",
-		"hostname":                     hostname,
-		"service":                      workerName,
-		"zone_id":                      zoneID,
-		"override_existing_dns_record": true,
+		"environment":              "production",
+		"hostname":                 hostname,
+		"service":                  workerName,
+		"zone_id":                  zoneID,
+		"override_existing_origin": true,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

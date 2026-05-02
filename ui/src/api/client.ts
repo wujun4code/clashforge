@@ -436,9 +436,36 @@ export interface SetupPortCheck {
 }
 export const checkSetupPorts = () => request<{ checks: SetupPortCheck[] }>('GET', '/setup/port-check')
 export const previewSetupFinalConfig = (payload: {
-  dns: { enable: boolean; mode: string; dnsmasq_mode: string; apply_on_start: boolean }
+  dns: {
+    enable: boolean; mode: string; dnsmasq_mode: string; apply_on_start: boolean
+    listen: string; ipv6: boolean
+    nameservers: string[]; fallback: string[]; doh: string[]; fake_ip_filter: string[]
+  }
   network: { mode: string; firewall_backend: string; bypass_lan: boolean; bypass_china: boolean; apply_on_start: boolean; ipv6: boolean }
 }) => request<{ config_file: string; content: string }>('POST', '/setup/final-config-preview', payload)
+
+// ---- setup DNS probe ----
+export interface DNSProbeResult {
+  nameserver: string
+  hostname: string
+  ips: string[]
+  hijacked: boolean
+  error?: string
+}
+export interface DNSProbeReport {
+  all_clear: boolean
+  hijacked_nameservers: string[]
+  working_nameservers: string[]
+  suggested_fallbacks: string[]
+  results: DNSProbeResult[]
+}
+export interface SetupDNSProbeResponse {
+  report: DNSProbeReport
+  node_count: number
+  nameserver_count: number
+}
+export const setupDNSProbe = (nameservers?: string[]) =>
+  request<SetupDNSProbeResponse>('POST', '/setup/dns-probe', { nameservers: nameservers ?? [] })
 
 // ---- rule providers ----
 export interface RuleProvider {
@@ -714,6 +741,8 @@ export const updatePublishWorkerConfig = (id: string, payload: PublishWorkerConf
   request<{ config: PublishWorkerConfig }>('PUT', `/publish/worker-configs/${encodeURIComponent(id)}`, payload)
 export const deletePublishWorkerConfig = (id: string) =>
   request<{ deleted: boolean }>('DELETE', `/publish/worker-configs/${encodeURIComponent(id)}`)
+export const destroyPublishWorkerConfig = (id: string) =>
+  request<{ deleted: boolean; warnings: string[] }>('POST', `/publish/worker-configs/${encodeURIComponent(id)}/destroy`)
 export const checkPublishWorkerPermissions = (payload: { token: string; account_id: string; zone_id?: string }) =>
   request<{ ok: boolean; checks: PublishPermissionCheck[]; account_id: string }>('POST', '/publish/worker/check-permissions', payload)
 export const createPublishWorkerNamespace = (payload: { token: string; account_id: string; worker_name: string }) =>

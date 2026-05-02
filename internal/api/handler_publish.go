@@ -209,6 +209,46 @@ func handleDeletePublishWorkerConfig(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+func handleDestroyPublishWorkerConfig(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.PublishStore == nil {
+			Err(w, http.StatusInternalServerError, "PUBLISH_STORE_UNAVAILABLE", "publish store not initialized")
+			return
+		}
+		id := strings.TrimSpace(chi.URLParam(r, "id"))
+		if id == "" {
+			Err(w, http.StatusBadRequest, "PUBLISH_CONFIG_ID_REQUIRED", "worker config id is required")
+			return
+		}
+		cfg, token, err := deps.PublishStore.GetWorkerConfigWithToken(id)
+		var warnings []string
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("获取 Token 失败（将跳过 CF 清理）: %s", err.Error()))
+		} else if strings.TrimSpace(token) != "" && strings.TrimSpace(cfg.AccountID) != "" {
+			client, cfErr := publish.NewCloudflareClient(token)
+			if cfErr != nil {
+				warnings = append(warnings, fmt.Sprintf("CF 客户端初始化失败: %s", cfErr.Error()))
+			} else {
+				if cfg.WorkerName != "" {
+					if wErr := client.DeleteWorkerScript(r.Context(), cfg.AccountID, cfg.WorkerName); wErr != nil {
+						warnings = append(warnings, fmt.Sprintf("删除 Worker 脚本失败: %s", wErr.Error()))
+					}
+				}
+				if cfg.NamespaceID != "" {
+					if nErr := client.DeleteKVNamespace(r.Context(), cfg.AccountID, cfg.NamespaceID); nErr != nil {
+						warnings = append(warnings, fmt.Sprintf("删除 KV Namespace 失败: %s", nErr.Error()))
+					}
+				}
+			}
+		}
+		if err := deps.PublishStore.DeleteWorkerConfig(id); err != nil {
+			Err(w, http.StatusInternalServerError, "PUBLISH_STORE_DELETE_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{"deleted": true, "warnings": warnings})
+	}
+}
+
 func handlePublishWorkerCheckPermissions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req publish.WorkerPermissionCheckRequest
