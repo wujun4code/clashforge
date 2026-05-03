@@ -25,6 +25,20 @@ import {
   Radio, AlertCircle, X, HardDrive, Copy, ExternalLink,
 } from 'lucide-react'
 
+// ── Clipboard helper (works on HTTP non-secure contexts) ──────────────────────
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return } catch { /* fall through */ }
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'
+  document.body.appendChild(ta)
+  ta.focus(); ta.select()
+  document.execCommand('copy')
+  document.body.removeChild(ta)
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type PendingActivate =
@@ -429,7 +443,7 @@ function SubCard({ sub, isRunning, onDelete, onUpdate, onActivate }: {
         <>
           <button
             className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5 transition-all"
-            onClick={() => { setMenu(false); void navigator.clipboard.writeText(sub.url!) }}
+            onClick={() => { setMenu(false); void copyText(sub.url!) }}
           >
             <Copy size={13} /> 复制订阅链接
           </button>
