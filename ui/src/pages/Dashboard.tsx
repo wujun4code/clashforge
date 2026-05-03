@@ -567,9 +567,9 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
 
       {/* Results */}
       {result && (
-        <div className="border-t border-white/8 grid grid-cols-2">
+        <div className="border-t border-white/8 grid grid-cols-1 sm:grid-cols-2">
           {/* Router */}
-          <div className="px-4 py-3 space-y-1 border-r border-white/8">
+          <div className="px-4 py-3 space-y-1 border-b border-white/8 sm:border-b-0 sm:border-r">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">路由器侧</p>
               <Pill tone={result.router?.ok ? 'success' : 'danger'} label={result.router?.ok ? '通' : '不通'} />

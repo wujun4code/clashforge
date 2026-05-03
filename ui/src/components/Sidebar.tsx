@@ -11,6 +11,7 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  X,
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
 import { ThemeSwitcher } from '../theme/ThemeSwitcher'
@@ -118,7 +119,7 @@ const coreStatus = {
   },
 } as const
 
-export function Sidebar() {
+export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void }) {
   const [coreState, setCoreState] = useState<CoreState>('checking')
 
   useEffect(() => {
@@ -136,7 +137,12 @@ export function Sidebar() {
 
   return (
     <aside
-      className="app-sidebar flex h-screen flex-shrink-0 flex-col border-r border-white/[0.06]"
+      className={[
+        'app-sidebar flex h-screen flex-shrink-0 flex-col border-r border-white/[0.06]',
+        'fixed inset-y-0 left-0 z-50 transition-transform duration-300 ease-in-out',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+        'md:static md:translate-x-0',
+      ].join(' ')}
       style={{
         width: 'var(--sidebar-width)',
         background: 'linear-gradient(180deg, rgb(var(--surface-1)) 0%, rgb(var(--surface-0)) 100%)',
@@ -153,7 +159,7 @@ export function Sidebar() {
         >
           <img src="/favicon.svg" alt="ClashForge" className="h-[18px] w-[18px]" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p
             className="font-heading text-[15px] font-semibold leading-none tracking-tight text-white"
           >
@@ -163,11 +169,19 @@ export function Sidebar() {
             Control Studio
           </p>
         </div>
+        {/* Mobile close button */}
+        <button
+          className="md:hidden ml-2 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-white/40 transition-colors hover:bg-white/[0.06] hover:text-white"
+          onClick={onClose}
+          aria-label="关闭菜单"
+        >
+          <X size={16} />
+        </button>
       </div>
 
       {/* ── Proxy Service Card ────────────────────────────── */}
       <div className="px-3 pt-3">
-        <NavLink to="/setup" className="group block cursor-pointer">
+        <NavLink to="/setup" className="group block cursor-pointer" onClick={onClose}>
           {({ isActive }) => (
             <div
               className={[
@@ -243,6 +257,7 @@ export function Sidebar() {
                   key={to}
                   to={to}
                   end={to === '/'}
+                  onClick={onClose}
                   className={({ isActive }) =>
                     [
                       'sidebar-nav-item sidebar-nav-link group relative flex items-center gap-2.5 px-2.5 py-2 transition-all duration-150 cursor-pointer',

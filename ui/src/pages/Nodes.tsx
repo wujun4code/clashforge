@@ -313,8 +313,8 @@ function NodeEditModal({
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
         <fieldset className="space-y-3">
           <legend className="text-xs font-semibold uppercase tracking-[0.2em] text-muted mb-2">服务器信息</legend>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2">
+          <div className="grid grid-cols-1 min-[420px]:grid-cols-3 gap-3">
+            <div className="min-[420px]:col-span-2">
               <label className="block text-xs text-slate-400 mb-1">名称</label>
               <input className="glass-input" value={form.name} onChange={e => update('name', e.target.value)} placeholder="如: 东京-AWS" />
             </div>
@@ -793,8 +793,8 @@ function NodeWizard({
         {/* ── Step 1: 服务器基本信息 ── */}
         {step === 1 && (
           <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2">
+            <div className="grid grid-cols-1 min-[420px]:grid-cols-3 gap-3">
+              <div className="min-[420px]:col-span-2">
                 <label className="block text-xs text-slate-400 mb-1">名称</label>
                 <input className="glass-input" value={form.name} onChange={e => updateForm('name', e.target.value)} placeholder="如: 东京-AWS" autoFocus />
               </div>
