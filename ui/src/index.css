@@ -638,14 +638,19 @@
       rgb(var(--surface-2) / 0.90),
       rgb(var(--surface-1) / 0.80)
     );
-    padding: var(--space-lg) var(--space-xl);
+    padding: var(--space-md) var(--space-md);
     box-shadow: var(--shadow-card-hover);
     backdrop-filter: blur(var(--glass-blur));
+  }
+  @media (min-width: 768px) {
+    .hero-panel {
+      padding: var(--space-lg) var(--space-xl);
+    }
   }
 
   /* Section wrapper with subtle gradient */
   .glass-section {
-    overflow: hidden;
+    overflow: clip;
     border: var(--border-width) solid rgb(var(--border-color) / var(--border-alpha));
     background: linear-gradient(180deg,
       rgb(var(--surface-1) / 0.50),
@@ -1653,4 +1658,26 @@
   .animate-scale-in { animation: scaleIn  var(--dur-normal) var(--ease-default); }
   .animate-slide-up { animation: slideUp  var(--dur-normal) var(--ease-default); }
   .animate-fade-in  { animation: fadeIn   var(--dur-fast)   var(--ease-default); }
+
+
+  /* ────────────────────────────────────────────────────────────────────────
+     MOBILE RESPONSIVE  —  < 768px
+  ──────────────────────────────────────────────────────────────────────── */
+
+  @media (max-width: 767px) {
+    /* Compact hero panel on portrait / small screens */
+    .hero-panel {
+      padding: var(--space-md) !important;
+    }
+
+    /* Horizontally scrollable data tables */
+    .table-shell {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .table-header-row,
+    .table-row {
+      min-width: 580px;
+    }
+  }
 }
