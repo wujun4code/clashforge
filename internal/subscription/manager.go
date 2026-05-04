@@ -371,10 +371,10 @@ func (m *Manager) ImportStatic(content string) (string, int, []ProxyNode, error)
 	if err := os.WriteFile(filepath.Join(cacheDir, id+".json"), data, 0o644); err != nil {
 		return "", 0, nil, err
 	}
-	// Persist raw YAML so rule-providers can be extracted if the content is a full Clash config.
-	if isYAMLMap([]byte(content)) {
-		_ = os.WriteFile(filepath.Join(cacheDir, id+".raw.yaml"), []byte(content), 0o644)
-	}
+	// Always persist raw YAML for static subscriptions so users can view and edit
+	// the original content regardless of whether it is a full Clash map or a bare
+	// proxy list (sequence).
+	_ = os.WriteFile(filepath.Join(cacheDir, id+".raw.yaml"), []byte(content), 0o644)
 
 	m.mu.Lock()
 	m.imports.Subscriptions = append(m.imports.Subscriptions, sub)
@@ -382,6 +382,45 @@ func (m *Manager) ImportStatic(content string) (string, int, []ProxyNode, error)
 	m.mu.Unlock()
 
 	return id, len(nodes), nodes, nil
+}
+
+// UpdateStaticContent re-parses inline YAML and replaces the cached nodes for an
+// existing static subscription in-place, preserving the subscription ID.
+func (m *Manager) UpdateStaticContent(id string, content string) (int, []ProxyNode, error) {
+	nodes, err := Parse([]byte(content))
+	if err != nil {
+		return 0, nil, fmt.Errorf("parse: %w", err)
+	}
+
+	m.mu.Lock()
+	found := false
+	for i, s := range m.imports.Subscriptions {
+		if s.ID == id {
+			m.imports.Subscriptions[i].NodeCount = len(nodes)
+			m.imports.Subscriptions[i].Name = autoNameFromNodes(nodes)
+			m.imports.Subscriptions[i].LastUpdated = time.Now()
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.mu.Unlock()
+		return 0, nil, fmt.Errorf("static subscription %s not found", id)
+	}
+	_ = m.saveImportsLocked()
+	m.mu.Unlock()
+
+	cacheDir := filepath.Join(m.dataDir, "cache")
+	data, err := json.Marshal(nodes)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := os.WriteFile(filepath.Join(m.dataDir, "cache", id+".json"), data, 0o644); err != nil {
+		return 0, nil, err
+	}
+	// Always persist raw YAML so the edit modal can reload the content.
+	_ = os.WriteFile(filepath.Join(cacheDir, id+".raw.yaml"), []byte(content), 0o644)
+	return len(nodes), nodes, nil
 }
 
 func (m *Manager) doUpdate(sub Subscription) error {

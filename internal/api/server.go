@@ -104,6 +104,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/subscriptions/{id}/update", handleTriggerSubscriptionUpdate(deps))
 		api.Post("/subscriptions/{id}/sync-update", handleSyncSubscriptionUpdate(deps))
 		api.Get("/subscriptions/{id}/cache", handleGetSubscriptionCache(deps))
+		api.Put("/subscriptions/{id}/content", handleUpdateStaticContent(deps))
 		api.Get("/subscriptions/{id}/nodes", handleGetSubscriptionNodes(deps))
 		api.Get("/node-imports", handleGetNodeImports(deps))
 		api.Get("/logs", handleGetLogs(deps))

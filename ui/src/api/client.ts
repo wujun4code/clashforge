@@ -388,6 +388,8 @@ export const deleteSubscription = (id: string) => request('DELETE', `/subscripti
 export const triggerSubUpdate   = (id: string) => request('POST', `/subscriptions/${id}/update`)
 export const syncSubUpdate      = (id: string) => request('POST', `/subscriptions/${id}/sync-update`)
 export const getSubscriptionCache = (id: string) => request<{id: string; content: string}>('GET', `/subscriptions/${id}/cache`)
+export const updateSubscriptionContent = (id: string, content: string) =>
+  request<{id: string; node_count: number; nodes: unknown[]}>('PUT', `/subscriptions/${id}/content`, { content })
 export const triggerUpdateAll   = () => request('POST', '/subscriptions/update-all')
 export const getConfig        = () => request<Record<string,unknown>>('GET', '/config')
 export const updateConfig     = (p: Record<string,unknown>) => request('PUT', '/config', p)
