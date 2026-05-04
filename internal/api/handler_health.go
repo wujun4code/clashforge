@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"context"
+
+	"github.com/wujun4code/clashforge/internal/diag"
 	"github.com/wujun4code/clashforge/internal/probetargets"
 )
 
@@ -750,13 +753,7 @@ func handleProbeDomain(deps Dependencies) http.HandlerFunc {
 
 		res := domainProbeResult{Domain: domain, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
 
-		ips, dnsErr := net.LookupHost(domain)
-		if dnsErr != nil {
-			res.DNSError = dnsErr.Error()
-		} else {
-			res.DNSIPs = ips
-		}
-
+		// Basic connectivity test via Mihomo mixed proxy port.
 		test := testHTTPProxyEndpoint("mixed", deps.Config.Ports.Mixed, "https://"+domain, deps.Config.Core.RuntimeDir)
 		res.OK = test.OK
 		res.LatencyMS = test.DurationMS
@@ -765,6 +762,32 @@ func handleProbeDomain(deps Dependencies) http.HandlerFunc {
 			res.Error = test.Error
 		}
 
-		JSON(w, http.StatusOK, res)
+		// Comprehensive DNS/routing diagnostic — runs in parallel with the
+		// connectivity test using the same request context.
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		diagResult := diag.Run(ctx, domain, diag.Config{
+			MihomoAPIPort: deps.Config.Ports.MihomoAPI,
+			GeoIPPath:     deps.Config.Core.GeoIPPath,
+		})
+
+		// Backfill dns_ips from mihomo source for backward-compat.
+		for _, src := range diagResult.DNSSources {
+			if src.Source == "mihomo" {
+				res.DNSIPs = src.IPs
+				break
+			}
+		}
+
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"domain":     res.Domain,
+			"checked_at": res.CheckedAt,
+			"dns_ips":    res.DNSIPs,
+			"ok":         res.OK,
+			"latency_ms": res.LatencyMS,
+			"status_code": res.StatusCode,
+			"error":      res.Error,
+			"diag":       diagResult,
+		})
 	}
 }
