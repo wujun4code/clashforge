@@ -141,6 +141,8 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 //	fallback-filter       — hardcoded: geoip CN + 240.0.0.0/4
 func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 	// WAN interface for dhcp:// nameserver — reads ISP-assigned DNS automatically.
+	// The value is validated and auto-corrected at startup (see main.go); here
+	// we just use whatever is stored, with "eth1" as a last-resort default.
 	wanIface := cfg.Network.WANInterface
 	if wanIface == "" {
 		wanIface = "eth1"
@@ -173,7 +175,7 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 		"respect-rules": false,
 		// dhcp:// reads the DNS servers assigned to the WAN interface via DHCP,
 		// so Mihomo always uses the ISP-provided DNS for local domain resolution.
-		"nameserver": []string{"dhcp://\"" + wanIface + "\""},
+		"nameserver": []string{"dhcp://" + wanIface},
 	}
 
 	if cfg.DNS.Mode == "fake-ip" {

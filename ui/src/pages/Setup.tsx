@@ -89,6 +89,8 @@ interface FormNetwork {
   bypass_china: boolean
   apply_on_start: boolean
   ipv6: boolean
+  wan_interface: string
+  wan_interface_auto_detected: boolean
 }
 
 // Streaming launch event received from POST /api/v1/setup/launch
@@ -910,6 +912,7 @@ export function Setup() {
   const [net, setNet] = useState<FormNetwork>({
     mode: 'tproxy', firewall_backend: 'auto',
     bypass_lan: true, bypass_china: true, apply_on_start: true, ipv6: true,
+    wan_interface: 'eth1', wan_interface_auto_detected: false,
   })
 
   // ── import preview ──
@@ -982,6 +985,8 @@ export function Setup() {
           bypass_china: c.network?.bypass_china !== undefined ? Boolean(c.network.bypass_china) : prev.bypass_china,
           apply_on_start: c.network?.apply_on_start !== undefined ? Boolean(c.network.apply_on_start) : prev.apply_on_start,
           ipv6: c.network?.ipv6 !== undefined ? Boolean(c.network.ipv6) : prev.ipv6,
+          wan_interface: String(c.network?.wan_interface || prev.wan_interface),
+          wan_interface_auto_detected: Boolean(c.network?.wan_interface_auto_detected),
         }))
       }
     }).catch(() => null)
@@ -1128,7 +1133,7 @@ export function Setup() {
   const handleNetworkNext = useCallback(async () => {
     try {
       await updateConfig({
-        network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
+        network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6, wan_interface: net.wan_interface },
       } as Record<string, unknown>)
     } catch { /* best-effort */ }
     setStep('launch')
@@ -2378,6 +2383,24 @@ export function Setup() {
 
               <Field label="IPv6 透明代理" hint="同时拦截 IPv6 流量，防止浏览器优先走 IPv6 绕过代理（路由器需有公网 IPv6 才有效）">
                 <Toggle checked={net.ipv6} onChange={v => netSet('ipv6', v)} label={net.ipv6 ? '开启' : '关闭'} />
+              </Field>
+
+              <Field
+                label="WAN 接口"
+                hint="路由器 WAN 口的网络接口名，用于 Mihomo 从 DHCP 读取 ISP DNS。留空则使用 eth1。"
+              >
+                <div className="flex items-center gap-2">
+                  <TextInput
+                    value={net.wan_interface}
+                    onChange={v => netSet('wan_interface', v)}
+                    placeholder="eth1"
+                  />
+                  {net.wan_interface_auto_detected && (
+                    <span className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-brand/15 border border-brand/30 text-brand whitespace-nowrap">
+                      ClashForge 已自动适配
+                    </span>
+                  )}
+                </div>
               </Field>
             </div>
 
