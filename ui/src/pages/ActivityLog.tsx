@@ -6,6 +6,34 @@ import { formatBytes } from '../utils/format'
 import { Activity, Copy, ListTree, PauseCircle, PlayCircle, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { EmptyState, PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
 
+// ── Shared copy helper ────────────────────────────────────────────────────────
+
+function copyText(text: string) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => null)
+  } else {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+}
+
+function CopyIconButton({ text, title = '复制', size = 10, className = '' }: { text: string; title?: string; size?: number; className?: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      onClick={() => { copyText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+      className={`transition-opacity p-1 rounded text-slate-600 hover:text-slate-300 hover:bg-white/5 flex-shrink-0 ${className}`}
+      title={title}
+    >
+      {copied ? <span className="text-[10px] text-emerald-400 font-mono">✓</span> : <Copy size={size} />}
+    </button>
+  )
+}
+
 // ── Connections panel ─────────────────────────────────────────────────────────
 
 function ConnectionsPanel() {
@@ -72,10 +100,22 @@ function ConnectionsPanel() {
                   </td>
                 </tr>
               )}
-              {conns.map(c => (
-                <tr key={c.id} className="table-row">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-200 max-w-xs truncate">
-                    {c.metadata.host || c.metadata.sourceIP}:{c.metadata.destinationPort}
+              {conns.map(c => {
+                const domain = c.metadata.host || c.metadata.sourceIP
+                return (
+                <tr key={c.id} className="table-row group">
+                  <td className="px-4 py-3 max-w-xs">
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="font-mono text-xs text-slate-200 truncate">
+                        {domain}:{c.metadata.destinationPort}
+                      </span>
+                      <CopyIconButton
+                        text={domain}
+                        title="复制域名"
+                        size={11}
+                        className="opacity-0 group-hover:opacity-100"
+                      />
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <span className="badge badge-muted">{c.metadata.network || c.metadata.type}</span>
@@ -84,7 +124,8 @@ function ConnectionsPanel() {
                   <td className="px-4 py-3 text-right font-mono text-xs text-brand">{formatBytes(c.upload, '')}</td>
                   <td className="px-4 py-3 text-right font-mono text-xs text-success">{formatBytes(c.download, '')}</td>
                 </tr>
-              ))}
+              )})}
+
             </tbody>
           </table>
         </div>
@@ -149,6 +190,14 @@ function fieldStyle(key: string, val: unknown): { text: string; variant: keyof t
   return { text: String(val), variant: 'muted' }
 }
 
+function extractDomain(fields: Record<string, unknown>): string | null {
+  const raw = (fields.target ?? fields.host ?? fields.domain) as string | undefined
+  if (!raw) return null
+  const host = String(raw).split(':')[0].trim()
+  if (!host || !host.includes('.') || host.includes(' ')) return null
+  return host
+}
+
 function FieldChip({ fieldKey, value }: { fieldKey: string; value: unknown }) {
   const { text, variant } = fieldStyle(fieldKey, value)
   return (
@@ -161,7 +210,6 @@ function FieldChip({ fieldKey, value }: { fieldKey: string; value: unknown }) {
 }
 
 function LogRow({ entry }: { entry: LogLine }) {
-  const [copied, setCopied] = useState(false)
   const level = (entry.level ?? '').toLowerCase()
   const side = entry.fields?.side as string | undefined
   const fields = entry.fields ?? {}
@@ -172,22 +220,17 @@ function LogRow({ entry }: { entry: LogLine }) {
     ...allKeys.filter(k => !PRIORITY_FIELDS.includes(k)),
   ]
 
-  const handleCopy = () => {
-    const parts = [new Date(entry.ts * 1000).toISOString(), entry.level.toUpperCase(), entry.msg]
-    for (const k of sortedKeys) parts.push(`${k}=${String(fields[k])}`)
-    navigator.clipboard.writeText(parts.join('  ')).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
+  const copyLineText = [new Date(entry.ts * 1000).toISOString(), entry.level.toUpperCase(), entry.msg]
+  for (const k of sortedKeys) copyLineText.push(`${k}=${String(fields[k])}`)
 
+  const domain = extractDomain(fields)
   const timeStr = entry.ts
     ? new Date(entry.ts * 1000).toLocaleTimeString('zh-CN', { hour12: false })
     : '—'
 
   return (
     <div className="group flex flex-col gap-1 rounded-lg px-2 py-1.5 transition-colors hover:bg-white/[0.03]">
-      {/* Header row: timestamp · level · side · message · copy */}
+      {/* Header row: timestamp · level · side · message · copy buttons */}
       <div className="flex items-center gap-1.5 flex-wrap min-w-0">
         <span className="text-slate-500 font-mono tabular-nums text-[11px] flex-shrink-0 w-[66px] select-text">
           {timeStr}
@@ -203,15 +246,17 @@ function LogRow({ entry }: { entry: LogLine }) {
         <span className="text-slate-200 font-mono text-xs select-text min-w-0 truncate flex-1">
           {entry.msg ?? ''}
         </span>
-        <button
-          onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-slate-600 hover:text-slate-300 hover:bg-white/5 flex-shrink-0 ml-auto"
-          title="复制此行"
-        >
-          {copied
-            ? <span className="text-[10px] text-emerald-400 font-mono">✓</span>
-            : <Copy size={10} />}
-        </button>
+        <div className="flex items-center gap-0.5 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          {domain && (
+            <CopyIconButton
+              text={domain}
+              title={`复制域名：${domain}`}
+              size={10}
+              className="text-sky-600 hover:text-sky-300"
+            />
+          )}
+          <CopyIconButton text={copyLineText.join('  ')} title="复制此行" size={10} />
+        </div>
       </div>
       {/* Structured field chips */}
       {sortedKeys.length > 0 && (

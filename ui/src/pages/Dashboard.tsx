@@ -20,7 +20,7 @@ import {
   testLatency,
   probeDomain,
 } from '../api/client'
-import type { ClashforgeVersionData, DomainProbeResult } from '../api/client'
+import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote } from '../api/client'
 import type {
   OverviewAccessCheck,
   OverviewCoreData,
@@ -521,6 +521,66 @@ interface DomainProbeState {
 
 const PRESET_DOMAINS = DOMAIN_PROBE_PRESETS
 
+// Country code → flag emoji
+function countryFlag(code: string): string {
+  if (!code || code.length !== 2) return '🌐'
+  return String.fromCodePoint(...[...code.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65))
+}
+
+function DiagNoteRow({ note }: { note: DiagNote }) {
+  const styles = {
+    ok:    'bg-success/10 border-success/20 text-success',
+    warn:  'bg-warning/10 border-warning/25 text-warning',
+    error: 'bg-danger/10  border-danger/20  text-danger',
+  }
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-[11px] leading-relaxed ${styles[note.level]}`}>
+      {note.message}
+    </div>
+  )
+}
+
+function DNSTable({ sources }: { sources: DNSSourceResult[] }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-white/8 text-[11px]">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-white/8 bg-white/[0.02]">
+            <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">DNS 来源</th>
+            <th className="px-3 py-1.5 text-left font-medium text-muted/70">返回 IP</th>
+            <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">地区</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sources.map(src => (
+            <tr key={src.source} className="border-b border-white/5 last:border-0">
+              <td className="px-3 py-1.5 text-muted whitespace-nowrap">{src.label}</td>
+              <td className="px-3 py-1.5 font-mono">
+                {src.error
+                  ? <span className="text-danger/70">{src.error.slice(0, 60)}</span>
+                  : (src.ips ?? []).map(ip => (
+                    <span key={ip} className="mr-2 text-slate-300">{ip}</span>
+                  ))}
+              </td>
+              <td className="px-3 py-1.5">
+                {(src.geo_ips ?? []).map(g => (
+                  <span
+                    key={g.ip}
+                    className={`mr-1.5 font-medium ${g.is_cn ? 'text-success' : 'text-amber-400'}`}
+                    title={g.country}
+                  >
+                    {countryFlag(g.country)} {g.country || '?'}
+                  </span>
+                ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
   domain: string
   onDomainChange: (v: string) => void
@@ -528,8 +588,9 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
   result: DomainProbeState | null
   onRun: () => void
 }) {
+  const d = result?.router?.diag
   return (
-    <div className="glass-card overflow-hidden">
+    <div className="glass-card overflow-hidden space-y-0">
       <div className="px-4 py-3.5 space-y-3">
         {/* Input row */}
         <div className="flex items-center gap-2">
@@ -538,7 +599,7 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
             value={domain}
             onChange={e => onDomainChange(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') onRun() }}
-            placeholder="输入域名，如 google.com"
+            placeholder="输入域名，如 google.com 或 c.y.qq.com"
             className="glass-input h-8 flex-1 min-w-0 text-xs font-mono"
           />
           <button
@@ -547,7 +608,7 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
             className="btn-primary h-8 px-3 flex items-center gap-1.5 text-xs shrink-0"
           >
             {loading && <Loader2 size={11} className="animate-spin" />}
-            {loading ? '检测中' : '探测'}
+            {loading ? '探测中' : '探测'}
           </button>
         </div>
 
@@ -565,44 +626,72 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
         </div>
       </div>
 
-      {/* Results */}
-      {result && (
-        <div className="border-t border-white/8 grid grid-cols-1 sm:grid-cols-2">
-          {/* Router */}
-          <div className="px-4 py-3 space-y-1 border-b border-white/8 sm:border-b-0 sm:border-r">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">路由器侧</p>
-              <Pill tone={result.router?.ok ? 'success' : 'danger'} label={result.router?.ok ? '通' : '不通'} />
-            </div>
-            <p className="text-[10px] text-muted/60">经 Mihomo mixed 端口转发</p>
-            {result.router?.ok
-              ? <p className="text-sm font-mono font-semibold text-white">{result.router.latency_ms} ms</p>
-              : <p className="text-xs text-danger/80 leading-5 break-all">{result.router?.error || '连接失败'}</p>}
-            {result.router?.dns_ips?.[0] && (
-              <p className="text-[10px] text-muted/50 font-mono">DNS → {result.router.dns_ips[0]}</p>
-            )}
-            {result.router?.dns_error && (
-              <p className="text-[10px] text-warning/60 break-all">DNS 失败: {result.router.dns_error}</p>
-            )}
-          </div>
-          {/* Browser */}
-          <div className="px-4 py-3 space-y-1">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">浏览器侧</p>
-              <Pill tone={result.browser?.ok ? 'success' : 'danger'} label={result.browser?.ok ? '通' : '不通'} />
-            </div>
-            <p className="text-[10px] text-muted/60">由浏览器直连，不经过代理</p>
-            {result.browser?.ok
-              ? <p className="text-sm font-mono font-semibold text-white">{result.browser.latency_ms} ms</p>
-              : <p className="text-xs text-danger/80 leading-5 break-all">{result.browser?.error || '连接失败'}</p>}
-          </div>
-        </div>
-      )}
-
       {loading && !result && (
         <div className="border-t border-white/8 px-4 py-4 flex items-center gap-2 text-xs text-muted">
           <Loader2 size={12} className="animate-spin" />
-          正在同时从路由器和浏览器发起探测…
+          正在从多个 DNS 源并发探测，同步检测路由与连通性…
+        </div>
+      )}
+
+      {/* ── Results ── */}
+      {result && (
+        <div className="border-t border-white/8 divide-y divide-white/5">
+
+          {/* Connectivity row */}
+          <div className="grid grid-cols-2 divide-x divide-white/5">
+            <div className="px-4 py-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">路由器侧</p>
+                <Pill tone={result.router?.ok ? 'success' : 'danger'} label={result.router?.ok ? '通' : '不通'} />
+              </div>
+              <p className="text-[10px] text-muted/60">经 Mihomo mixed 端口转发</p>
+              {result.router?.ok
+                ? <p className="text-sm font-mono font-semibold text-white">{result.router.latency_ms} ms</p>
+                : <p className="text-xs text-danger/80 break-all">{result.router?.error || '连接失败'}</p>}
+            </div>
+            <div className="px-4 py-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">浏览器侧</p>
+                <Pill tone={result.browser?.ok ? 'success' : 'danger'} label={result.browser?.ok ? '通' : '不通'} />
+              </div>
+              <p className="text-[10px] text-muted/60">由浏览器直连，不经过代理</p>
+              {result.browser?.ok
+                ? <p className="text-sm font-mono font-semibold text-white">{result.browser.latency_ms} ms</p>
+                : <p className="text-xs text-danger/80 break-all">{result.browser?.error || '连接失败'}</p>}
+            </div>
+          </div>
+
+          {/* DNS multi-source table */}
+          {d && d.dns_sources.length > 0 && (
+            <div className="px-4 py-3 space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">DNS 多源对比</p>
+              <DNSTable sources={d.dns_sources} />
+            </div>
+          )}
+
+          {/* Routing + Fake-IP */}
+          {d && (d.routing.has_active || d.fake_ip) && (
+            <div className="px-4 py-3 flex flex-wrap gap-x-6 gap-y-2 text-[11px]">
+              {d.routing.has_active && (
+                <>
+                  <span className="text-muted">匹配规则：<code className="font-mono text-slate-300">{d.routing.rule}{d.routing.rule_payload ? ` / ${d.routing.rule_payload}` : ''}</code></span>
+                  <span className="text-muted">代理链：<code className="font-mono text-slate-300">{(d.routing.chains ?? []).join(' → ')}</code></span>
+                  {d.routing.network && <span className="text-muted">协议：<code className="font-mono text-slate-300">{d.routing.network}</code></span>}
+                </>
+              )}
+              {d.fake_ip && (
+                <span className="text-muted">Fake-IP：<code className="font-mono text-slate-300">{d.fake_ip}</code></span>
+              )}
+            </div>
+          )}
+
+          {/* Diagnoses */}
+          {d && d.diagnoses.length > 0 && (
+            <div className="px-4 py-3 space-y-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">诊断结论</p>
+              {d.diagnoses.map((note, i) => <DiagNoteRow key={i} note={note} />)}
+            </div>
+          )}
         </div>
       )}
     </div>

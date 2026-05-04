@@ -574,6 +574,42 @@ export const testNodeConnection = (id: string) => request<{ ok: boolean; message
 export const probeNode = (id: string, mode: 'ip' | 'domain' = 'ip') =>
   request<{ mode: 'ip' | 'domain'; proxy_host: string; proxy_port: number; probe_results: NodeProbeResult[]; summary: { ok: number; total: number; success: boolean } }>('POST', `/nodes/${encodeURIComponent(id)}/probe`, { mode })
 
+export interface GeoIPResult {
+  ip: string
+  country: string   // ISO 3166-1 alpha-2, e.g. "CN", "SG"
+  is_cn: boolean
+}
+
+export interface DNSSourceResult {
+  source: string    // "mihomo" | "isp" | "cn_1" | "cn_2" | "cloudflare" | "google"
+  label: string
+  server: string
+  ips?: string[]
+  geo_ips?: GeoIPResult[]
+  error?: string
+}
+
+export interface RoutingInfo {
+  has_active: boolean
+  rule?: string
+  rule_payload?: string
+  chains?: string[]
+  network?: string
+}
+
+export interface DiagNote {
+  level: 'ok' | 'warn' | 'error'
+  code: string
+  message: string
+}
+
+export interface DomainDiag {
+  dns_sources: DNSSourceResult[]
+  routing: RoutingInfo
+  fake_ip?: string
+  diagnoses: DiagNote[]
+}
+
 export interface DomainProbeResult {
   domain: string
   checked_at: string
@@ -583,6 +619,7 @@ export interface DomainProbeResult {
   latency_ms?: number
   status_code?: number
   error?: string
+  diag?: DomainDiag
 }
 
 export const probeDomain = (domain: string) =>
