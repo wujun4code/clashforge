@@ -52,6 +52,21 @@ func main() {
 		log.Fatal().Err(err).Msg("load config")
 	}
 
+	// Auto-correct WAN interface: if the stored value doesn't exist on this
+	// system (e.g. config copied from another router), detect the real one and
+	// save it back so future runs use the correct interface immediately.
+	if detected, changed := config.DetectWANInterface(cfg.Network.WANInterface); changed {
+		log.Warn().
+			Str("configured", cfg.Network.WANInterface).
+			Str("detected", detected).
+			Msg("WAN interface not found on this system — auto-corrected")
+		cfg.Network.WANInterface = detected
+		cfg.Network.WANInterfaceAutoDetected = true
+		if err := config.Save(*cfgPath, cfg); err != nil {
+			log.Error().Err(err).Msg("save auto-corrected WAN interface")
+		}
+	}
+
 	if level, err := zerolog.ParseLevel(cfg.Log.Level); err == nil {
 		zerolog.SetGlobalLevel(level)
 	}

@@ -47,6 +47,10 @@ type NetworkConfig struct {
 	// WANInterface is the router's WAN-facing network interface used for the
 	// dhcp:// nameserver entry so Mihomo reads ISP DNS from the DHCP lease.
 	WANInterface string `toml:"wan_interface" json:"wan_interface"`
+	// WANInterfaceAutoDetected is set to true when ClashForge corrected
+	// WANInterface at startup because the configured value did not exist on
+	// this system. Not persisted to TOML; used only for UI indication.
+	WANInterfaceAutoDetected bool `toml:"-" json:"wan_interface_auto_detected"`
 }
 
 type DNSConfig struct {
