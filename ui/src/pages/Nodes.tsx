@@ -17,6 +17,9 @@ import {
   Copy,
   Check,
   Upload,
+  ChevronDown,
+  ChevronRight,
+  FileCode2,
 } from 'lucide-react'
 import {
   getNodes,
@@ -35,6 +38,8 @@ import {
   getNodeImports,
   deleteSubscription,
   getSubscriptionNodes,
+  getSubscriptionCache,
+  updateSubscriptionContent,
 } from '../api/client'
 import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone, WorkerNodeListItem, Subscription } from '../api/client'
 import { PageHeader, SectionCard, ModalShell, EmptyState } from '../components/ui'
@@ -1632,6 +1637,154 @@ function ImportClashModal({ onClose, onImported }: { onClose: () => void; onImpo
   )
 }
 
+// ── Edit Imported Sub Modal ───────────────────────────────────────────────────
+
+function EditImportedSubModal({
+  subId,
+  subName,
+  onClose,
+  onSaved,
+}: {
+  subId: string
+  subName: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [content, setContent] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState<{ node_count: number; nodes: { name: string; type: string; server: string; port: number }[] } | null>(null)
+
+  const [cacheNotFound, setCacheNotFound] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    setError('')
+    setCacheNotFound(false)
+    void getSubscriptionCache(subId)
+      .then(data => setContent(data.content ?? ''))
+      .catch(e => {
+        const msg: string = e instanceof Error ? e.message : ''
+        if (msg.toLowerCase().includes('cache not found') || msg.toLowerCase().includes('not found')) {
+          setCacheNotFound(true)
+        } else {
+          setError(msg || '加载配置失败')
+        }
+      })
+      .finally(() => setLoading(false))
+  }, [subId])
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => { setContent(ev.target?.result as string ?? ''); setError('') }
+    reader.readAsText(file)
+  }
+
+  const handleSave = async () => {
+    if (!content.trim()) return
+    setSaving(true); setError('')
+    try {
+      const res = await updateSubscriptionContent(subId, content)
+      setSaved({
+        node_count: res.node_count,
+        nodes: (res.nodes as { name: string; type: string; server: string; port: number }[]) ?? [],
+      })
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell
+      title={`编辑导入配置 — ${subName}`}
+      onClose={onClose}
+      size="lg"
+      icon={<FileCode2 size={18} />}
+    >
+      {saved ? (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
+              <p className="text-sm font-semibold text-emerald-300">保存成功，共 {saved.node_count} 个节点</p>
+            </div>
+            {saved.nodes.length > 0 && (
+              <div className="rounded-lg border border-white/8 bg-black/20 max-h-52 overflow-y-auto divide-y divide-white/5">
+                {saved.nodes.slice(0, 100).map((n, i) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                    <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-mono uppercase">{n.type || '?'}</span>
+                    <span className="flex-1 truncate text-slate-300">{n.name}</span>
+                    <span className="shrink-0 font-mono text-[11px] text-muted">{n.server}:{n.port}</span>
+                  </div>
+                ))}
+                {saved.nodes.length > 100 && (
+                  <div className="px-3 py-1.5 text-xs text-muted">…还有 {saved.nodes.length - 100} 个节点</div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <button className="btn-ghost" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+      ) : loading ? (
+        <div className="flex items-center gap-2 text-muted py-8 justify-center">
+          <Loader2 size={16} className="animate-spin" /> 加载配置中…
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {cacheNotFound && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-300 flex items-center gap-2">
+              <AlertCircle size={12} className="shrink-0" /> 未找到原始配置缓存，请重新粘贴或上传新的 YAML 内容。
+            </div>
+          )}
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Clash 代理配置 (YAML)</label>
+            <div className="relative rounded-xl border border-white/10 bg-black/20 transition-colors hover:border-brand/30">
+              <textarea
+                className="w-full bg-transparent rounded-xl px-3 py-3 font-mono text-xs text-slate-300 placeholder:text-muted resize-none outline-none min-h-[220px]"
+                value={content}
+                onChange={e => { setContent(e.target.value); setError('') }}
+                placeholder="粘贴 Clash YAML 配置"
+                spellCheck={false}
+                autoFocus
+              />
+              <label className="absolute bottom-2 right-2 btn-ghost h-7 px-2.5 text-xs cursor-pointer">
+                <Upload size={11} /> 选择文件
+                <input type="file" accept=".yaml,.yml,.txt" className="hidden" onChange={handleFileInput} />
+              </label>
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400 flex items-center gap-2">
+              <AlertCircle size={12} /> {error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button className="btn-ghost" onClick={onClose} disabled={saving}>取消</button>
+            <button
+              className="btn-primary"
+              onClick={handleSave}
+              disabled={saving || !content.trim()}
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              {saving ? '保存中…' : '保存'}
+            </button>
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  )
+}
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export function Nodes() {
@@ -1663,29 +1816,30 @@ export function Nodes() {
   const [showImportModal, setShowImportModal] = useState(false)
 
   // ── Static (imported) subscriptions ─────────────────────────────────────
-  type StaticNodeRow = { subId: string; name: string; type: string; server: string; port: number }
-  const [importedNodes, setImportedNodes] = useState<StaticNodeRow[]>([])
+  type StaticSubGroup = { subId: string; subName: string; nodes: { name: string; type: string; server: string; port: number }[] }
+  const [staticSubGroups, setStaticSubGroups] = useState<StaticSubGroup[]>([])
+  const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
+  const [editImportTarget, setEditImportTarget] = useState<{ id: string; name: string } | null>(null)
 
   const loadStaticSubs = useCallback(async () => {
     try {
       const data = await getNodeImports()
-      const rows: StaticNodeRow[] = []
+      const groups: StaticSubGroup[] = []
       await Promise.all((data.subscriptions ?? []).map(async (sub: Subscription) => {
         try {
           const res = await getSubscriptionNodes(sub.id)
-          for (const n of res.nodes) {
-            rows.push({ subId: sub.id, name: n.name, type: n.type, server: n.server, port: n.port })
-          }
+          groups.push({ subId: sub.id, subName: sub.name, nodes: res.nodes.map(n => ({ name: n.name, type: n.type, server: n.server, port: n.port })) })
         } catch { /* non-fatal */ }
       }))
-      setImportedNodes(rows)
+      setStaticSubGroups(groups)
     } catch { /* non-fatal */ }
   }, [])
 
   useEffect(() => { void loadStaticSubs() }, [loadStaticSubs])
 
   const handleStaticSubDelete = async (subId: string) => {
-    const count = importedNodes.filter(n => n.subId === subId).length
+    const group = staticSubGroups.find(g => g.subId === subId)
+    const count = group?.nodes.length ?? 0
     const label = count > 1 ? `这组导入节点（${count} 个）` : '这个导入节点'
     if (!confirm(`确定删除${label}？`)) return
     try { await deleteSubscription(subId); void loadStaticSubs() }
@@ -1933,7 +2087,7 @@ export function Nodes() {
           </button>
         }
       >
-        {importedNodes.length === 0 ? (
+        {staticSubGroups.length === 0 ? (
           <EmptyState
             title="暂无导入节点"
             description="点击「导入配置」粘贴 Clash YAML，将代理节点加入 mihomo 路由配置。"
@@ -1945,31 +2099,68 @@ export function Nodes() {
             icon={<Upload size={18} />}
           />
         ) : (
-          <div className="table-shell">
-            <div className="grid grid-cols-12 gap-3 px-4 py-3 table-header-row">
-              <span className="col-span-5">节点名称</span>
-              <span className="col-span-2">类型</span>
-              <span className="col-span-3">服务器</span>
-              <span className="col-span-2 text-right">操作</span>
-            </div>
-            {importedNodes.map((node, i) => (
-              <div key={i} className="grid grid-cols-12 gap-3 px-4 py-3 table-row items-center">
-                <div className="col-span-5">
-                  <p className="text-sm font-semibold text-white truncate">{node.name}</p>
+          <div className="divide-y divide-white/5">
+            {staticSubGroups.map(group => {
+              const isExpanded = expandedSubs.has(group.subId)
+              return (
+                <div key={group.subId}>
+                  {/* Group header row */}
+                  <div className="flex items-center gap-2 px-4 py-3">
+                    <button
+                      className="btn-icon-sm btn-ghost shrink-0"
+                      onClick={() => setExpandedSubs(prev => {
+                        const next = new Set(prev)
+                        if (next.has(group.subId)) next.delete(group.subId)
+                        else next.add(group.subId)
+                        return next
+                      })}
+                      title={isExpanded ? '收起节点列表' : '展开节点列表'}
+                    >
+                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </button>
+                    <p className="flex-1 text-sm font-semibold text-white truncate">{group.subName}</p>
+                    <span className="shrink-0 text-xs text-muted">{group.nodes.length} 个节点</span>
+                    <button
+                      className="btn-icon-sm btn-ghost shrink-0"
+                      title="编辑配置"
+                      onClick={() => setEditImportTarget({ id: group.subId, name: group.subName })}
+                    >
+                      <FileCode2 size={14} />
+                    </button>
+                    <button
+                      className="btn-icon-sm btn-ghost shrink-0"
+                      title="删除此导入组"
+                      onClick={() => handleStaticSubDelete(group.subId)}
+                    >
+                      <Trash2 size={14} className="text-muted hover:text-red-400" />
+                    </button>
+                  </div>
+                  {/* Expanded node rows */}
+                  {isExpanded && group.nodes.length > 0 && (
+                    <div className="border-t border-white/5">
+                      <div className="grid grid-cols-12 gap-3 px-4 py-2 bg-white/2 text-[11px] text-muted">
+                        <span className="col-span-5 pl-6">节点名称</span>
+                        <span className="col-span-2">类型</span>
+                        <span className="col-span-5">服务器</span>
+                      </div>
+                      {group.nodes.map((n, ni) => (
+                        <div key={ni} className="grid grid-cols-12 gap-3 px-4 py-2 hover:bg-white/2 items-center border-t border-white/3">
+                          <div className="col-span-5 pl-6">
+                            <p className="text-xs text-slate-300 truncate">{n.name}</p>
+                          </div>
+                          <div className="col-span-2">
+                            <span className="rounded px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-mono uppercase">{n.type || '?'}</span>
+                          </div>
+                          <div className="col-span-5">
+                            <span className="text-xs font-mono text-muted truncate">{n.server}:{n.port}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="col-span-2">
-                  <span className="rounded px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-mono uppercase">{node.type || '?'}</span>
-                </div>
-                <div className="col-span-3">
-                  <span className="text-xs font-mono text-muted truncate">{node.server}:{node.port}</span>
-                </div>
-                <div className="col-span-2 flex items-center justify-end">
-                  <button className="btn-icon-sm btn-ghost" title="删除此导入组" onClick={() => handleStaticSubDelete(node.subId)}>
-                    <Trash2 size={14} className="text-muted hover:text-red-400" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </SectionCard>
@@ -2088,6 +2279,15 @@ export function Nodes() {
         <ImportClashModal
           onClose={() => setShowImportModal(false)}
           onImported={() => { void loadStaticSubs() }}
+        />
+      )}
+
+      {editImportTarget && (
+        <EditImportedSubModal
+          subId={editImportTarget.id}
+          subName={editImportTarget.name}
+          onClose={() => setEditImportTarget(null)}
+          onSaved={() => { void loadStaticSubs() }}
         />
       )}
     </CFGate>

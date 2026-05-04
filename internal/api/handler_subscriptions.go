@@ -146,6 +146,34 @@ func handleGetSubscriptionCache(deps Dependencies) http.HandlerFunc {
 	}
 }
 
+// handleUpdateStaticContent re-parses inline YAML and updates a static subscription in-place.
+func handleUpdateStaticContent(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+			return
+		}
+		if req.Content == "" {
+			Err(w, http.StatusBadRequest, "CONTENT_REQUIRED", "content is required")
+			return
+		}
+		count, nodes, err := deps.SubManager.UpdateStaticContent(id, req.Content)
+		if err != nil {
+			Err(w, http.StatusUnprocessableEntity, "UPDATE_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"id":         id,
+			"node_count": count,
+			"nodes":      nodes,
+		})
+	}
+}
+
 func handleTriggerUpdateAll(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_ = deps.SubManager.TriggerUpdateAll()
