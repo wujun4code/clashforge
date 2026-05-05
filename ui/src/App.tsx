@@ -38,7 +38,7 @@ export default function App() {
 
         <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
 
-        <main id="main-content" className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main id="main-content" className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* Mobile top bar — hidden on md+ */}
           <div className="flex flex-shrink-0 items-center gap-3 border-b border-white/[0.06] bg-surface-0/95 px-4 py-3 backdrop-blur-md md:hidden">
             <button

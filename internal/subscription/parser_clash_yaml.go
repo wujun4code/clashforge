@@ -7,6 +7,42 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// stripCommonIndent removes a uniform leading indent shared by every non-blank,
+// non-comment line. This handles the case where the user copies a proxy list
+// from inside a "proxies:" YAML block — every line (including each "- ") has
+// the same leading spaces that need to be removed before the bare-sequence
+// parser can treat it as a top-level YAML sequence.
+func stripCommonIndent(content []byte) []byte {
+	lines := bytes.Split(content, []byte("\n"))
+	min := -1
+	for _, line := range lines {
+		stripped := bytes.TrimLeft(line, " ")
+		if len(stripped) == 0 || bytes.HasPrefix(stripped, []byte("#")) {
+			continue
+		}
+		n := len(line) - len(stripped)
+		if min < 0 || n < min {
+			min = n
+		}
+	}
+	if min <= 0 {
+		return content
+	}
+	out := make([][]byte, len(lines))
+	for i, line := range lines {
+		if len(bytes.TrimSpace(line)) == 0 {
+			out[i] = line
+			continue
+		}
+		removed := 0
+		for removed < min && removed < len(line) && line[removed] == ' ' {
+			removed++
+		}
+		out[i] = line[removed:]
+	}
+	return bytes.Join(out, []byte("\n"))
+}
+
 // normalizeBareSeqIndent fixes a common copy-paste artefact: when a proxy list
 // is copied from inside a "proxies:" block, the dash "-" ends up at col 0 but
 // continuation keys remain at col 4 (where they were under "  - ").  That is
@@ -59,8 +95,7 @@ func parseClashYAML(content []byte) ([]ProxyNode, error) {
 		return extractProxyNodes(raw.Proxies), nil
 	}
 	// Try bare YAML sequence (list without proxies: wrapper).
-	// Normalise indentation first — some tools copy proxy items from inside a
-	// proxies: block, leaving continuation keys at col 4 while "-" is at col 0.
+	// Normalise continuation-line excess indent.
 	normalized := normalizeBareSeqIndent(content)
 	var rawList []map[string]interface{}
 	if err := yaml.Unmarshal(normalized, &rawList); err != nil {

@@ -173,6 +173,53 @@ func TestParseClashYAML(t *testing.T) {
 	}
 }
 
+// -------- bare YAML sequence with leading indent (copy-paste from proxies: block) --------
+
+func TestParseClashYAML_IndentedBareList(t *testing.T) {
+	// Simulates content copied from inside a "proxies:" block where every line —
+	// including the "- " markers — has 4 spaces of leading indent.
+	yaml := `    - name: osaka-jp03
+      password: pass1
+      port: 443
+      server: a.example.com
+      tls: true
+      type: http
+      username: proxy
+    - name: sg-sg01
+      password: pass2
+      port: 443
+      server: b.example.com
+      skip-cert-verify: false
+      tls: true
+      type: http
+      username: u_abc
+    - name: kansas-us01
+      password: pass3
+      port: 443
+      server: c.example.com
+      skip-cert-verify: false
+      tls: true
+      type: http
+      username: u_xyz
+`
+	nodes, err := subscription.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Parse indented bare list: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("expected 3 nodes, got %d", len(nodes))
+	}
+	if nodes[0].Name != "osaka-jp03" {
+		t.Errorf("expected name=osaka-jp03, got %q", nodes[0].Name)
+	}
+	if nodes[1].Server != "b.example.com" {
+		t.Errorf("expected server=b.example.com, got %q", nodes[1].Server)
+	}
+	if nodes[2].Type != "http" {
+		t.Errorf("expected type=http, got %q", nodes[2].Type)
+	}
+}
+
 // -------- line-based multi-protocol --------
 
 func TestParseMixedLines(t *testing.T) {
