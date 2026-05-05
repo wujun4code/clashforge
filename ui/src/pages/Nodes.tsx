@@ -1603,7 +1603,7 @@ function ImportClashModal({ onClose, onImported }: { onClose: () => void; onImpo
                 className="w-full bg-transparent rounded-xl px-3 py-3 font-mono text-xs text-slate-300 placeholder:text-muted resize-none outline-none min-h-[180px]"
                 value={content}
                 onChange={e => { setContent(e.target.value); setError('') }}
-                placeholder={"粘贴 Clash YAML 配置，或拖拽 .yaml 文件到此处\n\n支持完整 Clash 配置（含 proxies: 块）或纯代理列表"}
+                placeholder={"粘贴 Clash YAML 配置，或拖拽 .yaml 文件到此处\n\n支持以下格式：\n• 完整 Clash 配置（含 proxies: 块）\n• 纯代理列表（直接粘贴多个 - name: ... 节点）\n• 从 proxies: 块内复制的带缩进内容（自动修正缩进）"}
                 spellCheck={false}
                 autoFocus
               />

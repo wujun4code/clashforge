@@ -8,6 +8,12 @@ import (
 
 // Parse detects format and returns ProxyNode list.
 func Parse(content []byte) ([]ProxyNode, error) {
+	// Remove uniform leading indent before any other processing so that content
+	// copied from inside a YAML "proxies:" block (where every line including
+	// the "- " markers has the same leading spaces) is treated as a top-level
+	// bare sequence.  Must happen before TrimSpace so the full set of line
+	// indentations is still intact when we compute the minimum.
+	content = stripCommonIndent(content)
 	trimmed := bytes.TrimSpace(content)
 
 	// 1a. Full Clash YAML (has proxies: key)

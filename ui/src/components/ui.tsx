@@ -280,7 +280,7 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-[var(--space-md)]"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-[var(--space-md)]"
       style={{ background: 'var(--modal-backdrop)', backdropFilter: 'blur(8px)' }}
       onClick={dismissible ? () => { if (onBeforeClose && !onBeforeClose()) return; onClose?.() } : undefined}
     >
