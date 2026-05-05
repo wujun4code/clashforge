@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Sparkles } from 'lucide-react'
 
 function cn(...parts: Array<string | false | null | undefined>) {
@@ -278,7 +279,7 @@ export function ModalShell({
           ? 'max-w-5xl'
           : 'max-w-md'
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-[var(--space-md)]"
       style={{ background: 'var(--modal-backdrop)', backdropFilter: 'blur(8px)' }}
@@ -328,6 +329,7 @@ export function ModalShell({
         </div>
         <div className="min-h-0 overflow-y-auto" style={{ padding: 'var(--space-md) var(--space-lg)' }}>{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
