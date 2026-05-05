@@ -1,0 +1,18 @@
+<svg width="88" height="88" viewBox="0 0 88 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tablet-shell" x1="14" y1="20" x2="74" y2="68" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DED4FF"/>
+      <stop offset="1" stop-color="#7F68FF"/>
+    </linearGradient>
+    <linearGradient id="tablet-screen" x1="23" y1="26" x2="65" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1E1A4A"/>
+      <stop offset="1" stop-color="#352E71"/>
+    </linearGradient>
+  </defs>
+  <rect x="14" y="16" width="60" height="56" rx="12" fill="url(#tablet-shell)" fill-opacity="0.2" stroke="url(#tablet-shell)" stroke-width="2.2"/>
+  <rect x="22" y="24" width="44" height="40" rx="7.5" fill="url(#tablet-screen)"/>
+  <circle cx="44" cy="68" r="2.1" fill="#ECE6FF" fill-opacity="0.85"/>
+  <rect x="30" y="31" width="28" height="2.2" rx="1.1" fill="#B9A9FF" fill-opacity="0.6"/>
+  <rect x="30" y="38" width="20" height="2.2" rx="1.1" fill="#B9A9FF" fill-opacity="0.45"/>
+  <rect x="30" y="45" width="24" height="2.2" rx="1.1" fill="#B9A9FF" fill-opacity="0.36"/>
+</svg>

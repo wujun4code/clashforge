@@ -1315,13 +1315,10 @@ function annotateYamlLines(content: string, ruleSets: RuleSet[], selectedIDs: st
 function AnnotatedYamlView({
   lines,
   loading,
-  noNodes,
 }: {
   lines: AnnotatedLine[]
   loading: boolean
-  noNodes: boolean
 }) {
-  if (noNodes) return <div className="flex min-h-[160px] items-center justify-center"><p className="text-xs text-muted">请先选择节点</p></div>
   if (loading) return <div className="flex min-h-[160px] items-center justify-center"><Loader2 size={14} className="animate-spin text-brand" /></div>
   if (lines.length === 0) return <div className="flex min-h-[160px] items-center justify-center"><p className="text-xs text-muted">暂无预览</p></div>
 
@@ -1414,7 +1411,6 @@ function PublishWizardModal({
     setSelectedRuleSetIDs((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
   const refreshPreview = useCallback(async () => {
-    if (selectedNodes.length === 0) { setPreviewContent(''); return }
     setPreviewLoading(true)
     try {
       const data = await previewPublishConfig({
@@ -1795,10 +1791,14 @@ function PublishWizardModal({
                   <RefreshCw size={12} className={previewLoading ? 'animate-spin' : ''} />
                 </button>
               </div>
+              {selectedNodes.length === 0 && (
+                <p className="mb-2 text-[10px] text-muted">
+                  当前未选择节点，正在预览模板原文。
+                </p>
+              )}
               <AnnotatedYamlView
                 lines={annotateYamlLines(previewContent, ruleSets, selectedRuleSetIDs)}
                 loading={previewLoading}
-                noNodes={selectedNodes.length === 0}
               />
             </div>
           </div>

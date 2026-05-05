@@ -76,9 +76,9 @@ function StopAndSwitchDialog({ target, onCancel, onStopped }: {
 
   const name = target.kind === 'file' ? target.displayName : target.name
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4"
       onClick={!stopping ? onCancel : undefined}
     >
       <div
@@ -116,7 +116,8 @@ function StopAndSwitchDialog({ target, onCancel, onStopped }: {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -128,9 +129,9 @@ function DeleteConfirmDialog({ target, onCancel, onConfirm, deleting }: {
   onConfirm: () => void
   deleting: boolean
 }) {
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4"
       onClick={!deleting ? onCancel : undefined}
     >
       <div
@@ -157,7 +158,8 @@ function DeleteConfirmDialog({ target, onCancel, onConfirm, deleting }: {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -518,8 +520,8 @@ function AddModal({ onClose, onAdded, initialUrl = '', initialName = '' }: {
     onClose()
   }
 
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4" onClick={onClose}>
       <div className="bg-surface-1 rounded-2xl border border-white/10 w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
         <h2 className="text-base font-semibold text-white">添加订阅</h2>
         {[
@@ -545,7 +547,8 @@ function AddModal({ onClose, onAdded, initialUrl = '', initialName = '' }: {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

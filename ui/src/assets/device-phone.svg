@@ -1,0 +1,18 @@
+<svg width="88" height="88" viewBox="0 0 88 88" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="phone-shell" x1="22" y1="12" x2="67" y2="76" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C4EEFF"/>
+      <stop offset="1" stop-color="#3AA8FF"/>
+    </linearGradient>
+    <linearGradient id="phone-screen" x1="30" y1="21" x2="58" y2="65" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B273D"/>
+      <stop offset="1" stop-color="#113E63"/>
+    </linearGradient>
+  </defs>
+  <rect x="23" y="10" width="42" height="68" rx="13" fill="url(#phone-shell)" fill-opacity="0.2" stroke="url(#phone-shell)" stroke-width="2.2"/>
+  <rect x="29" y="19" width="30" height="45" rx="7.5" fill="url(#phone-screen)"/>
+  <rect x="40" y="14.5" width="9" height="2.4" rx="1.2" fill="#DCF5FF" fill-opacity="0.88"/>
+  <circle cx="44" cy="69.5" r="2.6" fill="#D9F2FF" fill-opacity="0.92"/>
+  <path d="M34.5 30.5H53.5" stroke="#7ED2FF" stroke-opacity="0.62" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M34.5 37.5H49" stroke="#7ED2FF" stroke-opacity="0.45" stroke-width="1.8" stroke-linecap="round"/>
+</svg>

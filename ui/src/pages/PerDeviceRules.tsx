@@ -40,9 +40,13 @@ import {
   getSources,
   getSubscriptionCache,
   getSubscriptions,
+  syncSubUpdate,
   restartCore,
   updateDeviceGroups,
 } from '../api/client'
+import deviceDesktopIcon from '../assets/device-desktop.svg'
+import devicePhoneIcon from '../assets/device-phone.svg'
+import deviceTabletIcon from '../assets/device-tablet.svg'
 import type {
   ActiveSource,
   DeviceRouteDevice,
@@ -96,19 +100,67 @@ const DEVICE_TYPE_LABEL: Record<DeviceType, string> = {
   unknown: '未知设备',
 }
 
-const DEVICE_TYPE_BG: Record<DeviceType, string> = {
-  iphone:  'bg-blue-500/12 border-blue-500/20',
-  ipad:    'bg-indigo-500/12 border-indigo-500/20',
-  macbook: 'bg-slate-500/12 border-slate-500/20',
-  imac:    'bg-slate-500/12 border-slate-500/20',
-  android: 'bg-green-500/12 border-green-500/20',
-  windows: 'bg-sky-500/12 border-sky-500/20',
-  linux:   'bg-orange-500/12 border-orange-500/20',
-  tv:      'bg-purple-500/12 border-purple-500/20',
-  gaming:  'bg-red-500/12 border-red-500/20',
-  nas:     'bg-yellow-500/12 border-yellow-500/20',
-  router:  'bg-teal-500/12 border-teal-500/20',
-  unknown: 'bg-white/4 border-white/10',
+type DeviceVisualFamily = 'phone' | 'tablet' | 'desktop' | 'other'
+
+interface DeviceVisualMeta {
+  label: string
+  icon: string
+  card: string
+  chip: string
+  halo: string
+  ring: string
+}
+
+const DEVICE_VISUAL_META: Record<DeviceVisualFamily, DeviceVisualMeta> = {
+  phone: {
+    label: '手机',
+    icon: devicePhoneIcon,
+    card: 'border-sky-400/25 bg-gradient-to-br from-sky-500/14 via-sky-500/5 to-slate-900/45',
+    chip: 'border-sky-300/35 bg-sky-500/15 text-sky-200',
+    halo: 'bg-sky-300/30',
+    ring: 'border-sky-300/35 bg-sky-500/10',
+  },
+  tablet: {
+    label: 'iPad',
+    icon: deviceTabletIcon,
+    card: 'border-indigo-400/25 bg-gradient-to-br from-indigo-500/15 via-violet-500/5 to-slate-900/45',
+    chip: 'border-indigo-300/35 bg-indigo-500/16 text-indigo-200',
+    halo: 'bg-indigo-300/30',
+    ring: 'border-indigo-300/35 bg-indigo-500/10',
+  },
+  desktop: {
+    label: '电脑',
+    icon: deviceDesktopIcon,
+    card: 'border-emerald-300/25 bg-gradient-to-br from-emerald-500/14 via-teal-500/5 to-slate-900/45',
+    chip: 'border-emerald-300/35 bg-emerald-500/15 text-emerald-100',
+    halo: 'bg-emerald-300/30',
+    ring: 'border-emerald-300/35 bg-emerald-500/10',
+  },
+  other: {
+    label: '其他',
+    icon: deviceDesktopIcon,
+    card: 'border-slate-300/20 bg-gradient-to-br from-slate-500/12 via-slate-500/4 to-slate-900/50',
+    chip: 'border-white/20 bg-white/8 text-slate-200',
+    halo: 'bg-slate-300/25',
+    ring: 'border-white/18 bg-white/6',
+  },
+}
+
+function visualFamilyForType(type: DeviceType): DeviceVisualFamily {
+  switch (type) {
+    case 'iphone':
+    case 'android':
+      return 'phone'
+    case 'ipad':
+      return 'tablet'
+    case 'macbook':
+    case 'imac':
+    case 'windows':
+    case 'linux':
+      return 'desktop'
+    default:
+      return 'other'
+  }
 }
 
 function detectDeviceType(hostname: string): DeviceType {
@@ -797,7 +849,7 @@ function VisualMode({
   return (
     <div className="space-y-5">
       {/* Device Pool */}
-      <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-surface-2/55 via-black/20 to-black/30 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-white">在线设备池</p>
@@ -830,9 +882,11 @@ function VisualMode({
             未发现在线设备，请点击扫描
           </div>
         ) : (
-          <div className="flex flex-wrap gap-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {filteredPool.map((client) => {
               const type = detectDeviceType(client.hostname || '')
+              const visualFamily = visualFamilyForType(type)
+              const visual = DEVICE_VISUAL_META[visualFamily]
               const assignedGroup = assignedIPs.get(client.ip)
               const isDragging = draggingIP === client.ip
               const extraIPv6 = (client.ips ?? []).filter(ip => ip.includes(':')).length
@@ -847,56 +901,77 @@ function VisualMode({
                   }}
                   onDragEnd={() => setDraggingIP(null)}
                   className={[
-                    'flex items-center gap-2.5 rounded-xl border w-[200px] px-3 py-2.5 text-xs transition-all select-none',
+                    'group relative overflow-hidden rounded-2xl border px-3.5 py-3 text-xs transition-all duration-200 select-none',
+                    visual.card,
                     isDragging
-                      ? 'opacity-30 scale-95 border-brand/40 bg-brand/10'
-                      : 'border-white/12 bg-white/3 cursor-grab active:cursor-grabbing hover:border-white/22 hover:bg-white/6',
+                      ? 'cursor-grabbing scale-[0.98] opacity-35 border-brand/35'
+                      : 'cursor-grab active:cursor-grabbing hover:-translate-y-0.5 hover:border-white/25 hover:shadow-lg hover:shadow-black/20',
                   ].join(' ')}
                 >
-                  {/* Device icon */}
                   <div className={[
-                    'w-9 h-9 rounded-lg border flex items-center justify-center flex-shrink-0',
-                    DEVICE_TYPE_BG[type],
-                  ].join(' ')}>
-                    <DeviceTypeIcon type={type} size={20} />
-                  </div>
-                  {/* Info column */}
-                  <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                    {/* Hostname */}
-                    <span className="font-semibold text-slate-200 text-[11px] truncate leading-tight">
-                      {client.hostname || '未知设备'}
-                    </span>
-                    {/* Device type label */}
-                    <span className="text-[9px] text-slate-500 uppercase tracking-wide leading-none">
-                      {DEVICE_TYPE_LABEL[type]}
-                    </span>
-                    {/* IPv4 address */}
-                    <span className="text-[10px] font-mono text-slate-400 leading-none mt-0.5">{client.ip}</span>
-                    {/* MAC address */}
-                    {client.mac && (
-                      <span className="text-[9px] font-mono text-slate-600 leading-none">{client.mac}</span>
-                    )}
-                    {/* Bottom row: assigned badge + IPv6 indicator */}
-                    {(assignedGroup || extraIPv6 > 0) && (
-                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                        {assignedGroup && (
-                          <span className="rounded-full bg-brand/20 border border-brand/25 px-1.5 py-0.5 text-[9px] text-brand-light font-medium leading-none">
-                            {assignedGroup}
-                          </span>
-                        )}
-                        {extraIPv6 > 0 && (
-                          <span className="rounded-full bg-slate-700/60 border border-white/10 px-1.5 py-0.5 text-[9px] text-slate-400 font-mono leading-none">
-                            +{extraIPv6} IPv6
-                          </span>
-                        )}
+                    'pointer-events-none absolute -right-7 -top-7 h-20 w-20 rounded-full blur-2xl',
+                    visual.halo,
+                  ].join(' ')} />
+
+                  {/* Device icon + headline */}
+                  <div className="relative flex items-start gap-3">
+                    <div className={[
+                      'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border',
+                      visual.ring,
+                    ].join(' ')}>
+                      <img src={visual.icon} alt="" className="h-8 w-8" draggable={false} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-[13px] font-semibold text-slate-100">
+                            {client.hostname || '未命名终端'}
+                          </p>
+                          <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                            {DEVICE_TYPE_LABEL[type]}
+                          </p>
+                        </div>
+                        <span className={[
+                          'shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-wide',
+                          visual.chip,
+                        ].join(' ')}>
+                          {visual.label}
+                        </span>
                       </div>
-                    )}
+
+                      <p className="mt-2 text-[11px] font-mono text-slate-300">{client.ip}</p>
+                      {client.mac && (
+                        <p className="mt-0.5 text-[10px] font-mono text-slate-500">{client.mac}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      {assignedGroup ? (
+                        <span className="rounded-full border border-brand/35 bg-brand/18 px-2 py-0.5 text-[9px] font-semibold text-brand-light">
+                          {assignedGroup}
+                        </span>
+                      ) : (
+                        <span className="rounded-full border border-white/12 bg-white/6 px-2 py-0.5 text-[9px] text-slate-500">
+                          未分组
+                        </span>
+                      )}
+                      {extraIPv6 > 0 && (
+                        <span className="rounded-full border border-white/12 bg-white/7 px-2 py-0.5 text-[9px] font-mono text-slate-400">
+                          +{extraIPv6} IPv6
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[9px] uppercase tracking-[0.12em] text-slate-500">拖拽分组</span>
                   </div>
                 </div>
               )
             })}
             {filteredPool.length === 0 && poolSearch && (
-              <p className="text-xs text-slate-500 py-1">无匹配结果</p>
+              <p className="col-span-full rounded-lg border border-dashed border-white/12 bg-black/15 px-3 py-4 text-center text-xs text-slate-500">
+                无匹配结果
+              </p>
             )}
           </div>
         )}
@@ -1158,6 +1233,7 @@ export function PerDeviceRules() {
     () => sourceOptions.find((item) => item.key === selectedSourceKey) ?? null,
     [selectedSourceKey, sourceOptions],
   )
+  const hasSelectedSource = selectedSourceKey !== ''
 
   const loadSourceOptions = useCallback(async () => {
     setLoadingSources(true)
@@ -1175,8 +1251,7 @@ export function PerDeviceRules() {
       setActiveSourceKey(activeKey)
       setSelectedSourceKey((current) => {
         if (current && builtOptions.some((item) => item.key === current)) return current
-        if (activeKey && builtOptions.some((item) => item.key === activeKey)) return activeKey
-        return builtOptions[0]?.key ?? ''
+        return ''
       })
     } finally {
       setLoadingSources(false)
@@ -1206,8 +1281,16 @@ export function PerDeviceRules() {
         const data = await getSourceFile(source.filename)
         content = data.content ?? ''
       } else if (source.type === 'subscription' && source.subscription) {
-        const data = await getSubscriptionCache(source.subscription.id)
-        content = data.content ?? ''
+        const subID = source.subscription.id
+        try {
+          const data = await getSubscriptionCache(subID)
+          content = data.content ?? ''
+        } catch {
+          // First-time selection often has no local cache yet; warm it up automatically.
+          await syncSubUpdate(subID)
+          const data = await getSubscriptionCache(subID)
+          content = data.content ?? ''
+        }
       }
 
       content = content.trim()
@@ -1622,7 +1705,9 @@ export function PerDeviceRules() {
         title="策略覆盖来源"
         description="设备分组全局共享；下方策略覆盖会按你选择的配置来源分别保存。"
         actions={(
-          activeSourceKey && selectedSourceKey && activeSourceKey === selectedSourceKey ? (
+          !hasSelectedSource ? (
+            <span className="badge badge-muted">尚未选择来源</span>
+          ) : activeSourceKey && selectedSourceKey && activeSourceKey === selectedSourceKey ? (
             <span className="badge badge-success">当前运行来源</span>
           ) : (
             <span className="badge badge-muted">编辑离线来源</span>
@@ -1645,8 +1730,11 @@ export function PerDeviceRules() {
               }}
               disabled={loadingSources || saving}
             >
+              <option value="">
+                {sourceOptions.length === 0 ? '暂无可选来源' : '请选择配置管理中的配置来源'}
+              </option>
               {sourceOptions.length === 0 ? (
-                <option value="">暂无可选来源</option>
+                null
               ) : (
                 sourceOptions.map((item) => (
                   <option key={item.key} value={item.key}>
@@ -1662,26 +1750,42 @@ export function PerDeviceRules() {
         </div>
       </SectionCard>
 
-      {optionsError ? (
+      {!hasSelectedSource ? (
+        <SectionCard
+          title="先选择配置来源"
+          description="你必须先在上方选择一个来自“配置管理”的配置，才能制定设备分流规则。"
+          actions={(
+            <a className="btn-primary h-8 px-3 text-xs" href="/config?tab=sources">
+              前往配置管理
+            </a>
+          )}
+        >
+          <p className="text-sm text-muted">
+            选择完成后，本页才会加载对应来源的策略组与节点信息，并允许编辑分流规则。
+          </p>
+        </SectionCard>
+      ) : null}
+
+      {hasSelectedSource && optionsError ? (
         <InlineNotice tone="warning" title="策略组选项不可用">
           {optionsError}
         </InlineNotice>
       ) : null}
 
-      {clientsError ? (
+      {hasSelectedSource && clientsError ? (
         <InlineNotice tone="warning" title="在线设备扫描失败">
           {clientsError}。你仍可继续手动填写设备信息。
         </InlineNotice>
       ) : null}
 
-      {(staleStats.staleGroups > 0 || staleStats.staleProxies > 0) ? (
+      {hasSelectedSource && (staleStats.staleGroups > 0 || staleStats.staleProxies > 0) ? (
         <InlineNotice tone="warning" title="检测到失效引用">
           订阅更新后有 {staleStats.staleGroups} 个策略组引用、{staleStats.staleProxies} 个节点引用已失效，请在下方覆盖配置中修复。
         </InlineNotice>
       ) : null}
 
       {/* ── Visual Mode ──────────────────────────────────────────────────────── */}
-      {viewMode === 'visual' && (
+      {hasSelectedSource && viewMode === 'visual' && (
         <VisualMode
           groups={groups}
           setGroups={setGroups}
@@ -1699,7 +1803,7 @@ export function PerDeviceRules() {
       )}
 
       {/* ── Geek Mode ────────────────────────────────────────────────────────── */}
-      {viewMode === 'geek' && (
+      {hasSelectedSource && viewMode === 'geek' && (
         <SectionCard
           title="设备分组与覆盖"
           description="每个分组可从在线设备池里选择客户端，并针对订阅中的策略组选择节点子集。保存后可热加载到运行中的内核。"
@@ -2105,17 +2209,19 @@ export function PerDeviceRules() {
       )}
 
       {/* Live config and rule explanation — always visible */}
-      <ConfigPreviewPanel
-        yaml={finalConfigContent}
-        loading={loadingFinalConfig}
-        error={finalConfigError}
-        groups={groups}
-        policyGroupMap={policyGroupMap}
-        onRefresh={() => { void loadFinalConfig(selectedSourceKey, groups) }}
-      />
+      {hasSelectedSource ? (
+        <ConfigPreviewPanel
+          yaml={finalConfigContent}
+          loading={loadingFinalConfig}
+          error={finalConfigError}
+          groups={groups}
+          policyGroupMap={policyGroupMap}
+          onRefresh={() => { void loadFinalConfig(selectedSourceKey, groups) }}
+        />
+      ) : null}
 
       {/* Generation logic hints — geek mode only */}
-      {viewMode === 'geek' && (
+      {hasSelectedSource && viewMode === 'geek' && (
         <>
           <SectionCard
             title="生成逻辑提示"

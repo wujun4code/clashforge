@@ -138,7 +138,7 @@ func handlePublishPreview(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		merged, nodeCount, templateMode, err := buildPublishMergedYAML(deps, req)
+		merged, nodeCount, templateMode, err := buildPublishMergedYAML(deps, req, true)
 		if err != nil {
 			Err(w, http.StatusBadRequest, "PUBLISH_PREVIEW_FAILED", err.Error())
 			return
@@ -439,7 +439,7 @@ func handlePublishUpload(deps Dependencies) http.HandlerFunc {
 				TemplateID:      req.TemplateID,
 				TemplateContent: req.TemplateContent,
 				RuleSetIDs:      req.RuleSetIDs,
-			})
+			}, false)
 			if err != nil {
 				Err(w, http.StatusBadRequest, "PUBLISH_CONTENT_BUILD_FAILED", err.Error())
 				return
@@ -663,12 +663,8 @@ func buildPublishMergeNodes(sshStore *nodes.Store, wStore *workernode.Store, sub
 func buildPublishMergedYAML(
 	deps Dependencies,
 	req publish.PublishPreviewRequest,
+	allowEmptyNodes bool,
 ) (string, int, string, error) {
-	mergeNodes, err := buildPublishMergeNodes(deps.NodeStore, deps.WorkerNodeStore, deps.SubManager, req.NodeIDs)
-	if err != nil {
-		return "", 0, "", err
-	}
-
 	mode := strings.ToLower(strings.TrimSpace(req.TemplateMode))
 	if mode == "" {
 		mode = "builtin"
@@ -690,9 +686,22 @@ func buildPublishMergedYAML(
 	if err != nil {
 		return "", 0, mode, err
 	}
-	merged, err := publish.MergeTemplateWithNodes(templateContent, mergeNodes)
-	if err != nil {
-		return "", 0, mode, err
+
+	nodeIDs := normalizePublishNodeIDs(req.NodeIDs)
+	nodeCount := 0
+	merged := templateContent
+	if len(nodeIDs) > 0 {
+		mergeNodes, err := buildPublishMergeNodes(deps.NodeStore, deps.WorkerNodeStore, deps.SubManager, nodeIDs)
+		if err != nil {
+			return "", 0, mode, err
+		}
+		merged, err = publish.MergeTemplateWithNodes(templateContent, mergeNodes)
+		if err != nil {
+			return "", 0, mode, err
+		}
+		nodeCount = len(mergeNodes)
+	} else if !allowEmptyNodes {
+		return "", 0, mode, fmt.Errorf("at least one node must be selected")
 	}
 
 	// Inject hosted rule-providers if requested
@@ -711,7 +720,7 @@ func buildPublishMergedYAML(
 		}
 	}
 
-	return merged, len(mergeNodes), mode, nil
+	return merged, nodeCount, mode, nil
 }
 
 func validatePublishYAML(content string) error {
