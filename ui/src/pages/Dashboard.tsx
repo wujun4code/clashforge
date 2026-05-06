@@ -1082,23 +1082,14 @@ export function Dashboard() {
         title="连通性 & 节点切换"
         description="切换节点后将自动重新执行连通性检测"
         actions={
-          <div className="flex items-center gap-2">
-            <button className="btn-ghost flex items-center gap-2" onClick={refreshProxies}>
-              <RefreshCw size={14} /> 刷新节点
-            </button>
-            <button className="btn-ghost flex items-center gap-2" onClick={handleTestLatency} disabled={testingLatency}>
-              <Zap size={14} className={testingLatency ? 'animate-pulse' : ''} />
-              {testingLatency ? '测速中…' : '测速'}
-            </button>
-            <button
-              className="btn-ghost flex items-center gap-2"
-              onClick={() => { setLastSwitchedProxy(null); void refreshProbes() }}
-              disabled={loadingProbes}
-            >
-              <RefreshCw size={14} className={loadingProbes ? 'animate-spin' : ''} />
-              重新检测
-            </button>
-          </div>
+          <button
+            className="btn-ghost flex items-center gap-2"
+            onClick={() => { setLastSwitchedProxy(null); void refreshProbes() }}
+            disabled={loadingProbes}
+          >
+            <RefreshCw size={14} className={loadingProbes ? 'animate-spin' : ''} />
+            重新检测
+          </button>
         }
       >
         {/* Node-switch trigger status */}
@@ -1192,7 +1183,18 @@ export function Dashboard() {
 
           {/* Right (2/5): proxy switcher */}
           <div className="space-y-3 xl:col-span-2">
-            <p className="-mb-1 border-b border-white/8 pb-2.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">节点切换</p>
+            <div className="-mb-1 flex items-center justify-between border-b border-white/8 pb-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">节点切换</p>
+              <div className="flex items-center gap-1.5">
+                <button className="btn-ghost flex items-center gap-1.5 py-1 text-xs" onClick={refreshProxies}>
+                  <RefreshCw size={12} /> 刷新节点
+                </button>
+                <button className="btn-ghost flex items-center gap-1.5 py-1 text-xs" onClick={handleTestLatency} disabled={testingLatency}>
+                  <Zap size={12} className={testingLatency ? 'animate-pulse' : ''} />
+                  {testingLatency ? '测速中…' : '测速'}
+                </button>
+              </div>
+            </div>
             {proxyGroups.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-white/15 bg-black/10 px-4 py-5 text-sm text-muted">
                 {coreRunning ? '未找到代理组，请先添加订阅并更新节点。' : '内核未运行，无法获取节点列表。'}
