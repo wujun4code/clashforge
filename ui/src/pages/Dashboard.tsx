@@ -3,6 +3,8 @@ import {
   Activity,
   Cpu,
   ExternalLink,
+  Eye,
+  EyeOff,
   HardDrive,
   Loader2,
   RefreshCw,
@@ -335,7 +337,7 @@ function GroupTag({ label }: { label: string }) {
   )
 }
 
-function IPCard({ item }: { item: OverviewIPCheck }) {
+function IPCard({ item, masked }: { item: OverviewIPCheck; masked: boolean }) {
   return (
     <div className="dashboard-card">
       <div className="flex items-center justify-between gap-3">
@@ -344,8 +346,12 @@ function IPCard({ item }: { item: OverviewIPCheck }) {
       </div>
       {item.ok ? (
         <>
-          <p className="text-lg font-semibold text-white mt-3">{item.ip || '--'}</p>
-          <p className="text-xs text-muted mt-2 leading-5">{item.location || '未返回位置信息'}</p>
+          <p className={`text-lg font-semibold text-white mt-3 transition-all duration-200 ${masked ? 'blur-sm select-none' : ''}`}>
+            {item.ip || '--'}
+          </p>
+          <p className={`text-xs text-muted mt-2 leading-5 transition-all duration-200 ${masked ? 'blur-sm select-none' : ''}`}>
+            {item.location || '未返回位置信息'}
+          </p>
         </>
       ) : (
         <p className="text-xs text-danger mt-3 leading-5">{item.error || '无法获取出口 IP'}</p>
@@ -443,6 +449,7 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
   accessChecks: PaneAccessCheck[]
   loading?: boolean
 }) {
+  const [masked, setMasked] = useState(false)
   const ipGroups = groupBy(ipChecks)
   const accessGroups = groupBy(accessChecks)
   const hasContent = ipChecks.length > 0 || accessChecks.length > 0
@@ -475,12 +482,22 @@ function ProbePane({ title, subtitle, health, ipChecks, accessChecks, loading }:
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted whitespace-nowrap">出口 IP</span>
                   <div className="flex-1 h-px bg-white/8" />
+                  <button
+                    onClick={() => setMasked(v => !v)}
+                    className="flex items-center gap-1 text-muted hover:text-slate-300 transition-colors"
+                    title={masked ? '显示真实 IP' : '隐藏 IP'}
+                  >
+                    {masked
+                      ? <EyeOff size={13} />
+                      : <Eye size={13} />
+                    }
+                  </button>
                 </div>
                 {ipGroups.map(([group, items]) => (
                   <div key={group} className="space-y-2">
                     <GroupTag label={group} />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {items.map((item) => <IPCard key={item.provider} item={item as OverviewIPCheck} />)}
+                      {items.map((item) => <IPCard key={item.provider} item={item as OverviewIPCheck} masked={masked} />)}
                     </div>
                   </div>
                 ))}
