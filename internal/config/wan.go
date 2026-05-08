@@ -2,10 +2,12 @@ package config
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DetectWANInterface validates the configured WAN interface against the
@@ -77,8 +79,10 @@ func defaultRouteIface() string {
 
 // uciWANIface queries OpenWrt's UCI for the WAN device name.
 func uciWANIface() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	for _, key := range []string{"network.wan.device", "network.wan.ifname"} {
-		out, err := exec.Command("uci", "get", key).Output()
+		out, err := exec.CommandContext(ctx, "uci", "get", key).Output()
 		if err != nil {
 			continue
 		}

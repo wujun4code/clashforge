@@ -347,9 +347,26 @@ jobs:
           _ssh "i=0; while [ \$i -lt 30 ]; do \
                   wget -q -O /dev/null --timeout=2 http://127.0.0.1:7777/api/v1/status 2>/dev/null && break; \
                   sleep 1; i=\$((i+1)); \
-                done; \
-                wget -q -O /dev/null --timeout=2 http://127.0.0.1:7777/api/v1/status 2>/dev/null \
-                  || (echo 'API 未就绪' && exit 1)"
+                done"
+
+          if ! _ssh "wget -q -O /dev/null --timeout=2 http://127.0.0.1:7777/api/v1/status 2>/dev/null"; then
+            echo "=== API 未就绪 — 诊断信息 ==="
+            echo "--- syslog (clashforge) ---"
+            _ssh "logread 2>/dev/null | grep -i clashforge | tail -40" || true
+            echo "--- 进程列表 ---"
+            _ssh "ps w 2>/dev/null | grep -v grep | grep -E 'clashforge|mihomo'" || true
+            echo "--- 端口 7777 ---"
+            _ssh "ss -tlnp 2>/dev/null | grep ':7777'" || true
+            echo "--- 二进制 ---"
+            _ssh "ls -la /usr/bin/clashforge /usr/bin/mihomo-clashforge 2>&1" || true
+            echo "--- 配置文件 ---"
+            _ssh "cat /etc/metaclash/config.toml 2>/dev/null" || true
+            echo "--- 直接运行（捕获启动日志，最多 5s）---"
+            _ssh "timeout 5 /usr/bin/clashforge -config /etc/metaclash/config.toml 2>&1 || true" || true
+            echo "=== 诊断结束 ==="
+            echo "API 未就绪"
+            exit 1
+          fi
 
           # 完备性检测
           _ssh "cat > /tmp/e2e-install-verify.sh && chmod +x /tmp/e2e-install-verify.sh" \
