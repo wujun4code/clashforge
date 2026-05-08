@@ -310,6 +310,9 @@ jobs:
           # 先用 uninstall-clashforge 彻底清除旧版（清除 opkg 注册 + 停止服务 + 清理接管状态）
           # 注意：uninstall 会删除 /tmp/clashforge*，必须在它之后再传 IPK
           _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge --keep-config || true"
+          # 兜底：直接从 opkg status 移除 clashforge 条目，防止 opkg remove 失败后
+          # 导致后续 opkg install --force-downgrade 误判为"up to date"而跳过文件解压
+          _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
           sleep 1
 
           # 更新 opkg 包列表，使 ca-bundle 等依赖进入 hash
