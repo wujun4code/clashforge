@@ -313,6 +313,8 @@ jobs:
           # 兜底：直接从 opkg status 移除 clashforge 条目，防止 opkg remove 失败后
           # 导致后续 opkg install --force-downgrade 误判为"up to date"而跳过文件解压
           _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
+          # 移除可能损坏的 SSH key 文件（空文件或内容无效），防止下次启动时 Fatal 崩溃
+          _ssh "[ -f /etc/metaclash/clashforge_ed25519 ] && [ ! -s /etc/metaclash/clashforge_ed25519 ] && rm -f /etc/metaclash/clashforge_ed25519 || true"
           sleep 1
 
           # 更新 opkg 包列表，使 ca-bundle 等依赖进入 hash
