@@ -44,7 +44,8 @@ check_memory() {
 patch_config_mihomo() {
     local bin="$1"
     [ -f "$CONFIG" ] || return
-    sed -i "s|^binary = .*|binary = \"$bin\"|" "$CONFIG" 2>/dev/null || true
+    # Match both non-indented (postinst template) and indented (config.Save TOML) binary keys.
+    sed -i "s|^[[:space:]]*binary[[:space:]]*=.*|  binary = \"$bin\"|" "$CONFIG" 2>/dev/null || true
 }
 
 start_service() {
@@ -73,7 +74,8 @@ start_service() {
     procd_open_instance instance1
     procd_set_param command "$PROG" -config "$CONFIG"
     procd_set_param respawn 3600 10 3
-    # Don't pipe stdout/stderr to console — clashforge writes its own log
+    procd_set_param stdout 1
+    procd_set_param stderr 1
     procd_close_instance
     log "clashforge started"
 }

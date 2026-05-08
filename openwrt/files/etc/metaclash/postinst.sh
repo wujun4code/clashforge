@@ -4,7 +4,7 @@ mkdir -p /etc/metaclash /var/run/metaclash
 
 # Restore persistent data backed up by prerm (handles opkg removing /etc/metaclash on upgrade)
 if [ -f /tmp/clashforge-config.bak ];      then mv /tmp/clashforge-config.bak    /etc/metaclash/config.toml;       fi
-if [ -f /tmp/clashforge-ed25519.bak ];     then mv /tmp/clashforge-ed25519.bak   /etc/metaclash/clashforge_ed25519; chmod 600 /etc/metaclash/clashforge_ed25519; fi
+if [ -f /tmp/clashforge-ed25519.bak ] && [ -s /tmp/clashforge-ed25519.bak ]; then mv /tmp/clashforge-ed25519.bak /etc/metaclash/clashforge_ed25519; chmod 600 /etc/metaclash/clashforge_ed25519; fi
 if [ -f /tmp/clashforge-nodes.bak ];       then mv /tmp/clashforge-nodes.bak     /etc/metaclash/nodes.json;         fi
 if [ -f /tmp/clashforge-nodes-key.bak ];   then mv /tmp/clashforge-nodes-key.bak /etc/metaclash/nodes.key;          fi
 if [ -f /tmp/clashforge-cf-config.bak ];   then mv /tmp/clashforge-cf-config.bak /etc/metaclash/cf-config.json; chmod 600 /etc/metaclash/cf-config.json; fi

@@ -3,7 +3,7 @@ import { getConnections, closeAllConns, getLogs, clearLogs, pauseLogs, resumeLog
 import type { Connection } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { formatBytes } from '../utils/format'
-import { Activity, Copy, ListTree, PauseCircle, PlayCircle, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import { Activity, Copy, ListTree, PauseCircle, PlayCircle, RefreshCw, ScrollText, Search, Trash2, X } from 'lucide-react'
 import { EmptyState, PageHeader, SectionCard, SegmentedTabs } from '../components/ui'
 
 // ── Shared copy helper ────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ function CopyIconButton({ text, title = '复制', size = 10, className = '' }: {
 
 // ── Connections panel ─────────────────────────────────────────────────────────
 
-function ConnectionsPanel() {
+function ConnectionsPanel({ search }: { search: string }) {
   const [conns, setConns] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -56,12 +56,23 @@ function ConnectionsPanel() {
     refresh()
   }
 
+  const keyword = search.trim().toLowerCase()
+  const visible = keyword
+    ? conns.filter(c => {
+        const domain = (c.metadata.host || c.metadata.sourceIP || '').toLowerCase()
+        const chain = (c.chains?.join(' ') ?? '').toLowerCase()
+        const proto = (c.metadata.network || c.metadata.type || '').toLowerCase()
+        const port = String(c.metadata.destinationPort ?? '')
+        return domain.includes(keyword) || chain.includes(keyword) || proto.includes(keyword) || port.includes(keyword)
+      })
+    : conns
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted">活跃连接</span>
-          <span className="badge badge-muted">{conns.length}</span>
+          <span className="badge badge-muted">{visible.length}{keyword ? `/${conns.length}` : ''}</span>
         </div>
         <div className="flex gap-2">
           <button className="btn-ghost flex items-center gap-2" onClick={refresh}>
@@ -89,18 +100,18 @@ function ConnectionsPanel() {
               {loading && (
                 <tr><td colSpan={5} className="px-4 py-8 text-center text-muted">加载中…</td></tr>
               )}
-              {!loading && conns.length === 0 && (
+              {!loading && visible.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8">
                     <EmptyState
-                      title="暂无活跃连接"
-                      description="当设备或应用开始通过代理链转发流量时，这里会实时显示目标、链路与吞吐量。"
+                      title={keyword ? `未找到匹配"${search}"的连接` : '暂无活跃连接'}
+                      description={keyword ? '尝试其他关键字，或清空搜索框查看全部连接。' : '当设备或应用开始通过代理链转发流量时，这里会实时显示目标、链路与吞吐量。'}
                       icon={<ListTree size={18} />}
                     />
                   </td>
                 </tr>
               )}
-              {conns.map(c => {
+              {visible.map(c => {
                 const domain = c.metadata.host || c.metadata.sourceIP
                 return (
                 <tr key={c.id} className="table-row group">
@@ -247,15 +258,22 @@ function LogRow({ entry }: { entry: LogLine }) {
           {entry.msg ?? ''}
         </span>
         <div className="flex items-center gap-0.5 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* Primary copy: domain when available, full line otherwise */}
+          <CopyIconButton
+            text={domain ?? copyLineText.join('  ')}
+            title={domain ? `复制域名：${domain}` : '复制此行'}
+            size={10}
+            className={domain ? 'text-sky-600 hover:text-sky-300' : ''}
+          />
+          {/* Secondary copy: full line, shown only when domain copy is primary */}
           {domain && (
             <CopyIconButton
-              text={domain}
-              title={`复制域名：${domain}`}
+              text={copyLineText.join('  ')}
+              title="复制整行"
               size={10}
-              className="text-sky-600 hover:text-sky-300"
+              className="text-slate-600 hover:text-slate-400"
             />
           )}
-          <CopyIconButton text={copyLineText.join('  ')} title="复制此行" size={10} />
         </div>
       </div>
       {/* Structured field chips */}
@@ -268,7 +286,7 @@ function LogRow({ entry }: { entry: LogLine }) {
   )
 }
 
-function LogsPanel() {
+function LogsPanel({ search }: { search: string }) {
   const [lines, setLines] = useState<LogLine[]>([])
   const [filter, setFilter] = useState<string>('all')
   const [autoScroll, setAutoScroll] = useState(true)
@@ -308,7 +326,14 @@ function LogsPanel() {
     if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [lines, autoScroll])
 
-  const filtered = filter === 'all' ? lines : lines.filter(l => (l.level ?? '').toLowerCase() === filter)
+  const levelFiltered = filter === 'all' ? lines : lines.filter(l => (l.level ?? '').toLowerCase() === filter)
+  const keyword = search.trim().toLowerCase()
+  const filtered = keyword
+    ? levelFiltered.filter(l =>
+        l.msg.toLowerCase().includes(keyword) ||
+        Object.values(l.fields ?? {}).some(v => String(v).toLowerCase().includes(keyword))
+      )
+    : levelFiltered
 
   const handleCopyAll = useCallback(() => {
     const text = filtered.map(l => {
@@ -402,8 +427,8 @@ function LogsPanel() {
           <div className="h-full overflow-y-auto px-2 py-2 space-y-0">
             {rows.length === 0 && (
               <EmptyState
-                title="还没有匹配到日志"
-                description="确认 ClashForge 服务已启动，或调整日志级别与筛选条件后重新查看。"
+                title={keyword ? `未找到匹配"${search}"的日志` : '还没有匹配到日志'}
+                description={keyword ? '尝试其他关键字，或清空搜索框查看全部日志。' : '确认 ClashForge 服务已启动，或调整日志级别与筛选条件后重新查看。'}
                 icon={<ScrollText size={18} />}
               />
             )}
@@ -422,6 +447,7 @@ type Tab = 'connections' | 'logs'
 
 export function ActivityLog() {
   const [tab, setTab] = useState<Tab>('connections')
+  const [search, setSearch] = useState('')
 
   return (
     <div className="space-y-6">
@@ -444,15 +470,35 @@ export function ActivityLog() {
         onChange={setTab}
       />
 
+      {/* Search bar */}
+      <div className="relative">
+        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder={tab === 'connections' ? '搜索域名、代理链、协议…' : '搜索日志消息、域名、字段值…'}
+          className="glass-input h-9 w-full pl-8 pr-8 text-sm"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted hover:text-slate-300 transition-colors"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+
       {tab === 'connections' && (
         <SectionCard
           title="连接总览"
           description="实时查看每条连接的目标地址、协议类型、代理链与上下行吞吐。"
         >
-          <ConnectionsPanel />
+          <ConnectionsPanel search={search} />
         </SectionCard>
       )}
-      {tab === 'logs' && <LogsPanel />}
+      {tab === 'logs' && <LogsPanel search={search} />}
     </div>
   )
 }

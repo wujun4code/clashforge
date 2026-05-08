@@ -46,18 +46,22 @@ func LoadOrGenerateKeyPair(dataDir string) (*KeyPair, error) {
 	if err == nil {
 		raw, parseErr := ssh.ParseRawPrivateKey(data)
 		if parseErr != nil {
-			return nil, fmt.Errorf("parse SSH private key %s: %w", privPath, parseErr)
-		}
-		switch k := raw.(type) {
-		case ed25519.PrivateKey:
-			privKey = k
-		case *ed25519.PrivateKey:
-			if k == nil {
-				return nil, fmt.Errorf("parse SSH private key %s: empty ed25519 key", privPath)
+			// File exists but is corrupt or empty (e.g. truncated write, empty backup
+			// restored by postinst). Remove it and fall through to key generation.
+			_ = os.Remove(privPath)
+		} else {
+			switch k := raw.(type) {
+			case ed25519.PrivateKey:
+				privKey = k
+			case *ed25519.PrivateKey:
+				if k != nil {
+					privKey = *k
+				} else {
+					_ = os.Remove(privPath)
+				}
+			default:
+				_ = os.Remove(privPath)
 			}
-			privKey = *k
-		default:
-			return nil, fmt.Errorf("unsupported SSH private key type %T in %s", raw, privPath)
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read SSH private key %s: %w", privPath, err)

@@ -336,8 +336,8 @@ export function GeoData({ embedded = false }: { embedded?: boolean }) {
           <div>
             <label className="text-xs text-muted font-medium block mb-1.5">定时下载代理</label>
             <ProxySelect
-              value={normalizeProxyValue(merged.proxy_server)}
-              onChange={v => patchCfg({ proxy_server: normalizeProxyValue(v) })}
+              value={selectedProxy}
+              onChange={v => { setSelectedProxy(v); patchCfg({ proxy_server: normalizeProxyValue(v) }) }}
               proxies={proxies}
             />
             <p className="text-xs text-muted mt-1">定时任务使用的代理，手动更新也以此为默认值</p>
