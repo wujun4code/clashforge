@@ -362,7 +362,7 @@ jobs:
             echo "--- 配置文件 ---"
             _ssh "cat /etc/metaclash/config.toml 2>/dev/null" || true
             echo "--- 直接运行（捕获启动日志，最多 5s）---"
-            _ssh "timeout 5 /usr/bin/clashforge -config /etc/metaclash/config.toml 2>&1 || true" || true
+            _ssh "/usr/bin/clashforge -config /etc/metaclash/config.toml >/tmp/cf-diag.log 2>&1 & CF_PID=\$!; sleep 4; kill \$CF_PID 2>/dev/null || true; cat /tmp/cf-diag.log 2>/dev/null || true" || true
             echo "=== 诊断结束 ==="
             echo "API 未就绪"
             exit 1
