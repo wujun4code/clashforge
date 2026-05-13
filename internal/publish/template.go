@@ -54,12 +54,6 @@ rule-providers:
     url: https://cdn.jsdmirror.com/gh/Loyalsoldier/clash-rules@release/proxy.txt
     path: "./rule_provider/proxy.yaml"
     interval: 86400
-  direct:
-    type: http
-    behavior: domain
-    url: https://cdn.jsdmirror.com/gh/Loyalsoldier/clash-rules@release/direct.txt
-    path: "./rule_provider/direct.yaml"
-    interval: 86400
   private:
     type: http
     behavior: domain
@@ -113,7 +107,7 @@ rules:
   - RULE-SET,google,🚀 节点选择
   - RULE-SET,gfw,🚀 节点选择
   - RULE-SET,proxy,🚀 节点选择
-  - RULE-SET,direct,🎯 全球直连
+  - GEOSITE,CN,🎯 全球直连
   - RULE-SET,tld-not-cn,🚀 节点选择
   - RULE-SET,telegramcidr,🚀 节点选择,no-resolve
   - RULE-SET,cncidr,🎯 全球直连,no-resolve

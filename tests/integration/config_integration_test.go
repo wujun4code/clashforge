@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/wujun4code/clashforge/internal/config"
+	"github.com/wujun4code/clashforge/internal/publish"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
@@ -21,6 +22,75 @@ func skipIfNoSample(t *testing.T) {
 		t.Skip("testdata/sample-clash-config.yaml not present; skipping integration test")
 	}
 }
+
+// --- Loyalsoldier template memory-optimization tests ---
+
+// TestLoyalsoldierTemplate_NoDirectProvider verifies that the built-in
+// Loyalsoldier template no longer contains the `direct` rule-provider, which
+// previously loaded 116 K domain rules (~40–60 MB) into Mihomo's memory.
+func TestLoyalsoldierTemplate_NoDirectProvider(t *testing.T) {
+	tmpl, err := publish.TemplateByID("loyalsoldier_standard")
+	if err != nil {
+		t.Fatalf("TemplateByID: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &parsed); err != nil {
+		t.Fatalf("template is not valid YAML: %v", err)
+	}
+
+	providers, _ := parsed["rule-providers"].(map[string]interface{})
+	if _, hasDirect := providers["direct"]; hasDirect {
+		t.Error("rule-providers must not contain 'direct' (replaced by GEOSITE,CN to save ~40–60 MB)")
+	}
+}
+
+// TestLoyalsoldierTemplate_HasGEOSITECN verifies that GEOSITE,CN replaces
+// the removed direct rule-provider in the rules list.
+func TestLoyalsoldierTemplate_HasGEOSITECN(t *testing.T) {
+	tmpl, err := publish.TemplateByID("loyalsoldier_standard")
+	if err != nil {
+		t.Fatalf("TemplateByID: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &parsed); err != nil {
+		t.Fatalf("template is not valid YAML: %v", err)
+	}
+
+	rules, _ := parsed["rules"].([]interface{})
+	found := false
+	for _, r := range rules {
+		if s, ok := r.(string); ok && strings.HasPrefix(s, "GEOSITE,CN,") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("rules must contain a GEOSITE,CN,... entry as replacement for the removed direct provider")
+	}
+}
+
+// TestLoyalsoldierTemplate_RejectProviderPresent verifies that the `reject`
+// rule-provider is intentionally retained in the template.
+func TestLoyalsoldierTemplate_RejectProviderPresent(t *testing.T) {
+	tmpl, err := publish.TemplateByID("loyalsoldier_standard")
+	if err != nil {
+		t.Fatalf("TemplateByID: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &parsed); err != nil {
+		t.Fatalf("template is not valid YAML: %v", err)
+	}
+
+	providers, _ := parsed["rule-providers"].(map[string]interface{})
+	if _, hasReject := providers["reject"]; !hasReject {
+		t.Error("rule-providers must still contain 'reject'")
+	}
+}
+
+// --- end template tests ---
 
 // TestSampleConfig_IsValidYAML verifies the sample config is valid YAML.
 func TestSampleConfig_IsValidYAML(t *testing.T) {
