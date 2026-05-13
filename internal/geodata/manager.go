@@ -363,12 +363,14 @@ func readMihomoProxyCreds(runtimeDir string) (user, pass string) {
 }
 
 func buildSpecs(cfg *config.MetaclashConfig) []FileSpec {
-	geoIPURLs := []string{
-		"https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-		"https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+	// country.mmdb — MaxMind format, used with geodata-mode: false.
+	// Falls back to jsdmirror CDN if the configured URL is unavailable.
+	mmdbURLs := []string{
+		"https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
+		"https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb",
 	}
 	if u := cfg.Update.GeoIPURL; u != "" {
-		geoIPURLs = append([]string{u}, geoIPURLs...)
+		mmdbURLs = append([]string{u}, mmdbURLs...)
 	}
 
 	geositeURLs := []string{
@@ -380,7 +382,7 @@ func buildSpecs(cfg *config.MetaclashConfig) []FileSpec {
 	}
 
 	return []FileSpec{
-		{Name: "GeoIP.dat", Filename: "GeoIP.dat", URLs: geoIPURLs},
+		{Name: "country.mmdb", Filename: "country.mmdb", URLs: mmdbURLs},
 		{Name: "GeoSite.dat", Filename: "GeoSite.dat", URLs: geositeURLs},
 	}
 }

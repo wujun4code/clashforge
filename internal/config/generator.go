@@ -40,9 +40,10 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	out["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
 	out["unified-delay"] = true
 	out["tcp-concurrent"] = true
-	out["geodata-mode"] = true
+	out["geodata-mode"] = false
 	out["geox-url"] = map[string]string{
-		"mmdb": filepath.ToSlash(cfg.Core.GeoIPPath),
+		"mmdb":    filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "country.mmdb")),
+		"geosite": filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "GeoSite.dat")),
 	}
 
 	// DNS 配置
@@ -240,9 +241,10 @@ func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscri
 	}
 
 	// Enforce local geodata so ClashForge-managed files are used
-	base["geodata-mode"] = true
+	base["geodata-mode"] = false
 	base["geox-url"] = map[string]string{
-		"mmdb": filepath.ToSlash(cfg.Core.GeoIPPath),
+		"mmdb":    filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "country.mmdb")),
+		"geosite": filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "GeoSite.dat")),
 	}
 
 	// Append proxy nodes from other (nodes-only) subscriptions, deduplicating by name
