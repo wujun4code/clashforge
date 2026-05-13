@@ -24,6 +24,12 @@ proxy-groups:
       - "🚀 节点选择"
       - "🎯 全球直连"
 rule-providers:
+  reject:
+    type: http
+    behavior: domain
+    url: https://cdn.jsdmirror.com/gh/Loyalsoldier/clash-rules@release/reject.txt
+    path: "./rule_provider/reject.yaml"
+    interval: 86400
   icloud:
     type: http
     behavior: domain
@@ -91,7 +97,7 @@ rule-providers:
     path: "./rule_provider/applications.yaml"
     interval: 86400
 rules:
-  - GEOSITE,category-ads-all,REJECT
+  - RULE-SET,reject,REJECT
   - RULE-SET,private,🎯 全球直连
   - RULE-SET,applications,🎯 全球直连
   - RULE-SET,icloud,🎯 全球直连
