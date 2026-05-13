@@ -180,6 +180,9 @@ jobs:
           dl /tmp/geodata/GeoSite.dat \
             "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
             "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+          dl /tmp/geodata/country.mmdb \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb" \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
           ls -lh /tmp/geodata/ || true
 
       - name: Upload GeoData fixtures
@@ -394,7 +397,7 @@ jobs:
           _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
           _ssh "mkdir -p /etc/metaclash"
           seeded=0
-          for f in GeoIP.dat GeoSite.dat; do
+          for f in GeoIP.dat GeoSite.dat country.mmdb; do
             src="/tmp/e2e-geodata/$f"
             if [ -f "$src" ] && [ "$(wc -c < "$src")" -gt 10000 ]; then
               _ssh "cat > /etc/metaclash/$f" < "$src"
@@ -405,7 +408,7 @@ jobs:
               echo "⚠️  $f fixture unavailable, setup/launch will attempt download"
             fi
           done
-          echo "Pre-seeded ${seeded}/2 geodata files"
+          echo "Pre-seeded ${seeded}/3 geodata files"
 
       # ── Scenario 1/2: dnsmasq_mode=upstream ──────────────────────────────────
       - name: "[Scenario 1/2] dnsmasq_mode=upstream"
