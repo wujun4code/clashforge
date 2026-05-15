@@ -121,38 +121,49 @@ function Sync-GeoDataToRouter {
     }
 
     $RemoteGeoDir = "/etc/metaclash"
-    $NeedGeoIP = $true
-    $NeedGeoSite = $true
+
+    # Primary: GitHub releases; fallback: jsdmirror CDN (mirrors clashforgectl bash)
     $GeoSpecs = @(
+        @{
+            Name = "country.mmdb"
+            File = "country.mmdb"
+            Urls = @(
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb",
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"
+            )
+        },
         @{
             Name = "GeoIP.dat"
             File = "GeoIP.dat"
             Urls = @(
-                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
             )
         },
         @{
             Name = "GeoSite.dat"
             File = "GeoSite.dat"
             Urls = @(
-                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
             )
         }
     )
 
+    # Check which files are already present on the router
+    $NeedUpload = @{ "country.mmdb" = $true; "GeoIP.dat" = $true; "GeoSite.dat" = $true }
     try {
-        $SshCheckArgs = $SshBase + @(
-            $Target,
-            "[ -s /etc/metaclash/GeoIP.dat ] && echo GeoIP=1 || echo GeoIP=0; [ -s /etc/metaclash/GeoSite.dat ] && echo GeoSite=1 || echo GeoSite=0"
-        )
+        $SshCheckCmd = '[ -s /etc/metaclash/country.mmdb ] && echo mmdb=1   || echo mmdb=0; ' +
+                       '[ -s /etc/metaclash/GeoIP.dat    ] && echo GeoIP=1  || echo GeoIP=0; ' +
+                       '[ -s /etc/metaclash/GeoSite.dat  ] && echo GeoSite=1|| echo GeoSite=0'
+        $SshCheckArgs = $SshBase + @($Target, $SshCheckCmd)
         $RemoteState = ssh @SshCheckArgs 2>$null
         if ($LASTEXITCODE -eq 0 -and $RemoteState) {
             foreach ($Line in $RemoteState) {
-                switch -Regex ($Line) {
-                    '^GeoIP=1$'   { $NeedGeoIP = $false; continue }
-                    '^GeoSite=1$' { $NeedGeoSite = $false; continue }
+                switch -Regex ($Line.Trim()) {
+                    '^mmdb=1$'    { $NeedUpload["country.mmdb"] = $false }
+                    '^GeoIP=1$'   { $NeedUpload["GeoIP.dat"]    = $false }
+                    '^GeoSite=1$' { $NeedUpload["GeoSite.dat"]  = $false }
                 }
             }
         } else {
@@ -162,8 +173,8 @@ function Sync-GeoDataToRouter {
         Warn "Unable to check existing GeoData on router, falling back to local preload"
     }
 
-    if (-not $NeedGeoIP -and -not $NeedGeoSite) {
-        Ok "GeoIP.dat and GeoSite.dat already exist on router, skipping preload"
+    if (-not $NeedUpload["country.mmdb"] -and -not $NeedUpload["GeoIP.dat"] -and -not $NeedUpload["GeoSite.dat"]) {
+        Ok "All GeoData files already exist on router, skipping preload"
         return
     }
 
@@ -174,22 +185,18 @@ function Sync-GeoDataToRouter {
     try {
         $DownloadedFiles = @()
         foreach ($Spec in $GeoSpecs) {
-            if ($Spec.File -eq "GeoIP.dat" -and -not $NeedGeoIP) {
-                Ok "GeoIP.dat already exists on router, skip download/upload"
+            if (-not $NeedUpload[$Spec.File]) {
+                Ok "$($Spec.File) already exists on router, skip download/upload"
                 continue
             }
-            if ($Spec.File -eq "GeoSite.dat" -and -not $NeedGeoSite) {
-                Ok "GeoSite.dat already exists on router, skip download/upload"
-                continue
-            }
-            $LocalPath = Join-Path $GeoTempDir $Spec.File
-            if (Download-WithFallback -Name $Spec.Name -OutFile $LocalPath -Urls $Spec.Urls) {
+            $LocalFilePath = Join-Path $GeoTempDir $Spec.File
+            if (Download-WithFallback -Name $Spec.Name -OutFile $LocalFilePath -Urls $Spec.Urls) {
                 $DownloadedFiles += $Spec.File
             }
         }
 
         if ($DownloadedFiles.Count -eq 0) {
-            Warn "GeoData preload skipped: required GeoData files could not be downloaded locally"
+            Warn "GeoData preload skipped: no GeoData files could be downloaded locally"
             return
         }
 
@@ -200,6 +207,7 @@ function Sync-GeoDataToRouter {
             return
         }
 
+        $UploadedPaths = @()
         Push-Location $GeoTempDir
         try {
             foreach ($File in $DownloadedFiles) {
@@ -210,13 +218,17 @@ function Sync-GeoDataToRouter {
                     continue
                 }
                 Ok "$File uploaded to ${RemoteGeoDir}/$File"
+                $UploadedPaths += "$RemoteGeoDir/$File"
             }
         } finally {
             Pop-Location
         }
 
-        $SshChmodArgs = $SshBase + @($Target, "chmod 644 $RemoteGeoDir/GeoIP.dat $RemoteGeoDir/GeoSite.dat 2>/dev/null || true")
-        ssh @SshChmodArgs | Out-Null
+        if ($UploadedPaths.Count -gt 0) {
+            $ChmodTargets = $UploadedPaths -join " "
+            $SshChmodArgs = $SshBase + @($Target, "chmod 644 $ChmodTargets 2>/dev/null || true")
+            ssh @SshChmodArgs | Out-Null
+        }
     } catch {
         Warn "GeoData preload failed: $_"
     } finally {
@@ -380,6 +392,62 @@ if ($Action -eq "deploy") {
         } else {
             Warn "Not found (skipped): $RelSrc"
         }
+    }
+
+    # ── 4.5. Pre-seed GeoData into IPK staging (best-effort, mirrors CI) ────────
+    Log "── Step 4.5: Pre-seeding GeoData into ipk\usr\share\metaclash\"
+    $GeoStagingDir = Join-Path $RepoRoot "ipk\usr\share\metaclash"
+    New-Item -ItemType Directory -Force -Path $GeoStagingDir | Out-Null
+    $GeoStagingSpecs = @(
+        @{
+            File = "country.mmdb"
+            Urls = @(
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb",
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"
+            )
+        },
+        @{
+            File = "GeoIP.dat"
+            Urls = @(
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+            )
+        },
+        @{
+            File = "GeoSite.dat"
+            Urls = @(
+                "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+                "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+            )
+        }
+    )
+    $GeoTmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("cf-geodata-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $GeoTmpDir | Out-Null
+    $GeoSeeded = 0
+    try {
+        foreach ($Spec in $GeoStagingSpecs) {
+            $StagedPath = Join-Path $GeoStagingDir $Spec.File
+            if ((Test-Path $StagedPath) -and ((Get-Item $StagedPath).Length -gt 0)) {
+                Ok "$($Spec.File) already in staging, skip download"
+                $GeoSeeded++
+                continue
+            }
+            $TmpPath = Join-Path $GeoTmpDir $Spec.File
+            if (Download-WithFallback -Name $Spec.File -OutFile $TmpPath -Urls $Spec.Urls) {
+                Copy-Item -Force $TmpPath $StagedPath
+                Ok "$($Spec.File) staged → ipk\usr\share\metaclash\"
+                $GeoSeeded++
+            }
+        }
+    } catch {
+        Warn "GeoData pre-seed encountered an error: $_"
+    } finally {
+        Remove-Item $GeoTmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($GeoSeeded -eq 3) {
+        Ok "All 3 GeoData files bundled into IPK staging"
+    } else {
+        Warn "GeoData pre-seed partial ($GeoSeeded/3 files) — Sync-GeoDataToRouter will fill gaps after install"
     }
 
     # ── 5. Build IPK ─────────────────────────────────────────────────────────

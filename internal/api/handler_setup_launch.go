@@ -165,6 +165,14 @@ func handleSetupFinalConfigPreview(deps Dependencies) http.HandlerFunc {
 func defaultGeodataSpecs() []geodataSpec {
 	return []geodataSpec{
 		{
+			Name:     "country.mmdb",
+			Filename: "country.mmdb",
+			URLs: []string{
+				"https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
+				"https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb",
+			},
+		},
+		{
 			Name:     "GeoIP.dat",
 			Filename: "GeoIP.dat",
 			URLs: []string{

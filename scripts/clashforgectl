@@ -77,30 +77,34 @@ sync_geodata_to_router() {
     fi
 
     local remote_dir="/etc/metaclash"
-    local remote_state=""
-    local need_geoip=1
-    local need_geosite=1
     local tmpdir
-    local geoip_local=0
-    local geosite_local=0
 
-    if remote_state="$(ssh "${SSH_OPTS[@]}" "$TARGET" '[ -s /etc/metaclash/GeoIP.dat ] && echo GeoIP=1 || echo GeoIP=0; [ -s /etc/metaclash/GeoSite.dat ] && echo GeoSite=1 || echo GeoSite=0' 2>/dev/null)"; then
+    # Check which files are already present on the router
+    local remote_state=""
+    declare -A need_upload
+    need_upload["country.mmdb"]=1
+    need_upload["GeoIP.dat"]=1
+    need_upload["GeoSite.dat"]=1
+
+    if remote_state="$(ssh "${SSH_OPTS[@]}" "$TARGET" \
+        '[ -s /etc/metaclash/country.mmdb ] && echo mmdb=1   || echo mmdb=0
+         [ -s /etc/metaclash/GeoIP.dat    ] && echo GeoIP=1  || echo GeoIP=0
+         [ -s /etc/metaclash/GeoSite.dat  ] && echo GeoSite=1|| echo GeoSite=0' 2>/dev/null)"; then
         while IFS='=' read -r key value; do
             case "$key" in
-                GeoIP)
-                    [ "$value" = "1" ] && need_geoip=0
-                    ;;
-                GeoSite)
-                    [ "$value" = "1" ] && need_geosite=0
-                    ;;
+                mmdb)    [ "$value" = "1" ] && need_upload["country.mmdb"]=0 ;;
+                GeoIP)   [ "$value" = "1" ] && need_upload["GeoIP.dat"]=0    ;;
+                GeoSite) [ "$value" = "1" ] && need_upload["GeoSite.dat"]=0  ;;
             esac
         done <<< "$remote_state"
     else
         warn "Unable to check existing GeoData on router, falling back to local preload"
     fi
 
-    if [ "$need_geoip" -eq 0 ] && [ "$need_geosite" -eq 0 ]; then
-        ok "GeoIP.dat and GeoSite.dat already exist on router, skipping preload"
+    if [ "${need_upload[country.mmdb]}" -eq 0 ] && \
+       [ "${need_upload[GeoIP.dat]}"    -eq 0 ] && \
+       [ "${need_upload[GeoSite.dat]}"  -eq 0 ]; then
+        ok "All GeoData files already exist on router, skipping preload"
         return 0
     fi
 
@@ -111,28 +115,49 @@ sync_geodata_to_router() {
 
     log "── GeoData: preloading missing files only"
 
-    if [ "$need_geoip" -eq 1 ]; then
+    # Download each missing file (primary: GitHub releases; fallback: jsdmirror CDN)
+    declare -A local_ok
+    local_ok["country.mmdb"]=0
+    local_ok["GeoIP.dat"]=0
+    local_ok["GeoSite.dat"]=0
+
+    if [ "${need_upload[country.mmdb]}" -eq 1 ]; then
+        if download_with_fallback "country.mmdb" "$tmpdir/country.mmdb" \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"; then
+            local_ok["country.mmdb"]=1
+        fi
+    else
+        ok "country.mmdb already exists on router, skip download/upload"
+    fi
+
+    if [ "${need_upload[GeoIP.dat]}" -eq 1 ]; then
         if download_with_fallback "GeoIP.dat" "$tmpdir/GeoIP.dat" \
-            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
-            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"; then
-            geoip_local=1
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"; then
+            local_ok["GeoIP.dat"]=1
         fi
     else
         ok "GeoIP.dat already exists on router, skip download/upload"
     fi
 
-    if [ "$need_geosite" -eq 1 ]; then
+    if [ "${need_upload[GeoSite.dat]}" -eq 1 ]; then
         if download_with_fallback "GeoSite.dat" "$tmpdir/GeoSite.dat" \
-            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
-            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"; then
-            geosite_local=1
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"; then
+            local_ok["GeoSite.dat"]=1
         fi
     else
         ok "GeoSite.dat already exists on router, skip download/upload"
     fi
 
-    if [ "$geoip_local" -eq 0 ] && [ "$geosite_local" -eq 0 ]; then
-        warn "GeoData preload skipped: required GeoData files could not be downloaded locally"
+    local any_local=0
+    for f in "country.mmdb" "GeoIP.dat" "GeoSite.dat"; do
+        [ "${local_ok[$f]}" -eq 1 ] && any_local=1
+    done
+
+    if [ "$any_local" -eq 0 ]; then
+        warn "GeoData preload skipped: no GeoData files could be downloaded locally"
         rm -rf "$tmpdir"
         return 0
     fi
@@ -143,19 +168,24 @@ sync_geodata_to_router() {
         return 0
     fi
 
-    if [ "$geoip_local" -eq 1 ] && [ -s "$tmpdir/GeoIP.dat" ]; then
-        scp "${SCP_OPTS[@]}" "$tmpdir/GeoIP.dat" "${TARGET}:${remote_dir}/GeoIP.dat" \
-            && ok "GeoIP.dat uploaded to ${remote_dir}/GeoIP.dat" \
-            || warn "Failed to upload GeoIP.dat to router"
+    local uploaded_files=""
+    for f in "country.mmdb" "GeoIP.dat" "GeoSite.dat"; do
+        if [ "${local_ok[$f]}" -eq 1 ] && [ -s "$tmpdir/$f" ]; then
+            if scp "${SCP_OPTS[@]}" "$tmpdir/$f" "${TARGET}:${remote_dir}/$f"; then
+                ok "$f uploaded to ${remote_dir}/$f"
+                uploaded_files="$uploaded_files $remote_dir/$f"
+            else
+                warn "Failed to upload $f to router"
+            fi
+        fi
+    done
+
+    if [ -n "$uploaded_files" ]; then
+        # shellcheck disable=SC2086
+        ssh "${SSH_OPTS[@]}" "$TARGET" "chmod 644$uploaded_files 2>/dev/null || true" \
+            >/dev/null 2>&1 || true
     fi
 
-    if [ "$geosite_local" -eq 1 ] && [ -s "$tmpdir/GeoSite.dat" ]; then
-        scp "${SCP_OPTS[@]}" "$tmpdir/GeoSite.dat" "${TARGET}:${remote_dir}/GeoSite.dat" \
-            && ok "GeoSite.dat uploaded to ${remote_dir}/GeoSite.dat" \
-            || warn "Failed to upload GeoSite.dat to router"
-    fi
-
-    ssh "${SSH_OPTS[@]}" "$TARGET" "chmod 644 $remote_dir/GeoIP.dat $remote_dir/GeoSite.dat 2>/dev/null || true" >/dev/null 2>&1 || true
     rm -rf "$tmpdir"
 }
 
@@ -440,6 +470,38 @@ if [ "$ACTION" = "deploy" ]; then
     _sync "openwrt/files/etc/metaclash/postinst.sh"                         "ipk/CONTROL/postinst"
     _sync "openwrt/files/etc/metaclash/prerm.sh"                            "ipk/CONTROL/prerm"
     _sync "openwrt/files/etc/metaclash/postrm.sh"                           "ipk/CONTROL/postrm"
+
+    # ── 4.5. Pre-seed GeoData into IPK staging (best-effort, mirrors CI) ────────
+    log "── Step 4.5: Pre-seeding GeoData into ipk/usr/share/metaclash/"
+    mkdir -p "$REPO_ROOT/ipk/usr/share/metaclash"
+    _geodata_seeded=0
+    _gd_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/clashforge-geodata.XXXXXX" 2>/dev/null)" || _gd_tmpdir=""
+    if [ -n "$_gd_tmpdir" ]; then
+        _seed_file() {
+            local name="$1" dest="$2/usr/share/metaclash/$3"; shift 3
+            [ -s "$dest" ] && { ok "$name already in staging, skip download"; return 0; }
+            download_with_fallback "$name" "$_gd_tmpdir/$name" "$@" || return 1
+            cp "$_gd_tmpdir/$name" "$dest" && ok "$name staged → ipk/usr/share/metaclash/"
+        }
+        _seed_file country.mmdb "$REPO_ROOT" country.mmdb \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb" \
+            && _geodata_seeded=$((_geodata_seeded + 1)) || true
+        _seed_file GeoIP.dat "$REPO_ROOT" GeoIP.dat \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
+            && _geodata_seeded=$((_geodata_seeded + 1)) || true
+        _seed_file GeoSite.dat "$REPO_ROOT" GeoSite.dat \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
+            && _geodata_seeded=$((_geodata_seeded + 1)) || true
+        rm -rf "$_gd_tmpdir"
+    fi
+    if [ "$_geodata_seeded" -eq 3 ]; then
+        ok "All 3 GeoData files bundled into IPK staging"
+    else
+        warn "GeoData pre-seed partial ($_geodata_seeded/3 files) — sync_geodata_to_router will fill gaps after install"
+    fi
 
     # ── 5. Build IPK ─────────────────────────────────────────────────────────
     log "── Step 5: Building IPK ($IPK_NAME)"

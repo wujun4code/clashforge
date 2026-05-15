@@ -1082,9 +1082,10 @@ cmd_diag() {
       fi
     done
 
-    _diag_section "【16】/etc/metaclash directory structure"
-    find /etc/metaclash /etc/clashforge 2>/dev/null -maxdepth 4 | head -60 || true
+    _diag_section "【16】/etc/metaclash and /usr/share/metaclash directory structure"
+    find /etc/metaclash /etc/clashforge /usr/share/metaclash 2>/dev/null -maxdepth 4 | head -80 || true
     ls -laR /etc/metaclash 2>/dev/null | head -80 || true
+    ls -laR /usr/share/metaclash 2>/dev/null | head -20 || true
 
     _diag_section "【17】Connectivity probes"
     echo "--- Direct ipify (no proxy) ---"

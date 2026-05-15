@@ -77,6 +77,15 @@ else
   ip rule del fwmark 0x1 table 1 2>/dev/null || true
 fi
 
+# Seed bundled GeoData to data_dir on fresh install only.
+# Skipped if files already exist so auto-updated versions are preserved on upgrade.
+for _gf in country.mmdb GeoIP.dat GeoSite.dat; do
+  if [ ! -f "/etc/metaclash/$_gf" ] && [ -f "/usr/share/metaclash/$_gf" ]; then
+    cp "/usr/share/metaclash/$_gf" "/etc/metaclash/$_gf"
+    echo "ClashForge: seeded $_gf from bundle"
+  fi
+done
+
 /etc/init.d/clashforge enable 2>/dev/null || true
 /etc/init.d/clashforge start 2>/dev/null || true
 
