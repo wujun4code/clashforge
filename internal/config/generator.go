@@ -40,11 +40,8 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	out["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
 	out["unified-delay"] = true
 	out["tcp-concurrent"] = true
-	out["geodata-mode"] = false
-	out["geox-url"] = map[string]string{
-		"mmdb":    filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "country.mmdb")),
-		"geosite": filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "GeoSite.dat")),
-	}
+	out["geodata-mode"] = cfg.Core.GeoDataMode
+	out["geodata-path"] = filepath.ToSlash(cfg.Core.DataDir)
 
 	// DNS 配置
 	if cfg.DNS.Enable {
@@ -241,11 +238,8 @@ func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscri
 	}
 
 	// Enforce local geodata so ClashForge-managed files are used
-	base["geodata-mode"] = false
-	base["geox-url"] = map[string]string{
-		"mmdb":    filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "country.mmdb")),
-		"geosite": filepath.ToSlash(filepath.Join(cfg.Core.DataDir, "GeoSite.dat")),
-	}
+	base["geodata-mode"] = cfg.Core.GeoDataMode
+	base["geodata-path"] = filepath.ToSlash(cfg.Core.DataDir)
 
 	// Append proxy nodes from other (nodes-only) subscriptions, deduplicating by name
 	if len(extraNodes) > 0 {
@@ -404,6 +398,8 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 	merged["external-controller"] = fmt.Sprintf("127.0.0.1:%d", cfg.Ports.MihomoAPI)
 	merged["tcp-concurrent"] = true
 	merged["unified-delay"] = true
+	merged["geodata-mode"] = cfg.Core.GeoDataMode
+	merged["geodata-path"] = filepath.ToSlash(cfg.Core.DataDir)
 	// ClashForge owns the mihomo API endpoint (localhost-only); strip any secret
 	// the user may have imported so our proxy handler can always reach it unauthenticated.
 	delete(merged, "secret")

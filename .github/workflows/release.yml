@@ -119,12 +119,59 @@ jobs:
           retention-days: 1
 
   # ────────────────────────────────────────────────────────────
+  # Stage 2.5: Download latest GeoData files once, reused by all packages
+  # ────────────────────────────────────────────────────────────
+  download-geodata:
+    name: Download GeoData files
+    runs-on: ubuntu-latest
+    needs: build-ui
+    steps:
+      - name: Download geodata files
+        run: |
+          mkdir -p geodata
+
+          download_file() {
+            local name="$1" dest="$2"; shift 2
+            for url in "$@"; do
+              echo "  → trying $url"
+              if curl -fsSL --max-time 120 -o "$dest" "$url"; then
+                echo "  ✓ $name  $(du -sh "$dest" | cut -f1)"
+                return 0
+              fi
+              echo "  ✗ failed, trying next mirror…"
+            done
+            echo "ERROR: all mirrors failed for $name" >&2
+            return 1
+          }
+
+          download_file country.mmdb geodata/country.mmdb \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"
+
+          download_file GeoIP.dat geodata/GeoIP.dat \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+
+          download_file GeoSite.dat geodata/GeoSite.dat \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+
+          ls -lh geodata/
+
+      - name: Upload geodata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodata
+          path: geodata/
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────
   # Stage 3: Package OpenWrt IPK for each platform
   # ────────────────────────────────────────────────────────────
   package-ipk:
     name: Package IPK (${{ matrix.pkg_arch }})
     runs-on: ubuntu-latest
-    needs: [build-ui, build-binaries]
+    needs: [build-ui, build-binaries, download-geodata]
 
     strategy:
       matrix:
@@ -170,6 +217,12 @@ jobs:
           echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
           echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
 
+      - name: Download geodata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geodata
+          path: geodata/
+
       - name: Build IPK
         run: |
           VERSION="${{ steps.version.outputs.pkg_version }}"
@@ -185,6 +238,13 @@ jobs:
           mkdir -p ipk/usr/share/luci/menu.d
           mkdir -p ipk/www/luci-static/resources/view/clashforge
           mkdir -p ipk/usr/share/rpcd/acl.d
+
+          # Bundle GeoData (postinst seeds these to /etc/metaclash on fresh install)
+          cp geodata/country.mmdb ipk/usr/share/metaclash/country.mmdb
+          cp geodata/GeoIP.dat    ipk/usr/share/metaclash/GeoIP.dat
+          cp geodata/GeoSite.dat  ipk/usr/share/metaclash/GeoSite.dat
+          echo "GeoData sizes:"
+          ls -lh ipk/usr/share/metaclash/
 
           # Binaries
           cp dist/clashforge-${{ matrix.binary_suffix }} ipk/usr/bin/clashforge
@@ -259,7 +319,7 @@ jobs:
   package-apk:
     name: Package APK (${{ matrix.pkg_arch }})
     runs-on: ubuntu-latest
-    needs: [build-ui, build-binaries]
+    needs: [build-ui, build-binaries, download-geodata]
 
     strategy:
       matrix:
@@ -312,6 +372,12 @@ jobs:
           echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
           echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
 
+      - name: Download geodata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geodata
+          path: geodata/
+
       - name: Build APK
         run: |
           ARCH="${{ matrix.pkg_arch }}"
@@ -328,6 +394,13 @@ jobs:
           mkdir -p apk-root/usr/share/rpcd/acl.d
           mkdir -p apk-root/lib/apk/packages
           mkdir -p apk-scripts
+
+          # Bundle GeoData (postinst seeds these to /etc/metaclash on fresh install)
+          cp geodata/country.mmdb apk-root/usr/share/metaclash/country.mmdb
+          cp geodata/GeoIP.dat    apk-root/usr/share/metaclash/GeoIP.dat
+          cp geodata/GeoSite.dat  apk-root/usr/share/metaclash/GeoSite.dat
+          echo "GeoData sizes:"
+          ls -lh apk-root/usr/share/metaclash/
 
           # Binaries
           cp dist/clashforge-${{ matrix.binary_suffix }} apk-root/usr/bin/clashforge

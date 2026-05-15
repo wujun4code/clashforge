@@ -179,6 +179,24 @@ export function Settings() {
               ]}
             />
           </Field>
+          <Field label="GeoData 格式" hint="false = mmdb 格式（country.mmdb），true = dat 格式（GeoIP.dat / GeoSite.dat）">
+            <div className="flex gap-2">
+              {([false, true] as const).map(v => (
+                <button
+                  key={String(v)}
+                  onClick={() => set(['core', 'geodata_mode'], v)}
+                  className={[
+                    'rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors',
+                    get(['core', 'geodata_mode']) === v
+                      ? 'border-brand bg-brand/10 text-brand'
+                      : 'border-white/10 bg-surface-2 text-slate-400 hover:border-white/20 hover:text-white',
+                  ].join(' ')}
+                >
+                  {v ? 'dat 模式' : 'mmdb 模式'}
+                </button>
+              ))}
+            </div>
+          </Field>
         </div>
       </SectionCard>
 

@@ -196,55 +196,54 @@ func TestGenerate_LogLevelFallback(t *testing.T) {
 	}
 }
 
-func TestGenerate_GeodataModeIsFalse(t *testing.T) {
+func TestGenerate_GeodataModeFollowsConfig(t *testing.T) {
 	cfg := defaultTestCfg()
+	cfg.Core.GeoDataMode = false
 	result, err := config.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-
 	if result["geodata-mode"] != false {
 		t.Errorf("expected geodata-mode=false, got %v", result["geodata-mode"])
 	}
+
+	cfg.Core.GeoDataMode = true
+	result, err = config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate (true): %v", err)
+	}
+	if result["geodata-mode"] != true {
+		t.Errorf("expected geodata-mode=true, got %v", result["geodata-mode"])
+	}
 }
 
-func TestGenerate_GeoxURLContainsBothPaths(t *testing.T) {
+func TestGenerate_GeodataPathPointsToDataDir(t *testing.T) {
 	cfg := defaultTestCfg()
 	result, err := config.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	geoxRaw, ok := result["geox-url"]
+	if _, hasGeox := result["geox-url"]; hasGeox {
+		t.Error("geox-url must not be set (local paths are not valid URLs; use geodata-path instead)")
+	}
+
+	pathRaw, ok := result["geodata-path"]
 	if !ok {
-		t.Fatal("geox-url key missing from generated config")
+		t.Fatal("geodata-path key missing from generated config")
 	}
-	geox, ok := geoxRaw.(map[string]string)
+	gotPath, ok := pathRaw.(string)
 	if !ok {
-		t.Fatalf("geox-url is not map[string]string, got %T", geoxRaw)
+		t.Fatalf("geodata-path is not a string, got %T", pathRaw)
 	}
 
-	mmdb, hasMmdb := geox["mmdb"]
-	geosite, hasGeosite := geox["geosite"]
-
-	if !hasMmdb {
-		t.Error("geox-url missing mmdb key")
-	}
-	if !hasGeosite {
-		t.Error("geox-url missing geosite key")
-	}
-
-	// Both paths must be rooted under DataDir, not a stale /usr/share/metaclash path.
-	dataDir := cfg.Core.DataDir
-	if hasMmdb && !strings.HasPrefix(mmdb, strings.ReplaceAll(dataDir, `\`, "/")) {
-		t.Errorf("geox-url.mmdb %q does not start with DataDir %q", mmdb, dataDir)
-	}
-	if hasGeosite && !strings.HasPrefix(geosite, strings.ReplaceAll(dataDir, `\`, "/")) {
-		t.Errorf("geox-url.geosite %q does not start with DataDir %q", geosite, dataDir)
+	dataDir := strings.ReplaceAll(cfg.Core.DataDir, `\`, "/")
+	if gotPath != dataDir {
+		t.Errorf("geodata-path %q does not equal DataDir %q", gotPath, dataDir)
 	}
 }
 
-func TestGenerateFromBase_GeodataModeIsFalse(t *testing.T) {
+func TestGenerateFromBase_GeodataModeFollowsConfig(t *testing.T) {
 	rawYAML := []byte(`
 proxies: []
 proxy-groups:
@@ -255,6 +254,7 @@ rules:
   - MATCH,Proxy
 `)
 	cfg := config.Default()
+	cfg.Core.GeoDataMode = false
 	result, err := config.GenerateFromBase(cfg, rawYAML, nil)
 	if err != nil {
 		t.Fatalf("GenerateFromBase: %v", err)
@@ -264,19 +264,16 @@ rules:
 		t.Errorf("expected geodata-mode=false in GenerateFromBase output, got %v", result["geodata-mode"])
 	}
 
-	geoxRaw, ok := result["geox-url"]
+	if _, hasGeox := result["geox-url"]; hasGeox {
+		t.Error("geox-url must not be set in GenerateFromBase output (use geodata-path instead)")
+	}
+
+	pathRaw, ok := result["geodata-path"]
 	if !ok {
-		t.Fatal("geox-url key missing from GenerateFromBase output")
+		t.Fatal("geodata-path key missing from GenerateFromBase output")
 	}
-	geox, ok := geoxRaw.(map[string]string)
-	if !ok {
-		t.Fatalf("geox-url is not map[string]string, got %T", geoxRaw)
-	}
-	if _, hasMmdb := geox["mmdb"]; !hasMmdb {
-		t.Error("geox-url missing mmdb key in GenerateFromBase output")
-	}
-	if _, hasGeosite := geox["geosite"]; !hasGeosite {
-		t.Error("geox-url missing geosite key in GenerateFromBase output")
+	if _, ok := pathRaw.(string); !ok {
+		t.Fatalf("geodata-path is not a string, got %T", pathRaw)
 	}
 }
 

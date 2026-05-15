@@ -23,6 +23,8 @@ type CoreConfig struct {
 	GeositePath   string `toml:"geosite_path" json:"geosite_path"`
 	MaxRestarts   int    `toml:"max_restarts" json:"max_restarts"`
 	AutoStartCore bool   `toml:"auto_start_core" json:"auto_start_core"`
+	// GeoDataMode controls mihomo's geodata-mode: false=mmdb format, true=dat format
+	GeoDataMode bool `toml:"geodata_mode" json:"geodata_mode"`
 }
 
 type PortsConfig struct {
