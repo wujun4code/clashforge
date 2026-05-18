@@ -166,14 +166,26 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 		proxyServerNS = append(proxyServerNS, bootstrapIPs...)
 	}
 
+	// Prefer PPP-provided DNS (PPPoE WAN) over dhcp://iface. On PPPoE connections
+	// pppd writes ISP-assigned DNS to /tmp/resolv.conf.ppp; Mihomo's dhcp://iface
+	// only works for DHCP leases and silently returns nothing on PPPoE interfaces,
+	// causing all DNS queries to fall through to the fallback (Cloudflare/Google)
+	// and domestic domains to receive overseas CDN IPs.
+	var nameserverList []string
+	if pppDNS := PPPNameservers(); len(pppDNS) > 0 {
+		nameserverList = pppDNS
+		log.Info().Strs("ppp_dns", pppDNS).Msg("config: 检测到 PPPoE WAN，使用 PPP 提供的 ISP DNS 作为 nameserver")
+	} else {
+		nameserverList = []string{"dhcp://" + wanIface}
+		log.Info().Str("iface", wanIface).Msg("config: 使用 dhcp://iface 作为 nameserver")
+	}
+
 	dnsMap := map[string]interface{}{
 		"enable":        true,
 		"listen":        fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS),
 		"ipv6":          cfg.DNS.IPv6,
 		"respect-rules": false,
-		// dhcp:// reads the DNS servers assigned to the WAN interface via DHCP,
-		// so Mihomo always uses the ISP-provided DNS for local domain resolution.
-		"nameserver": []string{"dhcp://" + wanIface},
+		"nameserver":    nameserverList,
 	}
 
 	if cfg.DNS.Mode == "fake-ip" {
