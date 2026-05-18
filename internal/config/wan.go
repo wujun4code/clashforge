@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -75,6 +76,44 @@ func defaultRouteIface() string {
 		}
 	}
 	return ""
+}
+
+// PPPNameservers reads ISP DNS servers from PPP-provided resolv.conf files.
+// PPPoE WAN connections receive DNS from the PPP server and pppd writes them
+// to well-known paths rather than a DHCP lease, so dhcp://iface won't work.
+func PPPNameservers() []string {
+	candidates := []string{
+		"/tmp/resolv.conf.ppp",
+		"/etc/ppp/resolv.conf",
+		"/tmp/ppp/resolv.conf",
+	}
+	for _, path := range candidates {
+		if servers := readNameserversFromFile(path); len(servers) > 0 {
+			return servers
+		}
+	}
+	return nil
+}
+
+func readNameserversFromFile(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var servers []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "nameserver ") {
+			continue
+		}
+		ip := strings.TrimSpace(strings.TrimPrefix(line, "nameserver "))
+		if net.ParseIP(ip) != nil {
+			servers = append(servers, ip)
+		}
+	}
+	return servers
 }
 
 // uciWANIface queries OpenWrt's UCI for the WAN device name.
