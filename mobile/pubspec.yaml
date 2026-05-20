@@ -26,6 +26,3 @@ flutter:
   assets:
     - assets/geodata/country.mmdb
     - assets/geodata/geosite.dat
-    - assets/mihomo/arm64-v8a
-    - assets/mihomo/armeabi-v7a
-    - assets/mihomo/x86_64
