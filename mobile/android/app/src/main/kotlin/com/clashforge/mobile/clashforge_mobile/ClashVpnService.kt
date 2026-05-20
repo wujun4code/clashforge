@@ -169,10 +169,6 @@ tun:
 
         LogEventBridge.info("assets", "Extracting assets", mapOf("version" to currentVersion))
 
-        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-        LogEventBridge.debug("assets", "Device ABI", mapOf("abi" to abi))
-
-        extractAsset("flutter_assets/assets/mihomo/$abi",          File(filesDir, "mihomo"),       executable = true)
         extractAsset("flutter_assets/assets/geodata/country.mmdb", File(filesDir, "country.mmdb"))
         extractAsset("flutter_assets/assets/geodata/geosite.dat",  File(filesDir, "geosite.dat"))
 
@@ -197,7 +193,8 @@ tun:
 
     private fun startMihomoCore() {
         val appDir     = filesDir.absolutePath
-        val coreBin    = File(appDir, "mihomo")
+        // nativeLibraryDir is on an executable partition; filesDir is mounted noexec on API 29+
+        val coreBin    = File(applicationInfo.nativeLibraryDir, "libmihomo.so")
         val configFile = File(appDir, "config.yaml")
 
         if (!coreBin.exists()) {
