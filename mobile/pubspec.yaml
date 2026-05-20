@@ -2,7 +2,7 @@ name: clashforge_mobile
 description: "ClashForge Mobile VPN Client"
 publish_to: 'none'
 
-version: 0.1.0+1
+version: 0.1.0+34
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
