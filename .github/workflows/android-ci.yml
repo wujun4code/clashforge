@@ -97,6 +97,18 @@ jobs:
             https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
           ls -lh mobile/assets/geodata/
 
+      # Build APK outside the emulator runner so working-directory applies correctly.
+      # android-emulator-runner@v2 runs each script: line in a separate sh -c invocation,
+      # so "cd mobile" on one line does NOT persist to the next line's flutter call.
+      - name: Pre-build debug APK (SUBSCRIPTION_URL embedded at compile time)
+        run: |
+          flutter build apk --debug \
+            "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
+            2>&1 | tail -20
+        working-directory: mobile
+        env:
+          SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
+
       - name: Run Android E2E Tests inside Emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -108,16 +120,10 @@ jobs:
           profile: Nexus 6
           script: |
             set -e
-            cd mobile
 
-            # ── Pre-install debug APK so we can grant VPN permission ────
-            echo "Building debug APK…"
-            flutter build apk --debug \
-              "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
-              2>&1 | tail -15
-
+            # ── Install pre-built APK ────────────────────────────────────
             echo "Installing debug APK…"
-            adb install -r build/app/outputs/flutter-apk/app-debug.apk
+            adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-debug.apk"
 
             # ── Pre-grant VPN service permission (bypasses system dialog) ─
             echo "Granting VPN permission via appops…"
@@ -126,9 +132,9 @@ jobs:
               ESTABLISH_VPN_SERVICE allow
             echo "VPN permission granted"
 
-            # ── Run integration test (reinstalls APK, permission persists) ─
+            # ── Run integration test ─────────────────────────────────────
             echo "Running E2E integration test…"
-            flutter test integration_test/app_e2e_test.dart \
+            cd "${GITHUB_WORKSPACE}/mobile" && flutter test integration_test/app_e2e_test.dart \
               "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
               --reporter=expanded \
               --timeout=300s
