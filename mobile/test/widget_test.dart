@@ -7,7 +7,7 @@ void main() {
     await tester.pumpWidget(const ClashForgeApp());
 
     expect(find.text('ClashForge'), findsOneWidget);
-    expect(find.byIcon(Icons.shield_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.power_settings_new), findsOneWidget);
     expect(find.text('Tap to connect'), findsOneWidget);
     expect(find.text('No node selected'), findsOneWidget);
 
