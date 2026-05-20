@@ -120,21 +120,9 @@ jobs:
           profile: Nexus 6
           script: |
             set -e
-
-            # ── Install pre-built APK ────────────────────────────────────
             echo "Installing debug APK…"
             adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-debug.apk"
-
-            # ── Pre-grant VPN service permission (bypasses system dialog) ─
             echo "Granting VPN permission via appops…"
-            adb shell cmd appops set \
-              com.clashforge.mobile.clashforge_mobile \
-              ESTABLISH_VPN_SERVICE allow
-            echo "VPN permission granted"
-
-            # ── Run integration test ─────────────────────────────────────
-            echo "Running E2E integration test…"
-            cd "${GITHUB_WORKSPACE}/mobile" && flutter test integration_test/app_e2e_test.dart \
-              "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
-              --reporter=expanded \
-              --timeout=300s
+            adb shell cmd appops set com.clashforge.mobile.clashforge_mobile ESTABLISH_VPN_SERVICE allow
+            echo "VPN permission granted — running E2E integration test…"
+            cd "${GITHUB_WORKSPACE}/mobile" && flutter test integration_test/app_e2e_test.dart "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" --reporter=expanded --timeout=300s
