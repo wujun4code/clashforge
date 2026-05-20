@@ -6,13 +6,15 @@ void main() {
   testWidgets('ClashForgeApp layout test', (WidgetTester tester) async {
     await tester.pumpWidget(const ClashForgeApp());
 
-    // Verify title and main widgets are present
-    expect(find.text('ClashForge Mobile'), findsOneWidget);
-    expect(find.byIcon(Icons.power_settings_new), findsOneWidget);
-    expect(find.text('Disconnected'), findsOneWidget);
-    expect(find.text('No proxy nodes loaded.'), findsOneWidget);
+    expect(find.text('ClashForge'), findsOneWidget);
+    expect(find.byIcon(Icons.shield_outlined), findsOneWidget);
+    expect(find.text('Tap to connect'), findsOneWidget);
+    expect(find.text('No node selected'), findsOneWidget);
 
-    // Verify Import button is present
-    expect(find.text('Import'), findsOneWidget);
+    // Navigation bar tabs
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Proxies'), findsOneWidget);
+    expect(find.text('Subscriptions'), findsOneWidget);
+    expect(find.text('Logs'), findsOneWidget);
   });
 }
