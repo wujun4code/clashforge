@@ -5,7 +5,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.system.Os
-import android.system.OsConstants
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -92,19 +91,24 @@ class ClashVpnService : VpnService(), Runnable {
             }
 
             val tunFd = vpnInterface!!.fd
-            val tunFileDes = vpnInterface!!.fileDescriptor
             LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
 
-            // Allow mihomo to inherit the TUN fd across exec()
+            // Os.dup() creates a copy of the fd WITHOUT FD_CLOEXEC (by POSIX spec),
+            // so mihomo's child process can inherit it via /proc/self/fd/N.
+            var inheritableFd = tunFd
             try {
-                Os.fcntl(tunFileDes, OsConstants.F_SETFD, 0)
-                LogEventBridge.debug("vpn", "Cleared CLOEXEC on TUN fd", mapOf("fd" to tunFd))
+                val dupFileDes = Os.dup(vpnInterface!!.fileDescriptor)
+                val fdField = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
+                fdField.isAccessible = true
+                inheritableFd = fdField.getInt(dupFileDes)
+                LogEventBridge.debug("vpn", "Duplicated TUN fd (no CLOEXEC)",
+                    mapOf("orig" to tunFd, "dup" to inheritableFd))
             } catch (e: Exception) {
-                LogEventBridge.warn("vpn", "Could not clear CLOEXEC: ${e.message}")
+                LogEventBridge.warn("vpn", "Could not dup TUN fd, using original: ${e.message}")
             }
 
-            // Patch config.yaml with the TUN section now that fd is known
-            patchConfigWithTun(tunFd)
+            // Patch config.yaml with the TUN section now that an inheritable fd is known
+            patchConfigWithTun(inheritableFd)
 
             startMihomoCore()
 
