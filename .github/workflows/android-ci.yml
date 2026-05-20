@@ -76,6 +76,4 @@ jobs:
           target: default
           arch: x86_64
           profile: Nexus 6
-          script: |
-            cd mobile
-            flutter test test/subscription_parser_test.dart
+          script: cd mobile && flutter test test/subscription_parser_test.dart
