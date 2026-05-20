@@ -161,14 +161,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _onNodesImported(List<ProxyNode> nodes, {String url = ''}) {
+  void _onNodesImported(List<ProxyNode> nodes, {String url = '', String nickname = ''}) {
     setState(() {
       _nodes
         ..clear()
         ..addAll(nodes);
       _selectedNode ??= nodes.isEmpty ? null : nodes.first;
     });
-    SubscriptionStore.save(nodes, url: url);
+    SubscriptionStore.save(nodes, url: url, nickname: nickname);
   }
 
   void _onNodeSelected(ProxyNode node) {
@@ -217,14 +217,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final res = await VpnManager.startVpn();
         logger.info('vpn', 'VPN start result: $res');
-        setState(() {
-          _isConnected = true;
-          _connectionStatus = 'Connected ($res)';
-        });
+        if (res == 'permission_needed') {
+          // VPN permission dialog shown; service starts asynchronously via onActivityResult.
+          // Keep _isConnected = false so the user can tap again once permission is granted.
+          setState(() => _connectionStatus = 'VPN permission requested — tap again after granting');
+        } else {
+          setState(() {
+            _isConnected = true;
+            _connectionStatus = 'Connected';
+          });
+        }
       }
     } catch (e, st) {
       logger.error('vpn', 'VPN toggle failed: $e', fields: {'stack': st.toString().split('\n').first});
-      setState(() => _connectionStatus = 'Error: $e');
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = 'Error: $e';
+      });
     } finally {
       setState(() => _isConnecting = false);
     }
@@ -247,8 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onSelect: _onNodeSelected,
       ),
       _SubscriptionsTab(onImported: _onNodesImported),
-      const _LogsTab(),
-      _AboutTab(nodeCount: _nodes.length),
+      _SettingsTab(nodeCount: _nodes.length),
     ];
 
     return Scaffold(
@@ -275,14 +283,9 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Subscriptions',
           ),
           NavigationDestination(
-            icon: Icon(Icons.terminal_outlined),
-            selectedIcon: Icon(Icons.terminal),
-            label: 'Logs',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.info_outline),
-            selectedIcon: Icon(Icons.info),
-            label: 'About',
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: 'Settings',
           ),
         ],
       ),
@@ -534,7 +537,7 @@ class _ProxiesTab extends StatelessWidget {
 // Tab 3 — Subscriptions
 // ─────────────────────────────────────────────────────────────
 
-typedef _OnImported = void Function(List<ProxyNode> nodes, {String url});
+typedef _OnImported = void Function(List<ProxyNode> nodes, {String url, String nickname});
 
 class _SubscriptionsTab extends StatefulWidget {
   const _SubscriptionsTab({required this.onImported});
@@ -592,12 +595,70 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       if (nodes.isEmpty) {
         logger.warn('subscription', 'No nodes parsed — check subscription format');
       }
-      widget.onImported(nodes, url: input.startsWith('http') ? input : '');
-      setState(() { _loading = false; _success = true; _message = 'Imported ${nodes.length} nodes successfully'; });
+
+      // Ask user for a nickname before saving
+      final defaultName = await SubscriptionStore.generateDefaultNickname();
+      if (!mounted) return;
+      final nickname = await _showNicknameDialog(defaultName);
+      if (!mounted) return;
+      if (nickname == null) {
+        setState(() { _loading = false; _success = false; _message = null; });
+        return;
+      }
+
+      widget.onImported(nodes, url: input.startsWith('http') ? input : '', nickname: nickname);
+      setState(() { _loading = false; _success = true; _message = 'Imported ${nodes.length} nodes as "$nickname"'; });
     } catch (e) {
       logger.error('subscription', 'Import error: $e');
       setState(() { _loading = false; _success = false; _message = 'Error: $e'; });
     }
+  }
+
+  Future<String?> _showNicknameDialog(String defaultName) async {
+    final controller = TextEditingController(text: defaultName);
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16161E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Name this subscription',
+            style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          decoration: InputDecoration(
+            hintText: 'e.g. Work VPN',
+            hintStyle: const TextStyle(color: Colors.white38),
+            filled: true,
+            fillColor: const Color(0xFF0A0A0F),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.white12)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.white12)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF00B4D8))),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF00B4D8),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              final name = controller.text.trim();
+              Navigator.pop(ctx, name.isEmpty ? defaultName : name);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -696,7 +757,115 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Tab 4 — Logs
+// Tab 4 — Settings
+// ─────────────────────────────────────────────────────────────
+
+class _SettingsTab extends StatelessWidget {
+  const _SettingsTab({required this.nodeCount});
+  final int nodeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 20, 24, 20),
+            child: Text('Settings',
+                style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
+          ),
+          _SettingsTile(
+            icon: Icons.terminal_outlined,
+            title: 'Logs',
+            subtitle: 'View runtime and system logs',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const Scaffold(
+                backgroundColor: Color(0xFF0A0A0F),
+                body: _LogsTab(),
+              )),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _SettingsTile(
+            icon: Icons.info_outline,
+            title: 'About',
+            subtitle: 'App version, runtime status, memory',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => Scaffold(
+                backgroundColor: const Color(0xFF0A0A0F),
+                body: _AboutTab(nodeCount: nodeCount),
+              )),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF16161E),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00B4D8).withAlpha(20),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: const Color(0xFF00B4D8), size: 20),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
+                    const SizedBox(height: 2),
+                    Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 13)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Colors.white24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Logs screen (also reachable from Settings)
 // ─────────────────────────────────────────────────────────────
 
 class _LogsTab extends StatefulWidget {
@@ -770,9 +939,15 @@ class _LogsTabState extends State<_LogsTab> {
         children: [
           // Header
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+            padding: const EdgeInsets.fromLTRB(8, 16, 12, 8),
             child: Row(
               children: [
+                if (Navigator.canPop(context))
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white54),
+                    onPressed: () => Navigator.pop(context),
+                    padding: EdgeInsets.zero,
+                  ),
                 const Text('Logs',
                     style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
                 const Spacer(),
@@ -1016,6 +1191,12 @@ class _AboutTabState extends State<_AboutTab> {
           children: [
             const SizedBox(height: 20),
             Row(children: [
+              if (Navigator.canPop(context))
+                IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.white54),
+                  onPressed: () => Navigator.pop(context),
+                  padding: EdgeInsets.zero,
+                ),
               const Text('About', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
               const Spacer(),
               if (_loading)

@@ -14,7 +14,6 @@ void main() {
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Proxies'), findsOneWidget);
     expect(find.text('Subscriptions'), findsOneWidget);
-    expect(find.text('Logs'), findsOneWidget);
-    expect(find.text('About'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
   });
 }
