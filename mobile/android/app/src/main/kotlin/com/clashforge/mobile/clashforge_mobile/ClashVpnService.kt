@@ -92,11 +92,12 @@ class ClashVpnService : VpnService(), Runnable {
             }
 
             val tunFd = vpnInterface!!.fd
+            val tunFileDes = vpnInterface!!.fileDescriptor
             LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
 
             // Allow mihomo to inherit the TUN fd across exec()
             try {
-                Os.fcntl(tunFd, OsConstants.F_SETFD, 0)
+                Os.fcntl(tunFileDes, OsConstants.F_SETFD, 0)
                 LogEventBridge.debug("vpn", "Cleared CLOEXEC on TUN fd", mapOf("fd" to tunFd))
             } catch (e: Exception) {
                 LogEventBridge.warn("vpn", "Could not clear CLOEXEC: ${e.message}")
