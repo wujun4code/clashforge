@@ -5,11 +5,77 @@ import 'package:http/http.dart' as http;
 import 'subscription/subscription_parser.dart';
 import 'subscription/proxy_node.dart';
 import 'config/vpn_manager.dart';
+import 'config/config_generator.dart';
 import 'logger/app_logger.dart';
 import 'logger/log_entry.dart';
 
 void main() {
   runApp(const ClashForgeApp());
+}
+
+// ─── Minimal YAML serialiser (no external dependency) ────────────────────────
+
+String _mapToYaml(Map<String, dynamic> m) {
+  final buf = StringBuffer();
+  _writeYamlMap(buf, m, 0);
+  return buf.toString();
+}
+
+void _writeYamlMap(StringBuffer buf, Map<String, dynamic> m, int depth) {
+  final pad = '  ' * depth;
+  for (final e in m.entries) {
+    final v = e.value;
+    if (v is Map<String, dynamic>) {
+      buf.writeln('$pad${e.key}:');
+      _writeYamlMap(buf, v, depth + 1);
+    } else if (v is List) {
+      buf.writeln('$pad${e.key}:');
+      _writeYamlList(buf, v, depth + 1);
+    } else {
+      buf.writeln('$pad${e.key}: ${_yamlScalar(v)}');
+    }
+  }
+}
+
+void _writeYamlList(StringBuffer buf, List<dynamic> list, int depth) {
+  final pad = '  ' * depth;
+  for (final item in list) {
+    if (item is Map<String, dynamic>) {
+      var first = true;
+      for (final e in item.entries) {
+        final prefix = first ? '$pad- ' : '$pad  ';
+        final v = e.value;
+        if (v is List) {
+          buf.writeln('$prefix${e.key}:');
+          _writeYamlList(buf, v, depth + 1);
+        } else if (v is Map<String, dynamic>) {
+          buf.writeln('$prefix${e.key}:');
+          _writeYamlMap(buf, v, depth + 2);
+        } else {
+          buf.writeln('$prefix${e.key}: ${_yamlScalar(v)}');
+        }
+        first = false;
+      }
+    } else {
+      buf.writeln('$pad- ${_yamlScalar(item)}');
+    }
+  }
+}
+
+String _yamlScalar(dynamic v) {
+  if (v is bool || v is int || v is double) return v.toString();
+  final s = v.toString();
+  // Quote strings that YAML could misparse
+  if (s.isEmpty ||
+      s.contains(':') ||
+      s.contains('#') ||
+      s.contains("'") ||
+      s.startsWith('*') ||
+      s.startsWith('!') ||
+      s == 'true' || s == 'false' || s == 'null') {
+    return '"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
+  }
+  return s;
 }
 
 class ClashForgeApp extends StatelessWidget {
@@ -123,6 +189,18 @@ class _HomeScreenState extends State<HomeScreen> {
           'server': _selectedNode!.server,
           'port': _selectedNode!.port,
         });
+
+        // Write mihomo config.yaml to native filesDir before starting VPN
+        final filesDir = await VpnManager.getFilesDir();
+        logger.debug('vpn', 'Writing config.yaml', fields: {'filesDir': filesDir});
+        final configMap = ConfigGenerator.generate(
+          nodes: _nodes,
+          geodataPath: filesDir,
+        );
+        final configYaml = _mapToYaml(configMap);
+        final writeResult = await VpnManager.writeConfig(configYaml);
+        logger.debug('vpn', 'Config write result: $writeResult');
+
         final res = await VpnManager.startVpn();
         logger.info('vpn', 'VPN start result: $res');
         setState(() {

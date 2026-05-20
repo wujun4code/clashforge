@@ -7,6 +7,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val VPN_CHANNEL = "com.clashforge.mobile/vpn"
@@ -31,6 +32,18 @@ class MainActivity : FlutterActivity() {
                 "stopVpn" -> {
                     stopVpnService()
                     result.success("stopped")
+                }
+                "getFilesDir" -> {
+                    result.success(filesDir.absolutePath)
+                }
+                "writeConfig" -> {
+                    val yaml = call.argument<String>("yaml") ?: ""
+                    try {
+                        File(filesDir, "config.yaml").writeText(yaml)
+                        result.success("written")
+                    } catch (e: Exception) {
+                        result.error("WRITE_FAILED", e.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }

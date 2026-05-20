@@ -60,6 +60,21 @@ jobs:
           curl -L -o mobile/assets/geodata/country.mmdb https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb
           curl -L -o mobile/assets/geodata/geosite.dat https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
 
+      - name: Download Mihomo Core
+        run: |
+          MIHOMO_VER=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
+          echo "Downloading mihomo $MIHOMO_VER"
+          mkdir -p mobile/assets/mihomo/
+          declare -A ABI_MAP=([arm64-v8a]=arm64 [armeabi-v7a]=armv7 [x86_64]=amd64)
+          for ABI in arm64-v8a armeabi-v7a x86_64; do
+            GOARCH="${ABI_MAP[$ABI]}"
+            curl -fL -o /tmp/mihomo.gz \
+              "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-android-${GOARCH}-${MIHOMO_VER}.gz"
+            gunzip /tmp/mihomo.gz
+            mv /tmp/mihomo "mobile/assets/mihomo/${ABI}"
+          done
+          ls -lh mobile/assets/mihomo/
+
       - name: Build Android APK
         run: |
           cd mobile

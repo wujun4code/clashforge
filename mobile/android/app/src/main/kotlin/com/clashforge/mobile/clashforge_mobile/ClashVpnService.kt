@@ -2,9 +2,11 @@ package com.clashforge.mobile.clashforge_mobile
 
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.File
+import java.io.FileOutputStream
 
 class ClashVpnService : VpnService(), Runnable {
     private var vpnThread: Thread? = null
@@ -66,6 +68,8 @@ class ClashVpnService : VpnService(), Runnable {
 
     override fun run() {
         try {
+            extractAssetsIfNeeded()
+
             LogEventBridge.info("vpn", "Building VPN interface", mapOf(
                 "addr" to "172.19.0.1/30",
                 "route" to "0.0.0.0/0",
@@ -103,6 +107,51 @@ class ClashVpnService : VpnService(), Runnable {
             ))
         } finally {
             stopVpn()
+        }
+    }
+
+    // Extract mihomo binary and geodata from Flutter assets to filesDir.
+    // Re-extracts whenever the app versionCode changes (i.e. on update).
+    private fun extractAssetsIfNeeded() {
+        val markerFile = File(filesDir, ".asset_version")
+        val currentVersion = packageManager
+            .getPackageInfo(packageName, 0)
+            .let { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode.toString() else @Suppress("DEPRECATION") it.versionCode.toString() }
+
+        if (markerFile.exists() && markerFile.readText().trim() == currentVersion) {
+            LogEventBridge.debug("assets", "Assets up-to-date, skipping extraction", mapOf("version" to currentVersion))
+            return
+        }
+
+        LogEventBridge.info("assets", "Extracting assets", mapOf("version" to currentVersion))
+
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        LogEventBridge.debug("assets", "Device ABI", mapOf("abi" to abi))
+
+        extractAsset("flutter_assets/assets/mihomo/$abi", File(filesDir, "mihomo"), executable = true)
+        extractAsset("flutter_assets/assets/geodata/country.mmdb", File(filesDir, "country.mmdb"))
+        extractAsset("flutter_assets/assets/geodata/geosite.dat", File(filesDir, "geosite.dat"))
+
+        markerFile.writeText(currentVersion)
+        LogEventBridge.info("assets", "Asset extraction complete")
+    }
+
+    private fun extractAsset(assetPath: String, dest: File, executable: Boolean = false) {
+        try {
+            assets.open(assetPath).use { input ->
+                FileOutputStream(dest).use { output -> input.copyTo(output) }
+            }
+            if (executable) dest.setExecutable(true)
+            LogEventBridge.debug("assets", "Extracted ${dest.name}", mapOf(
+                "size" to dest.length(),
+                "path" to dest.absolutePath
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract asset $assetPath", e)
+            LogEventBridge.error("assets", "Extract failed: ${dest.name}", mapOf(
+                "asset" to assetPath,
+                "error" to (e.message ?: "unknown")
+            ))
         }
     }
 

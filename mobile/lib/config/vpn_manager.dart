@@ -20,4 +20,22 @@ class VpnManager {
       return 'error: ${e.message}';
     }
   }
+
+  static Future<String> getFilesDir() async {
+    try {
+      final String result = await _channel.invokeMethod('getFilesDir');
+      return result;
+    } on PlatformException catch (e) {
+      return 'error: ${e.message}';
+    }
+  }
+
+  static Future<String> writeConfig(String yaml) async {
+    try {
+      final String result = await _channel.invokeMethod('writeConfig', {'yaml': yaml});
+      return result;
+    } on PlatformException catch (e) {
+      return 'error: ${e.message}';
+    }
+  }
 }
