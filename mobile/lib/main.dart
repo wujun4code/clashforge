@@ -23,7 +23,7 @@ class ClashForgeApp extends StatelessWidget {
         ),
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFF0A0A0F),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           color: const Color(0xFF16161E),
           elevation: 0,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
