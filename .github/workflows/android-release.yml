@@ -88,6 +88,21 @@ jobs:
           done
           ls -lh mobile/android/app/src/main/jniLibs/
 
+      - name: Configure Release Signing
+        env:
+          KEYSTORE_BASE64:    ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD:  ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS:          ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD:       ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > mobile/android/clashforge-release.p12
+          cat > mobile/android/key.properties <<EOF
+          storePassword=${KEYSTORE_PASSWORD}
+          keyPassword=${KEY_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          storeFile=../clashforge-release.p12
+          EOF
+
       - name: Build Android APK
         run: |
           cd mobile
