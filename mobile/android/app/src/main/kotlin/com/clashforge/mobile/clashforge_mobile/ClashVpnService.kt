@@ -30,13 +30,15 @@ class ClashVpnService : VpnService(), Runnable {
         return START_STICKY
     }
 
-    private synchronized fun startVpn() {
+    @Synchronized
+    private fun startVpn() {
         if (isRunning) return
         isRunning = true
         vpnThread = Thread(this, "ClashVpnThread").apply { start() }
     }
 
-    private synchronized fun stopVpn() {
+    @Synchronized
+    private fun stopVpn() {
         if (!isRunning) return
         isRunning = false
         
