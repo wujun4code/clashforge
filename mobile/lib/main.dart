@@ -402,6 +402,7 @@ class _HomeTab extends StatelessWidget {
               // ── VPN Power Button ─────────────────────────────
               Center(
                 child: GestureDetector(
+                  key: const Key('vpn_toggle'),
                   onTap: onToggle,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 400),
@@ -894,6 +895,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                   ),
                   const SizedBox(height: 14),
                   TextField(
+                    key: const Key('subscription_url_field'),
                     controller: _urlController,
                     style: const TextStyle(color: _kTextHi, fontSize: 14),
                     decoration: InputDecoration(
