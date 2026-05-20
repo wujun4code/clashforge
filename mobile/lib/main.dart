@@ -134,7 +134,35 @@ class _HomeScreenState extends State<HomeScreen> {
       AppLogger.instance.error('native', 'EventChannel error: $e');
     });
     AppLogger.instance.info('app', 'ClashForge started');
-  void _onNodesImported(List<ProxyNode> nodes, {String url = ''}) {    setState(() {
+    _loadPersistedData();
+  }
+
+  Future<void> _loadPersistedData() async {
+    final nodes = await SubscriptionStore.loadNodes();
+    if (nodes.isNotEmpty) {
+      setState(() {
+        _nodes.addAll(nodes);
+        _selectedNode = nodes.first;
+      });
+      AppLogger.instance.info('app', 'Loaded saved nodes', fields: {'count': nodes.length});
+    }
+  }
+
+  void _onNativeLog(dynamic event) {
+    try {
+      final map = json.decode(event as String) as Map<String, dynamic>;
+      final level = map['level'] as String? ?? 'info';
+      final component = map['component'] as String? ?? 'native';
+      final message = map['message'] as String? ?? '';
+      final fields = (map['fields'] as Map<String, dynamic>?) ?? {};
+      AppLogger.instance.log(level, component, message, fields: fields);
+    } catch (_) {
+      AppLogger.instance.debug('native', event.toString());
+    }
+  }
+
+  void _onNodesImported(List<ProxyNode> nodes, {String url = ''}) {
+    setState(() {
       _nodes
         ..clear()
         ..addAll(nodes);
@@ -220,11 +248,43 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       _SubscriptionsTab(onImported: _onNodesImported),
       const _LogsTab(),
+      _AboutTab(nodeCount: _nodes.length),
+    ];
+
+    return Scaffold(
+      body: tabs[_tabIndex],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (i) => setState(() => _tabIndex = i),
+        backgroundColor: const Color(0xFF16161E),
+        surfaceTintColor: Colors.transparent,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.shield_outlined),
+            selectedIcon: Icon(Icons.shield),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.language_outlined),
+            selectedIcon: Icon(Icons.language),
+            label: 'Proxies',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.cloud_download_outlined),
+            selectedIcon: Icon(Icons.cloud_download),
+            label: 'Subscriptions',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.terminal_outlined),
+            selectedIcon: Icon(Icons.terminal),
+            label: 'Logs',
+          ),
           NavigationDestination(
             icon: Icon(Icons.info_outline),
             selectedIcon: Icon(Icons.info),
             label: 'About',
-          ),        ],
+          ),
+        ],
       ),
     );
   }
@@ -532,7 +592,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       if (nodes.isEmpty) {
         logger.warn('subscription', 'No nodes parsed — check subscription format');
       }
-      widget.onImported(nodes, url: input.startsWith('http') ? input : '');      setState(() { _loading = false; _success = true; _message = 'Imported ${nodes.length} nodes successfully'; });
+      widget.onImported(nodes, url: input.startsWith('http') ? input : '');
+      setState(() { _loading = false; _success = true; _message = 'Imported ${nodes.length} nodes successfully'; });
     } catch (e) {
       logger.error('subscription', 'Import error: $e');
       setState(() { _loading = false; _success = false; _message = 'Error: $e'; });
