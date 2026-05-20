@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -16,16 +18,18 @@ class ClashVpnService : VpnService(), Runnable {
 
     companion object {
         const val ACTION_START = "com.clashforge.mobile.START"
-        const val ACTION_STOP = "com.clashforge.mobile.STOP"
-        private const val TAG = "ClashVpnService"
+        const val ACTION_STOP  = "com.clashforge.mobile.STOP"
+        private const val TAG  = "ClashVpnService"
+
+        @Volatile var vpnRunning     = false
+        @Volatile var mihomoRunning  = false
+        @Volatile var mihomoPid      = -1
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-        if (ACTION_START == action) {
-            startVpn()
-        } else if (ACTION_STOP == action) {
-            stopVpn()
+        when (intent?.action) {
+            ACTION_START -> startVpn()
+            ACTION_STOP  -> stopVpn()
         }
         return START_STICKY
     }
@@ -36,7 +40,8 @@ class ClashVpnService : VpnService(), Runnable {
             LogEventBridge.warn("vpn", "startVpn called but already running")
             return
         }
-        isRunning = true
+        isRunning  = true
+        vpnRunning = true
         LogEventBridge.info("vpn", "Starting VPN thread")
         vpnThread = Thread(this, "ClashVpnThread").apply { start() }
     }
@@ -47,16 +52,17 @@ class ClashVpnService : VpnService(), Runnable {
             LogEventBridge.warn("vpn", "stopVpn called but not running")
             return
         }
-        isRunning = false
-        LogEventBridge.info("vpn", "Stopping VPN")
+        isRunning     = false
+        vpnRunning    = false
+        mihomoRunning = false
+        mihomoPid     = -1
 
         coreProcess?.destroy()
         coreProcess = null
-        LogEventBridge.debug("vpn", "Mihomo core process destroyed")
+        LogEventBridge.debug("vpn", "Mihomo process destroyed")
 
         try {
             vpnInterface?.close()
-            LogEventBridge.debug("vpn", "VPN interface closed")
         } catch (e: Exception) {
             Log.e(TAG, "Error closing VPN interface", e)
             LogEventBridge.error("vpn", "Error closing VPN interface: ${e.message}")
@@ -70,56 +76,89 @@ class ClashVpnService : VpnService(), Runnable {
         try {
             extractAssetsIfNeeded()
 
-            LogEventBridge.info("vpn", "Building VPN interface", mapOf(
-                "addr" to "172.19.0.1/30",
-                "route" to "0.0.0.0/0",
-                "dns" to "172.19.0.2"
-            ))
+            LogEventBridge.info("vpn", "Building VPN interface",
+                mapOf("addr" to "172.19.0.1/30", "route" to "0.0.0.0/0", "dns" to "172.19.0.1"))
 
             val builder = Builder()
                 .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
-                .addDnsServer("172.19.0.2")
+                .addDnsServer("172.19.0.1")   // mihomo listens here after patching
                 .setSession("ClashForge")
                 .setBlocking(false)
 
-            vpnInterface = builder.establish()
-
-            if (vpnInterface == null) {
-                LogEventBridge.error("vpn", "builder.establish() returned null — VPN permission may not be granted")
+            vpnInterface = builder.establish() ?: run {
+                LogEventBridge.error("vpn", "builder.establish() returned null")
                 return
             }
 
-            LogEventBridge.info("vpn", "VPN interface established", mapOf(
-                "fd" to (vpnInterface?.fd ?: -1)
-            ))
+            val tunFd = vpnInterface!!.fd
+            LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
+
+            // Allow mihomo to inherit the TUN fd across exec()
+            try {
+                Os.fcntl(tunFd, OsConstants.F_SETFD, 0)
+                LogEventBridge.debug("vpn", "Cleared CLOEXEC on TUN fd", mapOf("fd" to tunFd))
+            } catch (e: Exception) {
+                LogEventBridge.warn("vpn", "Could not clear CLOEXEC: ${e.message}")
+            }
+
+            // Patch config.yaml with the TUN section now that fd is known
+            patchConfigWithTun(tunFd)
 
             startMihomoCore()
 
             LogEventBridge.info("vpn", "VPN loop running")
-            while (isRunning) {
-                Thread.sleep(1000)
-            }
+            while (isRunning) Thread.sleep(1000)
+
         } catch (e: Exception) {
-            Log.e(TAG, "VPN service execution error", e)
-            LogEventBridge.error("vpn", "VPN run() exception: ${e.message}", mapOf(
-                "type" to e.javaClass.simpleName
-            ))
+            Log.e(TAG, "VPN run error", e)
+            LogEventBridge.error("vpn", "VPN run() exception: ${e.message}",
+                mapOf("type" to e.javaClass.simpleName))
         } finally {
             stopVpn()
         }
     }
 
-    // Extract mihomo binary and geodata from Flutter assets to filesDir.
-    // Re-extracts whenever the app versionCode changes (i.e. on update).
+    // Appends the TUN stanza to config.yaml so mihomo uses Android's VPN interface
+    // instead of trying to create its own (which requires root).
+    private fun patchConfigWithTun(tunFd: Int) {
+        val configFile = File(filesDir, "config.yaml")
+        if (!configFile.exists()) {
+            LogEventBridge.warn("vpn", "config.yaml not found — skipping TUN patch")
+            return
+        }
+        val tunStanza = """
+
+tun:
+  enable: true
+  stack: gvisor
+  device: "/proc/self/fd/$tunFd"
+  auto-route: false
+  auto-detect-interface: false
+  mtu: 1500
+  dns-hijack:
+    - "any:53"
+"""
+        configFile.appendText(tunStanza)
+        LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
+            "fd"     to tunFd,
+            "device" to "/proc/self/fd/$tunFd"
+        ))
+    }
+
     private fun extractAssetsIfNeeded() {
         val markerFile = File(filesDir, ".asset_version")
         val currentVersion = packageManager
             .getPackageInfo(packageName, 0)
-            .let { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode.toString() else @Suppress("DEPRECATION") it.versionCode.toString() }
+            .let {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+                    it.longVersionCode.toString()
+                else
+                    @Suppress("DEPRECATION") it.versionCode.toString()
+            }
 
         if (markerFile.exists() && markerFile.readText().trim() == currentVersion) {
-            LogEventBridge.debug("assets", "Assets up-to-date, skipping extraction", mapOf("version" to currentVersion))
+            LogEventBridge.debug("assets", "Assets up-to-date", mapOf("version" to currentVersion))
             return
         }
 
@@ -128,12 +167,12 @@ class ClashVpnService : VpnService(), Runnable {
         val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
         LogEventBridge.debug("assets", "Device ABI", mapOf("abi" to abi))
 
-        extractAsset("flutter_assets/assets/mihomo/$abi", File(filesDir, "mihomo"), executable = true)
+        extractAsset("flutter_assets/assets/mihomo/$abi",          File(filesDir, "mihomo"),       executable = true)
         extractAsset("flutter_assets/assets/geodata/country.mmdb", File(filesDir, "country.mmdb"))
-        extractAsset("flutter_assets/assets/geodata/geosite.dat", File(filesDir, "geosite.dat"))
+        extractAsset("flutter_assets/assets/geodata/geosite.dat",  File(filesDir, "geosite.dat"))
 
         markerFile.writeText(currentVersion)
-        LogEventBridge.info("assets", "Asset extraction complete")
+        LogEventBridge.info("assets", "Extraction complete")
     }
 
     private fun extractAsset(assetPath: String, dest: File, executable: Boolean = false) {
@@ -142,73 +181,62 @@ class ClashVpnService : VpnService(), Runnable {
                 FileOutputStream(dest).use { output -> input.copyTo(output) }
             }
             if (executable) dest.setExecutable(true)
-            LogEventBridge.debug("assets", "Extracted ${dest.name}", mapOf(
-                "size" to dest.length(),
-                "path" to dest.absolutePath
-            ))
+            LogEventBridge.debug("assets", "Extracted ${dest.name}",
+                mapOf("size" to dest.length(), "path" to dest.absolutePath))
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to extract asset $assetPath", e)
-            LogEventBridge.error("assets", "Extract failed: ${dest.name}", mapOf(
-                "asset" to assetPath,
-                "error" to (e.message ?: "unknown")
-            ))
+            Log.e(TAG, "Failed to extract $assetPath", e)
+            LogEventBridge.error("assets", "Extract failed: ${dest.name}",
+                mapOf("asset" to assetPath, "error" to (e.message ?: "unknown")))
         }
     }
 
     private fun startMihomoCore() {
-        try {
-            val appDir = filesDir.absolutePath
-            val coreBin = File(appDir, "mihomo")
+        val appDir     = filesDir.absolutePath
+        val coreBin    = File(appDir, "mihomo")
+        val configFile = File(appDir, "config.yaml")
 
-            if (!coreBin.exists()) {
-                LogEventBridge.warn("mihomo", "Binary not found — skipping core start", mapOf(
-                    "path" to coreBin.absolutePath
-                ))
-                Log.w(TAG, "mihomo core binary does not exist yet at: ${coreBin.absolutePath}")
-                return
-            }
-
-            coreBin.setExecutable(true)
-            LogEventBridge.debug("mihomo", "Set executable: ${coreBin.absolutePath}")
-
-            val configFile = File(appDir, "config.yaml")
-            LogEventBridge.info("mihomo", "Starting core process", mapOf(
-                "bin" to coreBin.absolutePath,
-                "config" to configFile.absolutePath,
-                "config_exists" to configFile.exists()
-            ))
-
-            val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
-            pb.redirectErrorStream(true)
-            coreProcess = pb.start()
-
-            val pid = try {
-                val pidField = coreProcess!!.javaClass.getDeclaredField("pid")
-                pidField.isAccessible = true
-                pidField.getInt(coreProcess)
-            } catch (_: Exception) { -1 }
-
-            LogEventBridge.info("mihomo", "Core process started", mapOf("pid" to pid))
-
-            Thread {
-                try {
-                    coreProcess?.inputStream?.bufferedReader()?.forEachLine { line ->
-                        Log.d("MihomoCore", line)
-                        LogEventBridge.debug("mihomo", line)
-                    }
-                    val exitCode = coreProcess?.exitValue() ?: -1
-                    LogEventBridge.warn("mihomo", "Core process exited", mapOf("exit_code" to exitCode))
-                } catch (e: Exception) {
-                    LogEventBridge.error("mihomo", "Core log reader error: ${e.message}")
-                }
-            }.start()
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start mihomo core", e)
-            LogEventBridge.error("mihomo", "Failed to start core: ${e.message}", mapOf(
-                "type" to e.javaClass.simpleName
-            ))
+        if (!coreBin.exists()) {
+            LogEventBridge.error("mihomo", "Binary not found", mapOf("path" to coreBin.absolutePath))
+            return
         }
+        coreBin.setExecutable(true)
+
+        LogEventBridge.info("mihomo", "Starting core", mapOf(
+            "bin"           to coreBin.absolutePath,
+            "config_exists" to configFile.exists(),
+            "config_size"   to configFile.length()
+        ))
+
+        val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
+        pb.redirectErrorStream(true)
+        // Inherit all open fds so /proc/self/fd/{tunFd} is valid in the child
+        pb.inheritIO()
+        coreProcess = pb.start()
+
+        val pid = try {
+            val f = coreProcess!!.javaClass.getDeclaredField("pid")
+            f.isAccessible = true
+            f.getInt(coreProcess)
+        } catch (_: Exception) { -1 }
+
+        mihomoPid     = pid
+        mihomoRunning = true
+        LogEventBridge.info("mihomo", "Core started", mapOf("pid" to pid))
+
+        Thread {
+            try {
+                coreProcess?.inputStream?.bufferedReader()?.forEachLine { line ->
+                    Log.d("MihomoCore", line)
+                    LogEventBridge.debug("mihomo", line)
+                }
+                val exit = coreProcess?.exitValue() ?: -1
+                mihomoRunning = false
+                mihomoPid     = -1
+                LogEventBridge.warn("mihomo", "Core exited", mapOf("exit_code" to exit))
+            } catch (e: Exception) {
+                LogEventBridge.error("mihomo", "Log reader error: ${e.message}")
+            }
+        }.start()
     }
 
     override fun onDestroy() {

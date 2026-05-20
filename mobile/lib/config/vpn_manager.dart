@@ -38,4 +38,13 @@ class VpnManager {
       return 'error: ${e.message}';
     }
   }
+
+  static Future<Map<String, dynamic>> getSystemInfo() async {
+    try {
+      final result = await _channel.invokeMethod<Map>('getSystemInfo');
+      return Map<String, dynamic>.from(result ?? {});
+    } on PlatformException catch (e) {
+      return {'error': e.message};
+    }
+  }
 }

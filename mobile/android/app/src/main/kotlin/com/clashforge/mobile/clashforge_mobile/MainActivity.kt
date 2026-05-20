@@ -1,7 +1,10 @@
 package com.clashforge.mobile.clashforge_mobile
 
+import android.app.ActivityManager
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
+import android.os.Process
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -16,62 +19,86 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // VPN control channel (Flutter → Native)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VPN_CHANNEL).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "startVpn" -> {
-                    val intent = VpnService.prepare(this)
-                    if (intent != null) {
-                        startActivityForResult(intent, 0)
-                        result.success("permission_needed")
-                    } else {
-                        startVpnService()
-                        result.success("started")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VPN_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startVpn" -> {
+                        val intent = VpnService.prepare(this)
+                        if (intent != null) {
+                            startActivityForResult(intent, 0)
+                            result.success("permission_needed")
+                        } else {
+                            startVpnService()
+                            result.success("started")
+                        }
                     }
-                }
-                "stopVpn" -> {
-                    stopVpnService()
-                    result.success("stopped")
-                }
-                "getFilesDir" -> {
-                    result.success(filesDir.absolutePath)
-                }
-                "writeConfig" -> {
-                    val yaml = call.argument<String>("yaml") ?: ""
-                    try {
-                        File(filesDir, "config.yaml").writeText(yaml)
-                        result.success("written")
-                    } catch (e: Exception) {
-                        result.error("WRITE_FAILED", e.message, null)
+                    "stopVpn" -> {
+                        stopVpnService()
+                        result.success("stopped")
                     }
+                    "getFilesDir" -> {
+                        result.success(filesDir.absolutePath)
+                    }
+                    "writeConfig" -> {
+                        val yaml = call.argument<String>("yaml") ?: ""
+                        try {
+                            File(filesDir, "config.yaml").writeText(yaml)
+                            result.success("written")
+                        } catch (e: Exception) {
+                            result.error("WRITE_FAILED", e.message, null)
+                        }
+                    }
+                    "getSystemInfo" -> {
+                        result.success(buildSystemInfo())
+                    }
+                    else -> result.notImplemented()
                 }
-                else -> result.notImplemented()
             }
-        }
 
-        // Log event channel (Native → Flutter)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, LOG_CHANNEL)
             .setStreamHandler(LogEventBridge)
     }
 
+    private fun buildSystemInfo(): Map<String, Any> {
+        val pm = packageManager.getPackageInfo(packageName, 0)
+        val versionName = pm.versionName ?: "unknown"
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            pm.longVersionCode else @Suppress("DEPRECATION") pm.versionCode.toLong()
+
+        val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(memInfo)
+
+        val pss = try {
+            am.getProcessMemoryInfo(intArrayOf(Process.myPid()))[0].totalPss / 1024.0
+        } catch (_: Exception) { 0.0 }
+
+        return mapOf(
+            "app_version"         to versionName,
+            "build_number"        to versionCode,
+            "vpn_running"         to ClashVpnService.vpnRunning,
+            "mihomo_running"      to ClashVpnService.mihomoRunning,
+            "mihomo_pid"          to ClashVpnService.mihomoPid,
+            "memory_app_pss_mb"   to String.format("%.1f", pss).toDouble(),
+            "memory_available_mb" to String.format("%.0f", memInfo.availMem / 1024.0 / 1024.0).toDouble(),
+            "device_abi"          to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
+        )
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 0 && resultCode == RESULT_OK) {
-            startVpnService()
-        }
+        if (requestCode == 0 && resultCode == RESULT_OK) startVpnService()
     }
 
     private fun startVpnService() {
-        val intent = Intent(this, ClashVpnService::class.java).apply {
+        startService(Intent(this, ClashVpnService::class.java).apply {
             action = ClashVpnService.ACTION_START
-        }
-        startService(intent)
+        })
     }
 
     private fun stopVpnService() {
-        val intent = Intent(this, ClashVpnService::class.java).apply {
+        startService(Intent(this, ClashVpnService::class.java).apply {
             action = ClashVpnService.ACTION_STOP
-        }
-        startService(intent)
+        })
     }
 }

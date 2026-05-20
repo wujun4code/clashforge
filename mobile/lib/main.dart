@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'subscription/subscription_parser.dart';
+import 'subscription/subscription_store.dart';
 import 'subscription/proxy_node.dart';
 import 'config/vpn_manager.dart';
 import 'config/config_generator.dart';
@@ -133,28 +134,13 @@ class _HomeScreenState extends State<HomeScreen> {
       AppLogger.instance.error('native', 'EventChannel error: $e');
     });
     AppLogger.instance.info('app', 'ClashForge started');
-  }
-
-  void _onNativeLog(dynamic event) {
-    try {
-      final map = json.decode(event as String) as Map<String, dynamic>;
-      final level = map['level'] as String? ?? 'info';
-      final component = map['component'] as String? ?? 'native';
-      final message = map['message'] as String? ?? '';
-      final fields = (map['fields'] as Map<String, dynamic>?) ?? {};
-      AppLogger.instance.log(level, component, message, fields: fields);
-    } catch (_) {
-      AppLogger.instance.debug('native', event.toString());
-    }
-  }
-
-  void _onNodesImported(List<ProxyNode> nodes) {
-    setState(() {
+  void _onNodesImported(List<ProxyNode> nodes, {String url = ''}) {    setState(() {
       _nodes
         ..clear()
         ..addAll(nodes);
       _selectedNode ??= nodes.isEmpty ? null : nodes.first;
     });
+    SubscriptionStore.save(nodes, url: url);
   }
 
   void _onNodeSelected(ProxyNode node) {
@@ -234,37 +220,11 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       _SubscriptionsTab(onImported: _onNodesImported),
       const _LogsTab(),
-    ];
-
-    return Scaffold(
-      body: tabs[_tabIndex],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tabIndex,
-        onDestinationSelected: (i) => setState(() => _tabIndex = i),
-        backgroundColor: const Color(0xFF16161E),
-        surfaceTintColor: Colors.transparent,
-        destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.shield_outlined),
-            selectedIcon: Icon(Icons.shield),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.language_outlined),
-            selectedIcon: Icon(Icons.language),
-            label: 'Proxies',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.cloud_download_outlined),
-            selectedIcon: Icon(Icons.cloud_download),
-            label: 'Subscriptions',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.terminal_outlined),
-            selectedIcon: Icon(Icons.terminal),
-            label: 'Logs',
-          ),
-        ],
+            icon: Icon(Icons.info_outline),
+            selectedIcon: Icon(Icons.info),
+            label: 'About',
+          ),        ],
       ),
     );
   }
@@ -514,9 +474,11 @@ class _ProxiesTab extends StatelessWidget {
 // Tab 3 — Subscriptions
 // ─────────────────────────────────────────────────────────────
 
+typedef _OnImported = void Function(List<ProxyNode> nodes, {String url});
+
 class _SubscriptionsTab extends StatefulWidget {
   const _SubscriptionsTab({required this.onImported});
-  final ValueChanged<List<ProxyNode>> onImported;
+  final _OnImported onImported;
 
   @override
   State<_SubscriptionsTab> createState() => _SubscriptionsTabState();
@@ -527,6 +489,14 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   bool _loading = false;
   String? _message;
   bool _success = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SubscriptionStore.loadUrl().then((url) {
+      if (url.isNotEmpty && mounted) setState(() => _urlController.text = url);
+    });
+  }
 
   @override
   void dispose() {
@@ -562,8 +532,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       if (nodes.isEmpty) {
         logger.warn('subscription', 'No nodes parsed — check subscription format');
       }
-      widget.onImported(nodes);
-      setState(() { _loading = false; _success = true; _message = 'Imported ${nodes.length} nodes successfully'; });
+      widget.onImported(nodes, url: input.startsWith('http') ? input : '');      setState(() { _loading = false; _success = true; _message = 'Imported ${nodes.length} nodes successfully'; });
     } catch (e) {
       logger.error('subscription', 'Import error: $e');
       setState(() { _loading = false; _success = false; _message = 'Error: $e'; });
@@ -923,4 +892,125 @@ class _LogRow extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tab 5 — About
+// ─────────────────────────────────────────────────────────────
+
+class _AboutTab extends StatefulWidget {
+  const _AboutTab({required this.nodeCount});
+  final int nodeCount;
+
+  @override
+  State<_AboutTab> createState() => _AboutTabState();
+}
+
+class _AboutTabState extends State<_AboutTab> {
+  Map<String, dynamic> _info = {};
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() => _loading = true);
+    final info = await VpnManager.getSystemInfo();
+    if (mounted) setState(() { _info = info; _loading = false; });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFF00B4D8);
+
+    Widget _row(String label, String value, {Color? valueColor}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 14)),
+          Text(value, style: TextStyle(color: valueColor ?? Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+
+    final mihomoRunning = _info['mihomo_running'] as bool? ?? false;
+    final vpnRunning    = _info['vpn_running']    as bool? ?? false;
+    final pid           = _info['mihomo_pid']     as int?  ?? -1;
+    final appVersion    = _info['app_version']    as String? ?? '—';
+    final buildNum      = _info['build_number'];
+    final appPss        = _info['memory_app_pss_mb']   as double? ?? 0.0;
+    final avail         = _info['memory_available_mb'] as double? ?? 0.0;
+    final abi           = _info['device_abi']     as String? ?? '—';
+
+    return SafeArea(
+      child: RefreshIndicator(
+        onRefresh: _refresh,
+        color: accent,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          children: [
+            const SizedBox(height: 20),
+            Row(children: [
+              const Text('About', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
+              const Spacer(),
+              if (_loading)
+                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: accent))
+              else
+                IconButton(icon: const Icon(Icons.refresh, color: Colors.white38, size: 20), onPressed: _refresh, padding: EdgeInsets.zero),
+            ]),
+            const SizedBox(height: 20),
+
+            // App section
+            _section('APPLICATION', [
+              _row('Version',      '$appVersion ($buildNum)'),
+              _row('Nodes loaded', '${widget.nodeCount}'),
+              _row('Device ABI',   abi),
+            ]),
+            const SizedBox(height: 16),
+
+            // Runtime section
+            _section('RUNTIME', [
+              _row('VPN',    vpnRunning    ? 'Running'  : 'Stopped',
+                  valueColor: vpnRunning    ? const Color(0xFF00E676) : Colors.white38),
+              _row('Mihomo', mihomoRunning ? 'Running (PID $pid)' : 'Stopped',
+                  valueColor: mihomoRunning ? const Color(0xFF00E676) : Colors.white38),
+            ]),
+            const SizedBox(height: 16),
+
+            // Memory section
+            _section('MEMORY', [
+              _row('App (PSS)',  '${appPss.toStringAsFixed(1)} MB'),
+              _row('Available',  '${avail.toStringAsFixed(0)} MB'),
+            ]),
+            const SizedBox(height: 24),
+            const Center(child: Text('Pull down to refresh', style: TextStyle(color: Colors.white24, fontSize: 12))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _section(String title, List<Widget> rows) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    decoration: BoxDecoration(
+      color: const Color(0xFF16161E),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.white12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 4),
+          child: Text(title, style: const TextStyle(color: Colors.white24, fontSize: 11, letterSpacing: 1.2, fontWeight: FontWeight.w600)),
+        ),
+        const Divider(color: Colors.white12, height: 1),
+        ...rows,
+      ],
+    ),
+  );
 }
