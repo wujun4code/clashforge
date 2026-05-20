@@ -5,19 +5,22 @@ import android.net.VpnService
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.clashforge.mobile/vpn"
+    private val VPN_CHANNEL = "com.clashforge.mobile/vpn"
+    private val LOG_CHANNEL = "com.clashforge.mobile/logs"
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+
+        // VPN control channel (Flutter → Native)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VPN_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "startVpn" -> {
                     val intent = VpnService.prepare(this)
                     if (intent != null) {
-                        // Request VPN permission from the user
                         startActivityForResult(intent, 0)
                         result.success("permission_needed")
                     } else {
@@ -29,11 +32,13 @@ class MainActivity : FlutterActivity() {
                     stopVpnService()
                     result.success("stopped")
                 }
-                else -> {
-                    result.notImplemented()
-                }
+                else -> result.notImplemented()
             }
         }
+
+        // Log event channel (Native → Flutter)
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, LOG_CHANNEL)
+            .setStreamHandler(LogEventBridge)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -57,4 +62,3 @@ class MainActivity : FlutterActivity() {
         startService(intent)
     }
 }
-
