@@ -817,7 +817,7 @@ class _LogRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(entry.message,
-                    style: const TextStyle(color: Colors.white87, fontSize: 12, fontFamily: 'monospace')),
+                    style: const TextStyle(color: Color(0xDEFFFFFF), fontSize: 12, fontFamily: 'monospace')),
                 if (entry.fields.isNotEmpty) ...[
                   const SizedBox(height: 3),
                   Wrap(
