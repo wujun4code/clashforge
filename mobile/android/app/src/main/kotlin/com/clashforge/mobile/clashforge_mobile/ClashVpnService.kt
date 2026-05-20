@@ -25,6 +25,10 @@ class ClashVpnService : VpnService(), Runnable {
         @Volatile var mihomoPid      = -1
     }
 
+    // Holds the Os.dup() copy of the TUN fd so stopVpn() can close it.
+    // Without this, Android keeps the VPN tunnel alive even after vpnInterface.close().
+    private var dupTunFd: java.io.FileDescriptor? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> startVpn()
@@ -59,6 +63,15 @@ class ClashVpnService : VpnService(), Runnable {
         coreProcess?.destroy()
         coreProcess = null
         LogEventBridge.debug("vpn", "Mihomo process destroyed")
+
+        // Close the dup'd TUN fd first — this is the one the service process kept open
+        // after handing the fd to mihomo. Without closing it the OS keeps the tunnel alive.
+        try {
+            dupTunFd?.let { android.system.Os.close(it) }
+        } catch (e: Exception) {
+            LogEventBridge.warn("vpn", "Error closing dup'd TUN fd: ${e.message}")
+        }
+        dupTunFd = null
 
         try {
             vpnInterface?.close()
@@ -95,9 +108,12 @@ class ClashVpnService : VpnService(), Runnable {
 
             // Os.dup() creates a copy of the fd WITHOUT FD_CLOEXEC (by POSIX spec),
             // so mihomo's child process can inherit it via /proc/self/fd/N.
+            // We save the FileDescriptor in dupTunFd so stopVpn() can close it —
+            // if left open, the VPN tunnel stays active even after vpnInterface.close().
             var inheritableFd = tunFd
             try {
                 val dupFileDes = Os.dup(vpnInterface!!.fileDescriptor)
+                dupTunFd = dupFileDes
                 val fdField = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
                 fdField.isAccessible = true
                 inheritableFd = fdField.getInt(dupFileDes)
