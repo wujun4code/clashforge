@@ -137,3 +137,6 @@ jobs:
           gh workflow run release.yml \
             --ref "${{ steps.next.outputs.tag }}" \
             --field version="${{ steps.next.outputs.tag }}"
+          gh workflow run android-release.yml \
+            --ref "${{ steps.next.outputs.tag }}" \
+            --field version="${{ steps.next.outputs.tag }}"
