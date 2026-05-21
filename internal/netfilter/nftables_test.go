@@ -107,6 +107,20 @@ func TestNFTTemplate_TproxyPreRoutingAllowsReRoutedLocalTraffic(t *testing.T) {
 	}
 }
 
+func TestNFTTemplate_QUICBypassesTPROXY(t *testing.T) {
+	rendered := renderNFTTemplate(t, false, false)
+	// QUIC (UDP 443) must use "return" (bypass tproxy), not "drop".
+	// Dropping causes a silent black-hole that forces clients to wait for the full
+	// QUIC timeout before falling back to TCP, causing visible UI lag in domestic
+	// apps (Douyin, WeChat, Bilibili) that heavily use QUIC/HTTP3.
+	if strings.Contains(rendered, "udp dport 443 drop") {
+		t.Fatalf("QUIC must not be dropped: use 'return' to bypass tproxy instead")
+	}
+	if !strings.Contains(rendered, "udp dport 443 return") {
+		t.Fatalf("expected 'udp dport 443 return' in tproxy_prerouting to bypass QUIC")
+	}
+}
+
 func TestNFTTemplate_NoBlankLineBeforeBypassSetClose(t *testing.T) {
 	rendered := renderNFTTemplate(t, false, false)
 	if strings.Contains(rendered, "240.0.0.0/4\n\n        }") {
