@@ -1,39 +1,96 @@
 #!/usr/bin/env bash
-# Download mihomo for Android ABIs and place as jniLibs so the app can bundle it.
+# Prepare mihomo binaries for Android ABIs and place as jniLibs.
 #
-# PINNED to v1.18.10, using the LINUX build for arm64-v8a:
+# ── Background ────────────────────────────────────────────────────────────────
 #
-#   Why linux-arm64 instead of android-arm64-v8?
-#   The android build compiles with GOOS=android which adds a platform check:
-#   "if running on Android → buildAndroidRules() → read /data/system/packages.xml".
-#   On non-rooted devices SELinux blocks this read and TUN init aborts entirely.
-#   The linux build (GOOS=linux) has no such branch.  Since the binary is a pure-Go
-#   static binary (CGO disabled) it runs on Android's Linux kernel without any libc
-#   dependency.  We provide our own TUN fd via /proc/self/fd/N and handle routing via
-#   Android VPNService, so linux-mode TUN init works perfectly.
+# Two problems exist with pre-built mihomo android binaries that both need
+# to be solved simultaneously:
 #
-#   x86_64 (emulator): keep android-amd64 with linux-amd64-compatible fallback,
-#   matching the CI workflow which runs chmod o+r packages.xml as workaround.
+# Problem 1 — GOOS=linux binaries (e.g. linux-arm64):
+#   After opening the TUN fd they try to reconfigure the interface via
+#   ioctl/netlink (set MTU, IP address, routes).  This requires CAP_NET_ADMIN,
+#   which Android VPN apps don't have.  Android VpnService already fully
+#   configures the interface; we must use the fd as-is.
+#   Error: "configure tun interface: permission denied"
+#
+# Problem 2 — GOOS=android binaries (v1.18+):
+#   Call buildAndroidRules() unconditionally during TUN init, which reads
+#   /data/system/packages.xml.  SELinux denies this on non-rooted devices.
+#   Error: "build android rules: read packages list: ... permission denied"
+#
+# ── Correct solution ──────────────────────────────────────────────────────────
+#
+# Build mihomo with:
+#   GOOS=android  — correct VPN fd path (VpnService already configured the
+#                   interface, no CAP_NET_ADMIN calls needed)
+#   -tags cmfa    — buildAndroidRules() becomes a no-op stub; same approach
+#                   used by ClashMetaForAndroid (CMFA)
+#
+# This script builds from source when Go is available (recommended for arm64-v8a
+# real-device testing).  For x86_64 emulator-only testing it downloads the
+# android-amd64 pre-built binary since the CI emulator has a chmod workaround.
 #
 # Usage (from repo root):
-#   bash mobile/scripts/download-mihomo.sh
+#   bash mobile/scripts/download-mihomo.sh          # download-only (emulator)
+#   bash mobile/scripts/download-mihomo.sh --build  # build from source (real device)
 #
-# Windows alternative (PowerShell, from repo root):
-#   See the comment block at the bottom of this file.
+# ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
 MIHOMO_VER="v1.18.10"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JNILIBS_ROOT="$SCRIPT_DIR/../android/app/src/main/jniLibs"
+BUILD_MODE="${1:-}"  # pass --build to compile from source
 
-# ABI → (primary URL suffix, fallback URL suffix or "")
-# arm64-v8a uses linux build intentionally — see header comment.
+# ── Build from source (GOOS=android -tags cmfa) ──────────────────────────────
+if [ "$BUILD_MODE" = "--build" ]; then
+  if ! command -v go >/dev/null 2>&1; then
+    echo "ERROR: --build requires Go. Install from https://go.dev/dl/"
+    exit 1
+  fi
+
+  SRC="/tmp/mihomo-src-${MIHOMO_VER}"
+  if [ ! -d "$SRC" ]; then
+    echo "Cloning mihomo ${MIHOMO_VER}…"
+    git clone --depth 1 --branch "${MIHOMO_VER}" \
+      https://github.com/MetaCubeX/mihomo.git "$SRC"
+  fi
+
+  build_abi() {
+    local ABI="$1" GOARCH="$2" GOARM="${3:-}"
+    local DEST="$JNILIBS_ROOT/$ABI/libmihomo.so"
+    mkdir -p "$JNILIBS_ROOT/$ABI"
+    printf "%-16s GOOS=android GOARCH=%-6s -tags cmfa … " "$ABI" "$GOARCH"
+    GOOS=android GOARCH="$GOARCH" GOARM="$GOARM" CGO_ENABLED=0 \
+      go build -C "$SRC" -tags cmfa -trimpath -ldflags="-s -w" -o "$DEST" .
+    echo "✓ $(du -h "$DEST" | cut -f1)"
+  }
+
+  build_abi arm64-v8a   arm64
+  build_abi armeabi-v7a arm   7
+  build_abi x86_64      amd64
+
+  echo ""
+  echo "Mihomo ${MIHOMO_VER} (GOOS=android -tags cmfa) ready for all ABIs."
+  echo "Next: cd mobile && flutter build apk --debug"
+  exit 0
+fi
+
+# ── Download pre-built binaries (emulator / CI only) ─────────────────────────
+#
+# WARNING: The downloaded binaries are suitable for CI E2E testing on the
+# x86_64 emulator only.  The arm64-v8a binary produced here (linux-arm64)
+# will fail on real devices with "configure tun interface: permission denied".
+# For real-device builds use --build mode above, or use the release APK built
+# by android-release.yml CI (which uses GOOS=android -tags cmfa).
+
+echo "⚠️  Download mode: arm64-v8a binary will work on CI emulator but NOT real devices."
+echo "    Use --build for real-device APKs."
+echo ""
+
 download_abi() {
-  local ABI="$1"
-  local PRIMARY="$2"
-  local FALLBACK="${3:-}"
-
+  local ABI="$1" PRIMARY="$2" FALLBACK="${3:-}"
   local DEST="$JNILIBS_ROOT/$ABI/libmihomo.so"
   local TMP="/tmp/mihomo-${ABI}.gz"
   mkdir -p "$JNILIBS_ROOT/$ABI"
@@ -67,34 +124,14 @@ download_abi() {
 
 FAIL=0
 
-# arm64-v8a: linux build avoids android-specific packages.xml read
+# arm64-v8a: linux build — OK for emulator, NOT for real devices (see warning above)
 download_abi "arm64-v8a"   "linux-arm64"                  "" || FAIL=$((FAIL+1))
-
-# x86_64: android build with linux-compatible fallback (matches CI workflow)
+# x86_64: android build with linux-compatible fallback (matches CI emulator workflow)
 download_abi "x86_64"      "android-amd64"                "linux-amd64-compatible" || FAIL=$((FAIL+1))
-
-# armeabi-v7a: android build (correct v8 suffix not present for armv7)
+# armeabi-v7a: android build
 download_abi "armeabi-v7a" "android-armv7"                "" || FAIL=$((FAIL+1))
 
 echo ""
-echo "Mihomo ${MIHOMO_VER} binaries ready."
+echo "Mihomo ${MIHOMO_VER} download complete (emulator/CI use only)."
 [ "$FAIL" -eq 0 ] || { echo "⚠️  $FAIL ABI(s) failed — check network and retry."; exit 1; }
 echo "Next: cd mobile && flutter build apk --debug"
-
-# ── Windows PowerShell equivalent ──────────────────────────────────────────────
-# If you're on Windows without WSL, run these commands in PowerShell from the repo root:
-#
-#   $ver = "v1.18.10"
-#   $base = "https://github.com/MetaCubeX/mihomo/releases/download/$ver"
-#
-#   # arm64-v8a (linux build — no packages.xml read on real devices)
-#   New-Item -ItemType Directory -Force "mobile\android\app\src\main\jniLibs\arm64-v8a" | Out-Null
-#   Invoke-WebRequest "$base/mihomo-linux-arm64-$ver.gz" -OutFile "$env:TEMP\mihomo.gz"
-#   & wsl gunzip -f /mnt/c/Users/$env:USERNAME/AppData/Local/Temp/mihomo.gz
-#   Move-Item "$env:TEMP\mihomo" "mobile\android\app\src\main\jniLibs\arm64-v8a\libmihomo.so" -Force
-#
-#   # x86_64 (android build — for emulator, matches CI)
-#   New-Item -ItemType Directory -Force "mobile\android\app\src\main\jniLibs\x86_64" | Out-Null
-#   Invoke-WebRequest "$base/mihomo-android-amd64-$ver.gz" -OutFile "$env:TEMP\mihomo.gz"
-#   & wsl gunzip -f /mnt/c/Users/$env:USERNAME/AppData/Local/Temp/mihomo.gz
-#   Move-Item "$env:TEMP\mihomo" "mobile\android\app\src\main\jniLibs\x86_64\libmihomo.so" -Force
