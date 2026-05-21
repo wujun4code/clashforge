@@ -78,7 +78,7 @@ jobs:
           curl -L -o mobile/assets/geodata/country.mmdb https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb
           curl -L -o mobile/assets/geodata/geosite.dat https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
 
-      - name: Build Mihomo Core (GOOS=android -tags cmfa)
+      - name: Build Mihomo Core (GOOS=android -tags cmfa,with_gvisor)
         run: |
           # Two issues exist with pre-built mihomo android binaries:
           #
@@ -110,11 +110,11 @@ jobs:
             mkdir -p "$(dirname "$DEST")"
             GOOS=android GOARCH="$GOARCH" CGO_ENABLED=0 \
               go build -C /tmp/mihomo-src \
-                -tags cmfa \
+                -tags cmfa,with_gvisor \
                 -trimpath \
                 -ldflags="-s -w" \
                 -o "$DEST" .
-            echo "${ABI} (cmfa): $(du -h "$DEST" | cut -f1)"
+            echo "${ABI} (cmfa+gvisor): $(du -h "$DEST" | cut -f1)"
           }
 
           download_prebuilt() {
@@ -127,8 +127,8 @@ jobs:
             echo "${ABI} (pre-built): $(du -h "$DEST" | cut -f1)"
           }
 
-          # arm64-v8a: build from source with GOOS=android -tags cmfa
-          # (no packages.xml read, no TUN reconfiguration — only CGO-free android target)
+          # arm64-v8a: build from source with GOOS=android -tags cmfa,with_gvisor
+          # cmfa: disables packages.xml read; with_gvisor: includes gVisor TUN stack
           build_cmfa arm64-v8a arm64
 
           # x86_64 and armeabi-v7a: GOOS=android/{amd64,arm} requires CGO even
@@ -139,9 +139,8 @@ jobs:
 
           ls -lh "${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/"*/
 
-          # Verify arm64-v8a binary was built with GOOS=android and -tags cmfa.
-          # go version -m prints embedded build metadata; fail fast if it shows GOOS=linux
-          # or if the cmfa tag is missing.
+          # Verify arm64-v8a binary was built with GOOS=android, -tags cmfa, and -tags with_gvisor.
+          # go version -m prints embedded build metadata; fail fast if any tag is missing.
           echo "--- arm64-v8a build metadata ---"
           ARM64_BIN="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/arm64-v8a/libmihomo.so"
           go version -m "$ARM64_BIN"
@@ -149,7 +148,9 @@ jobs:
             || { echo "ERROR: arm64-v8a binary is not GOOS=android!"; exit 1; }
           go version -m "$ARM64_BIN" | grep -q 'tags.*cmfa' \
             || { echo "ERROR: arm64-v8a binary missing -tags cmfa!"; exit 1; }
-          echo "✓ arm64-v8a: GOOS=android + -tags cmfa confirmed"
+          go version -m "$ARM64_BIN" | grep -q 'tags.*with_gvisor' \
+            || { echo "ERROR: arm64-v8a binary missing -tags with_gvisor (gVisor TUN stack not included)!"; exit 1; }
+          echo "✓ arm64-v8a: GOOS=android + -tags cmfa + -tags with_gvisor confirmed"
 
       - name: Configure Release Signing
         env:

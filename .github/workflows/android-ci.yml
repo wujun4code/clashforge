@@ -11,17 +11,17 @@ on:
 
 jobs:
   # ────────────────────────────────────────────────────────────
-  # Job 0: Verify arm64-v8a binary is GOOS=android -tags cmfa
+  # Job 0: Verify arm64-v8a binary is GOOS=android -tags cmfa,with_gvisor
   #
   # Builds the real-device binary from source and inspects its
   # embedded build metadata.  Catches any regression where the
   # release workflow would produce a GOOS=linux binary (which
   # fails with "configure tun interface: permission denied") or
-  # a binary missing -tags cmfa (which reads packages.xml and
+  # a binary missing -tags cmfa (packages.xml read) or with_gvisor (gVisor TUN)
   # fails with "build android rules: permission denied").
   # ────────────────────────────────────────────────────────────
   verify-arm64-binary:
-    name: Verify arm64-v8a (GOOS=android -tags cmfa)
+    name: Verify arm64-v8a (GOOS=android -tags cmfa,with_gvisor)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
           DEST=/tmp/libmihomo-arm64.so
           GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
             go build -C /tmp/mihomo-src \
-              -tags cmfa -trimpath -ldflags="-s -w" \
+              -tags cmfa,with_gvisor -trimpath -ldflags="-s -w" \
               -o "$DEST" .
           echo "Built: $(du -h $DEST | cut -f1)"
 
@@ -52,7 +52,9 @@ jobs:
             || { echo "FAIL: binary is not GOOS=android (would cause 'configure tun interface: permission denied' on real devices)"; exit 1; }
           go version -m "$DEST" | grep -q 'tags.*cmfa' \
             || { echo "FAIL: binary missing -tags cmfa (would cause 'build android rules: permission denied' via packages.xml)"; exit 1; }
-          echo "PASS: arm64-v8a is GOOS=android + -tags cmfa"
+          go version -m "$DEST" | grep -q 'tags.*with_gvisor' \
+            || { echo "FAIL: binary missing -tags with_gvisor (gVisor TUN stack not compiled in — 'gVisor is not included in this build')"; exit 1; }
+          echo "PASS: arm64-v8a is GOOS=android + -tags cmfa + -tags with_gvisor"
 
   # ────────────────────────────────────────────────────────────
   # Job 1: Unit & Widget Tests
