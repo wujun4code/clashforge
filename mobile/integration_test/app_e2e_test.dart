@@ -197,7 +197,54 @@ void main() {
         isNot(equals(baselineIp)),
         reason: 'Exit IP must differ from baseline — traffic must route through proxy',
       );
-      _log('Round 2 ✓ IP changed ($baselineIp → $vpnIp)');
+      _log('[PASS] PR-01 Exit IP changed — $baselineIp → $vpnIp');
+
+      // ── PR-01b: Verify exit IP against proxy server ──────────────────────
+      // Mirrors OpenWrt probe.sh PR-01: if we know the proxy node's server IP,
+      // assert the exit IP matches.  CI uses Tor as exit relay so exit IP ≠
+      // proxy server IP — that gets a WARN (not FAIL).
+      _log('[E2E] PR-01b: querying mihomo API for active proxy node…');
+      final proxyServer = await _queryMihomoProxyServer();
+      if (proxyServer.isNotEmpty) {
+        final serverIp = await _resolveDoH(proxyServer);
+        if (serverIp.isEmpty) {
+          _log('[WARN] PR-01b Server IP resolve — DoH lookup failed for $proxyServer');
+        } else if (vpnIp == serverIp) {
+          _log('[PASS] PR-01b Exit IP matches proxy server — $vpnIp == $serverIp (server: $proxyServer)');
+        } else {
+          // In CI the exit is a Tor relay, so exit IP ≠ proxy server — expected.
+          _log('[WARN] PR-01b Exit IP vs server — $vpnIp ≠ $serverIp (server: $proxyServer); OK if Tor/multi-hop relay');
+        }
+      } else {
+        _log('[WARN] PR-01b Proxy server query — could not read active node from mihomo API at 127.0.0.1:9090');
+      }
+
+      // ── PR-02: Target website connectivity via mihomo HTTP proxy ─────────
+      // All probes route through 127.0.0.1:7890 (mihomo HTTP proxy) so they
+      // work even when TUN fails (packages.xml permission denied on real devices).
+      // Mirrors OpenWrt probe.sh PR-02 target list.
+      _log('[E2E] PR-02: connectivity probes via mihomo HTTP proxy 127.0.0.1:7890…');
+      final pr02Targets = {
+        'taobao':   'https://www.taobao.com',
+        'music163': 'https://music.163.com',
+        'github':   'https://github.com',
+        'google':   'https://www.google.com',
+      };
+      final conn = await _probeConnectivity(pr02Targets);
+      var pr02Ok = 0;
+      for (final e in conn.entries) {
+        final ok = e.value >= 200 && e.value < 400;
+        if (ok) pr02Ok++;
+        _log('[${ok ? "PASS" : "FAIL"}] PR-02 ${e.key} — HTTP ${e.value}');
+      }
+      _log('[E2E] PR-02: $pr02Ok/${pr02Targets.length} targets accessible');
+
+      final googleCode = conn['google'] ?? 0;
+      expect(
+        googleCode >= 200 && googleCode < 400,
+        isTrue,
+        reason: '[E2E] PR-02 FAIL: google.com not reachable via VPN proxy (HTTP $googleCode) — proxy node may be down or routing is broken',
+      );
 
       // ── Step 5: Disconnect VPN ──────────────────────────────────────
       _log('Navigating back to Home');
@@ -236,7 +283,7 @@ void main() {
 
       _log('=== E2E COMPLETE ✓ ===');
     },
-    timeout: const Timeout(Duration(minutes: 5)),
+    timeout: const Timeout(Duration(minutes: 9)),
   );
 }
 
@@ -323,4 +370,95 @@ Future<void> _waitUntil(
     }
     await tester.pump(const Duration(milliseconds: 500));
   }
+}
+
+// ── PR-01b / PR-02 helpers ────────────────────────────────────────────────────
+
+// Query mihomo REST API (127.0.0.1:9090/proxies) for the active proxy node's
+// server hostname.  Tries common proxy group names from subscription configs.
+Future<String> _queryMihomoProxyServer() async {
+  try {
+    final resp = await http
+        .get(Uri.parse('http://127.0.0.1:9090/proxies'))
+        .timeout(const Duration(seconds: 5));
+    if (resp.statusCode != 200) return '';
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final proxies = data['proxies'] as Map<String, dynamic>? ?? {};
+    for (final groupName in ['🚀 Proxy', 'Proxy', 'GLOBAL']) {
+      final group = proxies[groupName] as Map<String, dynamic>?;
+      if (group == null) continue;
+      final now = group['now'] as String?;
+      if (now == null || now.isEmpty) continue;
+      final node = proxies[now] as Map<String, dynamic>?;
+      final server = node?['server'] as String?;
+      if (server != null && server.isNotEmpty) {
+        _log('Active proxy node: $now → server=$server');
+        return server;
+      }
+    }
+  } catch (e) {
+    _log('queryMihomoProxyServer: $e');
+  }
+  return '';
+}
+
+// Resolve a hostname to its first IPv4 A record via Google DNS-over-HTTPS.
+// Routes through mihomo HTTP proxy (127.0.0.1:7890) so it works whether
+// TUN is active or not (loopback bypasses Android VPN routing entirely).
+Future<String> _resolveDoH(String hostname) async {
+  final httpClient = HttpClient()
+    ..findProxy = (_) => 'PROXY 127.0.0.1:7890';
+  try {
+    final uri = Uri.parse(
+        'https://dns.google/resolve?name=${Uri.encodeComponent(hostname)}&type=A');
+    final request =
+        await httpClient.getUrl(uri).timeout(const Duration(seconds: 8));
+    final response = await request.close().timeout(const Duration(seconds: 8));
+    if (response.statusCode == 200) {
+      final body = await response.transform(utf8.decoder).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final answers = (data['Answer'] as List<dynamic>?) ?? [];
+      for (final a in answers) {
+        final record = a as Map<String, dynamic>;
+        if (record['type'] == 1) {
+          final ip = record['data'] as String? ?? '';
+          if (ip.isNotEmpty) return ip;
+        }
+      }
+    }
+  } catch (e) {
+    _log('resolveDoH $hostname: $e');
+  } finally {
+    httpClient.close();
+  }
+  return '';
+}
+
+// Probe a map of named URLs via mihomo HTTP proxy (127.0.0.1:7890).
+// Returns name → HTTP status code; 0 means connection failed entirely.
+// Uses GET + drain to avoid full body download; follows redirects by default.
+Future<Map<String, int>> _probeConnectivity(Map<String, String> targets) async {
+  final results = <String, int>{};
+  for (final entry in targets.entries) {
+    final name = entry.key;
+    final url = entry.value;
+    var code = 0;
+    final httpClient = HttpClient()
+      ..findProxy = (_) => 'PROXY 127.0.0.1:7890';
+    try {
+      final request = await httpClient
+          .getUrl(Uri.parse(url))
+          .timeout(const Duration(seconds: 12));
+      final response =
+          await request.close().timeout(const Duration(seconds: 12));
+      code = response.statusCode;
+      await response.drain<void>();
+    } catch (e) {
+      _log('probeConnectivity $name: $e');
+    } finally {
+      httpClient.close();
+    }
+    results[name] = code;
+  }
+  return results;
 }
