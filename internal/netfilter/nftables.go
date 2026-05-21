@@ -89,9 +89,13 @@ table inet metaclash {
         # (those packets carry {{ .FWMarkOutput }} and must be tproxied, not skipped).
         fib saddr type local meta mark != {{ .FWMarkOutput }} return
         ip daddr @bypass_ipv4 return
-        # Block QUIC (HTTP/3 over UDP 443) — mihomo cannot SNI-sniff QUIC packets,
-        # dropping forces the client to retry over TCP where SNI matching works correctly.
-        udp dport 443 drop
+        # Let QUIC (HTTP/3, UDP 443) bypass tproxy entirely.
+        # HTTP proxy nodes cannot tunnel UDP, so forcing QUIC through tproxy causes
+        # a silent black-hole: the client waits for a QUIC timeout (500ms-2s) before
+        # falling back to TCP. Returning here lets QUIC go direct — domestic apps
+        # (Douyin, WeChat, Bilibili) get full QUIC speed; GFW-blocked domains get
+        # rejected by GFW quickly and the app falls back to TCP through the proxy.
+        udp dport 443 return
         meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:{{ .TProxyPort }} meta mark set {{ .FWMark }}
 {{ if .EnableIPv6 }}
         ip6 daddr @bypass_ipv6 return
