@@ -74,18 +74,33 @@ jobs:
 
       - name: Download Mihomo Core
         run: |
-          MIHOMO_VER=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
-          echo "Downloading mihomo $MIHOMO_VER"
-          # Install into jniLibs so Android's package manager extracts to nativeLibraryDir (executable partition)
-          declare -A ABI_MAP=([arm64-v8a]=arm64-v8 [armeabi-v7a]=armv7 [x86_64]=amd64)
-          for ABI in arm64-v8a armeabi-v7a x86_64; do
-            GOARCH="${ABI_MAP[$ABI]}"
+          # Pinned to v1.18.10 — v1.19.x reads /data/system/packages.xml
+          # unconditionally during TUN init on GOOS=android builds, which is
+          # denied by SELinux on non-rooted devices and aborts TUN setup.
+          #
+          # arm64-v8a uses the LINUX build (GOOS=linux): no android platform
+          # branch → no buildAndroidRules() → no packages.xml read.
+          # Pure-Go static binary runs fine on Android's Linux kernel.
+          #
+          # x86_64 / armeabi-v7a keep android builds (CI emulator uses
+          # chmod o+r packages.xml as workaround for x86_64).
+          MIHOMO_VER="v1.18.10"
+          BASE="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}"
+
+          download_abi() {
+            local ABI="$1" ASSET="$2"
             mkdir -p "mobile/android/app/src/main/jniLibs/${ABI}"
-            curl -fL -o /tmp/mihomo.gz \
-              "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-android-${GOARCH}-${MIHOMO_VER}.gz"
+            curl -fSL -o /tmp/mihomo.gz "${BASE}/mihomo-${ASSET}-${MIHOMO_VER}.gz"
             gunzip /tmp/mihomo.gz
             mv /tmp/mihomo "mobile/android/app/src/main/jniLibs/${ABI}/libmihomo.so"
-          done
+            echo "${ABI}: $(du -h mobile/android/app/src/main/jniLibs/${ABI}/libmihomo.so | cut -f1)"
+          }
+
+          # linux build for real devices — avoids packages.xml SELinux denial
+          download_abi arm64-v8a   linux-arm64
+          # android builds for 32-bit and emulator
+          download_abi armeabi-v7a android-armv7
+          download_abi x86_64      android-amd64
           ls -lh mobile/android/app/src/main/jniLibs/
 
       - name: Configure Release Signing
