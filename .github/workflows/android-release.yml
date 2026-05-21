@@ -127,14 +127,14 @@ jobs:
             echo "${ABI} (pre-built): $(du -h "$DEST" | cut -f1)"
           }
 
-          # arm64-v8a and x86_64: build from source with GOOS=android -tags cmfa
-          # (no packages.xml read, no TUN reconfiguration)
+          # arm64-v8a: build from source with GOOS=android -tags cmfa
+          # (no packages.xml read, no TUN reconfiguration — only CGO-free android target)
           build_cmfa arm64-v8a arm64
-          build_cmfa x86_64    amd64
 
-          # armeabi-v7a: GOOS=android/arm requires CGO even with CGO_ENABLED=0
-          # due to assembly in mihomo deps; use pre-built android-armv7 as fallback
-          # (legacy ABI, <0.5% of active Android devices)
+          # x86_64 and armeabi-v7a: GOOS=android/{amd64,arm} requires CGO even
+          # with CGO_ENABLED=0 due to assembly in mihomo deps; use pre-built binaries.
+          # x86_64 is used only by emulators/Chromebooks; armeabi-v7a is legacy (<0.5%).
+          download_prebuilt x86_64      android-amd64
           download_prebuilt armeabi-v7a android-armv7
 
           ls -lh "${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/"*/
