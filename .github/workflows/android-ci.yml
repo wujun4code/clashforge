@@ -73,7 +73,9 @@ jobs:
 
       - name: Download Mihomo Core (x86_64 for emulator)
         run: |
-          MIHOMO_VER=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
+          # Pinned to v1.18.10: v1.19.x reads /data/system/packages.xml unconditionally
+          # during TUN init ("build android rules"), which is denied by SELinux on API 29.
+          MIHOMO_VER="v1.18.10"
           echo "Mihomo $MIHOMO_VER — trying android-amd64 then linux-amd64-compatible"
           mkdir -p mobile/android/app/src/main/jniLibs/x86_64
           if curl -fsSL -o /tmp/mihomo.gz \
