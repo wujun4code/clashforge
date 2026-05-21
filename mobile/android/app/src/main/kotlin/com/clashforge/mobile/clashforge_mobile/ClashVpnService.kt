@@ -95,6 +95,7 @@ class ClashVpnService : VpnService(), Runnable {
                 .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer("172.19.0.1")   // mihomo listens here after patching
+                .setMtu(1500)                 // explicit MTU so sing-tun doesn't need to set it
                 .setSession("ClashForge")
                 .setBlocking(false)
 
@@ -193,7 +194,6 @@ tun:
   device: "/proc/self/fd/$tunFd"
   auto-route: false
   auto-detect-interface: false
-  mtu: 1500
   dns-hijack:
     - "any:53"
 
@@ -231,6 +231,10 @@ sniffer:
         // can fast-fail unsupported UDP sessions.
         // If the subscription config already has a sniffer block this override is
         // intentional — our config is always more complete for VPN usage.
+        // mtu is intentionally omitted: sing-tun calls SIOCSIFMTU when mtu != 0,
+        // which requires CAP_NET_ADMIN and fails on Android VPN apps.
+        // Android VpnService already sets MTU=1500 (via setMtu above); sing-tun
+        // leaves the interface MTU untouched when the option is absent (0).
         val tunStanza = """
 
 tun:
@@ -239,7 +243,6 @@ tun:
   device: "/proc/self/fd/$tunFd"
   auto-route: false
   auto-detect-interface: false
-  mtu: 1500
   dns-hijack:
     - "any:53"
 
@@ -258,7 +261,9 @@ sniffer:
         configFile.appendText(tunStanza)
         LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
             "fd"     to tunFd,
-            "device" to "/proc/self/fd/$tunFd"
+            "device" to "/proc/self/fd/$tunFd",
+            "stack"  to "gvisor",
+            "mtu"    to "android-default(1500)"
         ))
     }
 
@@ -316,8 +321,10 @@ sniffer:
 
         LogEventBridge.info("mihomo", "Starting core", mapOf(
             "bin"           to coreBin.absolutePath,
+            "bin_size_mb"   to String.format("%.1f", coreBin.length() / 1048576.0),
             "config_exists" to configFile.exists(),
-            "config_size"   to configFile.length()
+            "config_size"   to configFile.length(),
+            "abi"           to android.os.Build.SUPPORTED_ABIS.firstOrNull()
         ))
 
         val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
