@@ -196,6 +196,18 @@ tun:
   mtu: 1500
   dns-hijack:
     - "any:53"
+
+sniffer:
+  enable: true
+  override-destination: true
+  parse-pure-ip: true
+  sniff:
+    TLS:
+      ports: [443, 8443]
+    HTTP:
+      ports: [80, 8080-8880]
+    QUIC:
+      ports: [443]
 """.trimIndent()
 
     private fun patchConfigWithTun(tunFd: Int) {
@@ -211,6 +223,14 @@ tun:
             LogEventBridge.warn("vpn", "config.yaml not found — skipping TUN patch")
             return
         }
+        // Append TUN + sniffer together.
+        // sniffer enables QUIC/TLS/HTTP domain identification so mihomo can apply
+        // domain-based rules to QUIC (HTTP/3) connections via the gvisor TUN stack.
+        // Without sniffer, QUIC to HTTP-proxy nodes causes a silent timeout before
+        // the app falls back to TCP; with sniffer mihomo identifies the domain and
+        // can fast-fail unsupported UDP sessions.
+        // If the subscription config already has a sniffer block this override is
+        // intentional — our config is always more complete for VPN usage.
         val tunStanza = """
 
 tun:
@@ -222,6 +242,18 @@ tun:
   mtu: 1500
   dns-hijack:
     - "any:53"
+
+sniffer:
+  enable: true
+  override-destination: true
+  parse-pure-ip: true
+  sniff:
+    TLS:
+      ports: [443, 8443]
+    HTTP:
+      ports: [80, 8080-8880]
+    QUIC:
+      ports: [443]
 """
         configFile.appendText(tunStanza)
         LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
