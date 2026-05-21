@@ -324,7 +324,7 @@ sniffer:
             "bin_size_mb"   to String.format("%.1f", coreBin.length() / 1048576.0),
             "config_exists" to configFile.exists(),
             "config_size"   to configFile.length(),
-            "abi"           to android.os.Build.SUPPORTED_ABIS.firstOrNull()
+            "abi"           to (android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
         ))
 
         val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
