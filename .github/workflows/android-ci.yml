@@ -137,6 +137,7 @@ jobs:
             adb root 2>/dev/null || true
             adb wait-for-device
             adb shell setenforce 0 2>/dev/null || true
+            adb shell chmod o+r /data/system/packages.xml 2>/dev/null || true
             adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-debug.apk"
             adb reverse tcp:9050 tcp:9050
             adb logcat -c 2>/dev/null || true
