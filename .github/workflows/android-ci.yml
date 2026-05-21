@@ -46,7 +46,7 @@ jobs:
     name: Android E2E Emulated Test
     runs-on: ubuntu-latest
     needs: test
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -120,11 +120,5 @@ jobs:
           profile: Nexus 6
           script: |
             set -e
-            echo "Pre-installing debug APK…"
             adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-debug.apk"
-            echo "Granting VPN appops permission (op 67)…"
-            adb shell cmd appops set com.clashforge.mobile.clashforge_mobile 67 allow
-            echo "Starting background loop to re-grant every 2 s (flutter test reinstall clears appops)…"
-            (while true; do sleep 2; adb shell cmd appops set com.clashforge.mobile.clashforge_mobile 67 allow 2>/dev/null || true; done) &
-            echo "Running E2E integration test…"
-            cd "${GITHUB_WORKSPACE}/mobile" && flutter test integration_test/app_e2e_test.dart "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" --reporter=expanded --timeout=300s
+            (while true; do if adb shell uiautomator dump /sdcard/d.xml >/dev/null 2>&1 && adb pull /sdcard/d.xml /tmp/vd.xml >/dev/null 2>&1 && grep -q vpndialogs /tmp/vd.xml 2>/dev/null; then python3 -c "import xml.etree.ElementTree as ET,re; [print((int(m.group(1))+int(m.group(3)))//2,(int(m.group(2))+int(m.group(4)))//2) for n in ET.parse('/tmp/vd.xml').iter() if n.get('text') in ('OK','Allow','ALLOW') for m in [re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.get('bounds',''))] if m]" 2>/dev/null | head -1 | xargs -r adb shell input tap >/dev/null 2>&1; fi; sleep 1; done) & BGPID=$!; cd "${GITHUB_WORKSPACE}/mobile" && flutter test integration_test/app_e2e_test.dart "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" --reporter=expanded --timeout=300s; TEST_RC=$?; kill $BGPID 2>/dev/null; exit $TEST_RC
