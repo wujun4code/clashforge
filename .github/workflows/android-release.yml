@@ -93,32 +93,50 @@ jobs:
           #    this on non-rooted devices → "build android rules: ... permission
           #    denied".
           #
-          # Solution: build mihomo ourselves with:
+          # Solution for arm64 + x86_64: build with GOOS=android -tags cmfa.
           #   GOOS=android  — correct VPN fd path (no CAP_NET_ADMIN calls)
-          #   -tags cmfa    — buildAndroidRules() becomes a no-op stub (the
-          #                   same approach used by ClashMetaForAndroid)
+          #   -tags cmfa    — buildAndroidRules() becomes a no-op stub
           #
-          # This combination has no packages.xml read AND no TUN reconfiguration.
+          # armeabi-v7a (32-bit ARM, <0.5% of active devices): GOOS=android
+          # GOARCH=arm requires CGO linking which needs Android NDK.  Use the
+          # pre-built android-armv7 binary as a fallback — packages.xml error
+          # may occur on non-rooted 32-bit devices but arm64 is unaffected.
           MIHOMO_VER="v1.18.10"
+          BASE="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}"
+
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
 
-          build_abi() {
-            local ABI="$1" GOARCH="$2" GOARM="${3:-}"
+          build_cmfa() {
+            local ABI="$1" GOARCH="$2"
             local DEST="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/${ABI}/libmihomo.so"
             mkdir -p "$(dirname "$DEST")"
-            GOOS=android GOARCH="$GOARCH" GOARM="$GOARM" CGO_ENABLED=0 \
+            GOOS=android GOARCH="$GOARCH" CGO_ENABLED=0 \
               go build -C /tmp/mihomo-src \
                 -tags cmfa \
                 -trimpath \
                 -ldflags="-s -w" \
                 -o "$DEST" .
-            echo "${ABI}: $(du -h "$DEST" | cut -f1)"
+            echo "${ABI} (cmfa): $(du -h "$DEST" | cut -f1)"
           }
 
-          build_abi arm64-v8a   arm64
-          build_abi armeabi-v7a arm   7
-          build_abi x86_64      amd64
+          download_prebuilt() {
+            local ABI="$1" ASSET="$2"
+            local DEST="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/${ABI}/libmihomo.so"
+            mkdir -p "$(dirname "$DEST")"
+            curl -fSL -o /tmp/mihomo.gz "${BASE}/mihomo-${ASSET}-${MIHOMO_VER}.gz"
+            gunzip /tmp/mihomo.gz
+            mv /tmp/mihomo "$DEST"
+            echo "${ABI} (pre-built): $(du -h "$DEST" | cut -f1)"
+          }
+
+          # arm64 and x86_64: build from source with -tags cmfa
+          build_cmfa arm64-v8a arm64
+          build_cmfa x86_64    amd64
+
+          # armeabi-v7a: GOOS=android/arm requires CGO; use pre-built fallback
+          download_prebuilt armeabi-v7a android-armv7
+
           ls -lh "${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/"*/
 
       - name: Configure Release Signing
