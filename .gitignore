@@ -2,6 +2,9 @@
 bin/
 /clashforge
 
+# Android native libs — downloaded by mobile/scripts/download-mihomo.sh
+mobile/android/app/src/main/jniLibs/
+
 # Private test data - NEVER commit these
 testdata/sample-clash-config.yaml
 testdata/*.yaml
