@@ -189,7 +189,7 @@ rules:
 
 tun:
   enable: true
-  stack: mixed
+  stack: gvisor
   device: "/proc/self/fd/$tunFd"
   auto-route: false
   auto-detect-interface: false
