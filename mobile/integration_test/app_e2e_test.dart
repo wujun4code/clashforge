@@ -8,7 +8,7 @@
 //   Round 3  — IP probe restored (must match baseline)
 //
 // Required: --dart-define=SUBSCRIPTION_URL=<url>
-// Pre-requisite in CI: adb appops grant VPN permission before this test runs.
+// CI: a background adb loop (uiautomator dump + tap) auto-dismisses the VPN consent dialog.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -115,9 +115,25 @@ void main() {
         label: 'VPN connect',
       );
 
-      // If permission dialog appeared (ADB grant may not have persisted), fail clearly
+      // VPN consent dialog appeared — the background CI adb loop (uiautomator dump + tap)
+      // will dismiss it within a few seconds; onActivityResult then starts the VPN service.
+      // Wait for the clicker, then tap the toggle again so Flutter gets 'started' → Connected.
       if (find.text('Grant VPN permission, then tap again').evaluate().isNotEmpty) {
-        fail('[E2E] VPN permission was not pre-granted — check CI workflow (adb appops set)');
+        _log('[E2E] VPN consent dialog detected — waiting 15 s for CI clicker to dismiss it…');
+        await Future<void>.delayed(const Duration(seconds: 15));
+        await tester.pumpAndSettle();
+
+        _log('[E2E] Tapping VPN toggle again after permission grant');
+        await tester.tap(find.byKey(const Key('vpn_toggle')));
+        await tester.pump();
+
+        await _waitUntil(
+          tester,
+          () => find.text('Connected').evaluate().isNotEmpty ||
+                find.textContaining('Error:').evaluate().isNotEmpty,
+          timeout: const Duration(seconds: 30),
+          label: 'VPN connect (after permission grant)',
+        );
       }
 
       if (find.textContaining('Error:').evaluate().isNotEmpty) {
