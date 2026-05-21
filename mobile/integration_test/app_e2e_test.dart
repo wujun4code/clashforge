@@ -172,8 +172,17 @@ void main() {
       _log('VPN service: running. Mihomo: running');
 
       // ── Round 2: IP probe through VPN ───────────────────────────────
-      _log('Round 2: probing IP through VPN…');
-      final vpnIp = await _probeIp();
+      // Retry up to 5 times with 6 s gaps — Tor relays can take several seconds to
+      // establish the first circuit, and mihomo's url-test needs time to settle.
+      _log('Round 2: probing IP through VPN (up to 5 attempts)…');
+      String vpnIp = '';
+      for (var attempt = 1; attempt <= 5; attempt++) {
+        vpnIp = await _probeIp();
+        if (vpnIp.isNotEmpty) break;
+        _log('Round 2 attempt $attempt returned empty — waiting 6 s…');
+        await Future<void>.delayed(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      }
       _log('Round 2 VPN IP: $vpnIp');
       expect(vpnIp, isNotEmpty, reason: 'Network must be reachable through VPN');
       expect(
@@ -251,7 +260,9 @@ Future<String> _probeIp() async {
         final ip = (body['ip'] ?? body['origin']) as String?;
         if (ip != null && ip.isNotEmpty) return ip.split(',').first.trim();
       }
-    } catch (_) {}
+    } catch (e) {
+      _log('Probe $endpoint failed: $e');
+    }
   }
   return '';
 }

@@ -140,10 +140,73 @@ class ClashVpnService : VpnService(), Runnable {
         }
     }
 
-    // Appends the TUN stanza to config.yaml so mihomo uses Android's VPN interface
-    // instead of trying to create its own (which requires root).
+    // Returns true when running inside a CI emulator that has forwarded Tor SOCKS5 via
+    // "adb reverse tcp:9050 tcp:9050".  Uses a short timeout so it doesn't stall production.
+    private fun isCiTorAvailable(): Boolean = try {
+        java.net.Socket().use {
+            it.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 300)
+        }
+        true
+    } catch (_: Exception) { false }
+
+    // In CI, subscription proxy nodes are blocked from GitHub Actions (Azure) IPs.
+    // When Tor is detected on 127.0.0.1:9050 (forwarded from the CI host via adb reverse),
+    // we replace the entire config with a minimal one that uses Tor as the sole proxy.
+    // This guarantees a different exit IP without depending on external proxy reachability.
+    private fun buildCiConfig(tunFd: Int) = """
+port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: debug
+external-controller: 127.0.0.1:9090
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  enhanced-mode: fake-ip
+  nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+  fake-ip-filter:
+    - "*.lan"
+
+proxies:
+  - name: ci-tor
+    type: socks5
+    server: 127.0.0.1
+    port: 9050
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - ci-tor
+
+rules:
+  - GEOIP,private,DIRECT,no-resolve
+  - MATCH,Proxy
+
+tun:
+  enable: true
+  stack: mixed
+  device: "/proc/self/fd/$tunFd"
+  auto-route: false
+  auto-detect-interface: false
+  mtu: 1500
+  dns-hijack:
+    - "any:53"
+""".trimIndent()
+
     private fun patchConfigWithTun(tunFd: Int) {
         val configFile = File(filesDir, "config.yaml")
+
+        if (isCiTorAvailable()) {
+            LogEventBridge.info("vpn", "CI mode: Tor SOCKS5 detected on :9050 — writing CI config", mapOf("tunFd" to tunFd))
+            configFile.writeText(buildCiConfig(tunFd))
+            return
+        }
+
         if (!configFile.exists()) {
             LogEventBridge.warn("vpn", "config.yaml not found — skipping TUN patch")
             return
@@ -226,9 +289,7 @@ tun:
         ))
 
         val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
-        pb.redirectErrorStream(true)
-        // Inherit all open fds so /proc/self/fd/{tunFd} is valid in the child
-        pb.inheritIO()
+        pb.redirectErrorStream(true)   // capture stderr+stdout via inputStream → Log.d("MihomoCore")
         coreProcess = pb.start()
 
         val pid = try {
