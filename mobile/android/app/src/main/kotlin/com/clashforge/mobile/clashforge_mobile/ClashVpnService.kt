@@ -191,7 +191,7 @@ rules:
 tun:
   enable: true
   stack: gvisor
-  device: "/proc/self/fd/$tunFd"
+  file-descriptor: $tunFd
   auto-route: false
   auto-detect-interface: false
   dns-hijack:
@@ -231,16 +231,17 @@ sniffer:
         // can fast-fail unsupported UDP sessions.
         // If the subscription config already has a sniffer block this override is
         // intentional — our config is always more complete for VPN usage.
-        // mtu is intentionally omitted: sing-tun calls SIOCSIFMTU when mtu != 0,
-        // which requires CAP_NET_ADMIN and fails on Android VPN apps.
-        // Android VpnService already sets MTU=1500 (via setMtu above); sing-tun
-        // leaves the interface MTU untouched when the option is absent (0).
+        // file-descriptor passes the fd number directly to sing-tun's Options.FileDescriptor.
+        // When FileDescriptor != 0, sing-tun.New() skips configure() entirely — no TUNSETIFF,
+        // no SIOCSIFFLAGS, no SIOCSIFMTU — so no CAP_NET_ADMIN is needed.
+        // Using device: "/proc/self/fd/N" would set FileDescriptor=0 (mihomo treats it as an
+        // invalid name, generates mihomo0, and tries to open /dev/tun — blocked on Android).
         val tunStanza = """
 
 tun:
   enable: true
   stack: gvisor
-  device: "/proc/self/fd/$tunFd"
+  file-descriptor: $tunFd
   auto-route: false
   auto-detect-interface: false
   dns-hijack:
@@ -260,10 +261,9 @@ sniffer:
 """
         configFile.appendText(tunStanza)
         LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
-            "fd"     to tunFd,
-            "device" to "/proc/self/fd/$tunFd",
-            "stack"  to "gvisor",
-            "mtu"    to "android-default(1500)"
+            "fd"             to tunFd,
+            "file-descriptor" to tunFd,
+            "stack"          to "gvisor"
         ))
     }
 
