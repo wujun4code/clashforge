@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'subscription/subscription_parser.dart';
 import 'subscription/subscription_store.dart';
 import 'subscription/proxy_node.dart';
@@ -9,6 +10,14 @@ import 'config/vpn_manager.dart';
 import 'config/config_generator.dart';
 import 'logger/app_logger.dart';
 import 'logger/log_entry.dart';
+import 'update_checker.dart';
+
+Future<void> _launchUrl(String url) async {
+  final uri = Uri.parse(url);
+  if (await canLaunchUrl(uri)) {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+}
 
 void main() {
   runApp(const ClashForgeApp());
@@ -1025,6 +1034,21 @@ class _SettingsTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 _SettingsTile(
+                  iconColor: const Color(0xFF34D399),
+                  icon: Icons.system_update_alt_outlined,
+                  title: 'Check for Updates',
+                  subtitle: 'See if a newer version is available',
+                  onTap: () => showModalBottomSheet(
+                    context: context,
+                    backgroundColor: _kCard,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                    ),
+                    builder: (_) => const _UpdateSheet(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _SettingsTile(
                   iconColor: _kBrand,
                   icon: Icons.info_outline,
                   title: 'About',
@@ -1383,16 +1407,28 @@ class _AboutTabState extends State<_AboutTab> {
   Map<String, dynamic> _info = {};
   bool _loading = false;
 
+  UpdateInfo? _updateInfo;
+  bool _updateChecking = false;
+  bool _updateChecked = false;
+
   @override
   void initState() {
     super.initState();
     _refresh();
+    _checkUpdate();
   }
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
     final info = await VpnManager.getSystemInfo();
     if (mounted) setState(() { _info = info; _loading = false; });
+  }
+
+  Future<void> _checkUpdate() async {
+    if (_updateChecking) return;
+    setState(() { _updateChecking = true; _updateChecked = false; });
+    final info = await fetchLatestRelease();
+    if (mounted) setState(() { _updateInfo = info; _updateChecking = false; _updateChecked = true; });
   }
 
   @override
@@ -1483,6 +1519,58 @@ class _AboutTabState extends State<_AboutTab> {
             ]),
             const SizedBox(height: 14),
 
+            section('UPDATE', [
+              if (_updateChecking)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Row(children: [
+                    SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: _kBrand)),
+                    SizedBox(width: 12),
+                    Text('Checking for updates…',
+                        style: TextStyle(color: _kTextMuted, fontSize: 14)),
+                  ]),
+                )
+              else if (!_updateChecked)
+                row('Status', '—')
+              else if (_updateInfo == null)
+                row('Status', 'Could not check', valueColor: _kError)
+              else if (!_updateInfo!.isNewerThan(appVersion))
+                row('Status', 'Up to date  ✓', valueColor: _kConnected)
+              else ...[
+                row('Latest', _updateInfo!.tag, valueColor: _kBrand),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10, top: 4),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.download_rounded, size: 18),
+                      label: Text('Download ${_updateInfo!.tag}'),
+                      onPressed: () => _launchUrl(_updateInfo!.htmlUrl),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _kBrand,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              if (_updateChecked && _updateInfo != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: TextButton(
+                    onPressed: _checkUpdate,
+                    style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                    child: const Text('Re-check',
+                        style: TextStyle(color: _kTextFaint, fontSize: 12)),
+                  ),
+                ),
+            ]),
+            const SizedBox(height: 14),
+
             section('RUNTIME', [
               row('VPN',    vpnRunning    ? 'Running'  : 'Stopped',
                   valueColor: vpnRunning    ? _kConnected : _kTextMuted),
@@ -1500,6 +1588,175 @@ class _AboutTabState extends State<_AboutTab> {
                 style: TextStyle(color: _kTextFaint, fontSize: 12))),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Update check bottom sheet (from Settings → Check for Updates)
+// ─────────────────────────────────────────────────────────────
+class _UpdateSheet extends StatefulWidget {
+  const _UpdateSheet();
+
+  @override
+  State<_UpdateSheet> createState() => _UpdateSheetState();
+}
+
+class _UpdateSheetState extends State<_UpdateSheet> {
+  UpdateInfo? _info;
+  bool _loading = true;
+  String _currentVersion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final sysInfo = await VpnManager.getSystemInfo();
+    final cv = sysInfo['app_version'] as String? ?? '';
+    final info = await fetchLatestRelease();
+    if (mounted) {
+      setState(() {
+        _currentVersion = cv;
+        _info = info;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isNewer = _info != null && _info!.isNewerThan(_currentVersion);
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: _kBorder,
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: const Color(0xFF34D399).withAlpha(22),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: const Color(0xFF34D399).withAlpha(60)),
+              ),
+              child: const Icon(Icons.system_update_alt_outlined,
+                  color: Color(0xFF34D399), size: 20),
+            ),
+            const SizedBox(width: 12),
+            const Text('Check for Updates',
+                style: TextStyle(
+                    color: _kTextHi,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+          ]),
+          const SizedBox(height: 24),
+          if (_loading) ...[
+            const Center(
+                child: CircularProgressIndicator(color: _kBrand)),
+            const SizedBox(height: 12),
+            const Center(
+                child: Text('Checking…',
+                    style: TextStyle(color: _kTextMuted, fontSize: 13))),
+          ] else if (_info == null) ...[
+            Row(children: const [
+              Icon(Icons.warning_amber_rounded, color: _kError, size: 22),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                    'Could not check for updates.\nVerify internet connection.',
+                    style: TextStyle(color: _kTextMuted, fontSize: 14)),
+              ),
+            ]),
+          ] else if (!isNewer) ...[
+            Row(children: [
+              const Icon(Icons.check_circle_outline,
+                  color: _kConnected, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('You are up to date',
+                        style: TextStyle(
+                            color: _kConnected,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600)),
+                    Text('Version: ${_info!.tag}',
+                        style: const TextStyle(
+                            color: _kTextMuted, fontSize: 13)),
+                  ],
+                ),
+              ),
+            ]),
+          ] else ...[
+            Row(children: [
+              const Icon(Icons.new_releases_outlined,
+                  color: _kBrand, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Update available',
+                        style: TextStyle(
+                            color: _kBrand,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600)),
+                    if (_currentVersion.isNotEmpty)
+                      Text('$_currentVersion  →  ${_info!.tag}',
+                          style: const TextStyle(
+                              color: _kTextMuted, fontSize: 13)),
+                  ],
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.download_rounded, size: 18),
+                label: Text('Download ${_info!.tag}'),
+                onPressed: () => _launchUrl(_info!.htmlUrl),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kBrand,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          if (!_loading)
+            Center(
+              child: TextButton(
+                onPressed: () => _launchUrl(
+                    'https://github.com/wujun4code/clashforge/releases'),
+                child: const Text('All releases →',
+                    style: TextStyle(color: _kTextMuted, fontSize: 13)),
+              ),
+            ),
+        ],
       ),
     );
   }
