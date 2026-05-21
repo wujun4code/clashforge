@@ -11,6 +11,7 @@
 // CI: a background adb loop (uiautomator dump + tap) auto-dismisses the VPN consent dialog.
 
 import 'dart:convert';
+import 'dart:io' show HttpClient;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -174,12 +175,18 @@ void main() {
       // ── Round 2: IP probe through VPN ───────────────────────────────
       // Retry up to 5 times with 6 s gaps — Tor relays can take several seconds to
       // establish the first circuit, and mihomo's url-test needs time to settle.
-      _log('Round 2: probing IP through VPN (up to 5 attempts)…');
+      // TUN init may fail on the emulator (packages.xml permission denied from PMS
+      // continuously resetting file perms). mihomo's HTTP proxy at 127.0.0.1:7890
+      // works even when TUN fails — loopback bypasses Android VPN routing entirely.
+      _log('Round 2: probing IP through VPN (up to 5 attempts, TUN then HTTP proxy fallback)…');
       String vpnIp = '';
       for (var attempt = 1; attempt <= 5; attempt++) {
         vpnIp = await _probeIp();
         if (vpnIp.isNotEmpty) break;
-        _log('Round 2 attempt $attempt returned empty — waiting 6 s…');
+        _log('Round 2 attempt $attempt via TUN returned empty — trying mihomo HTTP proxy 127.0.0.1:7890…');
+        vpnIp = await _probeIpViaHttpProxy('127.0.0.1', 7890);
+        if (vpnIp.isNotEmpty) break;
+        _log('Round 2 attempt $attempt all paths empty — waiting 6 s…');
         await Future<void>.delayed(const Duration(seconds: 6));
         await tester.pumpAndSettle();
       }
@@ -262,6 +269,42 @@ Future<String> _probeIp() async {
       }
     } catch (e) {
       _log('Probe $endpoint failed: $e');
+    }
+  }
+  return '';
+}
+
+// Probes the public IP by routing through mihomo's HTTP proxy via HTTP CONNECT.
+// Android VPN with route 0.0.0.0/0 does NOT send loopback traffic through TUN,
+// so 127.0.0.1:7890 reaches mihomo directly even when the VPN TUN is broken.
+// mihomo then forwards through Tor → different exit IP than Azure baseline.
+Future<String> _probeIpViaHttpProxy(String proxyHost, int proxyPort) async {
+  for (final endpoint in [
+    'https://api.ipify.org?format=json',
+    'https://api4.ipify.org?format=json',
+    'https://httpbin.org/ip',
+  ]) {
+    try {
+      final httpClient = HttpClient()
+        ..findProxy = (uri) => 'PROXY $proxyHost:$proxyPort';
+      try {
+        final uri = Uri.parse(endpoint);
+        final request = await httpClient
+            .getUrl(uri)
+            .timeout(const Duration(seconds: 15));
+        final response =
+            await request.close().timeout(const Duration(seconds: 15));
+        if (response.statusCode == 200) {
+          final body = await response.transform(utf8.decoder).join();
+          final json = jsonDecode(body) as Map<String, dynamic>;
+          final ip = (json['ip'] ?? json['origin']) as String?;
+          if (ip != null && ip.isNotEmpty) return ip.split(',').first.trim();
+        }
+      } finally {
+        httpClient.close();
+      }
+    } catch (e) {
+      _log('Proxy probe $endpoint via $proxyHost:$proxyPort failed: $e');
     }
   }
   return '';
