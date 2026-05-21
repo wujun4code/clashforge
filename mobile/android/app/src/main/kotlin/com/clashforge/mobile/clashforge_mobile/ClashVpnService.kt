@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.system.Os
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -25,9 +24,6 @@ class ClashVpnService : VpnService(), Runnable {
         @Volatile var mihomoPid      = -1
     }
 
-    // Holds the Os.dup() copy of the TUN fd so stopVpn() can close it.
-    // Without this, Android keeps the VPN tunnel alive even after vpnInterface.close().
-    private var dupTunFd: java.io.FileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -64,15 +60,6 @@ class ClashVpnService : VpnService(), Runnable {
         coreProcess = null
         LogEventBridge.debug("vpn", "Mihomo process destroyed")
 
-        // Close the dup'd TUN fd first — this is the one the service process kept open
-        // after handing the fd to mihomo. Without closing it the OS keeps the tunnel alive.
-        try {
-            dupTunFd?.let { android.system.Os.close(it) }
-        } catch (e: Exception) {
-            LogEventBridge.warn("vpn", "Error closing dup'd TUN fd: ${e.message}")
-        }
-        dupTunFd = null
-
         try {
             vpnInterface?.close()
         } catch (e: Exception) {
@@ -107,27 +94,15 @@ class ClashVpnService : VpnService(), Runnable {
             val tunFd = vpnInterface!!.fd
             LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
 
-            // Os.dup() creates a copy of the fd WITHOUT FD_CLOEXEC (by POSIX spec),
-            // so mihomo's child process can inherit it via /proc/self/fd/N.
-            // We save the FileDescriptor in dupTunFd so stopVpn() can close it —
-            // if left open, the VPN tunnel stays active even after vpnInterface.close().
-            var inheritableFd = tunFd
-            try {
-                val dupFileDes = Os.dup(vpnInterface!!.fileDescriptor)
-                dupTunFd = dupFileDes
-                val fdField = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
-                fdField.isAccessible = true
-                inheritableFd = fdField.getInt(dupFileDes)
-                LogEventBridge.debug("vpn", "Duplicated TUN fd (no CLOEXEC)",
-                    mapOf("orig" to tunFd, "dup" to inheritableFd))
-            } catch (e: Exception) {
-                LogEventBridge.warn("vpn", "Could not dup TUN fd, using original: ${e.message}")
-            }
+            // Android's ProcessBuilder scans /proc/self/fd and closes ALL fds >= 3 before exec,
+            // so fd inheritance doesn't work for passing the TUN fd to a subprocess.
+            // Instead: redirect mihomo's stdin (fd 0) to the TUN fd via /proc/self/fd/<N>.
+            // ProcessBuilder opens /proc/self/fd/<N> in the PARENT (while fd N is valid),
+            // then dup2s the result to fd 0 in the child. Stdin is never closed by
+            // closeDescriptors(). In the config we write file-descriptor: 0.
+            patchConfigWithTun(0)
 
-            // Patch config.yaml with the TUN section now that an inheritable fd is known
-            patchConfigWithTun(inheritableFd)
-
-            startMihomoCore()
+            startMihomoCore(tunFd)
 
             LogEventBridge.info("vpn", "VPN loop running")
             while (isRunning) Thread.sleep(1000)
@@ -231,11 +206,10 @@ sniffer:
         // can fast-fail unsupported UDP sessions.
         // If the subscription config already has a sniffer block this override is
         // intentional — our config is always more complete for VPN usage.
-        // file-descriptor passes the fd number directly to sing-tun's Options.FileDescriptor.
-        // When FileDescriptor != 0, sing-tun.New() skips configure() entirely — no TUNSETIFF,
-        // no SIOCSIFFLAGS, no SIOCSIFMTU — so no CAP_NET_ADMIN is needed.
-        // Using device: "/proc/self/fd/N" would set FileDescriptor=0 (mihomo treats it as an
-        // invalid name, generates mihomo0, and tries to open /dev/tun — blocked on Android).
+        // file-descriptor: 0 = mihomo's stdin, which ProcessBuilder sets to the TUN fd via
+        // redirectInput(File("/proc/self/fd/<N>")). Android closes all fds >= 3 before exec
+        // so fd inheritance doesn't work; stdin (fd 0) is the only reliably preserved fd.
+        // sing-tun.New() skips configure() entirely when FileDescriptor != 0.
         val tunStanza = """
 
 tun:
@@ -261,9 +235,9 @@ sniffer:
 """
         configFile.appendText(tunStanza)
         LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
-            "fd"             to tunFd,
             "file-descriptor" to tunFd,
-            "stack"          to "gvisor"
+            "stack"           to "gvisor",
+            "note"            to "stdin=TUN"
         ))
     }
 
@@ -307,7 +281,7 @@ sniffer:
         }
     }
 
-    private fun startMihomoCore() {
+    private fun startMihomoCore(tunFd: Int) {
         val appDir     = filesDir.absolutePath
         // nativeLibraryDir is on an executable partition; filesDir is mounted noexec on API 29+
         val coreBin    = File(applicationInfo.nativeLibraryDir, "libmihomo.so")
@@ -324,10 +298,16 @@ sniffer:
             "bin_size_mb"   to String.format("%.1f", coreBin.length() / 1048576.0),
             "config_exists" to configFile.exists(),
             "config_size"   to configFile.length(),
-            "abi"           to (android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
+            "abi"           to (android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
+            "tun_fd"        to tunFd
         ))
 
         val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
+        // Redirect stdin to the TUN fd via /proc/self/fd/<N>.
+        // ProcessBuilder opens this path in the parent process (while fd N is still valid),
+        // then dup2s the result to fd 0 (stdin) in the child before exec.
+        // This bypasses Android's closeDescriptors() which closes all fds >= 3.
+        pb.redirectInput(File("/proc/self/fd/$tunFd"))
         pb.redirectErrorStream(true)   // capture stderr+stdout via inputStream → Log.d("MihomoCore")
         coreProcess = pb.start()
 
