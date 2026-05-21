@@ -139,6 +139,18 @@ jobs:
 
           ls -lh "${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/"*/
 
+          # Verify arm64-v8a binary was built with GOOS=android and -tags cmfa.
+          # go version -m prints embedded build metadata; fail fast if it shows GOOS=linux
+          # or if the cmfa tag is missing.
+          echo "--- arm64-v8a build metadata ---"
+          ARM64_BIN="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/arm64-v8a/libmihomo.so"
+          go version -m "$ARM64_BIN"
+          go version -m "$ARM64_BIN" | grep -q 'GOOS=android' \
+            || { echo "ERROR: arm64-v8a binary is not GOOS=android!"; exit 1; }
+          go version -m "$ARM64_BIN" | grep -q 'tags.*cmfa' \
+            || { echo "ERROR: arm64-v8a binary missing -tags cmfa!"; exit 1; }
+          echo "✓ arm64-v8a: GOOS=android + -tags cmfa confirmed"
+
       - name: Configure Release Signing
         env:
           KEYSTORE_BASE64:    ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
