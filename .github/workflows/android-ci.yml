@@ -79,6 +79,15 @@ jobs:
         run: flutter pub get
         working-directory: mobile
 
+      - name: Download geodata assets
+        run: |
+          mkdir -p assets/geodata
+          curl -fSL -o assets/geodata/country.mmdb \
+            https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb
+          curl -fSL -o assets/geodata/geosite.dat \
+            https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
+        working-directory: mobile
+
       - name: Run tests
         run: flutter test
         working-directory: mobile
