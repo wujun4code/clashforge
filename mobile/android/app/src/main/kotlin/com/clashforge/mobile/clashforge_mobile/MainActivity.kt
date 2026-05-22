@@ -5,21 +5,28 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Process
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 class MainActivity : FlutterActivity() {
     private val VPN_CHANNEL = "com.clashforge.mobile/vpn"
     private val LOG_CHANNEL = "com.clashforge.mobile/logs"
     private val HTTP_CHANNEL = "com.clashforge.mobile/http"
+
+    // Single shared OkHttpClient — reuse connection pools and thread pools.
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -63,8 +70,9 @@ class MainActivity : FlutterActivity() {
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, LOG_CHANNEL)
             .setStreamHandler(LogEventBridge)
 
-        // HTTP channel: uses a hidden WebView (= Chrome TLS stack, identical JA3 fingerprint
-        // to the system browser) to fetch subscription URLs that block non-browser TLS clients.
+        // HTTP channel: uses OkHttp with a full desktop-Chrome header set so that
+        // subscription servers that fingerprint by User-Agent, Sec-Ch-Ua-Mobile, or
+        // Sec-Fetch-* headers allow the request through.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HTTP_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -73,59 +81,60 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARG", "url is required", null)
                             return@setMethodCallHandler
                         }
-                        // WebView must be created and used on the main (UI) thread.
-                        runOnUiThread { fetchWithWebView(url, result) }
+                        fetchWithOkHttp(url, result)
                     }
                     else -> result.notImplemented()
                 }
             }
     }
 
-    // Loads `url` in a hidden WebView and returns the plain-text body via `result`.
-    // Using WebView means we get Chrome's exact TLS/JA3 fingerprint, which passes
-    // fingerprint-gating subscription servers that block HttpURLConnection and Dart http.
-    private fun fetchWithWebView(url: String, result: MethodChannel.Result) {
-        val wv = WebView(this)
-        wv.settings.javaScriptEnabled = true
-        wv.webViewClient = object : WebViewClient() {
-            private var done = false
+    // Fetches `url` using OkHttp with a desktop Windows Chrome header set.
+    // Subscription servers often block mobile clients via:
+    //   • User-Agent containing "Mobile"
+    //   • Sec-Ch-Ua-Mobile: ?1  (Android WebView always sends this)
+    //   • Sec-Ch-Ua-Platform: "Android"
+    // OkHttp lets us send every header explicitly, so we fully impersonate a
+    // desktop Chrome request at the HTTP layer.
+    private fun fetchWithOkHttp(url: String, result: MethodChannel.Result) {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            .header("Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9," +
+                "image/avif,image/webp,image/apng,*/*;q=0.8," +
+                "application/signed-exchange;v=b3;q=0.7")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .header("Sec-Ch-Ua",
+                "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", " +
+                "\"Not-A.Brand\";v=\"99\"")
+            .header("Sec-Ch-Ua-Mobile", "?0")          // desktop, NOT mobile
+            .header("Sec-Ch-Ua-Platform", "\"Windows\"")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Site", "none")
+            .header("Sec-Fetch-User", "?1")
+            .header("Upgrade-Insecure-Requests", "1")
+            .build()
 
-            override fun onPageFinished(view: WebView, pageUrl: String) {
-                if (done) return
-                done = true
-                // document.documentElement.innerText captures raw text for plain-text
-                // responses (JSON/YAML rendered as <pre> by Chrome).
-                view.evaluateJavascript("document.documentElement.innerText") { raw ->
-                    try {
-                        // evaluateJavascript returns a JSON-encoded string; decode it.
-                        val body = org.json.JSONArray("[$raw]").getString(0)
-                        result.success(mapOf("status" to 200, "body" to body))
-                    } catch (e: Exception) {
-                        result.error("PARSE_ERROR", e.message ?: "parse failed", null)
+        // OkHttp is blocking; run on a background thread and marshal result back.
+        Thread {
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    runOnUiThread {
+                        result.success(mapOf("status" to response.code, "body" to body))
                     }
                 }
-            }
-
-            override fun onReceivedError(
-                view: WebView, req: WebResourceRequest, err: WebResourceError
-            ) {
-                if (req.isForMainFrame && !done) {
-                    done = true
-                    result.error("FETCH_ERROR", err.description.toString(), null)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.error("FETCH_ERROR", e.message ?: "fetch failed", null)
                 }
             }
-
-            @Suppress("DEPRECATION", "OverridingDeprecatedMember")
-            override fun onReceivedError(
-                view: WebView, code: Int, desc: String, failUrl: String
-            ) {
-                if (!done) {
-                    done = true
-                    result.error("FETCH_ERROR", desc, null)
-                }
-            }
-        }
-        wv.loadUrl(url)
+        }.start()
     }
 
     private fun buildSystemInfo(): Map<String, Any> {
