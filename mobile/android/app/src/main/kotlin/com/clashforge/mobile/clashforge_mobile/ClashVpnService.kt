@@ -90,7 +90,7 @@ class ClashVpnService : VpnService(), Runnable {
     override fun run() {
         try {
             extractAssetsIfNeeded()
-            if (!isCiTorAvailable()) {
+            if (!shouldUseCiTorConfig()) {
                 // Probe before establishing VPN interface; otherwise probe sockets may
                 // be routed back into the tunnel and produce false negatives.
                 val configFile = File(filesDir, "config.yaml")
@@ -150,9 +150,18 @@ class ClashVpnService : VpnService(), Runnable {
         }
     }
 
-    // Returns true when running inside a CI emulator that has forwarded Tor SOCKS5 via
-    // "adb reverse tcp:9050 tcp:9050".  Uses a short timeout so it doesn't stall production.
-    private fun isCiTorAvailable(): Boolean = try {
+    // Returns true only when CI Tor mode is explicitly enabled via a marker file
+    // and the forwarded Tor SOCKS5 endpoint is reachable.
+    // Marker: /data/local/tmp/clashforge_ci_tor.enable
+    private fun shouldUseCiTorConfig(): Boolean {
+        val marker = File("/data/local/tmp/clashforge_ci_tor.enable")
+        if (!marker.exists()) {
+            return false
+        }
+        return isTorPortReachable()
+    }
+
+    private fun isTorPortReachable(): Boolean = try {
         java.net.Socket().use {
             it.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 300)
         }
@@ -222,7 +231,7 @@ sniffer:
     private fun patchConfigWithTun(tunFd: Int) {
         val configFile = File(filesDir, "config.yaml")
 
-        if (isCiTorAvailable()) {
+        if (shouldUseCiTorConfig()) {
             LogEventBridge.info("vpn", "CI mode: Tor SOCKS5 detected on :9050 — writing CI config", mapOf("tunFd" to tunFd))
             configFile.writeText(buildCiConfig(tunFd))
             return

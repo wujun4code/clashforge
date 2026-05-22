@@ -7,6 +7,7 @@
         android:label="ClashForge"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:extractNativeLibs="true">
         <activity
             android:name=".MainActivity"
@@ -24,6 +25,11 @@
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
+              />
+            <!-- Disable Impeller on x86_64 emulator: causes GPU render pass failures -->
+            <meta-data
+              android:name="io.flutter.embedding.android.EnableImpeller"
+              android:value="false"
               />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
