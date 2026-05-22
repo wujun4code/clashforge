@@ -104,6 +104,29 @@ jobs:
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
 
+          # Download module dependencies and patch sing-tun fd-0 sentinel.
+          # ClashVpnService passes the TUN fd on fd 0 (stdin) past Android's closeDescriptors().
+          # sing-tun checks `options.FileDescriptor == 0` to decide "not set" — we change
+          # that to `< 0` so that file-descriptor: 0 means "use fd 0 (stdin)".
+          (cd /tmp/mihomo-src && go mod download)
+          # sing-tun is vendored as github.com/metacubex/sing-tun in mihomo v1.18.x.
+          # Patch tun_linux.go: ==0→<0 (not-set sentinel) and >0→>=0 (fd-provided checks).
+          SINGTUN_VER=$(cd /tmp/mihomo-src && go list -m github.com/metacubex/sing-tun | awk '{print $2}')
+          GOMODCACHE=$(go env GOMODCACHE)
+          SINGTUN_DIR="${GOMODCACHE}/github.com/metacubex/sing-tun@${SINGTUN_VER}"
+          chmod -R u+w "$SINGTUN_DIR"
+          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+          if [ -n "$PATCHED" ]; then
+            echo "$PATCHED" | xargs sed -i \
+              -e 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g' \
+              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g'
+            echo "Patched sing-tun ${SINGTUN_VER}: ==0→<0 and >0→>=0"
+          else
+            echo "WARNING: sentinel not found in sing-tun ${SINGTUN_VER}"
+            grep -r "FileDescriptor" "$SINGTUN_DIR" --include="*.go" -l || true
+            exit 1
+          fi
+
           build_cmfa() {
             local ABI="$1" GOARCH="$2"
             local DEST="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/${ABI}/libmihomo.so"

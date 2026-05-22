@@ -28,3 +28,13 @@ internal/api/ui_dist/
 /dist/
 __pycache__/
 internal/api/ui_dist/
+
+# Temporary debug files (logcat, UI dumps, adb captures)
+tmp-*
+
+# Geodata binaries — downloaded at CI build time
+mobile/assets/geodata/country.mmdb
+mobile/assets/geodata/geosite.dat
+
+# Claude Code runtime files
+.claude/scheduled_tasks.lock
