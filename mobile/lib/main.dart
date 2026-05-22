@@ -41,7 +41,7 @@ const _kTextFaint = Color(0xFF4A4570); // very faint
 
 const _kClashControllerHost = '127.0.0.1';
 const _kClashControllerPort = 9090;
-const _kMixedProxyPort = 7892;
+const _kHttpProxyPort = 7890;
 const _kMainProxyGroup = '🚀 Proxy';
 
 class _ProbeTarget {
@@ -288,7 +288,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadPersistedData() async {
-    final subs     = await SubscriptionStore.loadSubscriptions();
+    final subs = await SubscriptionStore.loadSubscriptions();
     final activeId = await SubscriptionStore.loadActiveId();
     if (subs.isNotEmpty) {
       final active = subs.firstWhere(
@@ -321,8 +321,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onNodesImported(List<ProxyNode> nodes,
       {String url = '', String nickname = ''}) {
-    final id  = '${DateTime.now().millisecondsSinceEpoch}';
-    final sub = Subscription(id: id, nickname: nickname, url: url, nodes: nodes);
+    final id = '${DateTime.now().millisecondsSinceEpoch}';
+    final sub =
+        Subscription(id: id, nickname: nickname, url: url, nodes: nodes);
 
     final previousSelected = _selectedNode?.name;
     ProxyNode? nextSelected;
@@ -591,7 +592,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (viaProxy) {
       client.findProxy =
-          (_) => 'PROXY $_kClashControllerHost:$_kMixedProxyPort;';
+          (_) => 'PROXY $_kClashControllerHost:$_kHttpProxyPort;';
     }
 
     try {
@@ -602,14 +603,14 @@ class _HomeScreenState extends State<HomeScreen> {
       final ip = viaProxy ? await _probeExitIp(client) : null;
       return _ProbeScopeResult(
         title: viaProxy ? '代理侧' : '本机侧',
-        via: viaProxy ? '经 Mihomo mixed 端口' : '手机系统直连网络',
+        via: viaProxy ? '经 Mihomo HTTP 端口' : '手机系统直连网络',
         results: checks,
         exitIp: ip,
       );
     } catch (e) {
       return _ProbeScopeResult(
         title: viaProxy ? '代理侧' : '本机侧',
-        via: viaProxy ? '经 Mihomo mixed 端口' : '手机系统直连网络',
+        via: viaProxy ? '经 Mihomo HTTP 端口' : '手机系统直连网络',
         results: const [],
         error: e.toString(),
       );
@@ -1475,9 +1476,10 @@ class _ProxiesTab extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Tab 3 — Subscriptions
 // ─────────────────────────────────────────────────────────────
-typedef _OnImported    = void Function(List<ProxyNode> nodes, {String url, String nickname});
+typedef _OnImported = void Function(List<ProxyNode> nodes,
+    {String url, String nickname});
 typedef _OnSubActivated = void Function(Subscription sub);
-typedef _OnSubDeleted   = void Function(Subscription sub);
+typedef _OnSubDeleted = void Function(Subscription sub);
 
 class _SubscriptionsTab extends StatefulWidget {
   const _SubscriptionsTab({
@@ -1519,8 +1521,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 
   static const _httpChannel = MethodChannel('com.clashforge.mobile/http');
 
-  // Uses Android's HttpURLConnection — system TLS stack has a browser-compatible
-  // JA3 fingerprint, bypassing servers that block Dart's dart:io TLS client.
+  // Uses Android native networking stack (Cronet first, HttpURLConnection fallback)
+  // to improve compatibility with subscription endpoints.
   Future<(int, String)> _fetchUrlNative(String url) async {
     final result = await _httpChannel.invokeMapMethod<String, dynamic>(
         'fetchUrl', {'url': url, 'timeoutMs': 15000});
@@ -1528,8 +1530,25 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   }
 
   Future<(int, String)> _fetchUrlDart(String url) async {
-    final response = await http.get(Uri.parse(url));
+    final response =
+        await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
     return (response.statusCode, response.body);
+  }
+
+  Future<(int, String)> _fetchUrlWithFallback(String url) async {
+    if (!Platform.isAndroid) {
+      return _fetchUrlDart(url);
+    }
+    try {
+      return await _fetchUrlNative(url);
+    } on PlatformException catch (e) {
+      AppLogger.instance.warn(
+        'subscription',
+        'Native fetch failed, fallback to Dart',
+        fields: {'code': e.code, 'message': e.message ?? ''},
+      );
+      return _fetchUrlDart(url);
+    }
   }
 
   Future<void> _import() async {
@@ -1546,11 +1565,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       if (input.startsWith('http://') || input.startsWith('https://')) {
         logger.info('subscription', 'Fetching URL',
             fields: {'url': _redactSubscriptionUrl(input)});
-        // Use Android's native HttpURLConnection (system TLS stack) to bypass
-        // TLS fingerprinting on subscription servers that block Dart's dart:io.
-        final (statusCode, body) = Platform.isAndroid
-            ? await _fetchUrlNative(input)
-            : await _fetchUrlDart(input);
+        final (statusCode, body) = await _fetchUrlWithFallback(input);
         logger.info('subscription', 'Fetch response',
             fields: {'status': statusCode, 'bytes': body.length});
         if (statusCode != 200) {
@@ -1764,8 +1779,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                             decoration: BoxDecoration(
                               color: _kBrand.withAlpha(30),
                               borderRadius: BorderRadius.circular(4),
-                              border:
-                                  Border.all(color: _kBrand.withAlpha(80)),
+                              border: Border.all(color: _kBrand.withAlpha(80)),
                             ),
                             child: const Text('使用中',
                                 style: TextStyle(
@@ -1779,8 +1793,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                     const SizedBox(height: 4),
                     Text(
                       '${sub.nodes.length} 个节点${_domainLabel(sub.url)}',
-                      style: const TextStyle(
-                          color: _kTextFaint, fontSize: 12),
+                      style: const TextStyle(color: _kTextFaint, fontSize: 12),
                     ),
                   ],
                 ),
@@ -1790,15 +1803,15 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                 TextButton(
                   onPressed: () => widget.onActivate(sub),
                   style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     foregroundColor: _kBrand,
                   ),
                   child: const Text('切换',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
+                      style:
+                          TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ],
               IconButton(
@@ -1806,8 +1819,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                     color: _kTextFaint, size: 18),
                 onPressed: () => _confirmDelete(sub),
                 padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               ),
             ],
           ),
@@ -1856,8 +1868,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: _kBrand.withAlpha(60)),
                       ),
-                      child:
-                          const Icon(Icons.link, color: _kBrand, size: 17),
+                      child: const Icon(Icons.link, color: _kBrand, size: 17),
                     ),
                     const SizedBox(width: 10),
                     const Text('SUBSCRIPTION URL',
@@ -1888,8 +1899,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                         borderSide: const BorderSide(color: _kBorder)),
                     focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(
-                            color: _kBrand, width: 1.5)),
+                        borderSide:
+                            const BorderSide(color: _kBrand, width: 1.5)),
                     suffixIcon: _urlController.text.isNotEmpty
                         ? IconButton(
                             icon: const Icon(Icons.clear,
@@ -1921,12 +1932,10 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white54))
+                                strokeWidth: 2, color: Colors.white54))
                         : const Icon(Icons.cloud_download, size: 18),
                     label: Text(_loading ? 'Fetching…' : 'Import',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w600)),
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
                   ),
                 ),
               ],
@@ -1938,14 +1947,12 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
             const SizedBox(height: 14),
             AnimatedContainer(
               duration: const Duration(milliseconds: 250),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 color: (_success ? _kConnected : _kError).withAlpha(15),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                    color:
-                        (_success ? _kConnected : _kError).withAlpha(70)),
+                    color: (_success ? _kConnected : _kError).withAlpha(70)),
               ),
               child: Row(
                 children: [

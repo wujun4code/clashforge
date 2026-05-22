@@ -10,6 +10,8 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.net.HttpURLConnection
+import java.net.URL
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executor
@@ -27,7 +29,11 @@ class MainActivity : FlutterActivity() {
     // Cronet uses Chrome's actual TLS stack — same JA3 fingerprint as desktop Chrome.
     // Subscription servers that reject OkHttp (Android TLS, different JA3) accept Cronet.
     private val cronetEngine: CronetEngine by lazy {
-        CronetEngine.Builder(applicationContext).build()
+        CronetEngine.Builder(applicationContext)
+            .enableQuic(false)
+            .enableHttp2(true)
+            .enableBrotli(true)
+            .build()
     }
     private val cronetExecutor: Executor = Executors.newSingleThreadExecutor()
 
@@ -83,14 +89,57 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARG", "url is required", null)
                             return@setMethodCallHandler
                         }
-                        fetchWithCronet(url, result)
+                        val timeoutMs = (call.argument<Int>("timeoutMs") ?: 15000)
+                            .coerceIn(3000, 60000)
+                        fetchUrlWithFallback(url, timeoutMs, result)
                     }
                     else -> result.notImplemented()
                 }
             }
     }
 
-    private fun fetchWithCronet(url: String, result: MethodChannel.Result) {
+    private fun fetchUrlWithFallback(
+        url: String,
+        timeoutMs: Int,
+        result: MethodChannel.Result
+    ) {
+        fetchWithCronet(
+            url = url,
+            onSuccess = { code, body ->
+                runOnUiThread { result.success(mapOf("status" to code, "body" to body)) }
+            },
+            onFailed = { cronetMessage ->
+                cronetExecutor.execute {
+                    try {
+                        val (code, body) = fetchWithHttpURLConnection(url, timeoutMs)
+                        runOnUiThread {
+                            result.success(
+                                mapOf(
+                                    "status" to code,
+                                    "body" to body
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        val fallbackMessage = e.message ?: "HttpURLConnection fetch failed"
+                        runOnUiThread {
+                            result.error(
+                                "FETCH_ERROR",
+                                "Cronet failed: $cronetMessage; HttpURLConnection failed: $fallbackMessage",
+                                null
+                            )
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    private fun fetchWithCronet(
+        url: String,
+        onSuccess: (statusCode: Int, body: String) -> Unit,
+        onFailed: (message: String) -> Unit
+    ) {
         val callback = object : UrlRequest.Callback() {
             private var statusCode = 0
             private val body = StringBuilder()
@@ -124,11 +173,7 @@ class MainActivity : FlutterActivity() {
             }
 
             override fun onSucceeded(request: UrlRequest, info: UrlResponseInfo) {
-                val code = statusCode
-                val responseBody = body.toString()
-                runOnUiThread {
-                    result.success(mapOf("status" to code, "body" to responseBody))
-                }
+                onSuccess(statusCode, body.toString())
             }
 
             override fun onFailed(
@@ -136,9 +181,9 @@ class MainActivity : FlutterActivity() {
                 info: UrlResponseInfo?,
                 error: CronetException
             ) {
-                runOnUiThread {
-                    result.error("FETCH_ERROR", error.message ?: "Cronet fetch failed", null)
-                }
+                val infoText = info?.let { "url=${it.url}, status=${it.httpStatusCode}" } ?: "no_response_info"
+                val message = "${error.javaClass.simpleName}: ${error.message ?: "Cronet fetch failed"} ($infoText)"
+                onFailed(message)
             }
         }
 
@@ -154,6 +199,38 @@ class MainActivity : FlutterActivity() {
             .addHeader("Cache-Control", "no-cache")
             .build()
             .start()
+    }
+
+    private fun fetchWithHttpURLConnection(url: String, timeoutMs: Int): Pair<Int, String> {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            instanceFollowRedirects = true
+            useCaches = false
+            setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+            setRequestProperty(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9," +
+                    "image/avif,image/webp,image/apng,*/*;q=0.8," +
+                    "application/signed-exchange;v=b3;q=0.7"
+            )
+            setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            setRequestProperty("Cache-Control", "no-cache")
+        }
+
+        try {
+            val status = conn.responseCode
+            val stream = if (status >= 400) conn.errorStream else conn.inputStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            return Pair(status, body)
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun buildSystemInfo(): Map<String, Any> {
