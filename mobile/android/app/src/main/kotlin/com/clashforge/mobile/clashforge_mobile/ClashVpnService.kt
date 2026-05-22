@@ -97,12 +97,13 @@ class ClashVpnService : VpnService(), Runnable {
             LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
 
             // Android closes ALL fds >= 3 in the child before exec (closeDescriptors).
-            // Only fds 0/1/2 survive.  We dup the TUN fd onto fd 1 (stdout) in the parent
-            // before forking, tell ProcessBuilder to INHERIT stdout, then restore fd 1
-            // in the parent after start().  POSIX dup2 clears FD_CLOEXEC on the new fd,
-            // so fd 1 survives exec into mihomo.  Config: file-descriptor: 1 — sing-tun
-            // sees non-zero, uses the fd directly without calling configure() on /dev/tun.
-            patchConfigWithTun(1)
+            // Only fds 0/1/2 survive.  We dup the TUN fd onto fd 0 (stdin) in the parent
+            // before forking, tell ProcessBuilder to INHERIT stdin, then restore fd 0.
+            // POSIX dup2 clears FD_CLOEXEC on the new fd, so fd 0 survives exec.
+            // sing-tun is built from source with the sentinel changed from 0 to -1, so
+            // file-descriptor: 0 means "use fd 0" and mihomo's stdout (fd 1) stays
+            // connected to our log pipe — no interference with TUN reads/writes.
+            patchConfigWithTun(0)
 
             startMihomoCore(tunFd)
 
@@ -208,9 +209,10 @@ sniffer:
         // can fast-fail unsupported UDP sessions.
         // If the subscription config already has a sniffer block this override is
         // intentional — our config is always more complete for VPN usage.
-        // file-descriptor: 1 = mihomo's fd 1 (stdout), which startMihomoCore temporarily
-        // replaces with the TUN fd via Os.dup2 before forking.  sing-tun.New() skips
-        // configure() entirely when FileDescriptor != 0, so no ioctl calls on /dev/tun.
+        // file-descriptor: 0 = mihomo's fd 0 (stdin), which startMihomoCore temporarily
+        // replaces with the TUN fd via Os.dup2 before forking.  sing-tun is patched to
+        // treat FileDescriptor<0 (not 0) as "not set", so 0 means use fd 0 directly.
+        // sing-tun.New() skips configure() entirely when its sentinel check is false.
         val tunStanza = """
 
 tun:
@@ -238,7 +240,7 @@ sniffer:
         LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
             "file-descriptor" to tunFd,
             "stack"           to "gvisor",
-            "note"            to "stdout(fd1)=TUN"
+            "note"            to "stdin(fd0)=TUN"
         ))
     }
 
@@ -311,23 +313,23 @@ sniffer:
         // Android closes ALL fds >= 3 in the child before exec (closeDescriptors).
         // The only fds that survive into mihomo are 0 (stdin), 1 (stdout), 2 (stderr).
         //
-        // Strategy: dup the TUN fd onto fd 1 (stdout) in THIS process, fork with
-        // INHERIT for stdout so the child gets fd 1 = TUN, then restore fd 1 here.
-        // POSIX dup2() always clears FD_CLOEXEC on the new fd, so fd 1 survives exec.
-        // Config has file-descriptor: 1; sing-tun sees non-zero → uses fd 1 directly,
-        // skipping configure() (no EPERM from /dev/tun open or SIOCSIFFLAGS ioctls).
-        val savedStdout: FileDescriptor = Os.dup(FileDescriptor.out)
+        // Strategy: dup the TUN fd onto fd 0 (stdin) in THIS process, fork with
+        // INHERIT for stdin so the child gets fd 0 = TUN, then restore fd 0 here.
+        // POSIX dup2() always clears FD_CLOEXEC on the new fd, so fd 0 survives exec.
+        // sing-tun is patched (FileDescriptor<0 = "not set") so file-descriptor: 0
+        // means "use fd 0".  mihomo's stdout (fd 1) and stderr (fd 2) stay connected
+        // to normal pipes — no write errors, no interference with TUN reads.
+        val savedStdin: FileDescriptor = Os.dup(FileDescriptor.`in`)
         try {
-            Os.dup2(tunFdObj, 1)   // fd 1 in this process = TUN fd
+            Os.dup2(tunFdObj, 0)   // fd 0 in this process = TUN fd
 
             val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
-            pb.redirectInput(File("/dev/null"))                // fd 0 = /dev/null
-            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT) // fd 1 = TUN (no dup2 by JVM)
-            pb.redirectError(ProcessBuilder.Redirect.PIPE)    // fd 2 = pipe for log capture
+            pb.redirectInput(ProcessBuilder.Redirect.INHERIT)  // fd 0 = TUN (no dup2 by JVM)
+            pb.redirectErrorStream(true)                       // merge stderr into stdout pipe
             coreProcess = pb.start()
         } finally {
-            Os.dup2(savedStdout, 1)   // restore parent's stdout regardless of outcome
-            Os.close(savedStdout)
+            Os.dup2(savedStdin, 0)   // restore parent's stdin regardless of outcome
+            Os.close(savedStdin)
         }
 
         val pid = try {
@@ -342,7 +344,7 @@ sniffer:
 
         Thread {
             try {
-                coreProcess?.errorStream?.bufferedReader()?.forEachLine { line ->
+                coreProcess?.inputStream?.bufferedReader()?.forEachLine { line ->
                     Log.d("MihomoCore", line)
                     LogEventBridge.debug("mihomo", line)
                 }

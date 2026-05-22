@@ -116,24 +116,51 @@ jobs:
         run: flutter pub get
         working-directory: mobile
 
-      - name: Download Mihomo Core (x86_64 for emulator)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: Build Mihomo Core (x86_64, GOOS=android -tags cmfa,with_gvisor + sing-tun fd-0 patch)
         run: |
           # Pinned to v1.18.10: v1.19.x reads /data/system/packages.xml unconditionally
           # during TUN init ("build android rules"), which is denied by SELinux on API 29.
           MIHOMO_VER="v1.18.10"
-          echo "Mihomo $MIHOMO_VER — trying android-amd64 then linux-amd64-compatible"
-          mkdir -p mobile/android/app/src/main/jniLibs/x86_64
-          if curl -fsSL -o /tmp/mihomo.gz \
-              "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-android-amd64-${MIHOMO_VER}.gz" 2>/dev/null; then
-            echo "android-amd64 downloaded"
+          git clone --depth 1 --branch "${MIHOMO_VER}" \
+            https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+
+          # Download module dependencies into the module cache so we can patch sing-tun.
+          (cd /tmp/mihomo-src && go mod download)
+
+          # Patch sing-tun: change the "fd not set" sentinel from ==0 to <0.
+          # ClashVpnService passes the TUN fd on fd 0 (stdin) past Android's closeDescriptors().
+          # Without this patch sing-tun treats file-descriptor: 0 as "not set" and tries
+          # to open /dev/tun → EPERM.  After the patch, 0 means "use fd 0 (stdin)".
+          SINGTUN_VER=$(cd /tmp/mihomo-src && go list -m github.com/sagernet/sing-tun | awk '{print $2}')
+          GOMODCACHE=$(go env GOMODCACHE)
+          SINGTUN_DIR="${GOMODCACHE}/github.com/sagernet/sing-tun@${SINGTUN_VER}"
+          chmod -R u+w "$SINGTUN_DIR"
+          PATCHED=$(find "$SINGTUN_DIR" -name "*.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+          if [ -n "$PATCHED" ]; then
+            echo "$PATCHED" | xargs sed -i 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g'
+            echo "Patched sing-tun ${SINGTUN_VER}: FileDescriptor<0 is new not-set sentinel"
+            echo "Files patched: $PATCHED"
           else
-            curl -fSL -o /tmp/mihomo.gz \
-              "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-compatible-${MIHOMO_VER}.gz"
-            echo "linux-amd64-compatible downloaded (static binary works on emulator)"
+            echo "WARNING: 'FileDescriptor == 0' not found in sing-tun ${SINGTUN_VER} — sentinel may have moved"
+            grep -r "FileDescriptor" "$SINGTUN_DIR" --include="*.go" -l || true
           fi
-          gunzip /tmp/mihomo.gz
-          mv /tmp/mihomo mobile/android/app/src/main/jniLibs/x86_64/libmihomo.so
-          ls -lh mobile/android/app/src/main/jniLibs/x86_64/
+
+          DEST="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/x86_64/libmihomo.so"
+          mkdir -p "$(dirname "$DEST")"
+          GOOS=android GOARCH=amd64 CGO_ENABLED=0 \
+            go build -C /tmp/mihomo-src \
+              -tags cmfa,with_gvisor \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o "$DEST" .
+          echo "x86_64 (cmfa+gvisor+sing-tun-fd0-patch): $(du -h "$DEST" | cut -f1)"
+          ls -lh "${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/x86_64/"
 
       - name: Download GeoData
         run: |
