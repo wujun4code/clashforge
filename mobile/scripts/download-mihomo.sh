@@ -57,13 +57,34 @@ if [ "$BUILD_MODE" = "--build" ]; then
       https://github.com/MetaCubeX/mihomo.git "$SRC"
   fi
 
+  # Download module dependencies so we can patch sing-tun before building.
+  (cd "$SRC" && go mod download)
+
+  # Patch sing-tun: change the "fd not set" sentinel from ==0 to <0 and >0 to >=0.
+  # ClashVpnService passes the TUN fd on fd 0 (stdin).  Without this patch,
+  # sing-tun treats file-descriptor: 0 as "not set" and tries /dev/tun → EPERM.
+  SINGTUN_VER=$(cd "$SRC" && go list -m github.com/metacubex/sing-tun | awk '{print $2}')
+  GOMODCACHE=$(go env GOMODCACHE)
+  SINGTUN_DIR="${GOMODCACHE}/github.com/metacubex/sing-tun@${SINGTUN_VER}"
+  chmod -R u+w "$SINGTUN_DIR"
+  PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+  if [ -n "$PATCHED" ]; then
+    echo "$PATCHED" | xargs sed -i \
+      -e 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g' \
+      -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g'
+    echo "Patched sing-tun ${SINGTUN_VER}: ==0→<0 and >0→>=0"
+  else
+    echo "WARNING: sentinel not found in sing-tun ${SINGTUN_VER} — fd 0 TUN handoff may fail"
+    grep -r "FileDescriptor" "$SINGTUN_DIR" --include="*.go" -l || true
+  fi
+
   build_abi() {
     local ABI="$1" GOARCH="$2" GOARM="${3:-}"
     local DEST="$JNILIBS_ROOT/$ABI/libmihomo.so"
     mkdir -p "$JNILIBS_ROOT/$ABI"
-    printf "%-16s GOOS=android GOARCH=%-6s -tags cmfa … " "$ABI" "$GOARCH"
+    printf "%-16s GOOS=android GOARCH=%-6s -tags cmfa,with_gvisor … " "$ABI" "$GOARCH"
     GOOS=android GOARCH="$GOARCH" GOARM="$GOARM" CGO_ENABLED=0 \
-      go build -C "$SRC" -tags cmfa -trimpath -ldflags="-s -w" -o "$DEST" .
+      go build -C "$SRC" -tags cmfa,with_gvisor -trimpath -ldflags="-s -w" -o "$DEST" .
     echo "✓ $(du -h "$DEST" | cut -f1)"
   }
 
@@ -72,7 +93,7 @@ if [ "$BUILD_MODE" = "--build" ]; then
   build_abi x86_64      amd64
 
   echo ""
-  echo "Mihomo ${MIHOMO_VER} (GOOS=android -tags cmfa) ready for all ABIs."
+  echo "Mihomo ${MIHOMO_VER} (GOOS=android -tags cmfa,with_gvisor + sing-tun fd-0 patch) ready for all ABIs."
   echo "Next: cd mobile && flutter build apk --debug"
   exit 0
 fi
