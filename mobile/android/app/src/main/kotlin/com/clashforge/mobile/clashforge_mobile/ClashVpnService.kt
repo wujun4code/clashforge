@@ -31,9 +31,11 @@ class ClashVpnService : VpnService(), Runnable {
         private const val TAG  = "ClashVpnService"
         private val DEFAULT_DOH_PROBE_CANDIDATES = listOf(
             "https://1.1.1.1/dns-query",
+            "https://8.8.8.8/dns-query",
             "https://doh.pub/dns-query",
             "https://dns.alidns.com/dns-query",
         )
+        private val DEFAULT_BOOTSTRAP_NAMESERVERS = listOf("1.1.1.1", "8.8.8.8")
 
         @Volatile var vpnRunning     = false
         @Volatile var mihomoRunning  = false
@@ -214,6 +216,7 @@ tun:
   auto-detect-interface: false
   dns-hijack:
     - "any:53"
+    - "tcp://any:53"
 
 sniffer:
   enable: true
@@ -282,6 +285,7 @@ tun:
   auto-detect-interface: false
   dns-hijack:
     - "any:53"
+    - "tcp://any:53"
 
 sniffer:
   enable: true
@@ -417,29 +421,77 @@ sniffer:
             }
         }
 
-        if (suggestedDoH.isEmpty()) {
-            // Best-effort fallback: still apply known DoH list to avoid being stuck on broken UDP resolvers.
-            suggestedDoH += DEFAULT_DOH_PROBE_CANDIDATES
-            LogEventBridge.warn("dns", "No verified DoH during probe; applying built-in DoH fallback list", mapOf(
-                "hijacked_nameservers" to hijacked.joinToString(","),
-                "unresolved_nameservers" to unresolved.joinToString(","),
-            ))
-        }
-
         val existingProxyServerNS = extractDnsList(original, "proxy-server-nameserver")
         val existingDoh = existingProxyServerNS
             .map { it.trim() }
             .filter { isDohNameserver(it) }
             .map { withSkipCertVerifyParam(it) }
             .distinct()
-        val dohOnlyProxyServerNS = (existingDoh + suggestedDoH.map { withSkipCertVerifyParam(it) })
+        val existingIpLiteralDoh = existingDoh.filter { isIpLiteralDoh(it) }
+
+        val verifiedDoH = suggestedDoH
+            .map { withSkipCertVerifyParam(it) }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        val verifiedIpLiteralDoh = verifiedDoH.filter { isIpLiteralDoh(it) }
+
+        val builtInDoH = DEFAULT_DOH_PROBE_CANDIDATES
+            .map { withSkipCertVerifyParam(it) }
+            .distinct()
+        val builtInIpLiteralDoh = builtInDoH.filter { isIpLiteralDoh(it) }
+
+        val finalDoH = when {
+            verifiedIpLiteralDoh.isNotEmpty() -> (existingIpLiteralDoh + verifiedIpLiteralDoh).distinct()
+            verifiedDoH.isNotEmpty() -> (existingDoh + verifiedDoH).distinct()
+            existingIpLiteralDoh.isNotEmpty() -> existingIpLiteralDoh
+            builtInIpLiteralDoh.isNotEmpty() -> builtInIpLiteralDoh
+            else -> (existingDoh + builtInDoH).distinct()
+        }
+
+        if (finalDoH.isEmpty()) {
+            LogEventBridge.warn("dns", "Detected upstream DNS issue but no DoH candidates available", mapOf(
+                "hijacked_nameservers" to hijacked.joinToString(","),
+                "unresolved_nameservers" to unresolved.joinToString(","),
+            ))
+            return
+        }
+
+        if (verifiedDoH.isEmpty()) {
+            LogEventBridge.warn("dns", "No verified DoH during probe; using best-effort DoH candidate set", mapOf(
+                "hijacked_nameservers" to hijacked.joinToString(","),
+                "unresolved_nameservers" to unresolved.joinToString(","),
+                "auto_applied_doh" to finalDoH.joinToString(","),
+            ))
+        }
+
+        // Align with OpenWrt startup self-healing: once upstream DNS is deemed
+        // polluted/unusable, force DNS to encrypted resolvers to avoid carrying
+        // over stale domain-based fallback entries from previous runs.
+        val finalNameserver = finalDoH
+        val finalProxyServerNS = finalDoH
+        val finalFallback = finalDoH.filter { isIpLiteralDoh(it) }.ifEmpty { finalDoH }
+
+        val existingDefaultNS = extractDnsList(original, "default-nameserver")
+            .mapNotNull { extractIpLiteralFromPlainNameserver(it) }
+        val workingDefaultNS = working
+            .mapNotNull { extractIpLiteralFromPlainNameserver(it) }
+        val dohDefaultNS = finalDoH
+            .mapNotNull { extractIpLiteralHostFromDoh(it) }
+        val finalDefaultNS = (dohDefaultNS + existingDefaultNS + workingDefaultNS + DEFAULT_BOOTSTRAP_NAMESERVERS)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
 
-        val patched = upsertDnsList(original, "proxy-server-nameserver", dohOnlyProxyServerNS)
+        var patched = upsertDnsList(original, "nameserver", finalNameserver)
+        patched = upsertDnsList(patched, "proxy-server-nameserver", finalProxyServerNS)
+        patched = upsertDnsList(patched, "fallback", finalFallback)
+        if (finalDefaultNS.isNotEmpty()) {
+            patched = upsertDnsList(patched, "default-nameserver", finalDefaultNS)
+        }
+
         if (patched == original) {
-            LogEventBridge.warn("dns", "Detected upstream fake-ip hijack but failed to patch proxy-server-nameserver", mapOf(
+            LogEventBridge.warn("dns", "Detected upstream fake-ip hijack but failed to patch DNS resolvers", mapOf(
                 "hijacked_nameservers" to hijacked.joinToString(",")
             ))
             return
@@ -447,14 +499,17 @@ sniffer:
 
         try {
             configFile.writeText(patched)
-            LogEventBridge.warn("dns", "Upstream fake-ip hijack detected; switched proxy-server-nameserver to DoH-only", mapOf(
+            LogEventBridge.warn("dns", "Upstream fake-ip hijack detected; switched DNS to DoH-only set", mapOf(
                 "hijacked_nameservers" to hijacked.joinToString(","),
                 "working_nameservers" to working.joinToString(","),
                 "unresolved_nameservers" to unresolved.joinToString(","),
                 "unresolved_hosts" to unresolvedHosts.joinToString(","),
                 "existing_doh" to existingDoh.joinToString(","),
-                "auto_applied_doh" to suggestedDoH.joinToString(","),
-                "final_proxy_server_nameserver" to dohOnlyProxyServerNS.joinToString(","),
+                "auto_applied_doh" to verifiedDoH.joinToString(","),
+                "final_nameserver" to finalNameserver.joinToString(","),
+                "final_proxy_server_nameserver" to finalProxyServerNS.joinToString(","),
+                "final_fallback" to finalFallback.joinToString(","),
+                "final_default_nameserver" to finalDefaultNS.joinToString(","),
             ))
         } catch (e: Exception) {
             LogEventBridge.warn("dns", "Patch config.yaml failed after DNS probe", mapOf("error" to (e.message ?: "unknown")))
@@ -464,6 +519,56 @@ sniffer:
     private fun isDohNameserver(ns: String): Boolean {
         val lower = ns.trim().lowercase(Locale.ROOT)
         return lower.startsWith("https://")
+    }
+
+    private fun isIpLiteralDoh(ns: String): Boolean {
+        if (!isDohNameserver(ns)) return false
+        return try {
+            val host = URL(ns.substringBefore('#')).host
+            isIpLiteralHost(host)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun extractIpLiteralHostFromDoh(doh: String): String? {
+        if (!isDohNameserver(doh)) return null
+        return try {
+            val host = URL(doh.substringBefore('#')).host
+            if (isIpLiteralHost(host)) host else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractIpLiteralFromPlainNameserver(nameserver: String): String? {
+        if (nameserver.isBlank()) return null
+        if (isDohNameserver(nameserver)) return null
+
+        var serverPart = nameserver.trim()
+        val lower = serverPart.lowercase(Locale.ROOT)
+        if (lower.startsWith("dhcp://")) return null
+        if (lower.startsWith("udp://") || lower.startsWith("tcp://") || lower.startsWith("tls://")) {
+            serverPart = serverPart.substringAfter("://")
+        }
+
+        val host = when {
+            serverPart.startsWith("[") -> {
+                val end = serverPart.indexOf(']')
+                if (end > 0) serverPart.substring(1, end) else serverPart
+            }
+            serverPart.count { it == ':' } > 1 -> serverPart
+            serverPart.contains(':') -> serverPart.substringBeforeLast(':')
+            else -> serverPart
+        }.trim()
+
+        return if (isIpLiteralHost(host)) host else null
+    }
+
+    private fun isIpLiteralHost(host: String): Boolean {
+        val normalized = host.trim().removePrefix("[").removeSuffix("]")
+        if (normalized.isEmpty()) return false
+        return normalized.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$""")) || normalized.contains(':')
     }
 
     private fun withSkipCertVerifyParam(doh: String): String {

@@ -63,9 +63,17 @@ void main() {
       expect(dns['enhanced-mode'], equals('redir-host'));
       expect(dns['default-nameserver'], equals(['223.5.5.5', '8.8.8.8']));
       expect(dns['proxy-server-nameserver'], equals(['223.5.5.5', '8.8.8.8']));
+      expect((dns['fallback'] as List), contains('https://1.1.1.1/dns-query'));
+      expect((dns['fallback'] as List), contains('https://8.8.8.8/dns-query'));
+      final fallbackFilter = dns['fallback-filter'] as Map<String, dynamic>;
+      expect(fallbackFilter['geoip'], isTrue);
+      expect(fallbackFilter['geoip-code'], equals('CN'));
+      expect((fallbackFilter['ipcidr'] as List), contains('198.18.0.0/15'));
 
       final rules = config['rules'] as List;
-      expect(rules, contains('GEOIP,private,DIRECT,no-resolve'));
+      expect(rules, contains('IP-CIDR,10.0.0.0/8,DIRECT,no-resolve'));
+      expect(rules, contains('IP-CIDR,172.16.0.0/12,DIRECT,no-resolve'));
+      expect(rules, contains('IP-CIDR,192.168.0.0/16,DIRECT,no-resolve'));
       expect(rules, contains('GEOSITE,cn,DIRECT'));
       expect(rules, contains('GEOIP,CN,DIRECT'));
       expect(rules, contains('MATCH,🚀 Proxy'));
