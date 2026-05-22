@@ -6,9 +6,18 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.system.Os
 import android.util.Log
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileDescriptor
 import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.URL
+import java.util.Locale
+import java.util.concurrent.ThreadLocalRandom
 
 class ClashVpnService : VpnService(), Runnable {
     private var vpnThread: Thread? = null
@@ -20,6 +29,11 @@ class ClashVpnService : VpnService(), Runnable {
         const val ACTION_START = "com.clashforge.mobile.START"
         const val ACTION_STOP  = "com.clashforge.mobile.STOP"
         private const val TAG  = "ClashVpnService"
+        private val DEFAULT_DOH_PROBE_CANDIDATES = listOf(
+            "https://1.1.1.1/dns-query",
+            "https://doh.pub/dns-query",
+            "https://dns.alidns.com/dns-query",
+        )
 
         @Volatile var vpnRunning     = false
         @Volatile var mihomoRunning  = false
@@ -76,6 +90,14 @@ class ClashVpnService : VpnService(), Runnable {
     override fun run() {
         try {
             extractAssetsIfNeeded()
+            if (!isCiTorAvailable()) {
+                // Probe before establishing VPN interface; otherwise probe sockets may
+                // be routed back into the tunnel and produce false negatives.
+                val configFile = File(filesDir, "config.yaml")
+                if (configFile.exists()) {
+                    patchConfigForUpstreamFakeIP(configFile)
+                }
+            }
 
             LogEventBridge.info("vpn", "Building VPN interface",
                 mapOf("addr" to "172.19.0.1/30", "route" to "0.0.0.0/0", "dns" to "172.19.0.1"))
@@ -87,6 +109,15 @@ class ClashVpnService : VpnService(), Runnable {
                 .setMtu(1500)                 // explicit MTU so sing-tun doesn't need to set it
                 .setSession("ClashForge")
                 .setBlocking(false)
+
+            // Prevent self-capture loops: core outbound sockets (DNS/DoH/proxy upstream)
+            // must bypass this VPN tunnel.
+            try {
+                builder.addDisallowedApplication(packageName)
+                LogEventBridge.info("vpn", "Excluded app from VPN routing", mapOf("package" to packageName))
+            } catch (e: Exception) {
+                LogEventBridge.warn("vpn", "Failed to exclude app from VPN routing", mapOf("error" to (e.message ?: "unknown")))
+            }
 
             vpnInterface = builder.establish() ?: run {
                 LogEventBridge.error("vpn", "builder.establish() returned null")
@@ -201,6 +232,22 @@ sniffer:
             LogEventBridge.warn("vpn", "config.yaml not found — skipping TUN patch")
             return
         }
+
+        val original = try {
+            configFile.readText()
+        } catch (e: Exception) {
+            LogEventBridge.warn("vpn", "Read config.yaml failed before TUN patch", mapOf("error" to (e.message ?: "unknown")))
+            return
+        }
+
+        // Keep DNS bootstrap/direct lookups out of proxy rules to avoid resolver loops.
+        val dnsNormalized = upsertDnsScalar(original, "respect-rules", "false")
+
+        // Make this patch idempotent: remove any existing top-level tun/sniffer blocks
+        // before appending the canonical VPN stanza.
+        val withoutTun = removeTopLevelSection(dnsNormalized, "tun")
+        val sanitized = removeTopLevelSection(withoutTun, "sniffer").trimEnd()
+
         // Append TUN + sniffer together.
         // sniffer enables QUIC/TLS/HTTP domain identification so mihomo can apply
         // domain-based rules to QUIC (HTTP/3) connections via the gvisor TUN stack.
@@ -213,6 +260,9 @@ sniffer:
         // replaces with the TUN fd via Os.dup2 before forking.  sing-tun is patched to
         // treat FileDescriptor<0 (not 0) as "not set", so 0 means use fd 0 directly.
         // sing-tun.New() skips configure() entirely when its sentinel check is false.
+        // Append TUN + sniffer.
+        // ConfigGenerator already writes a dns: block (redir-host) — appending another
+        // would cause a YAML duplicate key error and a mihomo fatal parse failure.
         val tunStanza = """
 
 tun:
@@ -236,12 +286,546 @@ sniffer:
     QUIC:
       ports: [443]
 """
-        configFile.appendText(tunStanza)
+        configFile.writeText(sanitized + tunStanza)
         LogEventBridge.info("vpn", "Patched config.yaml with TUN fd", mapOf(
             "file-descriptor" to tunFd,
             "stack"           to "gvisor",
             "note"            to "stdin(fd0)=TUN"
         ))
+    }
+
+    private fun removeTopLevelSection(config: String, key: String): String {
+        val lines = config.replace("\r\n", "\n").split('\n').toMutableList()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.trim() == "$key:" && !line.startsWith(" ")) {
+                var end = i + 1
+                while (end < lines.size) {
+                    val ln = lines[end]
+                    if (ln.isNotEmpty() && !ln.startsWith(" ")) {
+                        break
+                    }
+                    end++
+                }
+                lines.subList(i, end).clear()
+                continue
+            }
+            i++
+        }
+        return lines.joinToString("\n")
+    }
+
+    private fun patchConfigForUpstreamFakeIP(configFile: File) {
+        val original = try {
+            configFile.readText()
+        } catch (e: Exception) {
+            LogEventBridge.warn("dns", "Read config.yaml failed, skip dns probe", mapOf("error" to (e.message ?: "unknown")))
+            return
+        }
+
+        val sampleHosts = extractProxyHostnames(original).distinct().take(3)
+        if (sampleHosts.isEmpty()) {
+            LogEventBridge.info("dns", "Skip upstream DNS probe: no proxy hostnames")
+            return
+        }
+
+        val udpNameservers = extractDnsList(original, "nameserver")
+            .map { it.trim() }
+            .filter { isUdpNameserver(it) }
+            .distinct()
+
+        if (udpNameservers.isEmpty()) {
+            LogEventBridge.info("dns", "Skip upstream DNS probe: no UDP nameserver configured")
+            return
+        }
+
+        LogEventBridge.info("dns", "Probing upstream DNS fake-ip hijack", mapOf(
+            "nameserver_count" to udpNameservers.size,
+            "hostname_count" to sampleHosts.size,
+        ))
+
+        val hijacked = linkedSetOf<String>()
+        val working = linkedSetOf<String>()
+        val unresolved = linkedSetOf<String>()
+        val hostHasUsableAnswer = sampleHosts.associateWith { false }.toMutableMap()
+
+        for (ns in udpNameservers) {
+            var nsHijacked = false
+            var nsHasFailure = false
+            for (hostname in sampleHosts) {
+                val ips = queryUdpA(ns, hostname)
+                if (ips.isEmpty()) {
+                    nsHasFailure = true
+                    continue
+                }
+                if (allInKnownFakeRanges(ips)) {
+                    nsHijacked = true
+                    break
+                }
+                hostHasUsableAnswer[hostname] = true
+            }
+            if (nsHijacked) {
+                hijacked += ns
+            } else {
+                if (nsHasFailure) {
+                    unresolved += ns
+                } else {
+                    working += ns
+                }
+            }
+        }
+
+        val unresolvedHosts = hostHasUsableAnswer
+            .filterValues { !it }
+            .keys
+            .toList()
+        val hasUnusableHost = unresolvedHosts.isNotEmpty()
+        val allUdpUnresolved = working.isEmpty() && unresolved.isNotEmpty()
+
+        if (hijacked.isEmpty() && !hasUnusableHost) {
+            LogEventBridge.info("dns", "Upstream DNS probe passed", mapOf(
+                "working_nameservers" to working.joinToString(","),
+                "unresolved_nameservers" to unresolved.joinToString(","),
+            ))
+            return
+        }
+
+        if (allUdpUnresolved || hasUnusableHost) {
+            LogEventBridge.warn("dns", "All UDP nameservers failed to resolve proxy hostnames; fallback to DoH-only", mapOf(
+                "unresolved_nameservers" to unresolved.joinToString(","),
+                "unresolved_hosts" to unresolvedHosts.joinToString(","),
+                "hostname_count" to sampleHosts.size,
+            ))
+        }
+
+        val probeHost = sampleHosts.first()
+        val suggestedDoH = mutableListOf<String>()
+        for (doh in DEFAULT_DOH_PROBE_CANDIDATES) {
+            val ips = queryDohA(doh, probeHost)
+            if (ips.isNotEmpty() && !allInKnownFakeRanges(ips)) {
+                suggestedDoH += doh
+            }
+        }
+
+        if (suggestedDoH.isEmpty()) {
+            // Best-effort fallback: still apply known DoH list to avoid being stuck on broken UDP resolvers.
+            suggestedDoH += DEFAULT_DOH_PROBE_CANDIDATES
+            LogEventBridge.warn("dns", "No verified DoH during probe; applying built-in DoH fallback list", mapOf(
+                "hijacked_nameservers" to hijacked.joinToString(","),
+                "unresolved_nameservers" to unresolved.joinToString(","),
+            ))
+        }
+
+        val existingProxyServerNS = extractDnsList(original, "proxy-server-nameserver")
+        val existingDoh = existingProxyServerNS
+            .map { it.trim() }
+            .filter { isDohNameserver(it) }
+            .map { withSkipCertVerifyParam(it) }
+            .distinct()
+        val dohOnlyProxyServerNS = (existingDoh + suggestedDoH.map { withSkipCertVerifyParam(it) })
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+
+        val patched = upsertDnsList(original, "proxy-server-nameserver", dohOnlyProxyServerNS)
+        if (patched == original) {
+            LogEventBridge.warn("dns", "Detected upstream fake-ip hijack but failed to patch proxy-server-nameserver", mapOf(
+                "hijacked_nameservers" to hijacked.joinToString(",")
+            ))
+            return
+        }
+
+        try {
+            configFile.writeText(patched)
+            LogEventBridge.warn("dns", "Upstream fake-ip hijack detected; switched proxy-server-nameserver to DoH-only", mapOf(
+                "hijacked_nameservers" to hijacked.joinToString(","),
+                "working_nameservers" to working.joinToString(","),
+                "unresolved_nameservers" to unresolved.joinToString(","),
+                "unresolved_hosts" to unresolvedHosts.joinToString(","),
+                "existing_doh" to existingDoh.joinToString(","),
+                "auto_applied_doh" to suggestedDoH.joinToString(","),
+                "final_proxy_server_nameserver" to dohOnlyProxyServerNS.joinToString(","),
+            ))
+        } catch (e: Exception) {
+            LogEventBridge.warn("dns", "Patch config.yaml failed after DNS probe", mapOf("error" to (e.message ?: "unknown")))
+        }
+    }
+
+    private fun isDohNameserver(ns: String): Boolean {
+        val lower = ns.trim().lowercase(Locale.ROOT)
+        return lower.startsWith("https://")
+    }
+
+    private fun withSkipCertVerifyParam(doh: String): String {
+        val raw = doh.trim()
+        if (raw.isEmpty()) return raw
+        val lower = raw.lowercase(Locale.ROOT)
+        if (lower.contains("skip-cert-verify=")) return raw
+        return if (raw.contains("#")) {
+            "$raw&skip-cert-verify=true"
+        } else {
+            "$raw#skip-cert-verify=true"
+        }
+    }
+
+    private fun isUdpNameserver(ns: String): Boolean {
+        if (ns.isBlank()) return false
+        val lower = ns.lowercase(Locale.ROOT)
+        return !lower.startsWith("https://")
+            && !lower.startsWith("tls://")
+            && !lower.startsWith("tcp://")
+            && !lower.startsWith("dhcp://")
+    }
+
+    private fun extractProxyHostnames(config: String): List<String> {
+        val out = mutableListOf<String>()
+        val lines = config.replace("\r\n", "\n").split('\n')
+        var inProxies = false
+
+        for (line in lines) {
+            val trimmed = line.trim()
+            val topLevel = line.isNotEmpty() && !line.startsWith(" ")
+            if (topLevel) {
+                inProxies = trimmed == "proxies:"
+                continue
+            }
+            if (!inProxies || trimmed.isEmpty()) continue
+            if (!trimmed.startsWith("server:")) continue
+            val value = parseYamlScalar(trimmed.substringAfter(':'))
+            if (isLikelyHostname(value)) {
+                out += value
+            }
+        }
+        return out
+    }
+
+    private fun extractDnsList(config: String, key: String): List<String> {
+        val lines = config.replace("\r\n", "\n").split('\n')
+        val dnsStart = lines.indexOfFirst { it.trim() == "dns:" && !it.startsWith(" ") }
+        if (dnsStart < 0) return emptyList()
+
+        var dnsEnd = lines.size
+        for (i in dnsStart + 1 until lines.size) {
+            val ln = lines[i]
+            if (ln.isNotEmpty() && !ln.startsWith(" ")) {
+                dnsEnd = i
+                break
+            }
+        }
+
+        val keyLine = lines.subList(dnsStart + 1, dnsEnd)
+            .indexOfFirst { it.trim() == "$key:" }
+            .let { if (it < 0) -1 else dnsStart + 1 + it }
+        if (keyLine < 0) return emptyList()
+
+        val out = mutableListOf<String>()
+        for (i in keyLine + 1 until dnsEnd) {
+            val ln = lines[i]
+            val trimmed = ln.trim()
+            if (trimmed.isEmpty()) continue
+            if (!ln.startsWith("    ")) break
+            if (!trimmed.startsWith("-")) continue
+            val value = parseYamlScalar(trimmed.removePrefix("-").trim())
+            if (value.isNotEmpty()) {
+                out += value
+            }
+        }
+        return out
+    }
+
+    private fun upsertDnsList(config: String, key: String, values: List<String>): String {
+        val lines = config.replace("\r\n", "\n").split('\n').toMutableList()
+        val dnsStart = lines.indexOfFirst { it.trim() == "dns:" && !it.startsWith(" ") }
+        if (dnsStart < 0) return config
+
+        var dnsEnd = lines.size
+        for (i in dnsStart + 1 until lines.size) {
+            val ln = lines[i]
+            if (ln.isNotEmpty() && !ln.startsWith(" ")) {
+                dnsEnd = i
+                break
+            }
+        }
+
+        val block = mutableListOf("  $key:")
+        for (v in values) {
+            val rendered = if (v.any { it.isWhitespace() || it == ':' || it == '#' || it == '"' || it == '\'' }) {
+                "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+            } else {
+                v
+            }
+            block += "    - $rendered"
+        }
+
+        var keyStart = -1
+        for (i in dnsStart + 1 until dnsEnd) {
+            if (lines[i].trim() == "$key:") {
+                keyStart = i
+                break
+            }
+        }
+
+        if (keyStart >= 0) {
+            var keyEnd = keyStart + 1
+            while (keyEnd < dnsEnd) {
+                val ln = lines[keyEnd]
+                if (ln.isNotEmpty() && !ln.startsWith("    ")) break
+                keyEnd++
+            }
+            lines.subList(keyStart, keyEnd).clear()
+            lines.addAll(keyStart, block)
+        } else {
+            lines.addAll(dnsEnd, block)
+        }
+
+        return lines.joinToString("\n")
+    }
+
+    private fun upsertDnsScalar(config: String, key: String, value: String): String {
+        val lines = config.replace("\r\n", "\n").split('\n').toMutableList()
+        val dnsStart = lines.indexOfFirst { it.trim() == "dns:" && !it.startsWith(" ") }
+        if (dnsStart < 0) return config
+
+        var dnsEnd = lines.size
+        for (i in dnsStart + 1 until lines.size) {
+            val ln = lines[i]
+            if (ln.isNotEmpty() && !ln.startsWith(" ")) {
+                dnsEnd = i
+                break
+            }
+        }
+
+        val scalarLine = "  $key: $value"
+        var keyStart = -1
+        for (i in dnsStart + 1 until dnsEnd) {
+            if (lines[i].trim().startsWith("$key:")) {
+                keyStart = i
+                break
+            }
+        }
+
+        if (keyStart >= 0) {
+            var keyEnd = keyStart + 1
+            while (keyEnd < dnsEnd) {
+                val ln = lines[keyEnd]
+                if (ln.isNotEmpty() && !ln.startsWith("    ")) break
+                keyEnd++
+            }
+            lines.subList(keyStart, keyEnd).clear()
+            lines.add(keyStart, scalarLine)
+        } else {
+            lines.add(dnsStart + 1, scalarLine)
+        }
+
+        return lines.joinToString("\n")
+    }
+
+    private fun parseYamlScalar(raw: String): String {
+        val v = raw.trim()
+        if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+            return v.substring(1, v.length - 1)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        }
+        return v
+    }
+
+    private fun isLikelyHostname(host: String): Boolean {
+        if (host.isBlank()) return false
+        if (host.startsWith("[")) return false
+        return !host.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$"""))
+    }
+
+    private fun queryUdpA(nameserver: String, hostname: String): List<String> {
+        val serverPart = nameserver.removePrefix("udp://")
+        val (host, port) = when {
+            serverPart.startsWith("[") -> {
+                val end = serverPart.indexOf(']')
+                if (end > 0) {
+                    val h = serverPart.substring(1, end)
+                    val p = if (end + 1 < serverPart.length && serverPart[end + 1] == ':') {
+                        serverPart.substring(end + 2).toIntOrNull() ?: 53
+                    } else {
+                        53
+                    }
+                    h to p
+                } else {
+                    serverPart to 53
+                }
+            }
+            serverPart.count { it == ':' } > 1 -> serverPart to 53
+            serverPart.contains(':') -> {
+                val idx = serverPart.lastIndexOf(':')
+                val h = serverPart.substring(0, idx)
+                val p = serverPart.substring(idx + 1).toIntOrNull() ?: 53
+                h to p
+            }
+            else -> serverPart to 53
+        }
+
+        return try {
+            val queryId = ThreadLocalRandom.current().nextInt(0, 65536)
+            val query = buildDnsQuery(hostname, queryId)
+            DatagramSocket().use { socket ->
+                socket.soTimeout = 5000
+                val packet = DatagramPacket(query, query.size, InetAddress.getByName(host), port)
+                socket.send(packet)
+
+                val buf = ByteArray(1500)
+                val resp = DatagramPacket(buf, buf.size)
+                socket.receive(resp)
+                parseDnsAAnswers(buf, resp.length, queryId)
+            }
+        } catch (e: Exception) {
+            LogEventBridge.debug("dns", "UDP DNS probe failed", mapOf(
+                "nameserver" to nameserver,
+                "hostname" to hostname,
+                "error" to (e.message ?: "unknown")
+            ))
+            emptyList()
+        }
+    }
+
+    private fun queryDohA(dohURL: String, hostname: String): List<String> {
+        return try {
+            val endpoint = URL("$dohURL?name=$hostname&type=A")
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("Accept", "application/dns-json")
+            conn.instanceFollowRedirects = true
+
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                conn.disconnect()
+                return emptyList()
+            }
+
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            val obj = JSONObject(body)
+            val answers = obj.optJSONArray("Answer") ?: return emptyList()
+            val ips = mutableListOf<String>()
+            for (i in 0 until answers.length()) {
+                val ans = answers.optJSONObject(i) ?: continue
+                if (ans.optInt("type") == 1) {
+                    val ip = ans.optString("data", "")
+                    if (ip.isNotBlank()) ips += ip
+                }
+            }
+            ips
+        } catch (e: Exception) {
+            LogEventBridge.debug("dns", "DoH probe failed", mapOf(
+                "doh" to dohURL,
+                "hostname" to hostname,
+                "error" to (e.message ?: "unknown")
+            ))
+            emptyList()
+        }
+    }
+
+    private fun buildDnsQuery(hostname: String, queryId: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(byteArrayOf(
+            ((queryId ushr 8) and 0xFF).toByte(), (queryId and 0xFF).toByte(),
+            0x01, 0x00, // RD=1 standard query
+            0x00, 0x01, // QDCOUNT
+            0x00, 0x00, // ANCOUNT
+            0x00, 0x00, // NSCOUNT
+            0x00, 0x00, // ARCOUNT
+        ))
+
+        for (label in hostname.trim('.').split('.')) {
+            if (label.isEmpty()) continue
+            val bytes = label.toByteArray(Charsets.US_ASCII)
+            out.write(bytes.size)
+            out.write(bytes)
+        }
+        out.write(0x00)        // QNAME terminator
+        out.write(0x00); out.write(0x01) // QTYPE A
+        out.write(0x00); out.write(0x01) // QCLASS IN
+        return out.toByteArray()
+    }
+
+    private fun parseDnsAAnswers(data: ByteArray, length: Int, queryId: Int): List<String> {
+        if (length < 12) return emptyList()
+        val msg = data.copyOf(length)
+        val respId = u16(msg, 0)
+        if (respId != queryId) return emptyList()
+
+        val qdCount = u16(msg, 4)
+        val anCount = u16(msg, 6)
+
+        var offset = 12
+        repeat(qdCount) {
+            offset = skipDnsName(msg, offset)
+            if (offset + 4 > msg.size) return emptyList()
+            offset += 4
+        }
+
+        val ips = mutableListOf<String>()
+        repeat(anCount) {
+            offset = skipDnsName(msg, offset)
+            if (offset + 10 > msg.size) return@repeat
+
+            val type = u16(msg, offset)
+            val klass = u16(msg, offset + 2)
+            val rdLen = u16(msg, offset + 8)
+            offset += 10
+
+            if (offset + rdLen > msg.size) return@repeat
+
+            if (type == 1 && klass == 1 && rdLen == 4) {
+                val ipBytes = msg.copyOfRange(offset, offset + 4)
+                val hostAddress = InetAddress.getByAddress(ipBytes).hostAddress
+                if (!hostAddress.isNullOrBlank()) {
+                    ips += hostAddress
+                }
+            }
+            offset += rdLen
+        }
+        return ips
+    }
+
+    private fun skipDnsName(msg: ByteArray, start: Int): Int {
+        var p = start
+        while (p < msg.size) {
+            val len = msg[p].toInt() and 0xFF
+            if (len == 0) {
+                return p + 1
+            }
+            if ((len and 0xC0) == 0xC0) {
+                return p + 2
+            }
+            p += len + 1
+        }
+        return p
+    }
+
+    private fun u16(buf: ByteArray, offset: Int): Int {
+        if (offset + 1 >= buf.size) return 0
+        return ((buf[offset].toInt() and 0xFF) shl 8) or (buf[offset + 1].toInt() and 0xFF)
+    }
+
+    private fun allInKnownFakeRanges(ips: List<String>): Boolean {
+        if (ips.isEmpty()) return false
+        return ips.all { isKnownFakeIP(it) }
+    }
+
+    private fun isKnownFakeIP(ip: String): Boolean {
+        val addr = try {
+            InetAddress.getByName(ip).address
+        } catch (_: Exception) {
+            return false
+        }
+        if (addr.size != 4) return false
+
+        val b0 = addr[0].toInt() and 0xFF
+        val b1 = addr[1].toInt() and 0xFF
+
+        // 198.18.0.0/15 and 28.0.0.0/8
+        return (b0 == 198 && (b1 == 18 || b1 == 19)) || b0 == 28
     }
 
     private fun extractAssetsIfNeeded() {

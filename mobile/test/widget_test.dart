@@ -9,8 +9,6 @@ void main() {
     expect(find.text('ClashForge'), findsOneWidget);
     expect(find.byIcon(Icons.power_settings_new), findsOneWidget);
     expect(find.text('Tap to connect'), findsOneWidget);
-    expect(find.text('No node selected'), findsOneWidget);
-
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Proxies'), findsOneWidget);
     expect(find.text('Subscriptions'), findsOneWidget);

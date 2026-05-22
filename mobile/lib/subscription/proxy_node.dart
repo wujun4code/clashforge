@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 class ProxyNode {
   final String name;
   final String type;
