@@ -274,6 +274,8 @@ class _HomeScreenState extends State<HomeScreen> {
   _ConnectivitySnapshot? _connectivitySnapshot;
   final List<ProxyNode> _nodes = [];
   ProxyNode? _selectedNode;
+  final List<Subscription> _subscriptions = [];
+  String? _activeSubscriptionId;
 
   @override
   void initState() {
@@ -286,14 +288,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadPersistedData() async {
-    final nodes = await SubscriptionStore.loadNodes();
-    if (nodes.isNotEmpty) {
+    final subs     = await SubscriptionStore.loadSubscriptions();
+    final activeId = await SubscriptionStore.loadActiveId();
+    if (subs.isNotEmpty) {
+      final active = subs.firstWhere(
+        (s) => s.id == activeId,
+        orElse: () => subs.first,
+      );
       setState(() {
-        _nodes.addAll(nodes);
-        _selectedNode = nodes.first;
+        _subscriptions.addAll(subs);
+        _activeSubscriptionId = active.id;
+        _nodes.addAll(active.nodes);
+        _selectedNode = active.nodes.isEmpty ? null : active.nodes.first;
       });
-      AppLogger.instance
-          .info('app', 'Loaded saved nodes', fields: {'count': nodes.length});
+      AppLogger.instance.info('app', 'Loaded subscriptions',
+          fields: {'count': subs.length, 'active': active.nickname});
     }
   }
 
@@ -312,6 +321,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onNodesImported(List<ProxyNode> nodes,
       {String url = '', String nickname = ''}) {
+    final id  = '${DateTime.now().millisecondsSinceEpoch}';
+    final sub = Subscription(id: id, nickname: nickname, url: url, nodes: nodes);
+
     final previousSelected = _selectedNode?.name;
     ProxyNode? nextSelected;
     if (previousSelected != null) {
@@ -325,12 +337,59 @@ class _HomeScreenState extends State<HomeScreen> {
     nextSelected ??= nodes.isEmpty ? null : nodes.first;
 
     setState(() {
+      _subscriptions.add(sub);
+      _activeSubscriptionId = id;
       _nodes
         ..clear()
         ..addAll(nodes);
       _selectedNode = nextSelected;
     });
-    SubscriptionStore.save(nodes, url: url, nickname: nickname);
+    SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
+    SubscriptionStore.saveActiveId(id);
+  }
+
+  void _activateSubscription(Subscription sub) {
+    final previousSelected = _selectedNode?.name;
+    ProxyNode? nextSelected;
+    if (previousSelected != null) {
+      for (final item in sub.nodes) {
+        if (item.name == previousSelected) {
+          nextSelected = item;
+          break;
+        }
+      }
+    }
+    nextSelected ??= sub.nodes.isEmpty ? null : sub.nodes.first;
+
+    setState(() {
+      _activeSubscriptionId = sub.id;
+      _nodes
+        ..clear()
+        ..addAll(sub.nodes);
+      _selectedNode = nextSelected;
+    });
+    SubscriptionStore.saveActiveId(sub.id);
+    unawaited(_applyNodeSelectionIfRunning(triggerProbe: false));
+  }
+
+  void _deleteSubscription(Subscription sub) {
+    final wasActive = _activeSubscriptionId == sub.id;
+    setState(() {
+      _subscriptions.removeWhere((s) => s.id == sub.id);
+    });
+    SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
+    if (wasActive) {
+      if (_subscriptions.isNotEmpty) {
+        _activateSubscription(_subscriptions.first);
+      } else {
+        setState(() {
+          _activeSubscriptionId = null;
+          _nodes.clear();
+          _selectedNode = null;
+        });
+        SubscriptionStore.saveActiveId('');
+      }
+    }
   }
 
   Future<void> _onNodeSelected(ProxyNode node) async {
@@ -540,7 +599,7 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final target in _probeTargets) {
         checks.add(await _runSingleProbe(client, target));
       }
-      final ip = await _probeExitIp(client);
+      final ip = viaProxy ? await _probeExitIp(client) : null;
       return _ProbeScopeResult(
         title: viaProxy ? '代理侧' : '本机侧',
         via: viaProxy ? '经 Mihomo mixed 端口' : '手机系统直连网络',
@@ -653,7 +712,13 @@ class _HomeScreenState extends State<HomeScreen> {
           unawaited(_onNodeSelected(node));
         },
       ),
-      _SubscriptionsTab(onImported: _onNodesImported),
+      _SubscriptionsTab(
+        onImported: _onNodesImported,
+        subscriptions: _subscriptions,
+        activeSubId: _activeSubscriptionId,
+        onActivate: _activateSubscription,
+        onDelete: _deleteSubscription,
+      ),
       _SettingsTab(nodeCount: _nodes.length),
     ];
 
@@ -1410,12 +1475,23 @@ class _ProxiesTab extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Tab 3 — Subscriptions
 // ─────────────────────────────────────────────────────────────
-typedef _OnImported = void Function(List<ProxyNode> nodes,
-    {String url, String nickname});
+typedef _OnImported    = void Function(List<ProxyNode> nodes, {String url, String nickname});
+typedef _OnSubActivated = void Function(Subscription sub);
+typedef _OnSubDeleted   = void Function(Subscription sub);
 
 class _SubscriptionsTab extends StatefulWidget {
-  const _SubscriptionsTab({required this.onImported});
+  const _SubscriptionsTab({
+    required this.onImported,
+    required this.subscriptions,
+    required this.activeSubId,
+    required this.onActivate,
+    required this.onDelete,
+  });
   final _OnImported onImported;
+  final List<Subscription> subscriptions;
+  final String? activeSubId;
+  final _OnSubActivated onActivate;
+  final _OnSubDeleted onDelete;
 
   @override
   State<_SubscriptionsTab> createState() => _SubscriptionsTabState();
@@ -1581,156 +1657,314 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 20),
-            const Text('Subscriptions',
-                style: TextStyle(
-                    color: _kTextHi,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: -0.5)),
-            const SizedBox(height: 24),
+  String _domainLabel(String url) {
+    if (url.isEmpty) return '';
+    try {
+      final host = Uri.parse(url).host;
+      return host.isEmpty ? '' : ' · $host';
+    } catch (_) {
+      return '';
+    }
+  }
 
-            // URL card
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [_kCardGrad, _kCard],
-                ),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _kBorder),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: _kBrand.withAlpha(22),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _kBrand.withAlpha(60)),
-                        ),
-                        child: const Icon(Icons.link, color: _kBrand, size: 17),
-                      ),
-                      const SizedBox(width: 10),
-                      const Text('SUBSCRIPTION URL',
-                          style: TextStyle(
-                              color: _kTextFaint,
-                              fontSize: 11,
-                              letterSpacing: 1.2,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  TextField(
-                    key: const Key('subscription_url_field'),
-                    controller: _urlController,
-                    style: const TextStyle(color: _kTextHi, fontSize: 14),
-                    decoration: InputDecoration(
-                      hintText: 'https://',
-                      hintStyle: const TextStyle(color: _kTextFaint),
-                      filled: true,
-                      fillColor: _kBg,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: _kBorder)),
-                      enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: _kBorder)),
-                      focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: _kBrand, width: 1.5)),
-                      suffixIcon: _urlController.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear,
-                                  color: _kTextFaint, size: 18),
-                              onPressed: () {
-                                _urlController.clear();
-                                setState(() {});
-                              },
-                            )
-                          : null,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 46,
-                    child: FilledButton.icon(
-                      onPressed: _loading ? null : _import,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _kBrand,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: _kBrand.withAlpha(80),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(11)),
-                      ),
-                      icon: _loading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white54))
-                          : const Icon(Icons.cloud_download, size: 18),
-                      label: Text(_loading ? 'Fetching…' : 'Import',
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                    ),
-                  ),
-                ],
-              ),
+  Future<void> _confirmDelete(Subscription sub) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除订阅'),
+        content: Text('确认删除 "${sub.nickname}"？\n该操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: _kTextMuted)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kError,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) widget.onDelete(sub);
+  }
 
-            // Result banner
-            if (_message != null) ...[
-              const SizedBox(height: 14),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: (_success ? _kConnected : _kError).withAlpha(15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: (_success ? _kConnected : _kError).withAlpha(70)),
-                ),
-                child: Row(
+  Widget _buildSubCard(Subscription sub) {
+    final isActive = sub.id == widget.activeSubId;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isActive ? _kBrand.withAlpha(200) : _kBorder,
+          width: isActive ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: isActive ? null : () => widget.onActivate(sub),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                        _success
-                            ? Icons.check_circle_outline
-                            : Icons.error_outline,
-                        color: _success ? _kConnected : _kError,
-                        size: 18),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(_message!,
-                          style: TextStyle(
-                              color: _success ? _kConnected : _kError,
-                              fontSize: 13)),
+                    Row(
+                      children: [
+                        if (isActive)
+                          Container(
+                            width: 7,
+                            height: 7,
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: const BoxDecoration(
+                              color: _kBrand,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        Flexible(
+                          child: Text(
+                            sub.nickname,
+                            style: const TextStyle(
+                                color: _kTextHi,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isActive) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _kBrand.withAlpha(30),
+                              borderRadius: BorderRadius.circular(4),
+                              border:
+                                  Border.all(color: _kBrand.withAlpha(80)),
+                            ),
+                            child: const Text('使用中',
+                                style: TextStyle(
+                                    color: _kBrand,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${sub.nodes.length} 个节点${_domainLabel(sub.url)}',
+                      style: const TextStyle(
+                          color: _kTextFaint, fontSize: 12),
                     ),
                   ],
                 ),
               ),
+              if (!isActive) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: () => widget.onActivate(sub),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    foregroundColor: _kBrand,
+                  ),
+                  child: const Text('切换',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ],
+              IconButton(
+                icon: const Icon(Icons.delete_outline,
+                    color: _kTextFaint, size: 18),
+                onPressed: () => _confirmDelete(sub),
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
             ],
-          ],
+          ),
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        children: [
+          const SizedBox(height: 20),
+          const Text('Subscriptions',
+              style: TextStyle(
+                  color: _kTextHi,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -0.5)),
+          const SizedBox(height: 24),
+
+          // URL import card
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [_kCardGrad, _kCard],
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _kBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: _kBrand.withAlpha(22),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _kBrand.withAlpha(60)),
+                      ),
+                      child:
+                          const Icon(Icons.link, color: _kBrand, size: 17),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('SUBSCRIPTION URL',
+                        style: TextStyle(
+                            color: _kTextFaint,
+                            fontSize: 11,
+                            letterSpacing: 1.2,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  key: const Key('subscription_url_field'),
+                  controller: _urlController,
+                  style: const TextStyle(color: _kTextHi, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'https://',
+                    hintStyle: const TextStyle(color: _kTextFaint),
+                    filled: true,
+                    fillColor: _kBg,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _kBorder)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _kBorder)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(
+                            color: _kBrand, width: 1.5)),
+                    suffixIcon: _urlController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear,
+                                color: _kTextFaint, size: 18),
+                            onPressed: () {
+                              _urlController.clear();
+                              setState(() {});
+                            },
+                          )
+                        : null,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: FilledButton.icon(
+                    onPressed: _loading ? null : _import,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _kBrand,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: _kBrand.withAlpha(80),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(11)),
+                    ),
+                    icon: _loading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white54))
+                        : const Icon(Icons.cloud_download, size: 18),
+                    label: Text(_loading ? 'Fetching…' : 'Import',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Result banner
+          if (_message != null) ...[
+            const SizedBox(height: 14),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: (_success ? _kConnected : _kError).withAlpha(15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color:
+                        (_success ? _kConnected : _kError).withAlpha(70)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                      _success
+                          ? Icons.check_circle_outline
+                          : Icons.error_outline,
+                      color: _success ? _kConnected : _kError,
+                      size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(_message!,
+                        style: TextStyle(
+                            color: _success ? _kConnected : _kError,
+                            fontSize: 13)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // Saved subscriptions list
+          if (widget.subscriptions.isNotEmpty) ...[
+            const SizedBox(height: 28),
+            const Text('已保存的订阅',
+                style: TextStyle(
+                    color: _kTextMuted,
+                    fontSize: 12,
+                    letterSpacing: 0.8,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            ...widget.subscriptions.map(_buildSubCard),
+          ],
+
+          const SizedBox(height: 20),
+        ],
       ),
     );
   }
