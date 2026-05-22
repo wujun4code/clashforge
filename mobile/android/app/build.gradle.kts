@@ -62,6 +62,8 @@ dependencies {
     // OkHttp uses Android's TLS stack (different JA3) and gets rejected by subscription servers
     // that fingerprint the ClientHello.
     implementation("org.chromium.net:cronet-embedded:119.6045.31")
+    // NotificationCompat + @RequiresApi annotations used by ClashVpnService and ClashForgeTileService.
+    implementation("androidx.core:core-ktx:1.13.1")
 }
 
 flutter {

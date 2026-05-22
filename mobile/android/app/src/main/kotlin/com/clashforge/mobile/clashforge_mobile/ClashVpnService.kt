@@ -1,11 +1,20 @@
 package com.clashforge.mobile.clashforge_mobile
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.service.quicksettings.TileService
 import android.system.Os
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -28,7 +37,11 @@ class ClashVpnService : VpnService(), Runnable {
     companion object {
         const val ACTION_START = "com.clashforge.mobile.START"
         const val ACTION_STOP  = "com.clashforge.mobile.STOP"
-        private const val TAG  = "ClashVpnService"
+        const val ACTION_VPN_STATE_CHANGED = "com.clashforge.mobile.VPN_STATE_CHANGED"
+        const val EXTRA_VPN_RUNNING = "vpn_running"
+        private const val TAG       = "ClashVpnService"
+        private const val CHANNEL_ID = "clashforge_vpn"
+        private const val NOTIF_ID   = 1001
         private val DEFAULT_DOH_PROBE_CANDIDATES = listOf(
             "https://1.1.1.1/dns-query",
             "https://8.8.8.8/dns-query",
@@ -59,6 +72,14 @@ class ClashVpnService : VpnService(), Runnable {
         }
         isRunning  = true
         vpnRunning = true
+        createNotificationChannel()
+        val notif = buildVpnNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIF_ID, notif)
+        }
+        sendVpnStateBroadcast(true)
         LogEventBridge.info("vpn", "Starting VPN thread")
         vpnThread = Thread(this, "ClashVpnThread").apply { start() }
     }
@@ -73,6 +94,14 @@ class ClashVpnService : VpnService(), Runnable {
         vpnRunning    = false
         mihomoRunning = false
         mihomoPid     = -1
+
+        @Suppress("DEPRECATION")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        } else {
+            stopForeground(true)
+        }
+        sendVpnStateBroadcast(false)
 
         coreProcess?.destroy()
         coreProcess = null
@@ -1054,6 +1083,71 @@ sniffer:
                 LogEventBridge.error("mihomo", "Log reader error: ${e.message}")
             }
         }.start()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "ClashForge VPN",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "VPN 连接状态"
+                setShowBadge(false)
+                setSound(null, null)       // silent — status notification, no alert sound
+                enableVibration(false)
+            }
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildVpnNotification(): Notification {
+        val stopIntent = PendingIntent.getService(
+            this, 0,
+            Intent(this, ClashVpnService::class.java).apply { action = ACTION_STOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val openIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("ClashForge VPN 运行中")
+            .setContentText("VPN 已接管网络流量")
+            .setSmallIcon(R.drawable.ic_vpn_notification)
+            .setContentIntent(openIntent)
+            .addAction(0, "断开连接", stopIntent)
+            .setOngoing(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    private fun sendVpnStateBroadcast(running: Boolean) {
+        sendBroadcast(Intent(ACTION_VPN_STATE_CHANGED).putExtra(EXTRA_VPN_RUNNING, running))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            TileService.requestListeningState(
+                this,
+                ComponentName(this, ClashForgeTileService::class.java)
+            )
+        }
+        // On first VPN start, prompt the user to add the Quick Settings tile.
+        // requestAddTileService() shows a one-time system sheet; Android ignores it
+        // on subsequent calls if the tile is already in the user's QS panel.
+        if (running && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                val sbm = getSystemService(android.app.StatusBarManager::class.java)
+                sbm?.requestAddTileService(
+                    ComponentName(this, ClashForgeTileService::class.java),
+                    "ClashForge VPN",
+                    android.graphics.drawable.Icon.createWithResource(
+                        this, R.drawable.ic_vpn_notification
+                    ),
+                    mainExecutor
+                ) { /* result ignored */ }
+            } catch (_: Exception) { /* non-fatal: some OEMs don't implement this */ }
+        }
     }
 
     override fun onDestroy() {
