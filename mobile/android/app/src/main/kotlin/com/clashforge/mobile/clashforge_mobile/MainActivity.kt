@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Process
+import android.provider.Settings
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -247,6 +248,9 @@ class MainActivity : FlutterActivity() {
             am.getProcessMemoryInfo(intArrayOf(Process.myPid()))[0].totalPss / 1024.0
         } catch (_: Exception) { 0.0 }
 
+        val privateDnsMode = readGlobalSetting("private_dns_mode")
+        val privateDnsSpecifier = readGlobalSetting("private_dns_specifier")
+
         return mapOf(
             "app_version"         to versionName,
             "build_number"        to versionCode,
@@ -255,8 +259,18 @@ class MainActivity : FlutterActivity() {
             "mihomo_pid"          to ClashVpnService.mihomoPid,
             "memory_app_pss_mb"   to String.format("%.1f", pss).toDouble(),
             "memory_available_mb" to String.format("%.0f", memInfo.availMem / 1024.0 / 1024.0).toDouble(),
-            "device_abi"          to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
+            "device_abi"          to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
+            "private_dns_mode"    to privateDnsMode,
+            "private_dns_specifier" to privateDnsSpecifier
         )
+    }
+
+    private fun readGlobalSetting(key: String): String {
+        return try {
+            Settings.Global.getString(contentResolver, key) ?: ""
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     override fun onDestroy() {

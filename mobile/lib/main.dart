@@ -104,6 +104,32 @@ class _ConnectivitySnapshot {
   final _ProbeScopeResult directSide;
 }
 
+class _BrowserDnsCheckResult {
+  const _BrowserDnsCheckResult({
+    required this.name,
+    required this.ok,
+    required this.detail,
+  });
+
+  final String name;
+  final bool ok;
+  final String detail;
+}
+
+class _BrowserDnsSnapshot {
+  const _BrowserDnsSnapshot({
+    required this.checkedAt,
+    required this.checks,
+    required this.summary,
+  });
+
+  final DateTime checkedAt;
+  final List<_BrowserDnsCheckResult> checks;
+  final String summary;
+
+  bool get healthy => checks.isNotEmpty && checks.every((item) => item.ok);
+}
+
 // ─── Minimal YAML serialiser ──────────────────────────────────
 String _mapToYaml(Map<String, dynamic> m) {
   final buf = StringBuffer();
@@ -268,10 +294,14 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isConnected = false;
   bool _isConnecting = false;
   bool _probeLoading = false;
+  bool _browserDnsLoading = false;
   bool _switchingNode = false;
   String _connectionStatus = 'Tap to connect';
   String? _probeMessage;
+  String? _browserDnsMessage;
+  String? _privateDnsWarning;
   _ConnectivitySnapshot? _connectivitySnapshot;
+  _BrowserDnsSnapshot? _browserDnsSnapshot;
   final List<ProxyNode> _nodes = [];
   ProxyNode? _selectedNode;
   final List<Subscription> _subscriptions = [];
@@ -414,7 +444,10 @@ class _HomeScreenState extends State<HomeScreen> {
           _isConnected = false;
           _connectionStatus = 'Tap to connect';
           _connectivitySnapshot = null;
+          _browserDnsSnapshot = null;
           _probeMessage = null;
+          _browserDnsMessage = null;
+          _privateDnsWarning = null;
         });
       } else {
         if (_selectedNode == null) {
@@ -464,6 +497,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _bootstrapAfterConnect() async {
+    await _refreshPrivateDnsWarning();
+
     // Retry applying node selection until mihomo's controller is ready.
     // The controller typically starts within 1–2 s; 8 × 500 ms = up to 4 s.
     for (var attempt = 0; attempt < 8; attempt++) {
@@ -490,6 +525,27 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
     await _runConnectivityChecks();
+    await _runBrowserDnsDiagnostics();
+  }
+
+  Future<void> _refreshPrivateDnsWarning() async {
+    final info = await VpnManager.getSystemInfo();
+    final mode =
+        (info['private_dns_mode'] ?? '').toString().trim().toLowerCase();
+    final specifier = (info['private_dns_specifier'] ?? '').toString().trim();
+
+    String? nextWarning;
+    if (mode == 'hostname' || mode == 'opportunistic') {
+      final modeText = mode == 'hostname' ? '严格主机名模式' : '自动模式';
+      final suffix =
+          mode == 'hostname' && specifier.isNotEmpty ? ' ($specifier)' : '';
+      nextWarning = '检测到系统 Private DNS $modeText$suffix，Android 可能无法劫持 DNS 请求，'
+          '浏览器可能报 DNS_PROBE_FINISHED_BAD_CONFIG。请先在系统设置中关闭 Private DNS 后重试。';
+    }
+
+    if (!mounted) return;
+    if (_privateDnsWarning == nextWarning) return;
+    setState(() => _privateDnsWarning = nextWarning);
   }
 
   Future<void> _applyNodeSelectionIfRunning(
@@ -546,6 +602,7 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => _connectionStatus = 'Switched to ${node.name}');
       }
       await _runConnectivityChecks();
+      await _runBrowserDnsDiagnostics();
     } finally {
       if (mounted) {
         setState(() => _switchingNode = false);
@@ -584,6 +641,159 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() => _probeLoading = false);
       }
+    }
+  }
+
+  Future<void> _runBrowserDnsDiagnostics() async {
+    if (_browserDnsLoading) return;
+    final logger = AppLogger.instance;
+
+    setState(() {
+      _browserDnsLoading = true;
+      _browserDnsMessage = null;
+    });
+
+    try {
+      final checks = <_BrowserDnsCheckResult>[];
+      final info = await VpnManager.getSystemInfo();
+
+      final modeRaw =
+          (info['private_dns_mode'] ?? '').toString().trim().toLowerCase();
+      final specifier = (info['private_dns_specifier'] ?? '').toString().trim();
+      final privateDnsOn = modeRaw == 'hostname' || modeRaw == 'opportunistic';
+      checks.add(
+        _BrowserDnsCheckResult(
+          name: '系统 Private DNS',
+          ok: !privateDnsOn,
+          detail: privateDnsOn
+              ? (modeRaw == 'hostname' && specifier.isNotEmpty
+                  ? '开启（严格主机名：$specifier）'
+                  : '开启（$modeRaw）')
+              : '关闭',
+        ),
+      );
+
+      final mihomoAnswers = await _queryMihomoDnsA('www.google.com');
+      checks.add(
+        _BrowserDnsCheckResult(
+          name: 'Mihomo DNS 解析',
+          ok: mihomoAnswers.isNotEmpty,
+          detail: mihomoAnswers.isNotEmpty
+              ? 'www.google.com -> ${mihomoAnswers.take(3).join(', ')}'
+              : '无返回记录（可能导致浏览器域名无法打开）',
+        ),
+      );
+
+      bool systemDnsOk = false;
+      String systemDnsDetail = '';
+      try {
+        final addrs = await InternetAddress.lookup('www.google.com')
+            .timeout(const Duration(seconds: 6));
+        final ips = addrs
+            .map((item) => item.address.trim())
+            .where((item) => item.isNotEmpty)
+            .toSet()
+            .toList();
+        systemDnsOk = ips.isNotEmpty;
+        systemDnsDetail = systemDnsOk ? ips.take(3).join(', ') : 'lookup 无可用地址';
+      } catch (e) {
+        systemDnsDetail = e.toString();
+      }
+      checks.add(
+        _BrowserDnsCheckResult(
+          name: '系统 DNS 解析',
+          ok: systemDnsOk,
+          detail: systemDnsDetail,
+        ),
+      );
+
+      final proxyClient = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 6)
+        ..findProxy = (_) => 'PROXY $_kClashControllerHost:$_kHttpProxyPort;';
+      final proxySmoke = await _runSingleProbe(
+        proxyClient,
+        const _ProbeTarget(
+          name: 'Proxy Smoke',
+          url: 'https://www.gstatic.com/generate_204',
+          description: '代理链路可达性',
+        ),
+      );
+      proxyClient.close(force: true);
+      checks.add(
+        _BrowserDnsCheckResult(
+          name: '代理链路',
+          ok: proxySmoke.ok,
+          detail: proxySmoke.ok
+              ? '经 HTTP 代理访问 gstatic 成功'
+              : (proxySmoke.error ?? '代理链路失败'),
+        ),
+      );
+
+      final summary = _buildBrowserDnsSummary(checks);
+      if (!mounted) return;
+      setState(() {
+        _browserDnsSnapshot = _BrowserDnsSnapshot(
+          checkedAt: DateTime.now(),
+          checks: checks,
+          summary: summary,
+        );
+      });
+    } catch (e) {
+      logger.error('browser-dns', 'Browser DNS diagnostics failed: $e');
+      if (!mounted) return;
+      setState(() => _browserDnsMessage = '专项检测失败: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _browserDnsLoading = false);
+      }
+    }
+  }
+
+  String _buildBrowserDnsSummary(List<_BrowserDnsCheckResult> checks) {
+    bool failed(String name) =>
+        checks.any((item) => item.name == name && !item.ok);
+
+    if (failed('系统 Private DNS')) {
+      return '检测到 Private DNS 已开启。该状态下浏览器可能出现 DNS_PROBE_FINISHED_BAD_CONFIG，建议先关闭系统 Private DNS 再重试。';
+    }
+    if (failed('Mihomo DNS 解析')) {
+      return 'Mihomo DNS 当前未能解析目标域名，建议检查订阅节点、上游 DNS 和 DNS 防污染设置。';
+    }
+    if (failed('系统 DNS 解析')) {
+      return '系统 DNS 解析异常。若连通性页面“代理侧”正常，优先排查系统 DNS / 路由器 DNS。';
+    }
+    if (failed('代理链路')) {
+      return '代理链路探测失败。DNS 可能正常，但出站链路不可达。';
+    }
+    return '浏览器 DNS 链路整体正常。若浏览器仍报错，请切换网络后再测一次。';
+  }
+
+  Future<List<String>> _queryMihomoDnsA(String host) async {
+    try {
+      final uri = Uri.parse(
+        'http://$_kClashControllerHost:$_kClashControllerPort/dns/query?name='
+        '${Uri.encodeQueryComponent(host)}&type=A',
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 6));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return const [];
+      }
+
+      final body = json.decode(res.body);
+      if (body is! Map<String, dynamic>) return const [];
+      final answersRaw = body['Answer'];
+      if (answersRaw is! List) return const [];
+
+      final out = <String>[];
+      for (final item in answersRaw) {
+        if (item is! Map) continue;
+        final data = (item['data'] ?? '').toString().trim();
+        if (data.isEmpty) continue;
+        out.add(data);
+      }
+      return out.toSet().toList();
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -700,9 +910,14 @@ class _HomeScreenState extends State<HomeScreen> {
         isSwitchingNode: _switchingNode,
         probeLoading: _probeLoading,
         probeMessage: _probeMessage,
+        browserDnsLoading: _browserDnsLoading,
+        browserDnsMessage: _browserDnsMessage,
+        privateDnsWarning: _privateDnsWarning,
         snapshot: _connectivitySnapshot,
+        browserDnsSnapshot: _browserDnsSnapshot,
         onToggle: _toggleVpn,
         onRecheckProbe: _runConnectivityChecks,
+        onRecheckBrowserDns: _runBrowserDnsDiagnostics,
         onSwitchNode: _switchNodeFromHome,
         onTapNode: () => setState(() => _tabIndex = 1),
       ),
@@ -768,9 +983,14 @@ class _HomeTab extends StatelessWidget {
     required this.isSwitchingNode,
     required this.probeLoading,
     required this.probeMessage,
+    required this.browserDnsLoading,
+    required this.browserDnsMessage,
+    required this.privateDnsWarning,
     required this.snapshot,
+    required this.browserDnsSnapshot,
     required this.onToggle,
     required this.onRecheckProbe,
+    required this.onRecheckBrowserDns,
     required this.onSwitchNode,
     required this.onTapNode,
   });
@@ -783,9 +1003,14 @@ class _HomeTab extends StatelessWidget {
   final bool isSwitchingNode;
   final bool probeLoading;
   final String? probeMessage;
+  final bool browserDnsLoading;
+  final String? browserDnsMessage;
+  final String? privateDnsWarning;
   final _ConnectivitySnapshot? snapshot;
+  final _BrowserDnsSnapshot? browserDnsSnapshot;
   final VoidCallback onToggle;
   final Future<void> Function() onRecheckProbe;
+  final Future<void> Function() onRecheckBrowserDns;
   final Future<void> Function(ProxyNode) onSwitchNode;
   final VoidCallback onTapNode;
 
@@ -797,6 +1022,11 @@ class _HomeTab extends StatelessWidget {
         : '${snapshot!.checkedAt.hour.toString().padLeft(2, '0')}:'
             '${snapshot!.checkedAt.minute.toString().padLeft(2, '0')}:'
             '${snapshot!.checkedAt.second.toString().padLeft(2, '0')}';
+    final browserDnsCheckedAt = browserDnsSnapshot == null
+        ? '--'
+        : '${browserDnsSnapshot!.checkedAt.hour.toString().padLeft(2, '0')}:'
+            '${browserDnsSnapshot!.checkedAt.minute.toString().padLeft(2, '0')}:'
+            '${browserDnsSnapshot!.checkedAt.second.toString().padLeft(2, '0')}';
 
     return Container(
       decoration: const BoxDecoration(
@@ -963,6 +1193,37 @@ class _HomeTab extends StatelessWidget {
                   ],
                 ),
               ),
+              if (privateDnsWarning != null) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _kError.withAlpha(16),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _kError.withAlpha(100)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.warning_amber_rounded,
+                            size: 16, color: _kError),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          privateDnsWarning!,
+                          style: const TextStyle(
+                              color: _kTextHi, fontSize: 12, height: 1.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               _HomeBlockCard(
                 title: '连通性检测',
@@ -1028,6 +1289,72 @@ class _HomeTab extends StatelessWidget {
                       const SizedBox(height: 8),
                       _ProbeScopePane(scope: snapshot!.directSide),
                     ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              _HomeBlockCard(
+                title: '浏览器 DNS 专项检测',
+                subtitle: '定位“连通性通过但浏览器打不开域名”',
+                trailing: TextButton.icon(
+                  onPressed: browserDnsLoading
+                      ? null
+                      : () => unawaited(onRecheckBrowserDns()),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _kBrand,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  ),
+                  icon: browserDnsLoading
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: _kBrand),
+                        )
+                      : const Icon(Icons.refresh, size: 14),
+                  label: const Text('重测', style: TextStyle(fontSize: 12)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '最近检测: $browserDnsCheckedAt',
+                          style:
+                              const TextStyle(color: _kTextFaint, fontSize: 11),
+                        ),
+                        const Spacer(),
+                        if (browserDnsMessage != null)
+                          Flexible(
+                            child: Text(
+                              browserDnsMessage!,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  const TextStyle(color: _kError, fontSize: 11),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (browserDnsSnapshot == null && !browserDnsLoading)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: _kBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: _kBorder),
+                        ),
+                        child: const Text(
+                          '点击“重测”开始浏览器 DNS 专项排查',
+                          style: TextStyle(color: _kTextMuted, fontSize: 13),
+                        ),
+                      ),
+                    if (browserDnsSnapshot != null)
+                      _BrowserDnsPane(snapshot: browserDnsSnapshot!),
                   ],
                 ),
               ),
@@ -1284,6 +1611,113 @@ class _ProbeScopePane extends StatelessWidget {
               );
             }),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BrowserDnsPane extends StatelessWidget {
+  const _BrowserDnsPane({required this.snapshot});
+
+  final _BrowserDnsSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = snapshot.healthy ? _kConnected : _kError;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _kBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '浏览器 DNS 路径',
+                  style: TextStyle(
+                      color: _kTextHi,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: tone.withAlpha(16),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: tone.withAlpha(120)),
+                ),
+                child: Text(
+                  snapshot.healthy ? '正常' : '风险',
+                  style: TextStyle(
+                      color: tone, fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...snapshot.checks.map((item) {
+            final okColor = item.ok ? _kConnected : _kError;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    width: 8,
+                    height: 8,
+                    decoration:
+                        BoxDecoration(color: okColor, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.name,
+                          style: const TextStyle(
+                              color: _kTextHi,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          item.detail,
+                          style:
+                              const TextStyle(color: _kTextMuted, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          const SizedBox(height: 4),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: tone.withAlpha(12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: tone.withAlpha(80)),
+            ),
+            child: Text(
+              snapshot.summary,
+              style:
+                  const TextStyle(color: _kTextHi, fontSize: 12, height: 1.4),
+            ),
+          ),
         ],
       ),
     );
