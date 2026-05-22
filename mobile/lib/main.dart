@@ -1517,6 +1517,21 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
     super.dispose();
   }
 
+  static const _httpChannel = MethodChannel('com.clashforge.mobile/http');
+
+  // Uses Android's HttpURLConnection — system TLS stack has a browser-compatible
+  // JA3 fingerprint, bypassing servers that block Dart's dart:io TLS client.
+  Future<(int, String)> _fetchUrlNative(String url) async {
+    final result = await _httpChannel.invokeMapMethod<String, dynamic>(
+        'fetchUrl', {'url': url, 'timeoutMs': 15000});
+    return (result!['status'] as int, result['body'] as String);
+  }
+
+  Future<(int, String)> _fetchUrlDart(String url) async {
+    final response = await http.get(Uri.parse(url));
+    return (response.statusCode, response.body);
+  }
+
   Future<void> _import() async {
     final input = _urlController.text.trim();
     if (input.isEmpty) return;
@@ -1531,20 +1546,22 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       if (input.startsWith('http://') || input.startsWith('https://')) {
         logger.info('subscription', 'Fetching URL',
             fields: {'url': _redactSubscriptionUrl(input)});
-        final response = await http.get(Uri.parse(input));
-        logger.info('subscription', 'Fetch response', fields: {
-          'status': response.statusCode,
-          'bytes': response.contentLength ?? response.bodyBytes.length,
-        });
-        if (response.statusCode != 200) {
+        // Use Android's native HttpURLConnection (system TLS stack) to bypass
+        // TLS fingerprinting on subscription servers that block Dart's dart:io.
+        final (statusCode, body) = Platform.isAndroid
+            ? await _fetchUrlNative(input)
+            : await _fetchUrlDart(input);
+        logger.info('subscription', 'Fetch response',
+            fields: {'status': statusCode, 'bytes': body.length});
+        if (statusCode != 200) {
           setState(() {
             _loading = false;
             _success = false;
-            _message = 'Fetch failed: HTTP ${response.statusCode}';
+            _message = 'Fetch failed: HTTP $statusCode';
           });
           return;
         }
-        content = response.body;
+        content = body;
       }
 
       final nodes = SubscriptionParser.parse(content);

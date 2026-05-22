@@ -5,6 +5,10 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Process
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -15,6 +19,7 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private val VPN_CHANNEL = "com.clashforge.mobile/vpn"
     private val LOG_CHANNEL = "com.clashforge.mobile/logs"
+    private val HTTP_CHANNEL = "com.clashforge.mobile/http"
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -57,6 +62,70 @@ class MainActivity : FlutterActivity() {
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, LOG_CHANNEL)
             .setStreamHandler(LogEventBridge)
+
+        // HTTP channel: uses a hidden WebView (= Chrome TLS stack, identical JA3 fingerprint
+        // to the system browser) to fetch subscription URLs that block non-browser TLS clients.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HTTP_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "fetchUrl" -> {
+                        val url = call.argument<String>("url") ?: run {
+                            result.error("INVALID_ARG", "url is required", null)
+                            return@setMethodCallHandler
+                        }
+                        // WebView must be created and used on the main (UI) thread.
+                        runOnUiThread { fetchWithWebView(url, result) }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    // Loads `url` in a hidden WebView and returns the plain-text body via `result`.
+    // Using WebView means we get Chrome's exact TLS/JA3 fingerprint, which passes
+    // fingerprint-gating subscription servers that block HttpURLConnection and Dart http.
+    private fun fetchWithWebView(url: String, result: MethodChannel.Result) {
+        val wv = WebView(this)
+        wv.settings.javaScriptEnabled = true
+        wv.webViewClient = object : WebViewClient() {
+            private var done = false
+
+            override fun onPageFinished(view: WebView, pageUrl: String) {
+                if (done) return
+                done = true
+                // document.documentElement.innerText captures raw text for plain-text
+                // responses (JSON/YAML rendered as <pre> by Chrome).
+                view.evaluateJavascript("document.documentElement.innerText") { raw ->
+                    try {
+                        // evaluateJavascript returns a JSON-encoded string; decode it.
+                        val body = org.json.JSONArray("[$raw]").getString(0)
+                        result.success(mapOf("status" to 200, "body" to body))
+                    } catch (e: Exception) {
+                        result.error("PARSE_ERROR", e.message ?: "parse failed", null)
+                    }
+                }
+            }
+
+            override fun onReceivedError(
+                view: WebView, req: WebResourceRequest, err: WebResourceError
+            ) {
+                if (req.isForMainFrame && !done) {
+                    done = true
+                    result.error("FETCH_ERROR", err.description.toString(), null)
+                }
+            }
+
+            @Suppress("DEPRECATION", "OverridingDeprecatedMember")
+            override fun onReceivedError(
+                view: WebView, code: Int, desc: String, failUrl: String
+            ) {
+                if (!done) {
+                    done = true
+                    result.error("FETCH_ERROR", desc, null)
+                }
+            }
+        }
+        wv.loadUrl(url)
     }
 
     private fun buildSystemInfo(): Map<String, Any> {
