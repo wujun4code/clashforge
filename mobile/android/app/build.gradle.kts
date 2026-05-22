@@ -58,7 +58,10 @@ android {
 }
 
 dependencies {
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Cronet embedded — uses Chrome's actual TLS stack so JA3 fingerprint matches desktop Chrome.
+    // OkHttp uses Android's TLS stack (different JA3) and gets rejected by subscription servers
+    // that fingerprint the ClientHello.
+    implementation("org.chromium.net:cronet-embedded:119.6045.31")
 }
 
 flutter {

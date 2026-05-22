@@ -11,22 +11,25 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import java.nio.ByteBuffer
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import org.chromium.net.CronetEngine
+import org.chromium.net.CronetException
+import org.chromium.net.UrlRequest
+import org.chromium.net.UrlResponseInfo
 
 class MainActivity : FlutterActivity() {
     private val VPN_CHANNEL = "com.clashforge.mobile/vpn"
     private val LOG_CHANNEL = "com.clashforge.mobile/logs"
     private val HTTP_CHANNEL = "com.clashforge.mobile/http"
 
-    // Single shared OkHttpClient — reuse connection pools and thread pools.
-    private val httpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .build()
+    // Cronet uses Chrome's actual TLS stack — same JA3 fingerprint as desktop Chrome.
+    // Subscription servers that reject OkHttp (Android TLS, different JA3) accept Cronet.
+    private val cronetEngine: CronetEngine by lazy {
+        CronetEngine.Builder(applicationContext).build()
     }
+    private val cronetExecutor: Executor = Executors.newSingleThreadExecutor()
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -70,9 +73,8 @@ class MainActivity : FlutterActivity() {
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, LOG_CHANNEL)
             .setStreamHandler(LogEventBridge)
 
-        // HTTP channel: uses OkHttp with a full desktop-Chrome header set so that
-        // subscription servers that fingerprint by User-Agent, Sec-Ch-Ua-Mobile, or
-        // Sec-Fetch-* headers allow the request through.
+        // HTTP channel: Cronet uses Chrome's BoringSSL TLS stack with identical cipher suite
+        // ordering and extension set, so the JA3 fingerprint matches desktop Chrome.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HTTP_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -81,60 +83,77 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARG", "url is required", null)
                             return@setMethodCallHandler
                         }
-                        fetchWithOkHttp(url, result)
+                        fetchWithCronet(url, result)
                     }
                     else -> result.notImplemented()
                 }
             }
     }
 
-    // Fetches `url` using OkHttp with a desktop Windows Chrome header set.
-    // Subscription servers often block mobile clients via:
-    //   • User-Agent containing "Mobile"
-    //   • Sec-Ch-Ua-Mobile: ?1  (Android WebView always sends this)
-    //   • Sec-Ch-Ua-Platform: "Android"
-    // OkHttp lets us send every header explicitly, so we fully impersonate a
-    // desktop Chrome request at the HTTP layer.
-    private fun fetchWithOkHttp(url: String, result: MethodChannel.Result) {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent",
+    private fun fetchWithCronet(url: String, result: MethodChannel.Result) {
+        val callback = object : UrlRequest.Callback() {
+            private var statusCode = 0
+            private val body = StringBuilder()
+            private val buffer = ByteBuffer.allocateDirect(32 * 1024)
+
+            override fun onRedirectReceived(
+                request: UrlRequest,
+                info: UrlResponseInfo,
+                newLocationUrl: String
+            ) {
+                request.followRedirect()
+            }
+
+            override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
+                statusCode = info.httpStatusCode
+                buffer.clear()
+                request.read(buffer)
+            }
+
+            override fun onReadCompleted(
+                request: UrlRequest,
+                info: UrlResponseInfo,
+                byteBuffer: ByteBuffer
+            ) {
+                byteBuffer.flip()
+                val bytes = ByteArray(byteBuffer.remaining())
+                byteBuffer.get(bytes)
+                body.append(String(bytes, Charsets.UTF_8))
+                byteBuffer.clear()
+                request.read(byteBuffer)
+            }
+
+            override fun onSucceeded(request: UrlRequest, info: UrlResponseInfo) {
+                val code = statusCode
+                val responseBody = body.toString()
+                runOnUiThread {
+                    result.success(mapOf("status" to code, "body" to responseBody))
+                }
+            }
+
+            override fun onFailed(
+                request: UrlRequest,
+                info: UrlResponseInfo?,
+                error: CronetException
+            ) {
+                runOnUiThread {
+                    result.error("FETCH_ERROR", error.message ?: "Cronet fetch failed", null)
+                }
+            }
+        }
+
+        cronetEngine.newUrlRequestBuilder(url, callback, cronetExecutor)
+            .addHeader("User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-            .header("Accept",
+            .addHeader("Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9," +
                 "image/avif,image/webp,image/apng,*/*;q=0.8," +
                 "application/signed-exchange;v=b3;q=0.7")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .header("Cache-Control", "no-cache")
-            .header("Pragma", "no-cache")
-            .header("Sec-Ch-Ua",
-                "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", " +
-                "\"Not-A.Brand\";v=\"99\"")
-            .header("Sec-Ch-Ua-Mobile", "?0")          // desktop, NOT mobile
-            .header("Sec-Ch-Ua-Platform", "\"Windows\"")
-            .header("Sec-Fetch-Dest", "document")
-            .header("Sec-Fetch-Mode", "navigate")
-            .header("Sec-Fetch-Site", "none")
-            .header("Sec-Fetch-User", "?1")
-            .header("Upgrade-Insecure-Requests", "1")
+            .addHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            .addHeader("Cache-Control", "no-cache")
             .build()
-
-        // OkHttp is blocking; run on a background thread and marshal result back.
-        Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val body = response.body?.string() ?: ""
-                    runOnUiThread {
-                        result.success(mapOf("status" to response.code, "body" to body))
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    result.error("FETCH_ERROR", e.message ?: "fetch failed", null)
-                }
-            }
-        }.start()
+            .start()
     }
 
     private fun buildSystemInfo(): Map<String, Any> {
@@ -161,6 +180,11 @@ class MainActivity : FlutterActivity() {
             "memory_available_mb" to String.format("%.0f", memInfo.availMem / 1024.0 / 1024.0).toDouble(),
             "device_abi"          to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
         )
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cronetEngine.shutdown()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
