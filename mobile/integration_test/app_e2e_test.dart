@@ -173,20 +173,19 @@ void main() {
       _log('VPN service: running. Mihomo: running');
 
       // ── Round 2: IP probe through VPN ───────────────────────────────
-      // Retry up to 5 times with 6 s gaps — Tor relays can take several seconds to
-      // establish the first circuit, and mihomo's url-test needs time to settle.
-      // TUN init may fail on the emulator (packages.xml permission denied from PMS
-      // continuously resetting file perms). mihomo's HTTP proxy at 127.0.0.1:7890
-      // works even when TUN fails — loopback bypasses Android VPN routing entirely.
-      _log('Round 2: probing IP through VPN (up to 5 attempts, TUN then HTTP proxy fallback)…');
+      // MUST use mihomo HTTP proxy (127.0.0.1:7890), NOT a direct HTTP request.
+      // Reason: the ClashForge app process is excluded from VPN routing via
+      // addDisallowedApplication(packageName) to prevent the TUN→mihomo→TUN
+      // loopback.  Any direct HTTP request from this test process bypasses the
+      // VPN TUN and returns the baseline (Azure runner) IP — not the proxy IP.
+      // Loopback (127.0.0.1) also bypasses Android VPN routing, so mihomo port
+      // 7890 is reachable directly; mihomo then forwards through the proxy node.
+      _log('Round 2: probing IP via mihomo HTTP proxy 127.0.0.1:7890 (up to 5 attempts)…');
       String vpnIp = '';
       for (var attempt = 1; attempt <= 5; attempt++) {
-        vpnIp = await _probeIp();
-        if (vpnIp.isNotEmpty) break;
-        _log('Round 2 attempt $attempt via TUN returned empty — trying mihomo HTTP proxy 127.0.0.1:7890…');
         vpnIp = await _probeIpViaHttpProxy('127.0.0.1', 7890);
         if (vpnIp.isNotEmpty) break;
-        _log('Round 2 attempt $attempt all paths empty — waiting 6 s…');
+        _log('Round 2 attempt $attempt — empty, waiting 6 s…');
         await Future<void>.delayed(const Duration(seconds: 6));
         await tester.pumpAndSettle();
       }
