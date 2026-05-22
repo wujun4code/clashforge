@@ -28,3 +28,6 @@ internal/api/ui_dist/
 /dist/
 __pycache__/
 internal/api/ui_dist/
+
+# Temporary debug files (logcat, UI dumps, adb captures)
+tmp-*
