@@ -8,18 +8,33 @@ class Subscription {
   final String url;
   final List<ProxyNode> nodes;
 
+  /// Non-empty when the original subscription contained `rules:`.
+  /// Empty means "no custom rules" → use Loyalsoldier template at config-gen time.
+  final List<String> customRules;
+
+  /// Non-empty when the original subscription contained `proxy-groups:`.
+  /// Only used when [hasCustomRules] is true; otherwise the config generator
+  /// builds its own proxy-groups from [nodes].
+  final List<Map<String, dynamic>> customProxyGroups;
+
   const Subscription({
     required this.id,
     required this.nickname,
     required this.url,
     required this.nodes,
+    this.customRules = const [],
+    this.customProxyGroups = const [],
   });
+
+  bool get hasCustomRules => customRules.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'nickname': nickname,
         'url': url,
         'nodes': nodes.map((n) => n.toJson()).toList(),
+        if (customRules.isNotEmpty) 'custom_rules': customRules,
+        if (customProxyGroups.isNotEmpty) 'custom_proxy_groups': customProxyGroups,
       };
 
   factory Subscription.fromJson(Map<String, dynamic> json) => Subscription(
@@ -29,6 +44,14 @@ class Subscription {
         nodes: (json['nodes'] as List)
             .map((n) => ProxyNode.fromJson(n as Map<String, dynamic>))
             .toList(),
+        customRules: (json['custom_rules'] as List?)
+                ?.map((e) => e as String)
+                .toList() ??
+            const [],
+        customProxyGroups: (json['custom_proxy_groups'] as List?)
+                ?.map((e) => Map<String, dynamic>.from(e as Map))
+                .toList() ??
+            const [],
       );
 }
 

@@ -142,6 +142,8 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/worker-nodes/{id}/redeploy", handleRedeployWorkerNode(deps.WorkerNodeStore))
 		api.Delete("/worker-nodes/{id}", handleDeleteWorkerNode(deps.WorkerNodeStore))
 		api.Get("/worker-nodes/{id}/clash-config", handleGetWorkerNodeClashConfig(deps.WorkerNodeStore))
+		api.Get("/worker-nodes/{id}/free-tier-info", handleGetWorkerNodeFreeTierInfo(deps.WorkerNodeStore))
+		api.Post("/worker-nodes/{id}/renew-expiry", handleRenewWorkerNodeExpiry(deps.WorkerNodeStore))
 		// Subscription publish workflow
 		api.Get("/publish/nodes", handleGetPublishNodes(deps))
 		api.Get("/publish/templates", handleGetPublishTemplates())

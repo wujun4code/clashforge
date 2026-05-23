@@ -5,6 +5,9 @@ bin/
 # Android native libs — downloaded by mobile/scripts/download-mihomo.sh
 mobile/android/app/src/main/jniLibs/
 
+# Local build secrets — contains subscription URLs and encryption keys
+.env.dev.mobile
+
 # Private test data - NEVER commit these
 testdata/sample-clash-config.yaml
 testdata/*.yaml

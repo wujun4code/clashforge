@@ -123,3 +123,73 @@ func handleGetWorkerNodeClashConfig(store *workernode.Store) http.HandlerFunc {
 		})
 	}
 }
+
+// handleGetWorkerNodeFreeTierInfo returns the AES key and /sub URL for CI use.
+// The response contains secrets — protect this endpoint with appropriate auth.
+func handleGetWorkerNodeFreeTierInfo(store *workernode.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		node, ok := store.Get(id)
+		if !ok {
+			Err(w, http.StatusNotFound, "NOT_FOUND", "worker node not found")
+			return
+		}
+		if node.AesKey == "" {
+			Err(w, http.StatusConflict, "NO_AES_KEY", "node has no AES key; redeploy to generate one")
+			return
+		}
+
+		expiresAt := ""
+		if node.ExpiresAt != nil {
+			expiresAt = node.ExpiresAt.UTC().Format(time.RFC3339)
+		}
+
+		subURL := "https://" + node.Hostname + "/sub"
+		JSON(w, http.StatusOK, workernode.FreeTierInfo{
+			SubURL:    subURL,
+			AesKey:    node.AesKey,
+			ExpiresAt: expiresAt,
+		})
+	}
+}
+
+// handleRenewWorkerNodeExpiry re-deploys the worker with a new EXPIRES_AT binding.
+func handleRenewWorkerNodeExpiry(store *workernode.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		node, ok := store.Get(id)
+		if !ok {
+			Err(w, http.StatusNotFound, "NOT_FOUND", "worker node not found")
+			return
+		}
+
+		var req workernode.RenewExpiryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+			return
+		}
+		if req.ExpiresInDays <= 0 {
+			Err(w, http.StatusBadRequest, "INVALID_DAYS", "expires_in_days must be > 0")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+
+		newExpiry, err := workernode.RenewExpiry(ctx, node, req.ExpiresInDays)
+		if err != nil {
+			Err(w, http.StatusBadGateway, "RENEW_FAILED", err.Error())
+			return
+		}
+
+		node.ExpiresAt = &newExpiry
+		if err := store.Update(id, node); err != nil {
+			Err(w, http.StatusInternalServerError, "STORE_FAILED", err.Error())
+			return
+		}
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"node":       workernode.ToListItem(node),
+			"expires_at": newExpiry.UTC().Format(time.RFC3339),
+		})
+	}
+}

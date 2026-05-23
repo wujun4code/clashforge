@@ -1,15 +1,28 @@
+import 'loyalsoldier_template.dart';
 import '../subscription/proxy_node.dart';
 
 class ConfigGenerator {
+  /// Generate a complete Clash/mihomo config map ready for YAML serialisation.
+  ///
+  /// **Rule-selection logic** (per spec):
+  /// 1. [customRules] non-empty → pass-through mode: use [customProxyGroups]
+  ///    (if any) and [customRules] exactly as imported.
+  /// 2. [customRules] empty → Loyalsoldier template: generate Auto + 🚀 Proxy
+  ///    groups and apply Loyalsoldier rule-providers / rules.
+  ///
+  /// **DNS**: always uses the app's own DNS config regardless of what the
+  /// subscription contained (imported DNS is intentionally ignored).
   static Map<String, dynamic> generate({
     required List<ProxyNode> nodes,
     required String geodataPath,
     bool bypassChina = true,
     String? selectedNodeName,
+    List<String> customRules = const [],
+    List<Map<String, dynamic>> customProxyGroups = const [],
   }) {
     final out = <String, dynamic>{};
 
-    // Proxy ports only — redir-port/tproxy-port need iptables (root), not available on Android
+    // ── Base settings ────────────────────────────────────────────────────────
     out['port'] = 7890;
     out['socks-port'] = 7891;
     out['mixed-port'] = 7892;
@@ -23,22 +36,37 @@ class ConfigGenerator {
     out['geodata-mode'] = false;
     out['geodata-path'] = geodataPath;
 
-    // DNS — redir-host returns real IPs, avoiding the fake-ip routing loop where
-    // proxy server hostnames get fake IPs (198.18.x.x) that mihomo cannot dial.
+    // ── DNS (always app-managed, never from subscription) ────────────────────
+    // fake-ip mode: mihomo returns a synthetic 198.18.x.x IP immediately for
+    // any query, stores the domain→fakeIP mapping, and resolves the real IP
+    // only when establishing the upstream connection. For proxied domains
+    // (github.com, youtube.com, …) the proxy does remote DNS — completely
+    // bypassing GFW-polluted local resolvers. This eliminates the
+    // DNS_PROBE_FINISHED_BAD_CONFIG failure Chrome gets in redir-host mode
+    // when 223.5.5.5 or 8.8.8.8 return blocked/poisoned results.
     out['dns'] = {
       'enable': true,
       'listen': '0.0.0.0:1053',
-      // Keep DNS bootstrap/direct lookups out of proxy rules to avoid
-      // circular dependency when resolving proxy node hostnames.
       'respect-rules': false,
-      'enhanced-mode': 'redir-host',
+      'enhanced-mode': 'fake-ip',
+      'fake-ip-range': '198.18.0.0/15',
+      'fake-ip-filter': [
+        '*.lan',
+        '*.local',
+        '*.localhost',
+        '*.localdomain',
+        '+.stun.*.*',
+        '+.stun.*.*.*',
+        'msftconnecttest.com',
+        '*.msftconnecttest.com',
+        'time.*.com',
+        'ntp.*.com',
+        '*.ntp.org.cn',
+        '*.pool.ntp.org',
+      ],
       'nameserver': ['223.5.5.5', '8.8.8.8'],
-      // Bootstrap resolver IPs for DoH/DoT hostname lookup.
       'default-nameserver': ['223.5.5.5', '8.8.8.8'],
-      // Proxy node hostname resolver. Startup probe may rewrite this to DoH.
       'proxy-server-nameserver': ['223.5.5.5', '8.8.8.8'],
-      // OpenWrt-aligned fallback chain: when upstream UDP returns polluted
-      // answers (e.g. fake-IP), mihomo can switch to encrypted resolvers.
       'fallback': [
         'https://1.1.1.1/dns-query',
         'https://8.8.8.8/dns-query',
@@ -48,12 +76,11 @@ class ConfigGenerator {
       'fallback-filter': {
         'geoip': true,
         'geoip-code': 'CN',
-        // Treat fake-IP/special ranges as polluted so fallback result wins.
-        'ipcidr': ['198.18.0.0/15', '240.0.0.0/4'],
+        'ipcidr': ['240.0.0.0/4'],
       },
     };
 
-    // Proxies
+    // ── Proxies ──────────────────────────────────────────────────────────────
     final proxies = <Map<String, dynamic>>[];
     final proxyNames = <String>[];
     for (final node in nodes) {
@@ -64,39 +91,57 @@ class ConfigGenerator {
         'port': node.port,
       };
       node.raw.forEach((k, v) {
-        if (k != 'name' && k != 'type' && k != 'server' && k != 'port') {
-          p[k] = v;
-        }
+        if (k != 'name' && k != 'type' && k != 'server' && k != 'port') p[k] = v;
       });
-      // Commercial proxy providers typically use private CAs not in the Android
-      // trust store. Force skip-cert-verify for TLS-enabled nodes so the tunnel
-      // actually works; the user already trusts the provider by importing the sub.
-      if (p['tls'] == true) {
-        p['skip-cert-verify'] = true;
-      }
+      if (p['tls'] == true) p['skip-cert-verify'] = true;
       proxies.add(p);
       proxyNames.add(node.name);
     }
     out['proxies'] = proxies;
 
-    final selected = selectedNodeName?.trim();
-    final orderedProxyNames = <String>[];
-    if (selected != null &&
-        selected.isNotEmpty &&
-        proxyNames.contains(selected)) {
-      orderedProxyNames.add(selected);
+    // ── Proxy-groups & Rules ─────────────────────────────────────────────────
+    final hasCustomRules = customRules.isNotEmpty;
+
+    if (hasCustomRules) {
+      // Pass-through mode: honour subscription's own groups and rules.
+      out['proxy-groups'] = customProxyGroups.isNotEmpty
+          ? customProxyGroups
+          : _defaultProxyGroups(proxyNames, selectedNodeName);
+      out['rules'] = customRules;
+    } else {
+      // Loyalsoldier mode: build standard groups, add rule-providers + template.
+      out['proxy-groups'] = _defaultProxyGroups(proxyNames, selectedNodeName);
+      out['rule-providers'] = LoyalsoldierTemplate.ruleProviders();
+      out['rules'] = LoyalsoldierTemplate.rules(
+        proxyGroup: '🚀 Proxy',
+        bypassChina: bypassChina,
+      );
     }
-    orderedProxyNames.addAll(proxyNames.where((name) => name != selected));
 
-    final autoProxies = orderedProxyNames.isNotEmpty
-        ? List<String>.from(orderedProxyNames)
+    return out;
+  }
+
+  // ── helpers ─────────────────────────────────────────────────────────────────
+
+  /// Auto url-test group + 🚀 Proxy select group, preserving [selectedNodeName]
+  /// at the top of the list.
+  static List<Map<String, dynamic>> _defaultProxyGroups(
+    List<String> proxyNames,
+    String? selectedNodeName,
+  ) {
+    final selected = selectedNodeName?.trim();
+    final ordered = <String>[];
+    if (selected != null && selected.isNotEmpty && proxyNames.contains(selected)) {
+      ordered.add(selected);
+    }
+    ordered.addAll(proxyNames.where((n) => n != selected));
+
+    final autoProxies = ordered.isNotEmpty ? List<String>.from(ordered) : ['DIRECT'];
+    final selectProxies = ordered.isNotEmpty
+        ? <String>[...ordered, 'Auto', 'DIRECT']
         : ['DIRECT'];
 
-    final selectProxies = orderedProxyNames.isNotEmpty
-        ? <String>[...orderedProxyNames, 'Auto', 'DIRECT']
-        : ['DIRECT'];
-
-    out['proxy-groups'] = [
+    return [
       {
         'name': 'Auto',
         'type': 'url-test',
@@ -111,30 +156,5 @@ class ConfigGenerator {
         'proxies': selectProxies,
       },
     ];
-
-    // NOTE:
-    // Do not use GEOIP,private here. In fake-ip/TUN flows, mihomo maps domains to
-    // 198.18.0.0/15 (RFC 2544 benchmark range). That range is often classified as
-    // "private/special", which would wrongly force most domain traffic to DIRECT.
-    // We only bypass true local/LAN ranges so domain rules can still decide proxying.
-    final rules = <String>[
-      'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
-      'IP-CIDR,10.0.0.0/8,DIRECT,no-resolve',
-      'IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
-      'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
-      'IP-CIDR,169.254.0.0/16,DIRECT,no-resolve',
-      'IP-CIDR,100.64.0.0/10,DIRECT,no-resolve',
-      'IP-CIDR6,::1/128,DIRECT,no-resolve',
-      'IP-CIDR6,fc00::/7,DIRECT,no-resolve',
-      'IP-CIDR6,fe80::/10,DIRECT,no-resolve',
-    ];
-    if (bypassChina) {
-      rules.add('GEOSITE,cn,DIRECT');
-      rules.add('GEOIP,CN,DIRECT');
-    }
-    rules.add('MATCH,🚀 Proxy');
-    out['rules'] = rules;
-
-    return out;
   }
 }

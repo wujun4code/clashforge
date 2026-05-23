@@ -33,6 +33,7 @@ import {
   getWorkerNodes,
   deleteWorkerNode,
   redeployWorkerNode,
+  renewWorkerNodeExpiry,
   getWorkerNodeClashConfig,
   importSubscription,
   getNodeImports,
@@ -51,7 +52,7 @@ import {
   maskSecret,
   useCFConfig,
 } from '../components/CFConfig'
-import { WorkerNodeWizard, WorkerNodeCard } from '../components/WorkerNodeWizard'
+import { WorkerNodeWizard, WorkerNodeCard, FreeTierInfoModal } from '../components/WorkerNodeWizard'
 
 const BASE = '/api/v1'
 
@@ -1814,6 +1815,7 @@ export function Nodes() {
   const [workerNodes, setWorkerNodes] = useState<WorkerNodeListItem[]>([])
   const [showWorkerWizard, setShowWorkerWizard] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
+  const [freeTierInfoNodeId, setFreeTierInfoNodeId] = useState<string | null>(null)
 
   // ── Static (imported) subscriptions ─────────────────────────────────────
   type StaticSubGroup = { subId: string; subName: string; nodes: { name: string; type: string; server: string; port: number }[] }
@@ -1864,6 +1866,15 @@ export function Nodes() {
   const handleWorkerRedeploy = async (id: string) => {
     try { await redeployWorkerNode(id); void loadWorkerNodes() }
     catch (e) { alert(e instanceof Error ? e.message : '重新部署失败') }
+  }
+
+  const handleWorkerRenew = async (id: string) => {
+    const input = window.prompt('续期天数（例如 90）：', '90')
+    if (!input) return
+    const days = parseInt(input, 10)
+    if (isNaN(days) || days <= 0) { alert('请输入有效的天数'); return }
+    try { await renewWorkerNodeExpiry(id, days); void loadWorkerNodes() }
+    catch (e) { alert(e instanceof Error ? e.message : '续期失败') }
   }
 
   const handleWorkerExport = (id: string) => {
@@ -2201,6 +2212,8 @@ export function Nodes() {
                 onDelete={handleWorkerDelete}
                 onRedeploy={handleWorkerRedeploy}
                 onExport={handleWorkerExport}
+                onRenew={handleWorkerRenew}
+                onFreeTierInfo={setFreeTierInfoNodeId}
               />
             ))}
           </div>
@@ -2213,6 +2226,13 @@ export function Nodes() {
           cfConfig={cfGlobal}
           onClose={() => setShowWorkerWizard(false)}
           onCreated={() => { void loadWorkerNodes() }}
+        />
+      )}
+
+      {freeTierInfoNodeId && (
+        <FreeTierInfoModal
+          nodeId={freeTierInfoNodeId}
+          onClose={() => setFreeTierInfoNodeId(null)}
         />
       )}
 

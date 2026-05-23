@@ -636,6 +636,7 @@ export interface WorkerNodeListItem {
   worker_dev_url: string
   status: 'pending' | 'deployed' | 'error'
   error?: string
+  expires_at?: string
   deployed_at?: string
   created_at: string
   updated_at: string
@@ -648,6 +649,13 @@ export interface WorkerNodeCreateRequest {
   cf_account_id: string
   cf_zone_id: string
   hostname: string
+  expires_in_days?: number
+}
+
+export interface WorkerNodeFreeTierInfo {
+  sub_url: string
+  aes_key: string
+  expires_at: string
 }
 
 export const getWorkerNodes = () =>
@@ -660,6 +668,10 @@ export const deleteWorkerNode = (id: string) =>
   request<{ status: string }>('DELETE', `/worker-nodes/${encodeURIComponent(id)}`)
 export const getWorkerNodeClashConfig = (id: string) =>
   request<{ yaml: string; name: string }>('GET', `/worker-nodes/${encodeURIComponent(id)}/clash-config`)
+export const renewWorkerNodeExpiry = (id: string, expiresInDays: number) =>
+  request<{ node: WorkerNodeListItem; expires_at: string }>('POST', `/worker-nodes/${encodeURIComponent(id)}/renew-expiry`, { expires_in_days: expiresInDays })
+export const getWorkerNodeFreeTierInfo = (id: string) =>
+  request<WorkerNodeFreeTierInfo>('GET', `/worker-nodes/${encodeURIComponent(id)}/free-tier-info`)
 
 // ---- publish workflow ----
 export type PublishTemplateMode = 'builtin' | 'runtime' | 'custom'
