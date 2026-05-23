@@ -2418,6 +2418,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
             child: const Text('Cancel', style: TextStyle(color: _kTextMuted)),
           ),
           FilledButton(
+            key: const Key('save_nickname'),
             style: FilledButton.styleFrom(
               backgroundColor: _kBrand,
               foregroundColor: Colors.white,

@@ -73,22 +73,35 @@ void main() {
         fail('[E2E] Subscription fetch failed: $msg');
       }
 
-      // Dismiss nickname dialog with default name
+      // Dismiss nickname dialog via keyed Save button (Key('save_nickname')).
+      // pumpAndSettle settles the dialog close animation, then extra pumps let
+      // the async _import() continuation (which resumes from await showDialog)
+      // run and call setState({_message: '...'}) on the subscriptions tab.
       _log('Saving subscription nickname');
-      await tester.tap(find.text('Save'));
+      await tester.tap(find.byKey(const Key('save_nickname')));
       await tester.pumpAndSettle();
+      // Two extra pumps ensure the Dart microtask (resuming _import() after
+      // showDialog returns) and the resulting setState are processed and rendered.
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 500));
 
-      // Verify import success banner ("Imported N nodes as …").
-      // Use _waitUntil: the parent _HomeScreenState.setState fires first and
-      // the _SubscriptionsTabState.setState (setting _success/_message) lands
-      // on the following frame, so a bare pumpAndSettle() can miss it.
+      _log('Screen after save: ${_visibleTexts(tester)}');
+
+      // Verify import result banner. Also check for Error: so a silent failure
+      // fails fast instead of timing out.
       await _waitUntil(
         tester,
         () => find.textContaining('nodes').evaluate().isNotEmpty ||
-              find.textContaining('Imported').evaluate().isNotEmpty,
-        timeout: const Duration(seconds: 10),
-        label: 'import success banner',
+              find.textContaining('Imported').evaluate().isNotEmpty ||
+              find.textContaining('Error:').evaluate().isNotEmpty,
+        timeout: const Duration(seconds: 15),
+        label: 'import result banner',
       );
+
+      final importErrFinder = find.textContaining('Error:');
+      if (importErrFinder.evaluate().isNotEmpty) {
+        fail('[E2E] Import failed after nickname save: ${_widgetText(importErrFinder)}');
+      }
       _log('Subscription imported successfully');
 
       // ── Step 2: Verify nodes in Proxies tab ─────────────────────────
@@ -360,6 +373,14 @@ Future<String> _probeIpViaHttpProxy(String proxyHost, int proxyPort) async {
   return '';
 }
 
+String _visibleTexts(WidgetTester tester) => tester.allWidgets
+    .whereType<Text>()
+    .map((t) => t.data ?? '')
+    .where((s) => s.isNotEmpty)
+    .take(30)
+    .map((s) => '"$s"')
+    .join(', ');
+
 Future<void> _waitUntil(
   WidgetTester tester,
   bool Function() condition, {
@@ -369,6 +390,7 @@ Future<void> _waitUntil(
   final deadline = DateTime.now().add(timeout);
   while (!condition()) {
     if (DateTime.now().isAfter(deadline)) {
+      _log('Timeout $label — visible texts: ${_visibleTexts(tester)}');
       throw Exception('[E2E] Timed out waiting for: $label (${timeout.inSeconds}s)');
     }
     await tester.pump(const Duration(milliseconds: 500));
