@@ -108,6 +108,21 @@ class ConfigGenerator {
           ? customProxyGroups
           : _defaultProxyGroups(proxyNames, selectedNodeName);
       out['rules'] = customRules;
+      // Many subscriptions include RULE-SET rules (e.g. RULE-SET,reject,REJECT)
+      // without bundling rule-providers definitions. Scan the custom rules and add
+      // Loyalsoldier provider definitions for any recognised names, so mihomo
+      // can download them instead of fataling with "rule set not found".
+      final loyalsoldierProviders = LoyalsoldierTemplate.ruleProviders();
+      final ruleProviders = <String, dynamic>{};
+      for (final rule in customRules) {
+        if (rule.startsWith('RULE-SET,')) {
+          final name = rule.split(',')[1];
+          if (loyalsoldierProviders.containsKey(name)) {
+            ruleProviders[name] = loyalsoldierProviders[name]!;
+          }
+        }
+      }
+      if (ruleProviders.isNotEmpty) out['rule-providers'] = ruleProviders;
     } else {
       // Loyalsoldier mode: build standard groups, add rule-providers + template.
       out['proxy-groups'] = _defaultProxyGroups(proxyNames, selectedNodeName);
