@@ -2392,7 +2392,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         title: const Text('Name this subscription'),
         content: TextField(
           controller: controller,
-          autofocus: true,
+          autofocus: false,
           style: const TextStyle(color: _kTextHi, fontSize: 14),
           decoration: InputDecoration(
             hintText: 'e.g. Work VPN',

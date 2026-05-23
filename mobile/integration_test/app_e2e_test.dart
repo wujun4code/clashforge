@@ -78,6 +78,9 @@ void main() {
       // the async _import() continuation (which resumes from await showDialog)
       // run and call setState({_message: '...'}) on the subscriptions tab.
       _log('Saving subscription nickname');
+      // pumpAndSettle ensures the dialog open animation is fully complete and
+      // the Save button is at its final on-screen position before we tap.
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('save_nickname')));
       await tester.pumpAndSettle();
       // Two extra pumps ensure the Dart microtask (resuming _import() after
