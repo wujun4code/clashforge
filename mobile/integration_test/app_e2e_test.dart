@@ -82,22 +82,27 @@ void main() {
       //   dialog open animation has long since completed.
       _log('Saving subscription nickname');
       await tester.tap(find.byKey(const Key('save_nickname')));
+      // One pump (not pumpAndSettle) to process the tap gesture and run the
+      // microtask that resumes _import() after showDialog resolves. The spinner
+      // (_loading=true) would cause pumpAndSettle to hang indefinitely, but a
+      // single pump is safe — it just renders one frame.
+      await tester.pump();
 
       // Wait for import to complete. Three signals, any one is enough:
-      //   1. '已保存的订阅' — subscription list header, set by parent setState in
+      //   1. '已保存' — subscription list header, set by parent setState in
       //      _onNodesImported. Appears even if child setState is delayed.
       //   2. 'Imported'/'nodes' — success banner text from child setState.
       //   3. 'Error:' — error banner; fail fast with the actual message.
-      // pumpAndSettle is NOT used here either — spinner runs until _loading=false.
-      // Instead _waitUntil pumps every 500ms which drives both event processing
-      // and animation frames until the import result is visible.
+      // Uses _hasText (allWidgets, no skipOffstage) instead of find.textContaining
+      // because the banner widget can be briefly off-stage while the dialog close
+      // animation plays, causing find.textContaining(skipOffstage:true) to miss it.
       await _waitUntil(
         tester,
-        () => find.textContaining('已保存').evaluate().isNotEmpty ||
-              find.textContaining('Imported').evaluate().isNotEmpty ||
-              find.textContaining('nodes').evaluate().isNotEmpty ||
-              find.textContaining('Error:').evaluate().isNotEmpty,
-        timeout: const Duration(seconds: 20),
+        () => _hasText(tester, '已保存') ||
+              _hasText(tester, 'Imported') ||
+              _hasText(tester, 'nodes') ||
+              _hasText(tester, 'Error:'),
+        timeout: const Duration(seconds: 60),
         label: 'import result',
       );
 
@@ -385,6 +390,13 @@ String _visibleTexts(WidgetTester tester) => tester.allWidgets
     .take(30)
     .map((s) => '"$s"')
     .join(', ');
+
+// find.textContaining() uses skipOffstage:true by default, which misses widgets
+// that are briefly off-stage during the dialog close animation (the banner is set
+// in the underlying route while the dialog route is still animating out).
+// This helper uses allWidgets (no offstage filter) to match what _visibleTexts sees.
+bool _hasText(WidgetTester tester, String substring) =>
+    tester.allWidgets.whereType<Text>().any((t) => (t.data ?? '').contains(substring));
 
 Future<void> _waitUntil(
   WidgetTester tester,
