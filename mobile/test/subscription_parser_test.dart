@@ -18,7 +18,7 @@ proxies:
     port: 443
     password: "pass"
 ''';
-      final nodes = SubscriptionParser.parse(yaml);
+      final nodes = SubscriptionParser.parse(yaml).proxies;
       expect(nodes.length, 2);
       expect(nodes[0].name, 'HK-01');
       expect(nodes[0].type, 'ss');
@@ -38,7 +38,7 @@ proxies:
   server: "jp01.node.com"
   port: 1080
 ''';
-      final nodes = SubscriptionParser.parse(yaml);
+      final nodes = SubscriptionParser.parse(yaml).proxies;
       expect(nodes.length, 2);
       expect(nodes[0].name, 'SG-01');
       expect(nodes[1].name, 'JP-01');
@@ -46,7 +46,7 @@ proxies:
 
     test('Parse Trojan URI', () {
       const trojanUri = 'trojan://password123@us.trojan.com:443#US-Trojan-Node';
-      final nodes = SubscriptionParser.parse(trojanUri);
+      final nodes = SubscriptionParser.parse(trojanUri).proxies;
       expect(nodes.length, 1);
       expect(nodes[0].name, 'US-Trojan-Node');
       expect(nodes[0].type, 'trojan');

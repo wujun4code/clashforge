@@ -1,12 +1,44 @@
 package workernode
 
 // VlessWorkerScript is the Cloudflare Worker JS deployed as a VLESS-over-WebSocket proxy.
-// UUID is injected via a plain_text env binding named "UUID".
+//
+// Env bindings (all plain_text):
+//   UUID       — VLESS UUID for auth (required)
+//   EXPIRES_AT — ISO 8601 timestamp; requests after this time return 410 (optional)
+//   AES_KEY    — 32-byte hex key; enables the GET /sub subscription endpoint (optional)
 const VlessWorkerScript = `
 import { connect } from 'cloudflare:sockets';
 
 export default {
   async fetch(request, env) {
+    // Expiry gate: applies to all requests when EXPIRES_AT is set.
+    if (env.EXPIRES_AT && Date.now() > new Date(env.EXPIRES_AT).getTime()) {
+      return Response.json(
+        { error: 'expired', expires_at: env.EXPIRES_AT },
+        { status: 410 }
+      );
+    }
+
+    const url = new URL(request.url);
+
+    // Subscription endpoint: GET /sub — returns AES-GCM encrypted Clash proxy YAML.
+    if (request.method === 'GET' && url.pathname === '/sub') {
+      if (!env.AES_KEY) {
+        return new Response('subscription not configured\n', { status: 404 });
+      }
+      const hostname = url.hostname;
+      const uuid = (env.UUID || '').toLowerCase().replace(/-/g, '');
+      const yaml = buildClashProxyYaml(hostname, uuid);
+      const encrypted = await aesGcmEncrypt(yaml, env.AES_KEY);
+      return new Response(encrypted, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Expires': env.EXPIRES_AT || '',
+        },
+      });
+    }
+
+    // VLESS WebSocket proxy.
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('ClashForge Proxy Node\n', { status: 200 });
     }
@@ -18,6 +50,48 @@ export default {
     return new Response(null, { status: 101, webSocket: client });
   }
 };
+
+// buildClashProxyYaml returns a Clash-compatible proxies YAML fragment.
+function buildClashProxyYaml(hostname, uuid) {
+  return [
+    'proxies:',
+    '- name: ClashForge Free',
+    '  type: vless',
+    '  server: ' + hostname,
+    '  port: 443',
+    '  uuid: ' + uuid,
+    '  tls: true',
+    '  network: ws',
+    '  ws-opts:',
+    '    path: /',
+    '    headers:',
+    '      Host: ' + hostname,
+    '  udp: false',
+    '',
+  ].join('\n');
+}
+
+// aesGcmEncrypt encrypts plaintext with AES-256-GCM using the WebCrypto API.
+// keyHex must be a 64-char hex string (32 bytes). Output format: IV(12) || ciphertext.
+async function aesGcmEncrypt(plaintext, keyHex) {
+  const keyBytes = hexToBytes(keyHex);
+  const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = new TextEncoder().encode(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+  const result = new Uint8Array(12 + ciphertext.byteLength);
+  result.set(iv);
+  result.set(new Uint8Array(ciphertext), 12);
+  return result.buffer;
+}
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
 
 async function proxyVless(ws, uuid) {
   let buf = new Uint8Array(0);

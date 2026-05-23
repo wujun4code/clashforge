@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -6,6 +6,8 @@ import {
   Copy,
   Download,
   Check,
+  Clock,
+  Key,
   Loader2,
   RotateCw,
   Trash2,
@@ -14,6 +16,8 @@ import { ModalShell } from './ui'
 import {
   createWorkerNode,
   getCloudflareZones,
+  getWorkerNodeFreeTierInfo,
+  type WorkerNodeFreeTierInfo,
   type WorkerNodeListItem,
   type CloudflareZone,
 } from '../api/client'
@@ -34,6 +38,15 @@ async function copyText(text: string) {
 
 // ── WorkerNodeWizard ──────────────────────────────────────────────────────────
 
+const EXPIRY_OPTIONS = [
+  { label: '不过期', value: 0 },
+  { label: '30 天', value: 30 },
+  { label: '60 天', value: 60 },
+  { label: '90 天（推荐）', value: 90 },
+  { label: '180 天', value: 180 },
+  { label: '365 天', value: 365 },
+]
+
 export function WorkerNodeWizard({
   cfConfig,
   onClose,
@@ -51,6 +64,7 @@ export function WorkerNodeWizard({
   const [zones, setZones] = useState<CloudflareZone[]>([])
   const [zonesLoading, setZonesLoading] = useState(false)
   const [zonesError, setZonesError] = useState('')
+  const [expiresInDays, setExpiresInDays] = useState(90)
 
   const [deploying, setDeploying] = useState(false)
   const [error, setError] = useState('')
@@ -92,6 +106,7 @@ export function WorkerNodeWizard({
         cf_account_id: cfConfig.cf_account_id,
         cf_zone_id: zoneId,
         hostname,
+        expires_in_days: expiresInDays > 0 ? expiresInDays : undefined,
       })
       setResult({ node: data.node, yaml: data.clash_config })
       onCreated(data.node)
@@ -151,6 +166,15 @@ export function WorkerNodeWizard({
               </button>
             </div>
           </div>
+
+          {result.node.expires_at && (
+            <div className="flex items-center gap-2 rounded-lg border border-sky-500/15 bg-sky-500/[0.04] px-3 py-2">
+              <Clock size={12} className="text-sky-400 shrink-0" />
+              <p className="text-[11px] text-sky-300/80">
+                节点有效期至 <span className="font-semibold">{new Date(result.node.expires_at).toLocaleDateString('zh-CN')}</span>，到期后 Worker 将拒绝所有连接
+              </p>
+            </div>
+          )}
 
           <p className="text-[11px] text-amber-300/70 leading-relaxed rounded-lg border border-amber-500/15 bg-amber-500/[0.04] px-3 py-2">
             UUID 已写入 Worker 环境变量。请妥善保存以上配置，UUID 不会再次显示（可通过"重新部署"刷新）。
@@ -232,6 +256,27 @@ export function WorkerNodeWizard({
                 </span>
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs text-slate-400 mb-1 flex items-center gap-1.5">
+                <Clock size={11} className="text-sky-400" />
+                节点有效期
+              </label>
+              <select
+                className="glass-input theme-select"
+                value={expiresInDays}
+                onChange={e => setExpiresInDays(Number(e.target.value))}
+              >
+                {EXPIRY_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {expiresInDays > 0 && (
+                <p className="text-[11px] text-white/30 mt-1">
+                  到期时间：{new Date(Date.now() + expiresInDays * 86400_000).toLocaleDateString('zh-CN')}
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-xs space-y-1">
@@ -279,11 +324,15 @@ export function WorkerNodeCard({
   onDelete,
   onRedeploy,
   onExport,
+  onRenew,
+  onFreeTierInfo,
 }: {
   node: WorkerNodeListItem
   onDelete: (id: string) => void
   onRedeploy: (id: string) => void
   onExport: (id: string) => void
+  onRenew?: (id: string) => void
+  onFreeTierInfo?: (id: string) => void
 }) {
   const statusColor = node.status === 'deployed'
     ? 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/20'
@@ -291,6 +340,15 @@ export function WorkerNodeCard({
     ? 'bg-red-500/10 text-red-400 ring-red-500/20'
     : 'bg-amber-500/10 text-amber-400 ring-amber-500/20'
   const statusLabel = node.status === 'deployed' ? '已部署' : node.status === 'error' ? '错误' : '待部署'
+
+  const expiryInfo = (() => {
+    if (!node.expires_at) return null
+    const exp = new Date(node.expires_at)
+    const daysLeft = Math.ceil((exp.getTime() - Date.now()) / 86400_000)
+    const expired = daysLeft <= 0
+    const soon = !expired && daysLeft <= 14
+    return { label: exp.toLocaleDateString('zh-CN'), daysLeft, expired, soon }
+  })()
 
   return (
     <div className="grid grid-cols-12 gap-3 px-4 py-3.5 table-row items-center">
@@ -308,11 +366,31 @@ export function WorkerNodeCard({
           {statusLabel}
         </span>
         {node.error && <p className="text-[10px] text-red-400/70 mt-1 truncate max-w-[120px]" title={node.error}>{node.error}</p>}
+        {expiryInfo && (
+          <p className={`text-[10px] mt-1 flex items-center gap-1 ${expiryInfo.expired ? 'text-red-400' : expiryInfo.soon ? 'text-amber-400' : 'text-white/30'}`}>
+            <Clock size={9} />
+            {expiryInfo.expired
+              ? '已过期'
+              : expiryInfo.soon
+              ? `${expiryInfo.daysLeft} 天后过期`
+              : `至 ${expiryInfo.label}`}
+          </p>
+        )}
       </div>
       <div className="col-span-4 flex items-center justify-end gap-2">
         <button className="btn-icon-sm btn-ghost" title="导出 Clash 配置" onClick={() => onExport(node.id)}>
           <Download size={14} className="text-emerald-400" />
         </button>
+        {onFreeTierInfo && (
+          <button className="btn-icon-sm btn-ghost" title="CI / GitHub Secret 配置" onClick={() => onFreeTierInfo(node.id)}>
+            <Key size={14} className="text-violet-400" />
+          </button>
+        )}
+        {onRenew && (
+          <button className="btn-icon-sm btn-ghost" title="续期" onClick={() => onRenew(node.id)}>
+            <Clock size={14} className="text-sky-400" />
+          </button>
+        )}
         <button className="btn-icon-sm btn-ghost" title="重新部署" onClick={() => onRedeploy(node.id)}>
           <RotateCw size={14} className="text-amber-400" />
         </button>
@@ -321,5 +399,112 @@ export function WorkerNodeCard({
         </button>
       </div>
     </div>
+  )
+}
+
+// ── FreeTierInfoModal ─────────────────────────────────────────────────────────
+
+const GITHUB_SECRETS: { key: keyof WorkerNodeFreeTierInfo; secretName: string; label: string; sensitive: boolean }[] = [
+  { key: 'sub_url',    secretName: 'FREE_NODE_URL',     label: '订阅 URL',  sensitive: false },
+  { key: 'aes_key',    secretName: 'FREE_NODE_AES_KEY', label: 'AES 密钥',  sensitive: true  },
+  { key: 'expires_at', secretName: '',                   label: '过期时间',  sensitive: false },
+]
+
+export function FreeTierInfoModal({
+  nodeId,
+  onClose,
+}: {
+  nodeId: string
+  onClose: () => void
+}) {
+  const [info, setInfo]       = useState<WorkerNodeFreeTierInfo | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
+  const [copied, setCopied]   = useState<string | null>(null)
+
+  useEffect(() => {
+    getWorkerNodeFreeTierInfo(nodeId)
+      .then(setInfo)
+      .catch(e => setError(e instanceof Error ? e.message : '获取失败'))
+      .finally(() => setLoading(false))
+  }, [nodeId])
+
+  const handleCopy = async (value: string, id: string) => {
+    await copyText(value)
+    setCopied(id)
+    setTimeout(() => setCopied(null), 1800)
+  }
+
+  return (
+    <ModalShell
+      title="CI / GitHub Secret 配置"
+      description="将以下值填入仓库 Secrets，GitHub Actions 打包时会自动将免费节点内置到 APK"
+      icon={<Key size={18} />}
+      onClose={onClose}
+      size="md"
+    >
+      {loading ? (
+        <div className="flex items-center justify-center py-10">
+          <Loader2 size={20} className="animate-spin text-brand-light" />
+        </div>
+      ) : error ? (
+        <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-3 text-xs text-red-400">
+          <AlertCircle size={13} className="shrink-0" />{error}
+        </div>
+      ) : info ? (
+        <div className="space-y-4">
+          {/* Secret 列表 */}
+          <div className="space-y-2">
+            {GITHUB_SECRETS.map(({ key, secretName, label, sensitive }) => {
+              const value = info[key] || '—'
+              const isEmpty = !info[key]
+              return (
+                <div key={key} className="rounded-xl border border-white/[0.08] bg-black/20 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">{label}</span>
+                    {secretName && (
+                      <span className="text-[10px] font-mono text-violet-400/80 bg-violet-500/10 px-2 py-0.5 rounded-full">
+                        {secretName}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className={`flex-1 text-[11px] font-mono break-all select-all rounded px-2 py-1.5 bg-black/30 border border-white/5 ${sensitive ? 'text-amber-200' : 'text-slate-200'} ${isEmpty ? 'text-white/25 italic' : ''}`}>
+                      {sensitive && !isEmpty ? '•'.repeat(Math.min(value.length, 32)) + (value.length > 32 ? '…' : '') : value}
+                    </code>
+                    {!isEmpty && (
+                      <button
+                        className="btn-icon-sm btn-ghost shrink-0"
+                        title="复制"
+                        onClick={() => handleCopy(value, key)}
+                      >
+                        {copied === key
+                          ? <Check size={13} className="text-emerald-400" />
+                          : <Copy size={13} />}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* 操作说明 */}
+          <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 py-3 text-xs space-y-2 text-white/50">
+            <p className="font-semibold text-white/70 uppercase tracking-[0.15em] text-[10px]">配置步骤</p>
+            <ol className="space-y-1.5 list-decimal list-inside leading-relaxed">
+              <li>进入 GitHub 仓库 → <span className="text-white/70">Settings → Secrets and variables → Actions</span></li>
+              <li>依次添加上方两个 Secret（名称须与紫色标签完全一致）</li>
+              <li>下次触发 <span className="font-mono text-brand-light">android-release</span> workflow 时，免费节点将自动内置到 APK</li>
+              <li>节点到期前，点击卡片的 <span className="inline-flex items-center gap-1"><Clock size={10} className="text-sky-400" />续期</span> 按钮更新 CF Worker，重新打包 APK 即可</li>
+            </ol>
+          </div>
+
+          <div className="flex justify-end">
+            <button className="btn-primary" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+      ) : null}
+    </ModalShell>
   )
 }

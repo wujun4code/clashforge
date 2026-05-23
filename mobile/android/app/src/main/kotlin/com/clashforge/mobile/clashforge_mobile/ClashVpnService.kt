@@ -131,12 +131,19 @@ class ClashVpnService : VpnService(), Runnable {
             }
 
             LogEventBridge.info("vpn", "Building VPN interface",
-                mapOf("addr" to "172.19.0.1/30", "route" to "0.0.0.0/0", "dns" to "172.19.0.1"))
+                mapOf("addr" to "172.19.0.1/30", "route" to "0.0.0.0/0", "dns" to "172.19.0.2"))
 
             val builder = Builder()
                 .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
-                .addDnsServer("172.19.0.1")   // mihomo listens here after patching
+                // DNS must NOT be 172.19.0.1 (the tun0 interface's own address).
+                // The kernel's local routing table (priority 0) intercepts packets to
+                // the interface's own IP before any VPN routing rules apply, so DNS
+                // queries to 172.19.0.1:53 never reach the TUN fd and mihomo's
+                // dns-hijack never sees them.  172.19.0.2 is the peer address in the
+                // same /30 subnet — not in the local table — so queries to it are
+                // forwarded through tun0 → TUN fd → gVisor → dns-hijack correctly.
+                .addDnsServer("172.19.0.2")
                 .setMtu(1500)                 // explicit MTU so sing-tun doesn't need to set it
                 .setSession("ClashForge")
                 .setBlocking(false)
@@ -246,6 +253,7 @@ tun:
   dns-hijack:
     - "any:53"
     - "tcp://any:53"
+    - "tls://any:853"
 
 sniffer:
   enable: true
@@ -282,11 +290,24 @@ sniffer:
         }
 
         // Keep DNS bootstrap/direct lookups out of proxy rules to avoid resolver loops.
-        val dnsNormalized = upsertDnsScalar(original, "respect-rules", "false")
+        // Also force fake-ip mode so Chrome/browsers never see GFW-poisoned DNS responses:
+        // mihomo returns a synthetic 198.18.x.x IP immediately, Chrome connects to it,
+        // mihomo maps it to the domain and forwards to the proxy which does remote DNS.
+        // This migration runs at every VPN start so it applies to configs written by older
+        // app versions that still had enhanced-mode: redir-host.
+        var dnsPatched = upsertDnsScalar(original, "respect-rules", "false")
+        dnsPatched = upsertDnsScalar(dnsPatched, "enhanced-mode", "fake-ip")
+        dnsPatched = upsertDnsScalar(dnsPatched, "fake-ip-range", "198.18.0.0/15")
+        dnsPatched = upsertDnsList(dnsPatched, "fake-ip-filter", listOf(
+            "*.lan", "*.local", "*.localhost", "*.localdomain",
+            "+.stun.*.*", "+.stun.*.*.*",
+            "msftconnecttest.com", "*.msftconnecttest.com",
+            "time.*.com", "ntp.*.com", "*.pool.ntp.org",
+        ))
 
         // Make this patch idempotent: remove any existing top-level tun/sniffer blocks
         // before appending the canonical VPN stanza.
-        val withoutTun = removeTopLevelSection(dnsNormalized, "tun")
+        val withoutTun = removeTopLevelSection(dnsPatched, "tun")
         val sanitized = removeTopLevelSection(withoutTun, "sniffer").trimEnd()
 
         // Append TUN + sniffer together.
@@ -302,7 +323,7 @@ sniffer:
         // treat FileDescriptor<0 (not 0) as "not set", so 0 means use fd 0 directly.
         // sing-tun.New() skips configure() entirely when its sentinel check is false.
         // Append TUN + sniffer.
-        // ConfigGenerator already writes a dns: block (redir-host) — appending another
+        // ConfigGenerator already writes a dns: block (fake-ip) — appending another
         // would cause a YAML duplicate key error and a mihomo fatal parse failure.
         val tunStanza = """
 
@@ -315,6 +336,7 @@ tun:
   dns-hijack:
     - "any:53"
     - "tcp://any:53"
+    - "tls://any:853"
 
 sniffer:
   enable: true
@@ -693,7 +715,8 @@ sniffer:
 
         val block = mutableListOf("  $key:")
         for (v in values) {
-            val rendered = if (v.any { it.isWhitespace() || it == ':' || it == '#' || it == '"' || it == '\'' }) {
+            // '*' and '+' are YAML special chars (alias/merge) at start of a scalar value
+            val rendered = if (v.any { it.isWhitespace() || it == ':' || it == '#' || it == '"' || it == '\'' || it == '*' || it == '+' }) {
                 "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
             } else {
                 v

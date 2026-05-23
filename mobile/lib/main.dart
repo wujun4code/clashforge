@@ -1,15 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:pointycastle/export.dart' as pc;
 import 'package:url_launcher/url_launcher.dart';
+import 'subscription/parsed_subscription.dart';
 import 'subscription/subscription_parser.dart';
 import 'subscription/subscription_store.dart';
 import 'subscription/proxy_node.dart';
 import 'config/vpn_manager.dart';
 import 'config/config_generator.dart';
+import 'config/free_node_config.dart';
 import 'logger/app_logger.dart';
 import 'logger/log_entry.dart';
 import 'update_checker.dart';
@@ -44,64 +48,45 @@ const _kClashControllerPort = 9090;
 const _kHttpProxyPort = 7890;
 const _kMainProxyGroup = '🚀 Proxy';
 
-class _ProbeTarget {
-  const _ProbeTarget({
-    required this.name,
-    required this.url,
-    required this.description,
-  });
-
-  final String name;
-  final String url;
-  final String description;
+class _IpInfo {
+  const _IpInfo({required this.ip, required this.location, required this.source});
+  final String ip;
+  final String location;
+  final String source;
 }
 
-class _ProbeCheckResult {
-  const _ProbeCheckResult({
+class _SiteCheckResult {
+  const _SiteCheckResult({
     required this.name,
-    required this.url,
     required this.description,
     required this.ok,
     this.latencyMs,
+    this.dnsLabel,
     this.error,
   });
-
   final String name;
-  final String url;
   final String description;
   final bool ok;
   final int? latencyMs;
+  final String? dnsLabel;
   final String? error;
-}
-
-class _ProbeScopeResult {
-  const _ProbeScopeResult({
-    required this.title,
-    required this.via,
-    required this.results,
-    this.exitIp,
-    this.error,
-  });
-
-  final String title;
-  final String via;
-  final List<_ProbeCheckResult> results;
-  final String? exitIp;
-  final String? error;
-
-  bool get healthy => results.isNotEmpty && results.every((item) => item.ok);
 }
 
 class _ConnectivitySnapshot {
   const _ConnectivitySnapshot({
     required this.checkedAt,
-    required this.proxySide,
-    required this.directSide,
+    required this.directIpResults,
+    required this.proxyIpResults,
+    required this.domesticResults,
+    required this.foreignResults,
+    required this.aiResults,
   });
-
   final DateTime checkedAt;
-  final _ProbeScopeResult proxySide;
-  final _ProbeScopeResult directSide;
+  final List<_IpInfo> directIpResults;
+  final List<_IpInfo> proxyIpResults;
+  final List<_SiteCheckResult> domesticResults;
+  final List<_SiteCheckResult> foreignResults;
+  final List<_SiteCheckResult> aiResults;
 }
 
 class _BrowserDnsCheckResult {
@@ -268,26 +253,29 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   static const _logChannel = EventChannel('com.clashforge.mobile/logs');
-  static const _probeTargets = <_ProbeTarget>[
-    _ProbeTarget(
-      name: 'Google 204',
-      url: 'https://www.gstatic.com/generate_204',
-      description: '基础连通性',
-    ),
-    _ProbeTarget(
-      name: 'Cloudflare 204',
-      url: 'https://cp.cloudflare.com/generate_204',
-      description: '国际出口探测',
-    ),
-    _ProbeTarget(
-      name: 'GitHub',
-      url: 'https://github.com',
-      description: '常用站点可达性',
-    ),
+  // (url, source-label, parse-type)  parse-type: 'upaiyun' | 'ipsb' | 'ipinfo'
+  static const _directIpCandidates = [
+    ('https://pubstatic.b0.upaiyun.com/?_upnode', 'UpaiYun', 'upaiyun'),
+    ('https://api.ip.sb/geoip',                   'IP.SB',   'ipsb'),
+    ('https://ipinfo.io/json',                     'IPInfo',  'ipinfo'),
   ];
-  static const _ipProbeUrls = <String>[
-    'https://api.ipify.org',
-    'https://ifconfig.me/ip',
+  static const _proxyIpCandidates = [
+    ('https://api.ip.sb/geoip',  'IP.SB',  'ipsb'),
+    ('https://ipinfo.io/json',   'IPInfo', 'ipinfo'),
+  ];
+
+  // (name, description, url, domain-for-DNS-query)
+  static const _domesticSites = [
+    ('淘宝', '验证国内主要电商平台直连可达性', 'https://www.taobao.com', 'www.taobao.com'),
+    ('网易云音乐', '验证国内常见内容站点延迟', 'https://music.163.com', 'music.163.com'),
+  ];
+  static const _foreignSites = [
+    ('GitHub', '验证国际开发站点的代理访问效果', 'https://github.com', 'github.com'),
+    ('Google', '验证 Google 搜索是否可通过代理访问', 'https://www.google.com', 'www.google.com'),
+  ];
+  static const _aiSites = [
+    ('OpenAI', '验证 ChatGPT 是否可通过代理访问', 'https://chat.openai.com', 'chat.openai.com'),
+    ('Claude', '验证 Claude AI 是否可通过代理访问', 'https://claude.ai', 'claude.ai'),
   ];
 
   int _tabIndex = 0;
@@ -334,6 +322,48 @@ class _HomeScreenState extends State<HomeScreen> {
       AppLogger.instance.info('app', 'Loaded subscriptions',
           fields: {'count': subs.length, 'active': active.nickname});
     }
+    // Always ensure the builtin subscription is present, regardless of
+    // whether other subscriptions exist. Skips silently if already imported.
+    await _ensureBuiltinSub();
+  }
+
+  Future<void> _ensureBuiltinSub() async {
+    final url = FreeNodeConfig.subscriptionUrl;
+    if (url == null) return;
+    if (_subscriptions.any((s) => s.url == url)) return;
+    AppLogger.instance.info('app', 'Importing built-in subscription');
+    try {
+      final response =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return;
+      final content = _decryptResponseOrFallback(response.bodyBytes, response.body);
+      final parsed = SubscriptionParser.parse(content);
+      if (parsed.proxies.isEmpty) return;
+      _onNodesImported(parsed, url: url, nickname: 'Free');
+      AppLogger.instance.info('app', 'Built-in subscription imported',
+          fields: {'nodes': parsed.proxies.length});
+    } catch (e) {
+      AppLogger.instance.warn('app', 'Built-in subscription import failed',
+          fields: {'error': e.toString()});
+    }
+  }
+
+  // Try AES-256-GCM decryption (nonce=12, tag=16) with the hex-decoded key.
+  // Falls back to the raw body string if the key is absent or decryption fails.
+  String _decryptResponseOrFallback(Uint8List bytes, String fallback) {
+    final key = FreeNodeConfig.rawKeyBytes;
+    if (key == null || bytes.length < 29) return fallback;
+    try {
+      final nonce = bytes.sublist(0, 12);
+      final cipherAndTag = bytes.sublist(12);
+      final cipher = pc.GCMBlockCipher(pc.AESEngine());
+      cipher.init(false,
+          pc.AEADParameters(pc.KeyParameter(key), 128, nonce, Uint8List(0)));
+      final plain = cipher.process(cipherAndTag);
+      return String.fromCharCodes(plain);
+    } catch (_) {
+      return fallback;
+    }
   }
 
   void _onNativeLog(dynamic event) {
@@ -349,30 +379,36 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _onNodesImported(List<ProxyNode> nodes,
+  void _onNodesImported(ParsedSubscription parsed,
       {String url = '', String nickname = ''}) {
     final id = '${DateTime.now().millisecondsSinceEpoch}';
-    final sub =
-        Subscription(id: id, nickname: nickname, url: url, nodes: nodes);
+    final sub = Subscription(
+      id: id,
+      nickname: nickname,
+      url: url,
+      nodes: parsed.proxies,
+      customRules: parsed.rules,
+      customProxyGroups: parsed.proxyGroups,
+    );
 
     final previousSelected = _selectedNode?.name;
     ProxyNode? nextSelected;
     if (previousSelected != null) {
-      for (final item in nodes) {
+      for (final item in parsed.proxies) {
         if (item.name == previousSelected) {
           nextSelected = item;
           break;
         }
       }
     }
-    nextSelected ??= nodes.isEmpty ? null : nodes.first;
+    nextSelected ??= parsed.proxies.isEmpty ? null : parsed.proxies.first;
 
     setState(() {
       _subscriptions.add(sub);
       _activeSubscriptionId = id;
       _nodes
         ..clear()
-        ..addAll(nodes);
+        ..addAll(parsed.proxies);
       _selectedNode = nextSelected;
     });
     SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
@@ -462,10 +498,16 @@ class _HomeScreenState extends State<HomeScreen> {
           'port': _selectedNode!.port,
         });
         final filesDir = await VpnManager.getFilesDir();
+        Subscription? activeSub;
+        for (final s in _subscriptions) {
+          if (s.id == _activeSubscriptionId) { activeSub = s; break; }
+        }
         final configMap = ConfigGenerator.generate(
           nodes: _nodes,
           geodataPath: filesDir,
           selectedNodeName: _selectedNode!.name,
+          customRules: activeSub?.customRules ?? const [],
+          customProxyGroups: activeSub?.customProxyGroups ?? const [],
         );
         final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
         logger.debug('vpn', 'Config write result: $writeResult');
@@ -612,36 +654,163 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _runConnectivityChecks() async {
     if (_probeLoading) return;
-    final logger = AppLogger.instance;
-
     setState(() {
       _probeLoading = true;
       _probeMessage = null;
     });
 
+    final directClient = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8);
+    final proxyClient = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8)
+      ..findProxy = (_) => 'PROXY $_kClashControllerHost:$_kHttpProxyPort;';
+
     try {
-      final results = await Future.wait([
-        _runProbeScope(viaProxy: true),
-        _runProbeScope(viaProxy: false),
-      ]);
+      // Start all probes concurrently
+      final directIpFut = _fetchAllIpInfos(directClient, _directIpCandidates);
+      final proxyIpFut = _fetchAllIpInfos(proxyClient, _proxyIpCandidates);
+      final domesticFut = _checkSites(directClient, _domesticSites);
+      final foreignFut = _checkSites(proxyClient, _foreignSites);
+      final aiFut = _checkSites(proxyClient, _aiSites);
+
+      final directIps = await directIpFut;
+      final proxyIps = await proxyIpFut;
+      final domestic = await domesticFut;
+      final foreign = await foreignFut;
+      final ai = await aiFut;
 
       if (!mounted) return;
       setState(() {
         _connectivitySnapshot = _ConnectivitySnapshot(
           checkedAt: DateTime.now(),
-          proxySide: results[0],
-          directSide: results[1],
+          directIpResults: directIps,
+          proxyIpResults: proxyIps,
+          domesticResults: domestic,
+          foreignResults: foreign,
+          aiResults: ai,
         );
       });
     } catch (e) {
-      logger.error('probe', 'Connectivity probe failed: $e');
+      AppLogger.instance.error('probe', 'Connectivity probe failed: $e');
       if (!mounted) return;
       setState(() => _probeMessage = 'Probe failed: $e');
     } finally {
-      if (mounted) {
-        setState(() => _probeLoading = false);
+      directClient.close(force: true);
+      proxyClient.close(force: true);
+      if (mounted) setState(() => _probeLoading = false);
+    }
+  }
+
+  // Fetch all candidates concurrently; returns only the ones that succeed.
+  Future<List<_IpInfo>> _fetchAllIpInfos(
+    HttpClient client,
+    List<(String, String, String)> candidates,
+  ) async {
+    final futures = candidates.map((c) => _fetchSingleIpInfo(client, c));
+    final results = await Future.wait(futures);
+    return results.whereType<_IpInfo>().toList();
+  }
+
+  Future<_IpInfo?> _fetchSingleIpInfo(
+    HttpClient client,
+    (String, String, String) candidate,
+  ) async {
+    final (url, source, parse) = candidate;
+    try {
+      final req = await client
+          .getUrl(Uri.parse(url))
+          .timeout(const Duration(seconds: 8));
+      req.headers.set(HttpHeaders.userAgentHeader, 'ClashForgeMobile/1.0');
+      final res = await req.close().timeout(const Duration(seconds: 8));
+      final body =
+          await utf8.decodeStream(res).timeout(const Duration(seconds: 6));
+      if (res.statusCode != 200) return null;
+      final data = json.decode(body) as Map<String, dynamic>;
+
+      String ip;
+      String location;
+
+      if (parse == 'upaiyun') {
+        // {"remote_addr":"114.x.x.x","remote_addr_location":{"country":"中国","province":"江苏省","city":"苏州","isp":"电信"}}
+        ip = (data['remote_addr'] ?? '').toString().trim();
+        final loc = data['remote_addr_location'] as Map<String, dynamic>?;
+        location = loc == null
+            ? ''
+            : [loc['country'], loc['province'], loc['city'], loc['isp']]
+                .whereType<String>()
+                .where((s) => s.isNotEmpty)
+                .join(' · ');
+      } else if (parse == 'ipsb') {
+        // {"ip":"...","country":"China","city":"Suzhou","organization":"AS4134 CHINANET-BACKBONE"}
+        ip = (data['ip'] ?? '').toString().trim();
+        final city = (data['city'] ?? '').toString();
+        final country = (data['country'] ?? '').toString();
+        final org = (data['organization'] ?? '').toString();
+        final orgClean = org.contains(' ') ? org.substring(org.indexOf(' ') + 1) : org;
+        location = [city, country, orgClean].where((s) => s.isNotEmpty).join(' · ');
+      } else {
+        // ipinfo.io: {"ip":"...","city":"Tokyo","country":"JP","org":"AS8075 Microsoft Corporation"}
+        ip = (data['ip'] ?? '').toString().trim();
+        final city = (data['city'] ?? '').toString();
+        final country = (data['country'] ?? '').toString();
+        final org = (data['org'] ?? '').toString();
+        location = [city, country, org].where((s) => s.isNotEmpty).join(' · ');
+      }
+
+      if (ip.isEmpty) return null;
+      return _IpInfo(ip: ip, location: location, source: source);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<_SiteCheckResult>> _checkSites(
+    HttpClient client,
+    List<(String, String, String, String)> sites,
+  ) async {
+    final results = <_SiteCheckResult>[];
+    for (final (name, desc, url, domain) in sites) {
+      final watch = Stopwatch()..start();
+      try {
+        final req = await client
+            .getUrl(Uri.parse(url))
+            .timeout(const Duration(seconds: 8));
+        req.headers.set(HttpHeaders.userAgentHeader, 'ClashForgeMobile/1.0');
+        final res = await req.close().timeout(const Duration(seconds: 10));
+        await res.drain<void>().timeout(const Duration(seconds: 5));
+        watch.stop();
+        final ok = res.statusCode >= 200 && res.statusCode < 400;
+
+        final dnsIps = await _queryMihomoDnsA(domain);
+        String? dnsLabel;
+        if (dnsIps.isNotEmpty) {
+          final ip = dnsIps.first;
+          final isFake = ip.startsWith('198.18.') || ip.startsWith('198.19.');
+          dnsLabel = isFake ? '$ip (fake-ip)' : ip;
+        }
+
+        results.add(_SiteCheckResult(
+          name: name,
+          description: desc,
+          ok: ok,
+          latencyMs: watch.elapsedMilliseconds,
+          dnsLabel: dnsLabel,
+          error: ok ? null : 'HTTP ${res.statusCode}',
+        ));
+      } on TimeoutException {
+        watch.stop();
+        results.add(_SiteCheckResult(name: name, description: desc, ok: false, error: 'timeout'));
+      } catch (e) {
+        watch.stop();
+        results.add(_SiteCheckResult(
+          name: name,
+          description: desc,
+          ok: false,
+          error: e.toString().split('\n').first,
+        ));
       }
     }
+    return results;
   }
 
   Future<void> _runBrowserDnsDiagnostics() async {
@@ -707,25 +876,36 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
+      bool proxySmokeOk = false;
+      String proxySmokeDetail = '';
       final proxyClient = HttpClient()
         ..connectionTimeout = const Duration(seconds: 6)
         ..findProxy = (_) => 'PROXY $_kClashControllerHost:$_kHttpProxyPort;';
-      final proxySmoke = await _runSingleProbe(
-        proxyClient,
-        const _ProbeTarget(
-          name: 'Proxy Smoke',
-          url: 'https://www.gstatic.com/generate_204',
-          description: '代理链路可达性',
-        ),
-      );
-      proxyClient.close(force: true);
+      try {
+        final watch = Stopwatch()..start();
+        final req = await proxyClient
+            .getUrl(Uri.parse('https://www.gstatic.com/generate_204'))
+            .timeout(const Duration(seconds: 6));
+        req.headers.set(HttpHeaders.userAgentHeader, 'ClashForgeMobile/1.0');
+        final res = await req.close().timeout(const Duration(seconds: 8));
+        await res.drain<void>();
+        watch.stop();
+        proxySmokeOk = res.statusCode >= 200 && res.statusCode < 400;
+        proxySmokeDetail = proxySmokeOk
+            ? '经 HTTP 代理访问 gstatic 成功（${watch.elapsedMilliseconds}ms）'
+            : 'HTTP ${res.statusCode}';
+      } on TimeoutException {
+        proxySmokeDetail = 'timeout';
+      } catch (e) {
+        proxySmokeDetail = e.toString().split('\n').first;
+      } finally {
+        proxyClient.close(force: true);
+      }
       checks.add(
         _BrowserDnsCheckResult(
           name: '代理链路',
-          ok: proxySmoke.ok,
-          detail: proxySmoke.ok
-              ? '经 HTTP 代理访问 gstatic 成功'
-              : (proxySmoke.error ?? '代理链路失败'),
+          ok: proxySmokeOk,
+          detail: proxySmokeDetail,
         ),
       );
 
@@ -797,106 +977,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<_ProbeScopeResult> _runProbeScope({required bool viaProxy}) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-
-    if (viaProxy) {
-      client.findProxy =
-          (_) => 'PROXY $_kClashControllerHost:$_kHttpProxyPort;';
-    }
-
-    try {
-      final checks = <_ProbeCheckResult>[];
-      for (final target in _probeTargets) {
-        checks.add(await _runSingleProbe(client, target));
-      }
-      final ip = viaProxy ? await _probeExitIp(client) : null;
-      return _ProbeScopeResult(
-        title: viaProxy ? '代理侧' : '本机侧',
-        via: viaProxy ? '经 Mihomo HTTP 端口' : '手机系统直连网络',
-        results: checks,
-        exitIp: ip,
-      );
-    } catch (e) {
-      return _ProbeScopeResult(
-        title: viaProxy ? '代理侧' : '本机侧',
-        via: viaProxy ? '经 Mihomo HTTP 端口' : '手机系统直连网络',
-        results: const [],
-        error: e.toString(),
-      );
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  Future<_ProbeCheckResult> _runSingleProbe(
-      HttpClient client, _ProbeTarget target) async {
-    final watch = Stopwatch()..start();
-    try {
-      final uri = Uri.parse(target.url);
-      final req = await client.getUrl(uri).timeout(const Duration(seconds: 6));
-      req.followRedirects = true;
-      req.headers.set(HttpHeaders.userAgentHeader, 'ClashForgeMobile/1.0');
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      await res.drain<void>();
-      final ok = res.statusCode >= 200 && res.statusCode < 400;
-      return _ProbeCheckResult(
-        name: target.name,
-        url: target.url,
-        description: target.description,
-        ok: ok,
-        latencyMs: watch.elapsedMilliseconds,
-        error: ok ? null : 'HTTP ${res.statusCode}',
-      );
-    } on TimeoutException {
-      return _ProbeCheckResult(
-        name: target.name,
-        url: target.url,
-        description: target.description,
-        ok: false,
-        error: 'timeout',
-      );
-    } on SocketException catch (e) {
-      return _ProbeCheckResult(
-        name: target.name,
-        url: target.url,
-        description: target.description,
-        ok: false,
-        error: e.message,
-      );
-    } catch (e) {
-      return _ProbeCheckResult(
-        name: target.name,
-        url: target.url,
-        description: target.description,
-        ok: false,
-        error: e.toString(),
-      );
-    } finally {
-      watch.stop();
-    }
-  }
-
-  Future<String?> _probeExitIp(HttpClient client) async {
-    for (final url in _ipProbeUrls) {
-      try {
-        final req = await client
-            .getUrl(Uri.parse(url))
-            .timeout(const Duration(seconds: 6));
-        req.headers.set(HttpHeaders.userAgentHeader, 'ClashForgeMobile/1.0');
-        final res = await req.close().timeout(const Duration(seconds: 6));
-        final body =
-            await utf8.decodeStream(res).timeout(const Duration(seconds: 6));
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          final ip = body.trim();
-          if (ip.isNotEmpty) return ip;
-        }
-      } catch (_) {
-        continue;
-      }
-    }
-    return null;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1227,7 +1307,7 @@ class _HomeTab extends StatelessWidget {
               const SizedBox(height: 16),
               _HomeBlockCard(
                 title: '连通性检测',
-                subtitle: '切换节点后建议重新检测',
+                subtitle: '切换节点后自动重新执行连通性检测',
                 trailing: TextButton.icon(
                   onPressed:
                       probeLoading ? null : () => unawaited(onRecheckProbe()),
@@ -1284,11 +1364,8 @@ class _HomeTab extends StatelessWidget {
                           style: TextStyle(color: _kTextMuted, fontSize: 13),
                         ),
                       ),
-                    if (snapshot != null) ...[
-                      _ProbeScopePane(scope: snapshot!.proxySide),
-                      const SizedBox(height: 8),
-                      _ProbeScopePane(scope: snapshot!.directSide),
-                    ],
+                    if (snapshot != null)
+                      _ConnectivityPane(snapshot: snapshot!),
                   ],
                 ),
               ),
@@ -1499,20 +1576,151 @@ class _HomeBlockCard extends StatelessWidget {
   }
 }
 
-class _ProbeScopePane extends StatelessWidget {
-  const _ProbeScopePane({required this.scope});
-  final _ProbeScopeResult scope;
+// ── Connectivity probe widgets ──────────────────────────────────────────────
+
+class _ConnectivityPane extends StatelessWidget {
+  const _ConnectivityPane({required this.snapshot});
+  final _ConnectivitySnapshot snapshot;
 
   @override
   Widget build(BuildContext context) {
-    final tone = scope.healthy ? _kConnected : _kError;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── 出口 IP ──────────────────────────────────────────────
+        const _SectionLabel(label: '出口 IP'),
+        const SizedBox(height: 8),
+        _IpGroup(
+          categoryTag: '直连',
+          tagColor: _kBrand,
+          subtitle: '绕过手机 VPN，经路由器直出',
+          results: snapshot.directIpResults,
+        ),
+        const SizedBox(height: 6),
+        _IpGroup(
+          categoryTag: 'VPN 出口',
+          tagColor: const Color(0xFF64B5F6),
+          subtitle: '经手机 ClashForge 代理',
+          results: snapshot.proxyIpResults,
+        ),
+        const SizedBox(height: 14),
+        // ── 访问检查 ─────────────────────────────────────────────
+        const _SectionLabel(label: '访问检查'),
+        const SizedBox(height: 8),
+        if (snapshot.domesticResults.isNotEmpty) ...[
+          const _CategoryTag(label: '直连路径', color: _kBrand),
+          const SizedBox(height: 6),
+          ...snapshot.domesticResults.map((r) => _SiteCheckRow(result: r)),
+          const SizedBox(height: 8),
+        ],
+        if (snapshot.foreignResults.isNotEmpty) ...[
+          const _CategoryTag(label: 'VPN 代理', color: Color(0xFF64B5F6)),
+          const SizedBox(height: 6),
+          ...snapshot.foreignResults.map((r) => _SiteCheckRow(result: r)),
+          const SizedBox(height: 8),
+        ],
+        if (snapshot.aiResults.isNotEmpty) ...[
+          const _CategoryTag(label: 'AI · VPN 代理', color: Color(0xFF9C6DFF)),
+          const SizedBox(height: 6),
+          ...snapshot.aiResults.map((r) => _SiteCheckRow(result: r)),
+        ],
+      ],
+    );
+  }
+}
 
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+          color: _kTextMuted, fontSize: 12, fontWeight: FontWeight.w600),
+    );
+  }
+}
+
+class _CategoryTag extends StatelessWidget {
+  const _CategoryTag({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withAlpha(36),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+            color: color, fontSize: 11, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+// Wraps a labelled row of one or two _IpCard tiles for a given direction.
+class _IpGroup extends StatelessWidget {
+  const _IpGroup({
+    required this.categoryTag,
+    required this.tagColor,
+    required this.subtitle,
+    required this.results,
+  });
+  final String categoryTag;
+  final Color tagColor;
+  final String subtitle;
+  final List<_IpInfo> results;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _CategoryTag(label: categoryTag, color: tagColor),
+            const SizedBox(width: 8),
+            Text(subtitle,
+                style: const TextStyle(color: _kTextFaint, fontSize: 10)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        if (results.isEmpty)
+          const _IpCard(info: null)
+        else
+          Column(
+            children: [
+              for (int i = 0; i < results.length; i++) ...[
+                if (i > 0) const SizedBox(height: 6),
+                _IpCard(info: results[i]),
+              ],
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _IpCard extends StatelessWidget {
+  const _IpCard({this.info});
+  final _IpInfo? info;
+
+  @override
+  Widget build(BuildContext context) {
+    final resolved = info != null;
+    final badgeColor = resolved ? _kConnected : _kTextFaint;
+    return Container(
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: _kBg,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: _kBorder),
       ),
       child: Column(
@@ -1522,96 +1730,144 @@ class _ProbeScopePane extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  scope.title,
+                  info?.source ?? '—',
                   style: const TextStyle(
-                      color: _kTextHi,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600),
+                      color: _kTextFaint,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500),
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: tone.withAlpha(16),
+                  color: badgeColor.withAlpha(20),
                   borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: tone.withAlpha(120)),
+                  border: Border.all(color: badgeColor.withAlpha(100)),
                 ),
                 child: Text(
-                  scope.healthy ? '正常' : '异常',
+                  resolved ? '已解析' : '未能获取',
                   style: TextStyle(
-                      color: tone, fontSize: 11, fontWeight: FontWeight.w600),
+                      color: badgeColor,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 3),
-          Text(scope.via,
-              style: const TextStyle(color: _kTextFaint, fontSize: 11)),
-          if (scope.exitIp != null) ...[
+          if (resolved) ...[
             const SizedBox(height: 6),
             Text(
-              '出口 IP: ${scope.exitIp}',
-              style: const TextStyle(color: _kTextMuted, fontSize: 12),
+              info!.ip,
+              style: const TextStyle(
+                  color: _kTextHi,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3),
             ),
-          ],
-          if (scope.error != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 2),
             Text(
-              scope.error!,
-              style: const TextStyle(color: _kError, fontSize: 12),
+              info!.location,
+              style: const TextStyle(color: _kTextMuted, fontSize: 11),
             ),
-          ],
-          if (scope.results.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            ...scope.results.map((result) {
-              final okColor = result.ok ? _kConnected : _kError;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(top: 4),
-                      width: 8,
-                      height: 8,
-                      decoration:
-                          BoxDecoration(color: okColor, shape: BoxShape.circle),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            result.name,
-                            style: const TextStyle(
-                                color: _kTextHi,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600),
-                          ),
-                          Text(
-                            result.description,
-                            style: const TextStyle(
-                                color: _kTextFaint, fontSize: 11),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      result.ok
-                          ? '${result.latencyMs ?? 0}ms'
-                          : (result.error ?? 'failed'),
-                      style: TextStyle(
-                          color: okColor,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              );
-            }),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _SiteCheckRow extends StatelessWidget {
+  const _SiteCheckRow({required this.result});
+  final _SiteCheckResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = result.ok ? _kConnected : _kError;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+        decoration: BoxDecoration(
+          color: _kBg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _kBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    result.name,
+                    style: const TextStyle(
+                        color: _kTextHi,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: tone.withAlpha(20),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: tone.withAlpha(100)),
+                  ),
+                  child: Text(
+                    result.ok ? '正常' : '异常',
+                    style: TextStyle(
+                        color: tone,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              result.description,
+              style: const TextStyle(color: _kTextFaint, fontSize: 11),
+            ),
+            if (result.ok) ...[
+              const SizedBox(height: 5),
+              Row(
+                children: [
+                  if (result.latencyMs != null) ...[
+                    Text(
+                      '${result.latencyMs} ms',
+                      style: const TextStyle(
+                          color: _kTextMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  if (result.dnsLabel != null)
+                    Expanded(
+                      child: Text(
+                        'DNS → ${result.dnsLabel}',
+                        style: const TextStyle(
+                            color: _kTextFaint, fontSize: 11),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+            if (!result.ok && result.error != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                result.error!,
+                style: const TextStyle(
+                    color: _kError, fontSize: 11, height: 1.3),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -1910,7 +2166,7 @@ class _ProxiesTab extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Tab 3 — Subscriptions
 // ─────────────────────────────────────────────────────────────
-typedef _OnImported = void Function(List<ProxyNode> nodes,
+typedef _OnImported = void Function(ParsedSubscription parsed,
     {String url, String nickname});
 typedef _OnSubActivated = void Function(Subscription sub);
 typedef _OnSubDeleted = void Function(Subscription sub);
@@ -1935,9 +2191,13 @@ class _SubscriptionsTab extends StatefulWidget {
 
 class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   final _urlController = TextEditingController();
+  final _pasteController = TextEditingController();
   bool _loading = false;
+  bool _pasteLoading = false;
   String? _message;
+  String? _pasteMessage;
   bool _success = false;
+  bool _pasteSuccess = false;
 
   @override
   void initState() {
@@ -1950,6 +2210,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   @override
   void dispose() {
     _urlController.dispose();
+    _pasteController.dispose();
     super.dispose();
   }
 
@@ -2013,10 +2274,10 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         content = body;
       }
 
-      final nodes = SubscriptionParser.parse(content);
+      final parsed = SubscriptionParser.parse(content);
       logger.info('subscription', 'Parsed nodes',
-          fields: {'count': nodes.length});
-      if (nodes.isEmpty) {
+          fields: {'count': parsed.proxies.length, 'has_custom_rules': parsed.hasCustomRules});
+      if (parsed.proxies.isEmpty) {
         logger.warn('subscription', 'No nodes parsed');
       }
 
@@ -2033,12 +2294,12 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         return;
       }
 
-      widget.onImported(nodes,
+      widget.onImported(parsed,
           url: input.startsWith('http') ? input : '', nickname: nickname);
       setState(() {
         _loading = false;
         _success = true;
-        _message = 'Imported ${nodes.length} nodes as "$nickname"';
+        _message = 'Imported ${parsed.proxies.length} nodes as "$nickname"';
       });
     } catch (e) {
       logger.error('subscription', 'Import error: $e');
@@ -2046,6 +2307,57 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         _loading = false;
         _success = false;
         _message = 'Error: $e';
+      });
+    }
+  }
+
+  Future<void> _importFromPaste() async {
+    final content = _pasteController.text.trim();
+    if (content.isEmpty) return;
+    final logger = AppLogger.instance;
+    setState(() {
+      _pasteLoading = true;
+      _pasteMessage = null;
+    });
+    try {
+      final parsed = SubscriptionParser.parse(content);
+      logger.info('subscription', 'Parsed pasted nodes',
+          fields: {'count': parsed.proxies.length, 'has_custom_rules': parsed.hasCustomRules});
+      if (parsed.proxies.isEmpty) {
+        setState(() {
+          _pasteLoading = false;
+          _pasteSuccess = false;
+          _pasteMessage = '未识别到有效节点，请检查格式（支持 ss:// vmess:// trojan:// vless:// 及 Clash YAML）';
+        });
+        return;
+      }
+
+      final defaultName = await SubscriptionStore.generateDefaultNickname();
+      if (!mounted) return;
+      final nickname = await _showNicknameDialog(defaultName);
+      if (!mounted) return;
+      if (nickname == null) {
+        setState(() {
+          _pasteLoading = false;
+          _pasteSuccess = false;
+          _pasteMessage = null;
+        });
+        return;
+      }
+
+      widget.onImported(parsed, url: '', nickname: nickname);
+      setState(() {
+        _pasteLoading = false;
+        _pasteSuccess = true;
+        _pasteMessage =
+            '已导入 ${parsed.proxies.length} 个节点，配置已生成（使用 Loyalsoldier 规则），可直接启动 VPN';
+      });
+    } catch (e) {
+      logger.error('subscription', 'Paste import error: $e');
+      setState(() {
+        _pasteLoading = false;
+        _pasteSuccess = false;
+        _pasteMessage = '解析失败: $e';
       });
     }
   }
@@ -2376,7 +2688,136 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
             ),
           ),
 
-          // Result banner
+          const SizedBox(height: 14),
+
+          // Paste nodes card
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [_kCardGrad, _kCard],
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _kBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: _kConnected.withAlpha(22),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _kConnected.withAlpha(60)),
+                      ),
+                      child: const Icon(Icons.content_paste, color: _kConnected, size: 17),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('粘贴节点文本',
+                        style: TextStyle(
+                            color: _kTextFaint,
+                            fontSize: 11,
+                            letterSpacing: 1.2,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '支持 ss:// vmess:// trojan:// vless:// 链接或 Clash YAML，自动套用 Loyalsoldier 规则生成完整配置',
+                  style: TextStyle(color: _kTextMuted, fontSize: 12, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _pasteController,
+                  maxLines: 5,
+                  minLines: 3,
+                  style: const TextStyle(color: _kTextHi, fontSize: 12, fontFamily: 'monospace'),
+                  decoration: InputDecoration(
+                    hintText: 'ss://...\nvmess://...\nvless://...',
+                    hintStyle: const TextStyle(color: _kTextFaint, fontSize: 12),
+                    filled: true,
+                    fillColor: _kBg,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _kBorder)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _kBorder)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _kConnected, width: 1.5)),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: FilledButton.icon(
+                    onPressed: _pasteLoading || _pasteController.text.trim().isEmpty
+                        ? null
+                        : _importFromPaste,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _kConnected,
+                      foregroundColor: Colors.black87,
+                      disabledBackgroundColor: _kConnected.withAlpha(60),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(11)),
+                    ),
+                    icon: _pasteLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.black54))
+                        : const Icon(Icons.bolt, size: 18),
+                    label: Text(_pasteLoading ? '解析中…' : '导入并生成配置',
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ),
+                if (_pasteMessage != null) ...[
+                  const SizedBox(height: 12),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: (_pasteSuccess ? _kConnected : _kError).withAlpha(15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: (_pasteSuccess ? _kConnected : _kError).withAlpha(70)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                            _pasteSuccess
+                                ? Icons.check_circle_outline
+                                : Icons.error_outline,
+                            color: _pasteSuccess ? _kConnected : _kError,
+                            size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(_pasteMessage!,
+                              style: TextStyle(
+                                  color: _pasteSuccess ? _kConnected : _kError,
+                                  fontSize: 12,
+                                  height: 1.4)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // URL result banner
           if (_message != null) ...[
             const SizedBox(height: 14),
             AnimatedContainer(

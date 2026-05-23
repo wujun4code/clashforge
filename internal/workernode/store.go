@@ -25,6 +25,7 @@ type persistedNode struct {
 	WorkerName   string     `json:"worker_name"`
 	WorkerUUID   string     `json:"worker_uuid,omitempty"` // encrypted
 	CFToken      string     `json:"cf_token,omitempty"`    // encrypted
+	AesKey       string     `json:"aes_key,omitempty"`     // encrypted
 	CFAccountID  string     `json:"cf_account_id"`
 	CFZoneID     string     `json:"cf_zone_id"`
 	Hostname     string     `json:"hostname"`
@@ -32,6 +33,7 @@ type persistedNode struct {
 	WorkerDevURL string     `json:"worker_dev_url"`
 	Status       Status     `json:"status"`
 	Error        string     `json:"error,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	DeployedAt   *time.Time `json:"deployed_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -105,6 +107,9 @@ func (s *Store) Update(id string, n *WorkerNode) error {
 	if n.WorkerUUID == "" {
 		n.WorkerUUID = existing.WorkerUUID
 	}
+	if n.AesKey == "" {
+		n.AesKey = existing.AesKey
+	}
 	s.nodes[id] = n
 	s.mu.Unlock()
 	return s.save()
@@ -176,10 +181,10 @@ func (s *Store) save() error {
 func toPersisted(n *WorkerNode) persistedNode {
 	return persistedNode{
 		ID: n.ID, Name: n.Name, WorkerName: n.WorkerName,
-		WorkerUUID: n.WorkerUUID, CFToken: n.CFToken,
+		WorkerUUID: n.WorkerUUID, CFToken: n.CFToken, AesKey: n.AesKey,
 		CFAccountID: n.CFAccountID, CFZoneID: n.CFZoneID,
 		Hostname: n.Hostname, WorkerURL: n.WorkerURL, WorkerDevURL: n.WorkerDevURL,
-		Status: n.Status, Error: n.Error, DeployedAt: n.DeployedAt,
+		Status: n.Status, Error: n.Error, ExpiresAt: n.ExpiresAt, DeployedAt: n.DeployedAt,
 		CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt,
 	}
 }
@@ -187,10 +192,10 @@ func toPersisted(n *WorkerNode) persistedNode {
 func fromPersisted(p persistedNode) *WorkerNode {
 	return &WorkerNode{
 		ID: p.ID, Name: p.Name, WorkerName: p.WorkerName,
-		WorkerUUID: p.WorkerUUID, CFToken: p.CFToken,
+		WorkerUUID: p.WorkerUUID, CFToken: p.CFToken, AesKey: p.AesKey,
 		CFAccountID: p.CFAccountID, CFZoneID: p.CFZoneID,
 		Hostname: p.Hostname, WorkerURL: p.WorkerURL, WorkerDevURL: p.WorkerDevURL,
-		Status: p.Status, Error: p.Error, DeployedAt: p.DeployedAt,
+		Status: p.Status, Error: p.Error, ExpiresAt: p.ExpiresAt, DeployedAt: p.DeployedAt,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 }
@@ -201,7 +206,7 @@ func ToListItem(n *WorkerNode) WorkerNodeListItem {
 		ID: n.ID, Name: n.Name, WorkerName: n.WorkerName,
 		CFAccountID: n.CFAccountID, Hostname: n.Hostname,
 		WorkerURL: n.WorkerURL, WorkerDevURL: n.WorkerDevURL,
-		Status: n.Status, Error: n.Error, DeployedAt: n.DeployedAt,
+		Status: n.Status, Error: n.Error, ExpiresAt: n.ExpiresAt, DeployedAt: n.DeployedAt,
 		CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt,
 	}
 }

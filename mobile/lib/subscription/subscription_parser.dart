@@ -1,18 +1,47 @@
 import 'dart:convert';
 import 'package:yaml/yaml.dart';
+import 'parsed_subscription.dart';
 import 'proxy_node.dart';
 
 class SubscriptionParser {
-  static List<ProxyNode> parse(String content) {
+  static ParsedSubscription parse(String content) {
     content = _stripCommonIndent(content);
     final trimmed = content.trim();
 
-    // 1. Try Clash YAML with "proxies" key
+    // 1. Try Clash YAML with "proxies" key — also extract rules / proxy-groups.
     if (trimmed.contains('proxies:')) {
       try {
         final doc = loadYaml(trimmed);
         if (doc is Map && doc.containsKey('proxies') && doc['proxies'] is List) {
-          return _parseYamlList(doc['proxies'] as List);
+          final proxies = _parseYamlList(doc['proxies'] as List);
+
+          // Extract proxy-groups (pass-through raw maps).
+          final rawGroups = doc['proxy-groups'];
+          final proxyGroups = <Map<String, dynamic>>[];
+          if (rawGroups is List) {
+            for (final g in rawGroups) {
+              if (g is Map) {
+                proxyGroups.add(_convertYamlMap(g));
+              }
+            }
+          }
+
+          // Extract rules — presence signals "custom rules" mode.
+          // DNS is intentionally ignored (spec item 3).
+          final rawRules = doc['rules'];
+          final rules = <String>[];
+          if (rawRules is List) {
+            for (final r in rawRules) {
+              final s = r?.toString().trim() ?? '';
+              if (s.isNotEmpty) rules.add(s);
+            }
+          }
+
+          return ParsedSubscription(
+            proxies: proxies,
+            proxyGroups: proxyGroups,
+            rules: rules,
+          );
         }
       } catch (_) {}
     }
@@ -22,7 +51,7 @@ class SubscriptionParser {
       try {
         final doc = loadYaml(trimmed);
         if (doc is List) {
-          return _parseYamlList(doc);
+          return ParsedSubscription(proxies: _parseYamlList(doc));
         }
       } catch (_) {}
     }
@@ -31,34 +60,33 @@ class SubscriptionParser {
     if (_looksLikeBase64(trimmed)) {
       try {
         final decoded = utf8.decode(base64.decode(base64.normalize(trimmed)));
-        return _parseLineBased(decoded);
+        return ParsedSubscription(proxies: _parseLineBased(decoded));
       } catch (_) {}
     }
 
     // 4. Line-based URIs
-    return _parseLineBased(trimmed);
+    return ParsedSubscription(proxies: _parseLineBased(trimmed));
   }
 
   static List<ProxyNode> _parseYamlList(List list) {
     final nodes = <ProxyNode>[];
     for (final item in list) {
       if (item is Map) {
-        final map = <String, dynamic>{};
-        item.forEach((key, value) {
-          map[key.toString()] = _convertYamlValue(value);
-        });
-        nodes.add(ProxyNode.fromJson(map));
+        nodes.add(ProxyNode.fromJson(_convertYamlMap(item)));
       }
     }
     return nodes;
   }
 
+  static Map<String, dynamic> _convertYamlMap(Map m) {
+    final out = <String, dynamic>{};
+    m.forEach((k, v) => out[k.toString()] = _convertYamlValue(v));
+    return out;
+  }
+
   static dynamic _convertYamlValue(dynamic val) {
-    if (val is YamlMap) {
-      return val.map((k, v) => MapEntry(k.toString(), _convertYamlValue(v)));
-    } else if (val is YamlList) {
-      return val.map(_convertYamlValue).toList();
-    }
+    if (val is YamlMap) return _convertYamlMap(val);
+    if (val is YamlList) return val.map(_convertYamlValue).toList();
     return val;
   }
 
