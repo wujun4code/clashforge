@@ -60,7 +60,8 @@ void main() {
 
       final dns = config['dns'] as Map<String, dynamic>;
       expect(dns['respect-rules'], isFalse);
-      expect(dns['enhanced-mode'], equals('redir-host'));
+      expect(dns['enhanced-mode'], equals('fake-ip'));
+      expect(dns['fake-ip-range'], equals('198.18.0.0/15'));
       expect(dns['default-nameserver'], equals(['223.5.5.5', '8.8.8.8']));
       expect(dns['proxy-server-nameserver'], equals(['223.5.5.5', '8.8.8.8']));
       expect((dns['fallback'] as List), contains('https://1.1.1.1/dns-query'));
@@ -68,7 +69,7 @@ void main() {
       final fallbackFilter = dns['fallback-filter'] as Map<String, dynamic>;
       expect(fallbackFilter['geoip'], isTrue);
       expect(fallbackFilter['geoip-code'], equals('CN'));
-      expect((fallbackFilter['ipcidr'] as List), contains('198.18.0.0/15'));
+      expect((fallbackFilter['ipcidr'] as List), contains('240.0.0.0/4'));
 
       final rules = config['rules'] as List;
       expect(rules, contains('IP-CIDR,10.0.0.0/8,DIRECT,no-resolve'));
