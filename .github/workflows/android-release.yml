@@ -190,12 +190,41 @@ jobs:
           storeFile=../clashforge-release.p12
           EOF
 
-      - name: Build Android APK
+      - name: Encrypt free-node subscription URL
+        id: free_node
+        env:
+          FREE_NODE_URL: ${{ secrets.FREE_NODE_URL }}
+          FREE_NODE_AES_KEY: ${{ secrets.FREE_NODE_AES_KEY }}
         run: |
+          if [ -z "$FREE_NODE_URL" ] || [ -z "$FREE_NODE_AES_KEY" ]; then
+            echo "FREE_NODE_URL or FREE_NODE_AES_KEY not set — building without built-in subscription"
+            echo "cipher=" >> "$GITHUB_OUTPUT"
+          else
+            # Key: UTF-8 bytes of first 32 chars of the key string (matches Dart key derivation)
+            KEY_HEX=$(printf '%s' "${FREE_NODE_AES_KEY:0:32}" | xxd -p | tr -d '\n')
+            IV_HEX=$(openssl rand -hex 16)
+            CIPHER_HEX=$(printf '%s' "$FREE_NODE_URL" \
+              | openssl enc -aes-256-cbc -nosalt -K "$KEY_HEX" -iv "$IV_HEX" \
+              | xxd -p | tr -d '\n')
+            CIPHER=$(printf '%s%s' "$IV_HEX" "$CIPHER_HEX" | xxd -r -p | base64 -w 0)
+            echo "cipher=$CIPHER" >> "$GITHUB_OUTPUT"
+            echo "Encrypted subscription URL (cipher preview): ${CIPHER:0:24}..."
+          fi
+
+      - name: Build Android APK
+        env:
+          FREE_NODE_KEY: ${{ secrets.FREE_NODE_AES_KEY }}
+          FREE_NODE_CIPHER: ${{ steps.free_node.outputs.cipher }}
+        run: |
+          DART_DEFINES=""
+          if [ -n "$FREE_NODE_CIPHER" ] && [ -n "$FREE_NODE_KEY" ]; then
+            DART_DEFINES="--dart-define=FREE_NODE_CIPHER=${FREE_NODE_CIPHER} --dart-define=FREE_NODE_KEY=${FREE_NODE_KEY}"
+          fi
           cd mobile
           flutter build apk --release --split-per-abi \
             --build-name="${{ steps.version.outputs.version_name }}" \
-            --build-number="${{ steps.version.outputs.build_number }}"
+            --build-number="${{ steps.version.outputs.build_number }}" \
+            $DART_DEFINES
 
       - name: Rename APKs with version
         run: |
