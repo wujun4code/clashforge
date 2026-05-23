@@ -19,6 +19,7 @@ class ConfigGenerator {
     String? selectedNodeName,
     List<String> customRules = const [],
     List<Map<String, dynamic>> customProxyGroups = const [],
+    Map<String, Map<String, dynamic>> customRuleProviders = const {},
   }) {
     final out = <String, dynamic>{};
 
@@ -108,16 +109,18 @@ class ConfigGenerator {
           ? customProxyGroups
           : _defaultProxyGroups(proxyNames, selectedNodeName);
       out['rules'] = customRules;
-      // Many subscriptions include RULE-SET rules (e.g. RULE-SET,reject,REJECT)
-      // without bundling rule-providers definitions. Scan the custom rules and add
-      // Loyalsoldier provider definitions for any recognised names, so mihomo
-      // can download them instead of fataling with "rule set not found".
+      // Build rule-providers for the custom rules:
+      //   1. Start with the subscription's own rule-providers (exact definitions).
+      //   2. For any RULE-SET reference not covered by (1), fall back to the
+      //      Loyalsoldier CDN definition (handles subscriptions that bundle only
+      //      rules without bundling the matching rule-providers block).
+      final ruleProviders = <String, dynamic>{...customRuleProviders};
       final loyalsoldierProviders = LoyalsoldierTemplate.ruleProviders();
-      final ruleProviders = <String, dynamic>{};
       for (final rule in customRules) {
         if (rule.startsWith('RULE-SET,')) {
           final name = rule.split(',')[1];
-          if (loyalsoldierProviders.containsKey(name)) {
+          if (!ruleProviders.containsKey(name) &&
+              loyalsoldierProviders.containsKey(name)) {
             ruleProviders[name] = loyalsoldierProviders[name]!;
           }
         }

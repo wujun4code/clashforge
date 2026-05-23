@@ -389,6 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
       nodes: parsed.proxies,
       customRules: parsed.rules,
       customProxyGroups: parsed.proxyGroups,
+      customRuleProviders: parsed.ruleProviders,
     );
 
     final previousSelected = _selectedNode?.name;
@@ -508,6 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
           selectedNodeName: _selectedNode!.name,
           customRules: activeSub?.customRules ?? const [],
           customProxyGroups: activeSub?.customProxyGroups ?? const [],
+          customRuleProviders: activeSub?.customRuleProviders ?? const {},
         );
         final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
         logger.debug('vpn', 'Config write result: $writeResult');

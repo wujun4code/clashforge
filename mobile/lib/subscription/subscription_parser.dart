@@ -37,10 +37,20 @@ class SubscriptionParser {
             }
           }
 
+          // Extract rule-providers so mihomo can download referenced rule sets.
+          final rawProviders = doc['rule-providers'];
+          final ruleProviders = <String, Map<String, dynamic>>{};
+          if (rawProviders is Map) {
+            rawProviders.forEach((k, v) {
+              if (v is Map) ruleProviders[k.toString()] = _convertYamlMap(v);
+            });
+          }
+
           return ParsedSubscription(
             proxies: proxies,
             proxyGroups: proxyGroups,
             rules: rules,
+            ruleProviders: ruleProviders,
           );
         }
       } catch (_) {}

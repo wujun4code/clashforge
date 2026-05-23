@@ -17,6 +17,11 @@ class Subscription {
   /// builds its own proxy-groups from [nodes].
   final List<Map<String, dynamic>> customProxyGroups;
 
+  /// Non-empty when the original subscription contained `rule-providers:`.
+  /// Passed through to the config generator so mihomo can download rule sets
+  /// referenced by [customRules] (e.g. RULE-SET,chatGPT,...).
+  final Map<String, Map<String, dynamic>> customRuleProviders;
+
   const Subscription({
     required this.id,
     required this.nickname,
@@ -24,6 +29,7 @@ class Subscription {
     required this.nodes,
     this.customRules = const [],
     this.customProxyGroups = const [],
+    this.customRuleProviders = const {},
   });
 
   bool get hasCustomRules => customRules.isNotEmpty;
@@ -35,6 +41,7 @@ class Subscription {
         'nodes': nodes.map((n) => n.toJson()).toList(),
         if (customRules.isNotEmpty) 'custom_rules': customRules,
         if (customProxyGroups.isNotEmpty) 'custom_proxy_groups': customProxyGroups,
+        if (customRuleProviders.isNotEmpty) 'custom_rule_providers': customRuleProviders,
       };
 
   factory Subscription.fromJson(Map<String, dynamic> json) => Subscription(
@@ -52,6 +59,10 @@ class Subscription {
                 ?.map((e) => Map<String, dynamic>.from(e as Map))
                 .toList() ??
             const [],
+        customRuleProviders: (json['custom_rule_providers'] as Map?)?.map(
+                (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
+              ) ??
+            const {},
       );
 }
 
