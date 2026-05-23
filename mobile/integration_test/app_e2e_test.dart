@@ -78,12 +78,16 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      // Verify import success banner ("Imported N nodes as …")
-      expect(
-        find.textContaining('nodes').evaluate().isNotEmpty ||
-            find.textContaining('Imported').evaluate().isNotEmpty,
-        isTrue,
-        reason: 'Import success banner must appear',
+      // Verify import success banner ("Imported N nodes as …").
+      // Use _waitUntil: the parent _HomeScreenState.setState fires first and
+      // the _SubscriptionsTabState.setState (setting _success/_message) lands
+      // on the following frame, so a bare pumpAndSettle() can miss it.
+      await _waitUntil(
+        tester,
+        () => find.textContaining('nodes').evaluate().isNotEmpty ||
+              find.textContaining('Imported').evaluate().isNotEmpty,
+        timeout: const Duration(seconds: 10),
+        label: 'import success banner',
       );
       _log('Subscription imported successfully');
 
