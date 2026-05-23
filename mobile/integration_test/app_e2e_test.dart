@@ -310,6 +310,10 @@ void main() {
       _log('=== E2E COMPLETE ✓ ===');
     },
     timeout: const Timeout(Duration(minutes: 9)),
+    // Prevents "SemanticsHandle was active at end of test" in Flutter 3.27+:
+    // the integration test binding creates a handle it disposes after the
+    // framework's own end-of-test check runs, causing a spurious failure.
+    semanticsEnabled: false,
   );
 }
 
