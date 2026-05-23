@@ -73,18 +73,45 @@ void main() {
         fail('[E2E] Subscription fetch failed: $msg');
       }
 
-      // Dismiss nickname dialog with default name
+      // Dismiss nickname dialog.
+      // - autofocus: false in the dialog prevents the soft keyboard from opening
+      //   (keyboard would push Save off-screen on the emulator).
+      // - Do NOT pumpAndSettle() before tap: the dialog's CircularProgressIndicator
+      //   spins forever while _loading=true, causing pumpAndSettle to hang 9 min.
+      // - _waitUntil already pumped every 500ms until 'Save' appeared, so the
+      //   dialog open animation has long since completed.
       _log('Saving subscription nickname');
-      await tester.tap(find.text('Save'));
-      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('save_nickname')));
+      // One pump (not pumpAndSettle) to process the tap gesture and run the
+      // microtask that resumes _import() after showDialog resolves. The spinner
+      // (_loading=true) would cause pumpAndSettle to hang indefinitely, but a
+      // single pump is safe — it just renders one frame.
+      await tester.pump();
 
-      // Verify import success banner ("Imported N nodes as …")
-      expect(
-        find.textContaining('nodes').evaluate().isNotEmpty ||
-            find.textContaining('Imported').evaluate().isNotEmpty,
-        isTrue,
-        reason: 'Import success banner must appear',
+      // Wait for import to complete. Three signals, any one is enough:
+      //   1. '已保存' — subscription list header, set by parent setState in
+      //      _onNodesImported. Appears even if child setState is delayed.
+      //   2. 'Imported'/'nodes' — success banner text from child setState.
+      //   3. 'Error:' — error banner; fail fast with the actual message.
+      // Uses _hasText (allWidgets, no skipOffstage) instead of find.textContaining
+      // because the banner widget can be briefly off-stage while the dialog close
+      // animation plays, causing find.textContaining(skipOffstage:true) to miss it.
+      await _waitUntil(
+        tester,
+        () => _hasText(tester, '已保存') ||
+              _hasText(tester, 'Imported') ||
+              _hasText(tester, 'nodes') ||
+              _hasText(tester, 'Error:'),
+        timeout: const Duration(seconds: 60),
+        label: 'import result',
       );
+
+      _log('Screen after import: ${_visibleTexts(tester)}');
+
+      final importErrFinder = find.textContaining('Error:');
+      if (importErrFinder.evaluate().isNotEmpty) {
+        fail('[E2E] Import failed: ${_widgetText(importErrFinder)}');
+      }
       _log('Subscription imported successfully');
 
       // ── Step 2: Verify nodes in Proxies tab ─────────────────────────
@@ -283,6 +310,10 @@ void main() {
       _log('=== E2E COMPLETE ✓ ===');
     },
     timeout: const Timeout(Duration(minutes: 9)),
+    // Prevents "SemanticsHandle was active at end of test" in Flutter 3.27+:
+    // the integration test binding creates a handle it disposes after the
+    // framework's own end-of-test check runs, causing a spurious failure.
+    semanticsEnabled: false,
   );
 }
 
@@ -356,6 +387,21 @@ Future<String> _probeIpViaHttpProxy(String proxyHost, int proxyPort) async {
   return '';
 }
 
+String _visibleTexts(WidgetTester tester) => tester.allWidgets
+    .whereType<Text>()
+    .map((t) => t.data ?? '')
+    .where((s) => s.isNotEmpty)
+    .take(30)
+    .map((s) => '"$s"')
+    .join(', ');
+
+// find.textContaining() uses skipOffstage:true by default, which misses widgets
+// that are briefly off-stage during the dialog close animation (the banner is set
+// in the underlying route while the dialog route is still animating out).
+// This helper uses allWidgets (no offstage filter) to match what _visibleTexts sees.
+bool _hasText(WidgetTester tester, String substring) =>
+    tester.allWidgets.whereType<Text>().any((t) => (t.data ?? '').contains(substring));
+
 Future<void> _waitUntil(
   WidgetTester tester,
   bool Function() condition, {
@@ -365,6 +411,7 @@ Future<void> _waitUntil(
   final deadline = DateTime.now().add(timeout);
   while (!condition()) {
     if (DateTime.now().isAfter(deadline)) {
+      _log('Timeout $label — visible texts: ${_visibleTexts(tester)}');
       throw Exception('[E2E] Timed out waiting for: $label (${timeout.inSeconds}s)');
     }
     await tester.pump(const Duration(milliseconds: 500));

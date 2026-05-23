@@ -389,6 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
       nodes: parsed.proxies,
       customRules: parsed.rules,
       customProxyGroups: parsed.proxyGroups,
+      customRuleProviders: parsed.ruleProviders,
     );
 
     final previousSelected = _selectedNode?.name;
@@ -508,6 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
           selectedNodeName: _selectedNode!.name,
           customRules: activeSub?.customRules ?? const [],
           customProxyGroups: activeSub?.customProxyGroups ?? const [],
+          customRuleProviders: activeSub?.customRuleProviders ?? const {},
         );
         final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
         logger.debug('vpn', 'Config write result: $writeResult');
@@ -2392,7 +2394,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         title: const Text('Name this subscription'),
         content: TextField(
           controller: controller,
-          autofocus: true,
+          autofocus: false,
           style: const TextStyle(color: _kTextHi, fontSize: 14),
           decoration: InputDecoration(
             hintText: 'e.g. Work VPN',
@@ -2418,6 +2420,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
             child: const Text('Cancel', style: TextStyle(color: _kTextMuted)),
           ),
           FilledButton(
+            key: const Key('save_nickname'),
             style: FilledButton.styleFrom(
               backgroundColor: _kBrand,
               foregroundColor: Colors.white,
