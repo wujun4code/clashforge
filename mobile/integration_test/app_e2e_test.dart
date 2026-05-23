@@ -73,37 +73,39 @@ void main() {
         fail('[E2E] Subscription fetch failed: $msg');
       }
 
-      // Dismiss nickname dialog via keyed Save button (Key('save_nickname')).
-      // pumpAndSettle settles the dialog close animation, then extra pumps let
-      // the async _import() continuation (which resumes from await showDialog)
-      // run and call setState({_message: '...'}) on the subscriptions tab.
+      // Dismiss nickname dialog.
+      // - autofocus: false in the dialog prevents the soft keyboard from opening
+      //   (keyboard would push Save off-screen on the emulator).
+      // - Do NOT pumpAndSettle() before tap: the dialog's CircularProgressIndicator
+      //   spins forever while _loading=true, causing pumpAndSettle to hang 9 min.
+      // - _waitUntil already pumped every 500ms until 'Save' appeared, so the
+      //   dialog open animation has long since completed.
       _log('Saving subscription nickname');
-      // pumpAndSettle ensures the dialog open animation is fully complete and
-      // the Save button is at its final on-screen position before we tap.
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('save_nickname')));
-      await tester.pumpAndSettle();
-      // Two extra pumps ensure the Dart microtask (resuming _import() after
-      // showDialog returns) and the resulting setState are processed and rendered.
-      await tester.pump(const Duration(milliseconds: 500));
-      await tester.pump(const Duration(milliseconds: 500));
 
-      _log('Screen after save: ${_visibleTexts(tester)}');
-
-      // Verify import result banner. Also check for Error: so a silent failure
-      // fails fast instead of timing out.
+      // Wait for import to complete. Three signals, any one is enough:
+      //   1. '已保存的订阅' — subscription list header, set by parent setState in
+      //      _onNodesImported. Appears even if child setState is delayed.
+      //   2. 'Imported'/'nodes' — success banner text from child setState.
+      //   3. 'Error:' — error banner; fail fast with the actual message.
+      // pumpAndSettle is NOT used here either — spinner runs until _loading=false.
+      // Instead _waitUntil pumps every 500ms which drives both event processing
+      // and animation frames until the import result is visible.
       await _waitUntil(
         tester,
-        () => find.textContaining('nodes').evaluate().isNotEmpty ||
+        () => find.textContaining('已保存').evaluate().isNotEmpty ||
               find.textContaining('Imported').evaluate().isNotEmpty ||
+              find.textContaining('nodes').evaluate().isNotEmpty ||
               find.textContaining('Error:').evaluate().isNotEmpty,
-        timeout: const Duration(seconds: 15),
-        label: 'import result banner',
+        timeout: const Duration(seconds: 20),
+        label: 'import result',
       );
+
+      _log('Screen after import: ${_visibleTexts(tester)}');
 
       final importErrFinder = find.textContaining('Error:');
       if (importErrFinder.evaluate().isNotEmpty) {
-        fail('[E2E] Import failed after nickname save: ${_widgetText(importErrFinder)}');
+        fail('[E2E] Import failed: ${_widgetText(importErrFinder)}');
       }
       _log('Subscription imported successfully');
 
