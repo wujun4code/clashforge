@@ -30,7 +30,12 @@ class Subscription {
     this.customRules = const [],
     this.customProxyGroups = const [],
     this.customRuleProviders = const {},
+    this.isBuiltIn = false,
   });
+
+  /// True for the app's built-in free-node subscription.
+  /// UI must not reveal server/port/protocol for built-in nodes.
+  final bool isBuiltIn;
 
   bool get hasCustomRules => customRules.isNotEmpty;
 
@@ -42,6 +47,7 @@ class Subscription {
         if (customRules.isNotEmpty) 'custom_rules': customRules,
         if (customProxyGroups.isNotEmpty) 'custom_proxy_groups': customProxyGroups,
         if (customRuleProviders.isNotEmpty) 'custom_rule_providers': customRuleProviders,
+        if (isBuiltIn) 'is_built_in': true,
       };
 
   factory Subscription.fromJson(Map<String, dynamic> json) => Subscription(
@@ -63,6 +69,7 @@ class Subscription {
                 (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
               ) ??
             const {},
+        isBuiltIn: json['is_built_in'] as bool? ?? false,
       );
 }
 

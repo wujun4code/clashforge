@@ -339,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final content = _decryptResponseOrFallback(response.bodyBytes, response.body);
       final parsed = SubscriptionParser.parse(content);
       if (parsed.proxies.isEmpty) return;
-      _onNodesImported(parsed, url: url, nickname: 'Free');
+      _onNodesImported(parsed, url: url, nickname: 'Free', isBuiltIn: true);
       AppLogger.instance.info('app', 'Built-in subscription imported',
           fields: {'nodes': parsed.proxies.length});
     } catch (e) {
@@ -380,7 +380,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onNodesImported(ParsedSubscription parsed,
-      {String url = '', String nickname = ''}) {
+      {String url = '', String nickname = '', bool isBuiltIn = false}) {
     final id = '${DateTime.now().millisecondsSinceEpoch}';
     final sub = Subscription(
       id: id,
@@ -390,6 +390,7 @@ class _HomeScreenState extends State<HomeScreen> {
       customRules: parsed.rules,
       customProxyGroups: parsed.proxyGroups,
       customRuleProviders: parsed.ruleProviders,
+      isBuiltIn: isBuiltIn,
     );
 
     final previousSelected = _selectedNode?.name;
@@ -492,17 +493,20 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() => _connectionStatus = 'Select a node first');
           return;
         }
-        logger.info('vpn', 'Starting VPN', fields: {
-          'node': _selectedNode!.name,
-          'type': _selectedNode!.type,
-          'server': _selectedNode!.server,
-          'port': _selectedNode!.port,
-        });
-        final filesDir = await VpnManager.getFilesDir();
         Subscription? activeSub;
         for (final s in _subscriptions) {
           if (s.id == _activeSubscriptionId) { activeSub = s; break; }
         }
+        // Never log server/port/type for built-in nodes — they must stay hidden.
+        logger.info('vpn', 'Starting VPN', fields: {
+          'node': _selectedNode!.name,
+          if (!(activeSub?.isBuiltIn ?? false)) ...{
+            'type': _selectedNode!.type,
+            'server': _selectedNode!.server,
+            'port': _selectedNode!.port,
+          },
+        });
+        final filesDir = await VpnManager.getFilesDir();
         final configMap = ConfigGenerator.generate(
           nodes: _nodes,
           geodataPath: filesDir,
@@ -982,6 +986,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    Subscription? activeSub;
+    for (final s in _subscriptions) {
+      if (s.id == _activeSubscriptionId) { activeSub = s; break; }
+    }
+    final activeIsBuiltIn = activeSub?.isBuiltIn ?? false;
+
     final tabs = <Widget>[
       _HomeTab(
         isConnected: _isConnected,
@@ -1006,6 +1016,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _ProxiesTab(
         nodes: _nodes,
         selectedNode: _selectedNode,
+        hideNodeDetails: activeIsBuiltIn,
         onSelect: (node) {
           unawaited(_onNodeSelected(node));
         },
@@ -1989,11 +2000,14 @@ class _ProxiesTab extends StatelessWidget {
   const _ProxiesTab(
       {required this.nodes,
       required this.selectedNode,
-      required this.onSelect});
+      required this.onSelect,
+      this.hideNodeDetails = false});
 
   final List<ProxyNode> nodes;
   final ProxyNode? selectedNode;
   final ValueChanged<ProxyNode> onSelect;
+  /// When true (built-in free-node subscription), suppress server/port/protocol.
+  final bool hideNodeDetails;
 
   @override
   Widget build(BuildContext context) {
@@ -2131,11 +2145,13 @@ class _ProxiesTab extends StatelessWidget {
                                           fontWeight: FontWeight.w600,
                                           fontSize: 14,
                                         )),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                        '${node.type.toUpperCase()} · ${node.server}:${node.port}',
-                                        style: const TextStyle(
-                                            color: _kTextMuted, fontSize: 12)),
+                                    if (!hideNodeDetails) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                          '${node.type.toUpperCase()} · ${node.server}:${node.port}',
+                                          style: const TextStyle(
+                                              color: _kTextMuted, fontSize: 12)),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -2541,7 +2557,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${sub.nodes.length} 个节点${_domainLabel(sub.url)}',
+                      '${sub.nodes.length} 个节点${sub.isBuiltIn ? '' : _domainLabel(sub.url)}',
                       style: const TextStyle(color: _kTextFaint, fontSize: 12),
                     ),
                   ],
