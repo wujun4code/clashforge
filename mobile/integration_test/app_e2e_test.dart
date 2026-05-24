@@ -157,7 +157,7 @@ void main() {
         tester,
         () => find.text('Connected').evaluate().isNotEmpty ||
               find.textContaining('Error:').evaluate().isNotEmpty ||
-              find.text('Grant VPN permission, then tap again').evaluate().isNotEmpty,
+              find.text('Grant network permission, then tap again').evaluate().isNotEmpty,
         timeout: const Duration(seconds: 30),
         label: 'VPN connect',
       );
@@ -165,7 +165,7 @@ void main() {
       // VPN consent dialog appeared — the background CI adb loop (uiautomator dump + tap)
       // will dismiss it within a few seconds; onActivityResult then starts the VPN service.
       // Wait for the clicker, then tap the toggle again so Flutter gets 'started' → Connected.
-      if (find.text('Grant VPN permission, then tap again').evaluate().isNotEmpty) {
+      if (find.text('Grant network permission, then tap again').evaluate().isNotEmpty) {
         _log('[E2E] VPN consent dialog detected — waiting 15 s for CI clicker to dismiss it…');
         await Future<void>.delayed(const Duration(seconds: 15));
         await tester.pumpAndSettle();
