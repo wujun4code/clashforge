@@ -72,6 +72,8 @@ abstract class AppLocalizations {
   String get categoryAiVpnProxy;
   String get ipResolved;
   String get ipFailed;
+  String get siteStatusOk;
+  String get siteStatusError;
 
   // ── Browser DNS section ────────────────────────────────────────────────────
   String get browserDnsTitle;
@@ -283,6 +285,8 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get categoryAiVpnProxy => 'AI · VPN Proxy';
   @override String get ipResolved => 'resolved';
   @override String get ipFailed => 'failed';
+  @override String get siteStatusOk => 'OK';
+  @override String get siteStatusError => 'FAIL';
 
   @override String get browserDnsTitle => 'Browser DNS Diagnostics';
   @override String get browserDnsSubtitle => 'Pinpoint "connectivity OK but browser can\'t open domain"';
@@ -473,6 +477,8 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get categoryAiVpnProxy => 'AI · VPN 代理';
   @override String get ipResolved => '已解析';
   @override String get ipFailed => '未能获取';
+  @override String get siteStatusOk => '正常';
+  @override String get siteStatusError => '异常';
 
   @override String get browserDnsTitle => '浏览器 DNS 专项检测';
   @override String get browserDnsSubtitle => '定位"连通性通过但浏览器打不开域名"';

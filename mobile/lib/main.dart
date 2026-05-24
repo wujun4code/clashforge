@@ -1334,18 +1334,20 @@ class _HomeTab extends StatelessWidget {
                           const SizedBox(height: 10),
                           Row(
                             children: [
-                              FilledButton(
-                                onPressed: onToggle,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: accent.withAlpha(36),
-                                  foregroundColor: accent,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                    side: BorderSide(
-                                        color: accent.withAlpha(120)),
+                              Expanded(
+                                child: FilledButton(
+                                  onPressed: onToggle,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: accent.withAlpha(36),
+                                    foregroundColor: accent,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                      side: BorderSide(
+                                          color: accent.withAlpha(120)),
+                                    ),
                                   ),
+                                  child: Text(isConnected ? l10n.btnDisconnect : l10n.btnConnect),
                                 ),
-                                child: Text(isConnected ? l10n.btnDisconnect : l10n.btnConnect),
                               ),
                               const SizedBox(width: 8),
                               OutlinedButton(
@@ -1875,6 +1877,7 @@ class _SiteCheckRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final tone = result.ok ? _kConnected : _kError;
     return Padding(
       padding: const EdgeInsets.only(bottom: 7),
@@ -1908,7 +1911,7 @@ class _SiteCheckRow extends StatelessWidget {
                     border: Border.all(color: tone.withAlpha(100)),
                   ),
                   child: Text(
-                    result.ok ? '正常' : '异常',
+                    result.ok ? l10n.siteStatusOk : l10n.siteStatusError,
                     style: TextStyle(
                         color: tone,
                         fontSize: 10,
