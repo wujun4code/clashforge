@@ -330,7 +330,31 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _ensureBuiltinSub() async {
     final url = FreeNodeConfig.subscriptionUrl;
     if (url == null) return;
-    if (_subscriptions.any((s) => s.url == url)) return;
+
+    // Migration: users upgrading from pre-rc75 have the Free subscription saved
+    // without isBuiltIn=true, so the UI still shows server/port/protocol.
+    // Retroactively set the flag and persist without re-fetching.
+    final existingIdx = _subscriptions.indexWhere((s) => s.url == url);
+    if (existingIdx >= 0) {
+      final existing = _subscriptions[existingIdx];
+      if (!existing.isBuiltIn) {
+        final fixed = Subscription(
+          id: existing.id,
+          nickname: existing.nickname,
+          url: existing.url,
+          nodes: existing.nodes,
+          customRules: existing.customRules,
+          customProxyGroups: existing.customProxyGroups,
+          customRuleProviders: existing.customRuleProviders,
+          isBuiltIn: true,
+        );
+        setState(() => _subscriptions[existingIdx] = fixed);
+        await SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
+        AppLogger.instance.info('app', 'Retroactively marked built-in subscription');
+      }
+      return;
+    }
+
     AppLogger.instance.info('app', 'Importing built-in subscription');
     try {
       final response =
