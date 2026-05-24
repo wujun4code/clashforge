@@ -624,6 +624,36 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Discover which Selector group contains [nodeName].
+  // Tries well-known group names first, then falls back to scanning all Selectors.
+  Future<String?> _resolveProxyGroup(String nodeName) async {
+    try {
+      final res = await http
+          .get(Uri.parse(
+              'http://$_kClashControllerHost:$_kClashControllerPort/proxies'))
+          .timeout(const Duration(seconds: 3));
+      if (res.statusCode != 200) return null;
+      final proxies =
+          ((jsonDecode(res.body) as Map<String, dynamic>)['proxies']
+              as Map<String, dynamic>?) ??
+              {};
+      const preferred = ['🚀 Proxy', '🚀 节点选择', 'Proxy', 'GLOBAL'];
+      for (final name in preferred) {
+        final g = proxies[name] as Map<String, dynamic>?;
+        if (g == null || g['type'] != 'Selector') continue;
+        final all = (g['all'] as List?)?.cast<String>() ?? [];
+        if (all.contains(nodeName)) return name;
+      }
+      for (final entry in proxies.entries) {
+        final g = entry.value as Map<String, dynamic>? ?? {};
+        if (g['type'] != 'Selector') continue;
+        final all = (g['all'] as List?)?.cast<String>() ?? [];
+        if (all.contains(nodeName)) return entry.key;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _bootstrapAfterConnect() async {
     await _refreshPrivateDnsWarning();
 
@@ -633,15 +663,19 @@ class _HomeScreenState extends State<HomeScreen> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (!_isConnected || !mounted) return;
       try {
+        final nodeName = _selectedNode?.name ?? '';
+        final group = nodeName.isNotEmpty
+            ? await _resolveProxyGroup(nodeName) ?? _kMainProxyGroup
+            : _kMainProxyGroup;
         final uri = Uri.parse(
           'http://$_kClashControllerHost:$_kClashControllerPort/proxies/'
-          '${Uri.encodeComponent(_kMainProxyGroup)}',
+          '${Uri.encodeComponent(group)}',
         );
         await http
             .put(
               uri,
               headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({'name': _selectedNode?.name ?? ''}),
+              body: jsonEncode({'name': nodeName}),
             )
             .timeout(const Duration(seconds: 2));
         if (mounted) {
@@ -681,16 +715,18 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_isConnected || _selectedNode == null) return;
 
     final logger = AppLogger.instance;
+    final nodeName = _selectedNode!.name;
+    final group = await _resolveProxyGroup(nodeName) ?? _kMainProxyGroup;
     try {
       final uri = Uri.parse(
         'http://$_kClashControllerHost:$_kClashControllerPort/proxies/'
-        '${Uri.encodeComponent(_kMainProxyGroup)}',
+        '${Uri.encodeComponent(group)}',
       );
       final res = await http
           .put(
             uri,
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'name': _selectedNode!.name}),
+            body: jsonEncode({'name': nodeName}),
           )
           .timeout(const Duration(seconds: 5));
 
@@ -698,13 +734,13 @@ class _HomeScreenState extends State<HomeScreen> {
         throw Exception('HTTP ${res.statusCode}');
       }
       logger.info('proxy', 'Applied node selection',
-          fields: {'group': _kMainProxyGroup, 'node': _selectedNode!.name});
+          fields: {'group': group, 'node': nodeName});
       if (triggerProbe) {
         await _runConnectivityChecks();
       }
     } catch (e) {
       logger.warn('proxy', 'Apply node selection failed: $e',
-          fields: {'group': _kMainProxyGroup, 'node': _selectedNode!.name});
+          fields: {'group': group, 'node': nodeName});
       if (mounted) {
         setState(() => _connectionStatus =
             AppLocalizations.of(context).connNodeSwitchPending);
