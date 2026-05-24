@@ -343,6 +343,7 @@ class _HomeScreenState extends State<HomeScreen> {
   _BrowserDnsSnapshot? _browserDnsSnapshot;
   final List<ProxyNode> _nodes = [];
   ProxyNode? _selectedNode;
+  Map<String, String> _proxyNowMap = {};
   final List<Subscription> _subscriptions = [];
   String? _activeSubscriptionId;
 
@@ -654,6 +655,45 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
+  Future<void> _refreshProxyNow() async {
+    try {
+      final res = await http
+          .get(Uri.parse(
+              'http://$_kClashControllerHost:$_kClashControllerPort/proxies'))
+          .timeout(const Duration(seconds: 3));
+      if (res.statusCode != 200 || !mounted) return;
+      final data =
+          ((jsonDecode(res.body) as Map<String, dynamic>)['proxies']
+              as Map<String, dynamic>?) ??
+              {};
+      final map = <String, String>{};
+      for (final e in data.entries) {
+        final now =
+            (e.value as Map<String, dynamic>?)?['now'] as String?;
+        if (now != null && now.isNotEmpty) map[e.key] = now;
+      }
+      if (mounted) setState(() => _proxyNowMap = map);
+    } catch (_) {}
+  }
+
+  Future<void> _switchGroupMember(String group, String member) async {
+    setState(() => _proxyNowMap = {..._proxyNowMap, group: member});
+    if (!_isConnected) return;
+    final uri = Uri.parse(
+      'http://$_kClashControllerHost:$_kClashControllerPort/proxies/'
+      '${Uri.encodeComponent(group)}',
+    );
+    try {
+      await http
+          .put(uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'name': member}))
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    await _refreshProxyNow();
+  }
+
+
   Future<void> _bootstrapAfterConnect() async {
     await _refreshPrivateDnsWarning();
 
@@ -688,6 +728,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     await _runConnectivityChecks();
     await _runBrowserDnsDiagnostics();
+    await _refreshProxyNow();
   }
 
   Future<void> _refreshPrivateDnsWarning() async {
@@ -1128,9 +1169,14 @@ class _HomeScreenState extends State<HomeScreen> {
         onTapNode: () => setState(() => _tabIndex = 1),
       ),
       _ProxiesTab(
+        customProxyGroups: activeSub?.customProxyGroups ?? const [],
         nodes: _nodes,
         selectedNode: _selectedNode,
+        proxyNowMap: _proxyNowMap,
+        vpnRunning: _isConnected,
         hideNodeDetails: activeIsBuiltIn,
+        onGroupSwitch: _switchGroupMember,
+        onRefresh: _refreshProxyNow,
         onSelect: (node) {
           unawaited(_onNodeSelected(node));
         },
@@ -2113,23 +2159,50 @@ class _BrowserDnsPane extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Tab 2 — Proxies
+// Tab 2 — Routes (proxy groups)
 // ─────────────────────────────────────────────────────────────
-class _ProxiesTab extends StatelessWidget {
-  const _ProxiesTab(
-      {required this.nodes,
-      required this.selectedNode,
-      required this.onSelect,
-      this.hideNodeDetails = false});
+class _ProxiesTab extends StatefulWidget {
+  const _ProxiesTab({
+    required this.customProxyGroups,
+    required this.nodes,
+    required this.selectedNode,
+    required this.proxyNowMap,
+    required this.vpnRunning,
+    required this.onGroupSwitch,
+    required this.onRefresh,
+    required this.onSelect,
+    this.hideNodeDetails = false,
+  });
 
+  final List<Map<String, dynamic>> customProxyGroups;
   final List<ProxyNode> nodes;
   final ProxyNode? selectedNode;
+  final Map<String, String> proxyNowMap;
+  final bool vpnRunning;
+  final Future<void> Function(String group, String member) onGroupSwitch;
+  final Future<void> Function() onRefresh;
   final ValueChanged<ProxyNode> onSelect;
-  /// When true (built-in free-node subscription), suppress server/port/protocol.
   final bool hideNodeDetails;
 
   @override
+  State<_ProxiesTab> createState() => _ProxiesTabState();
+}
+
+class _ProxiesTabState extends State<_ProxiesTab> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.vpnRunning) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => widget.onRefresh());
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final groups = widget.customProxyGroups;
+
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2138,172 +2211,362 @@ class _ProxiesTab extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
             child: Row(
               children: [
-                Builder(builder: (context) {
-                  final l10n = AppLocalizations.of(context);
-                  return Text(l10n.proxiesTitle,
-                      style: const TextStyle(
-                          color: _kTextHi,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: -0.5));
-                }),
+                Text(l10n.proxiesTitle,
+                    style: const TextStyle(
+                        color: _kTextHi,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.5)),
                 const Spacer(),
-                Builder(builder: (context) {
-                  final l10n = AppLocalizations.of(context);
-                  return Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _kBrand.withAlpha(18),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _kBrand.withAlpha(55)),
-                    ),
-                    child: Text(l10n.nodesCount(nodes.length),
-                        style: const TextStyle(
-                            color: _kBrand,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600)),
-                  );
-                }),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _kBrand.withAlpha(18),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _kBrand.withAlpha(55)),
+                  ),
+                  child: Text(
+                    groups.isNotEmpty
+                        ? '${groups.length} groups'
+                        : l10n.nodesCount(widget.nodes.length),
+                    style: const TextStyle(
+                        color: _kBrand,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
               ],
             ),
           ),
           Expanded(
-            child: nodes.isEmpty
-                ? Center(
-                    child: Builder(builder: (context) {
-                      final l10n = AppLocalizations.of(context);
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: _kBrand.withAlpha(15),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: _kBrand.withAlpha(40)),
-                            ),
-                            child: const Icon(Icons.cloud_off_outlined,
-                                size: 34, color: _kBrand),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(l10n.noNodesYet,
-                              style: const TextStyle(
-                                  color: _kTextHi,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600)),
-                          const SizedBox(height: 6),
-                          Text(
-                              l10n.noNodesHint,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  color: _kTextMuted, height: 1.5, fontSize: 13)),
-                        ],
-                      );
-                    }),
-                  )
-                : ListView.separated(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    itemCount: nodes.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 6),
-                    itemBuilder: (context, i) {
-                      final node = nodes[i];
-                      final selected = node == selectedNode;
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: () => onSelect(node),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          decoration: BoxDecoration(
-                            gradient: selected
-                                ? LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      _kBrand.withAlpha(28),
-                                      _kCard,
-                                    ],
-                                  )
-                                : null,
-                            color: selected ? null : _kCard,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color:
-                                  selected ? _kBrand.withAlpha(120) : _kBorder,
-                              width: selected ? 1.5 : 1,
-                            ),
-                            boxShadow: selected
-                                ? [
-                                    BoxShadow(
-                                      color: _kBrand.withAlpha(30),
-                                      blurRadius: 12,
-                                      spreadRadius: 0,
-                                    )
-                                  ]
-                                : null,
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 36,
-                                height: 36,
-                                decoration: BoxDecoration(
-                                  color: _kBrand.withAlpha(selected ? 30 : 18),
-                                  borderRadius: BorderRadius.circular(9),
-                                  border: Border.all(
-                                      color: _kBrand
-                                          .withAlpha(selected ? 80 : 40)),
-                                ),
-                                child: Icon(Icons.language,
-                                    color: selected ? _kBrand : _kTextMuted,
-                                    size: 18),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(node.name,
-                                        style: TextStyle(
-                                          color: selected ? _kTextHi : _kTextHi,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14,
-                                        )),
-                                    if (!hideNodeDetails) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                          '${node.type.toUpperCase()} · ${node.server}:${node.port}',
-                                          style: const TextStyle(
-                                              color: _kTextMuted, fontSize: 12)),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              if (selected)
-                                Container(
-                                  width: 22,
-                                  height: 22,
-                                  decoration: BoxDecoration(
-                                    color: _kBrand.withAlpha(30),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color: _kBrand.withAlpha(100)),
-                                  ),
-                                  child: const Icon(Icons.check,
-                                      color: _kBrand, size: 13),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
+            child: groups.isEmpty
+                ? _buildFlatNodeList(l10n)
+                : RefreshIndicator(
+                    onRefresh: widget.onRefresh,
+                    color: _kBrand,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                      itemCount: groups.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, i) {
+                        final g = groups[i];
+                        final name = (g['name'] as String?) ?? '';
+                        final type =
+                            ((g['type'] as String?) ?? '').toLowerCase();
+                        final members =
+                            (g['proxies'] as List?)?.cast<String>() ?? [];
+                        return _ProxyGroupCard(
+                          name: name,
+                          type: type,
+                          members: members,
+                          currentNow: widget.proxyNowMap[name],
+                          vpnRunning: widget.vpnRunning,
+                          initiallyExpanded: i == 0,
+                          onMemberTap: type == 'select'
+                              ? (member) =>
+                                  unawaited(widget.onGroupSwitch(name, member))
+                              : null,
+                        );
+                      },
+                    ),
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFlatNodeList(AppLocalizations l10n) {
+    final nodes = widget.nodes;
+    final selectedNode = widget.selectedNode;
+    if (nodes.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: _kBrand.withAlpha(15),
+                shape: BoxShape.circle,
+                border: Border.all(color: _kBrand.withAlpha(40)),
+              ),
+              child: const Icon(Icons.cloud_off_outlined,
+                  size: 34, color: _kBrand),
+            ),
+            const SizedBox(height: 16),
+            Text(l10n.noNodesYet,
+                style: const TextStyle(
+                    color: _kTextHi,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text(l10n.noNodesHint,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: _kTextMuted, height: 1.5, fontSize: 13)),
+          ],
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      itemCount: nodes.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (context, i) {
+        final node = nodes[i];
+        final selected = node == selectedNode;
+        return InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => widget.onSelect(node),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              gradient: selected
+                  ? LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [_kBrand.withAlpha(28), _kCard],
+                    )
+                  : null,
+              color: selected ? null : _kCard,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: selected ? _kBrand.withAlpha(120) : _kBorder,
+                width: selected ? 1.5 : 1,
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                          color: _kBrand.withAlpha(30),
+                          blurRadius: 12,
+                          spreadRadius: 0)
+                    ]
+                  : null,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: _kBrand.withAlpha(selected ? 30 : 18),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(
+                        color: _kBrand.withAlpha(selected ? 80 : 40)),
+                  ),
+                  child: Icon(Icons.language,
+                      color: selected ? _kBrand : _kTextMuted, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(node.name,
+                          style: const TextStyle(
+                              color: _kTextHi,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14)),
+                      if (!widget.hideNodeDetails) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                            '${node.type.toUpperCase()} · ${node.server}:${node.port}',
+                            style: const TextStyle(
+                                color: _kTextMuted, fontSize: 12)),
+                      ],
+                    ],
+                  ),
+                ),
+                if (selected)
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: _kBrand.withAlpha(30),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: _kBrand.withAlpha(100)),
+                    ),
+                    child: const Icon(Icons.check, color: _kBrand, size: 13),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Proxy group card (one per group in the Routes tab)
+// ─────────────────────────────────────────────────────────────
+class _ProxyGroupCard extends StatelessWidget {
+  const _ProxyGroupCard({
+    required this.name,
+    required this.type,
+    required this.members,
+    required this.vpnRunning,
+    this.currentNow,
+    this.initiallyExpanded = false,
+    this.onMemberTap,
+  });
+
+  final String name;
+  final String type;
+  final List<String> members;
+  final String? currentNow;
+  final bool vpnRunning;
+  final bool initiallyExpanded;
+  final void Function(String member)? onMemberTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isAuto = type == 'url-test' || type == 'fallback';
+    final typeLabel = isAuto ? 'AUTO' : 'SELECT';
+    final typeColor =
+        isAuto ? const Color(0xFF64B5F6) : _kBrand;
+    final nowText = currentNow ??
+        (vpnRunning ? '…' : '—');
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kBorder),
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: initiallyExpanded,
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          childrenPadding: EdgeInsets.zero,
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(name,
+                    style: const TextStyle(
+                        color: _kTextHi,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15)),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: typeColor.withAlpha(22),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: typeColor.withAlpha(70)),
+                ),
+                child: Text(typeLabel,
+                    style: TextStyle(
+                        color: typeColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5)),
+              ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(nowText,
+                style: TextStyle(
+                    color: currentNow != null ? _kBrand : _kTextMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500)),
+          ),
+          children: [
+            const Divider(height: 1, thickness: 1, color: _kBorder),
+            ...members.map((member) => _GroupMemberTile(
+                  member: member,
+                  isCurrent: member == currentNow,
+                  canTap: onMemberTap != null,
+                  onTap: onMemberTap != null
+                      ? () => onMemberTap!(member)
+                      : null,
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupMemberTile extends StatelessWidget {
+  const _GroupMemberTile({
+    required this.member,
+    required this.isCurrent,
+    required this.canTap,
+    this.onTap,
+  });
+
+  final String member;
+  final bool isCurrent;
+  final bool canTap;
+  final VoidCallback? onTap;
+
+  static IconData _icon(String name) {
+    if (name == 'DIRECT') return Icons.swap_horiz;
+    if (name == 'REJECT') return Icons.block_outlined;
+    if (name.contains('自动') || name.toLowerCase().contains('auto')) {
+      return Icons.auto_awesome_outlined;
+    }
+    return Icons.language_outlined;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        decoration: BoxDecoration(
+          color: isCurrent ? _kBrand.withAlpha(10) : Colors.transparent,
+          border: const Border(
+              top: BorderSide(color: _kBorder, width: 0.5)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: isCurrent ? _kBrand.withAlpha(25) : _kBg,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color:
+                        isCurrent ? _kBrand.withAlpha(90) : _kBorder),
+              ),
+              child: Icon(_icon(member),
+                  size: 15,
+                  color: isCurrent ? _kBrand : _kTextMuted),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(member,
+                  style: TextStyle(
+                      color: isCurrent ? _kTextHi : _kTextMuted,
+                      fontWeight: isCurrent
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                      fontSize: 14)),
+            ),
+            if (isCurrent)
+              const Icon(Icons.check_circle_outline,
+                  color: _kBrand, size: 18)
+            else if (canTap)
+              Icon(Icons.chevron_right,
+                  color: _kBorder.withAlpha(180), size: 18),
+          ],
+        ),
       ),
     );
   }
