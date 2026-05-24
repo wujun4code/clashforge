@@ -31,6 +31,14 @@ void main() {
         return;
       }
 
+      // Explicitly own the semantics handle so we can dispose it within the
+      // test body (before _endOfTestVerifications runs). In
+      // IntegrationTestWidgetsFlutterBinding, _endOfTestVerifications executes
+      // before addTearDown callbacks, so any handle not disposed here would
+      // still be "active" at verification time even with semanticsEnabled:false.
+      final semanticsHandle = tester.ensureSemantics();
+      try {
+
       await tester.pumpWidget(const ClashForgeApp());
       await tester.pumpAndSettle();
 
@@ -308,11 +316,12 @@ void main() {
       _log('Round 3 ✓ IP restored ($restoredIp == $baselineIp)');
 
       _log('=== E2E COMPLETE ✓ ===');
+
+      } finally {
+        semanticsHandle.dispose();
+      }
     },
     timeout: const Timeout(Duration(minutes: 9)),
-    // Prevents "SemanticsHandle was active at end of test" in Flutter 3.27+:
-    // the integration test binding creates a handle it disposes after the
-    // framework's own end-of-test check runs, causing a spurious failure.
     semanticsEnabled: false,
   );
 }
