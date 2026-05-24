@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:pointycastle/export.dart' as pc;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'subscription/parsed_subscription.dart';
 import 'subscription/subscription_parser.dart';
@@ -17,6 +18,7 @@ import 'config/free_node_config.dart';
 import 'logger/app_logger.dart';
 import 'logger/log_entry.dart';
 import 'update_checker.dart';
+import 'l10n/app_localizations.dart';
 
 Future<void> _launchUrl(String url) async {
   final uri = Uri.parse(url);
@@ -184,8 +186,37 @@ String _yamlScalar(dynamic v) {
 }
 
 // ─── App root ─────────────────────────────────────────────────
-class ClashForgeApp extends StatelessWidget {
+class ClashForgeApp extends StatefulWidget {
   const ClashForgeApp({super.key});
+
+  @override
+  State<ClashForgeApp> createState() => _ClashForgeAppState();
+}
+
+class _ClashForgeAppState extends State<ClashForgeApp> {
+  Locale? _locale;
+
+  static const _kLocaleKey = 'app_locale';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocale();
+  }
+
+  Future<void> _loadLocale() async {
+    final prefs = await SharedPreferences.getInstance();
+    final code = prefs.getString(_kLocaleKey);
+    if (code != null && mounted) {
+      setState(() => _locale = Locale(code));
+    }
+  }
+
+  void _setLocale(Locale locale) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kLocaleKey, locale.languageCode);
+    if (mounted) setState(() => _locale = locale);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -206,6 +237,9 @@ class ClashForgeApp extends StatelessWidget {
     return MaterialApp(
       title: 'ClashForge',
       debugShowCheckedModeBanner: false,
+      locale: _locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       theme: ThemeData(
         colorScheme: scheme,
         useMaterial3: true,
@@ -240,7 +274,7 @@ class ClashForgeApp extends StatelessWidget {
           behavior: SnackBarBehavior.floating,
         ),
       ),
-      home: const HomeScreen(),
+      home: HomeScreen(onLocaleChanged: _setLocale),
     );
   }
 }
@@ -249,7 +283,8 @@ class ClashForgeApp extends StatelessWidget {
 // Root screen — shared state
 // ─────────────────────────────────────────────────────────────
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, required this.onLocaleChanged});
+  final void Function(Locale) onLocaleChanged;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -267,18 +302,31 @@ class _HomeScreenState extends State<HomeScreen> {
     ('https://ipinfo.io/json',   'IPInfo', 'ipinfo'),
   ];
 
-  // (name, description, url, domain-for-DNS-query)
-  static const _domesticSites = [
-    ('淘宝', '验证国内主要电商平台直连可达性', 'https://www.taobao.com', 'www.taobao.com'),
-    ('网易云音乐', '验证国内常见内容站点延迟', 'https://music.163.com', 'music.163.com'),
+  // (url, domain-for-DNS-query) — names and descriptions come from l10n
+  static const _domesticSiteUrls = [
+    ('https://www.taobao.com', 'www.taobao.com'),
+    ('https://music.163.com', 'music.163.com'),
   ];
-  static const _foreignSites = [
-    ('GitHub', '验证国际开发站点的代理访问效果', 'https://github.com', 'github.com'),
-    ('Google', '验证 Google 搜索是否可通过代理访问', 'https://www.google.com', 'www.google.com'),
+  static const _foreignSiteUrls = [
+    ('https://github.com', 'github.com'),
+    ('https://www.google.com', 'www.google.com'),
   ];
-  static const _aiSites = [
-    ('OpenAI', '验证 ChatGPT 是否可通过代理访问', 'https://chat.openai.com', 'chat.openai.com'),
-    ('Claude', '验证 Claude AI 是否可通过代理访问', 'https://claude.ai', 'claude.ai'),
+  static const _aiSiteUrls = [
+    ('https://chat.openai.com', 'chat.openai.com'),
+    ('https://claude.ai', 'claude.ai'),
+  ];
+
+  List<(String, String, String, String)> _domesticSites(AppLocalizations l10n) => [
+    (l10n.siteTaobaoName, l10n.siteTaobaoDesc, _domesticSiteUrls[0].$1, _domesticSiteUrls[0].$2),
+    (l10n.siteNeteaseName, l10n.siteNeteaseDesc, _domesticSiteUrls[1].$1, _domesticSiteUrls[1].$2),
+  ];
+  List<(String, String, String, String)> _foreignSites(AppLocalizations l10n) => [
+    ('GitHub', l10n.siteGitHubDesc, _foreignSiteUrls[0].$1, _foreignSiteUrls[0].$2),
+    ('Google', l10n.siteGoogleDesc, _foreignSiteUrls[1].$1, _foreignSiteUrls[1].$2),
+  ];
+  List<(String, String, String, String)> _aiSites(AppLocalizations l10n) => [
+    ('OpenAI', l10n.siteOpenAIDesc, _aiSiteUrls[0].$1, _aiSiteUrls[0].$2),
+    ('Claude', l10n.siteClaudeDesc, _aiSiteUrls[1].$1, _aiSiteUrls[1].$2),
   ];
 
   int _tabIndex = 0;
@@ -287,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _probeLoading = false;
   bool _browserDnsLoading = false;
   bool _switchingNode = false;
-  String _connectionStatus = 'Tap to connect';
+  String _connectionStatus = '';
   String? _probeMessage;
   String? _browserDnsMessage;
   String? _privateDnsWarning;
@@ -507,7 +555,7 @@ class _HomeScreenState extends State<HomeScreen> {
         logger.info('vpn', 'VPN stopped');
         setState(() {
           _isConnected = false;
-          _connectionStatus = 'Tap to connect';
+          _connectionStatus = '';
           _connectivitySnapshot = null;
           _browserDnsSnapshot = null;
           _probeMessage = null;
@@ -548,12 +596,15 @@ class _HomeScreenState extends State<HomeScreen> {
         final res = await VpnManager.startVpn();
         logger.info('vpn', 'VPN start result: $res');
         if (res == 'permission_needed') {
-          setState(
-              () => _connectionStatus = 'Grant VPN permission, then tap again');
+          if (!mounted) return;
+          final l10n = AppLocalizations.of(context);
+          setState(() => _connectionStatus = l10n.connGrantPermission);
         } else {
+          if (!mounted) return;
+          final l10n = AppLocalizations.of(context);
           setState(() {
             _isConnected = true;
-            _connectionStatus = 'Connected';
+            _connectionStatus = l10n.connConnected;
             _probeMessage = null;
           });
           unawaited(_bootstrapAfterConnect());
@@ -562,9 +613,11 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e, st) {
       logger.error('vpn', 'Toggle failed: $e',
           fields: {'stack': st.toString().split('\n').first});
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
       setState(() {
         _isConnected = false;
-        _connectionStatus = 'Error: $e';
+        _connectionStatus = l10n.connError(e.toString());
       });
     } finally {
       setState(() => _isConnecting = false);
@@ -592,7 +645,7 @@ class _HomeScreenState extends State<HomeScreen> {
             )
             .timeout(const Duration(seconds: 2));
         if (mounted) {
-          setState(() => _connectionStatus = 'Connected');
+          setState(() => _connectionStatus = AppLocalizations.of(context).connConnected);
         }
         break; // controller responded — stop retrying
       } catch (_) {
@@ -611,11 +664,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     String? nextWarning;
     if (mode == 'hostname' || mode == 'opportunistic') {
-      final modeText = mode == 'hostname' ? '严格主机名模式' : '自动模式';
-      final suffix =
-          mode == 'hostname' && specifier.isNotEmpty ? ' ($specifier)' : '';
-      nextWarning = '检测到系统 Private DNS $modeText$suffix，Android 可能无法劫持 DNS 请求，'
-          '浏览器可能报 DNS_PROBE_FINISHED_BAD_CONFIG。请先在系统设置中关闭 Private DNS 后重试。';
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
+      nextWarning = mode == 'hostname' && specifier.isNotEmpty
+          ? l10n.privateDnsWarningHostname(specifier)
+          : l10n.privateDnsWarningAuto;
     }
 
     if (!mounted) return;
@@ -654,7 +707,7 @@ class _HomeScreenState extends State<HomeScreen> {
           fields: {'group': _kMainProxyGroup, 'node': _selectedNode!.name});
       if (mounted) {
         setState(() => _connectionStatus =
-            'Node switch pending, retry after core is ready');
+            AppLocalizations.of(context).connNodeSwitchPending);
       }
     }
   }
@@ -667,14 +720,14 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     if (!_isConnected) {
-      setState(() => _connectionStatus = 'Node selected, tap connect');
+      setState(() => _connectionStatus = AppLocalizations.of(context).connNodeSelectedTapConnect);
       return;
     }
 
     try {
       await _applyNodeSelectionIfRunning(triggerProbe: false);
       if (mounted) {
-        setState(() => _connectionStatus = 'Switched to ${node.name}');
+        setState(() => _connectionStatus = AppLocalizations.of(context).connSwitchedTo(node.name));
       }
       await _runConnectivityChecks();
       await _runBrowserDnsDiagnostics();
@@ -692,6 +745,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _probeMessage = null;
     });
 
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
+
     final directClient = HttpClient()
       ..connectionTimeout = const Duration(seconds: 8);
     final proxyClient = HttpClient()
@@ -702,9 +758,9 @@ class _HomeScreenState extends State<HomeScreen> {
       // Start all probes concurrently
       final directIpFut = _fetchAllIpInfos(directClient, _directIpCandidates);
       final proxyIpFut = _fetchAllIpInfos(proxyClient, _proxyIpCandidates);
-      final domesticFut = _checkSites(directClient, _domesticSites);
-      final foreignFut = _checkSites(proxyClient, _foreignSites);
-      final aiFut = _checkSites(proxyClient, _aiSites);
+      final domesticFut = _checkSites(directClient, _domesticSites(l10n));
+      final foreignFut = _checkSites(proxyClient, _foreignSites(l10n));
+      final aiFut = _checkSites(proxyClient, _aiSites(l10n));
 
       final directIps = await directIpFut;
       final proxyIps = await proxyIpFut;
@@ -726,7 +782,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       AppLogger.instance.error('probe', 'Connectivity probe failed: $e');
       if (!mounted) return;
-      setState(() => _probeMessage = 'Probe failed: $e');
+      setState(() => _probeMessage = AppLocalizations.of(context).browserDnsFailed(e.toString()));
     } finally {
       directClient.close(force: true);
       proxyClient.close(force: true);
@@ -855,6 +911,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _browserDnsMessage = null;
     });
 
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
+
     try {
       final checks = <_BrowserDnsCheckResult>[];
       final info = await VpnManager.getSystemInfo();
@@ -865,24 +924,24 @@ class _HomeScreenState extends State<HomeScreen> {
       final privateDnsOn = modeRaw == 'hostname' || modeRaw == 'opportunistic';
       checks.add(
         _BrowserDnsCheckResult(
-          name: '系统 Private DNS',
+          name: l10n.checkPrivateDns,
           ok: !privateDnsOn,
           detail: privateDnsOn
               ? (modeRaw == 'hostname' && specifier.isNotEmpty
-                  ? '开启（严格主机名：$specifier）'
-                  : '开启（$modeRaw）')
-              : '关闭',
+                  ? l10n.privateDnsOnHostname(specifier)
+                  : l10n.privateDnsOn(modeRaw))
+              : l10n.privateDnsOff,
         ),
       );
 
       final mihomoAnswers = await _queryMihomoDnsA('www.google.com');
       checks.add(
         _BrowserDnsCheckResult(
-          name: 'Mihomo DNS 解析',
+          name: l10n.checkMihomoDns,
           ok: mihomoAnswers.isNotEmpty,
           detail: mihomoAnswers.isNotEmpty
               ? 'www.google.com -> ${mihomoAnswers.take(3).join(', ')}'
-              : '无返回记录（可能导致浏览器域名无法打开）',
+              : l10n.mihomoDnsNoRecord,
         ),
       );
 
@@ -897,13 +956,13 @@ class _HomeScreenState extends State<HomeScreen> {
             .toSet()
             .toList();
         systemDnsOk = ips.isNotEmpty;
-        systemDnsDetail = systemDnsOk ? ips.take(3).join(', ') : 'lookup 无可用地址';
+        systemDnsDetail = systemDnsOk ? ips.take(3).join(', ') : l10n.systemDnsNoAddr;
       } catch (e) {
         systemDnsDetail = e.toString();
       }
       checks.add(
         _BrowserDnsCheckResult(
-          name: '系统 DNS 解析',
+          name: l10n.checkSystemDns,
           ok: systemDnsOk,
           detail: systemDnsDetail,
         ),
@@ -925,7 +984,7 @@ class _HomeScreenState extends State<HomeScreen> {
         watch.stop();
         proxySmokeOk = res.statusCode >= 200 && res.statusCode < 400;
         proxySmokeDetail = proxySmokeOk
-            ? '经 HTTP 代理访问 gstatic 成功（${watch.elapsedMilliseconds}ms）'
+            ? l10n.proxyChainSuccess(watch.elapsedMilliseconds)
             : 'HTTP ${res.statusCode}';
       } on TimeoutException {
         proxySmokeDetail = 'timeout';
@@ -936,13 +995,13 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       checks.add(
         _BrowserDnsCheckResult(
-          name: '代理链路',
+          name: l10n.checkProxyChain,
           ok: proxySmokeOk,
           detail: proxySmokeDetail,
         ),
       );
 
-      final summary = _buildBrowserDnsSummary(checks);
+      final summary = _buildBrowserDnsSummary(checks, l10n);
       if (!mounted) return;
       setState(() {
         _browserDnsSnapshot = _BrowserDnsSnapshot(
@@ -954,7 +1013,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       logger.error('browser-dns', 'Browser DNS diagnostics failed: $e');
       if (!mounted) return;
-      setState(() => _browserDnsMessage = '专项检测失败: $e');
+      setState(() => _browserDnsMessage = AppLocalizations.of(context).browserDnsFailed(e.toString()));
     } finally {
       if (mounted) {
         setState(() => _browserDnsLoading = false);
@@ -962,23 +1021,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  String _buildBrowserDnsSummary(List<_BrowserDnsCheckResult> checks) {
+  String _buildBrowserDnsSummary(List<_BrowserDnsCheckResult> checks, AppLocalizations l10n) {
     bool failed(String name) =>
         checks.any((item) => item.name == name && !item.ok);
 
-    if (failed('系统 Private DNS')) {
-      return '检测到 Private DNS 已开启。该状态下浏览器可能出现 DNS_PROBE_FINISHED_BAD_CONFIG，建议先关闭系统 Private DNS 再重试。';
-    }
-    if (failed('Mihomo DNS 解析')) {
-      return 'Mihomo DNS 当前未能解析目标域名，建议检查订阅节点、上游 DNS 和 DNS 防污染设置。';
-    }
-    if (failed('系统 DNS 解析')) {
-      return '系统 DNS 解析异常。若连通性页面“代理侧”正常，优先排查系统 DNS / 路由器 DNS。';
-    }
-    if (failed('代理链路')) {
-      return '代理链路探测失败。DNS 可能正常，但出站链路不可达。';
-    }
-    return '浏览器 DNS 链路整体正常。若浏览器仍报错，请切换网络后再测一次。';
+    if (failed(l10n.checkPrivateDns)) return l10n.summaryPrivateDnsOn;
+    if (failed(l10n.checkMihomoDns)) return l10n.summaryMihomoDnsFailed;
+    if (failed(l10n.checkSystemDns)) return l10n.summarySystemDnsFailed;
+    if (failed(l10n.checkProxyChain)) return l10n.summaryProxyChainFailed;
+    return l10n.summaryAllOk;
   }
 
   Future<List<String>> _queryMihomoDnsA(String host) async {
@@ -1055,34 +1106,38 @@ class _HomeScreenState extends State<HomeScreen> {
         onActivate: _activateSubscription,
         onDelete: _deleteSubscription,
       ),
-      _SettingsTab(nodeCount: _nodes.length),
+      _SettingsTab(
+        nodeCount: _nodes.length,
+        onLocaleChanged: widget.onLocaleChanged,
+      ),
     ];
 
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       body: tabs[_tabIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tabIndex,
         onDestinationSelected: (i) => setState(() => _tabIndex = i),
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.shield_outlined),
-            selectedIcon: Icon(Icons.shield),
-            label: 'Home',
+            icon: const Icon(Icons.shield_outlined),
+            selectedIcon: const Icon(Icons.shield),
+            label: l10n.navHome,
           ),
           NavigationDestination(
-            icon: Icon(Icons.language_outlined),
-            selectedIcon: Icon(Icons.language),
-            label: 'Proxies',
+            icon: const Icon(Icons.language_outlined),
+            selectedIcon: const Icon(Icons.language),
+            label: l10n.navProxies,
           ),
           NavigationDestination(
-            icon: Icon(Icons.cloud_download_outlined),
-            selectedIcon: Icon(Icons.cloud_download),
-            label: 'Subscriptions',
+            icon: const Icon(Icons.cloud_download_outlined),
+            selectedIcon: const Icon(Icons.cloud_download),
+            label: l10n.navSubscriptions,
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            selectedIcon: const Icon(Icons.settings),
+            label: l10n.navSettings,
           ),
         ],
       ),
@@ -1136,17 +1191,14 @@ class _HomeTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final accent = isConnected ? _kConnected : _kBrand;
-    final checkedAt = snapshot == null
-        ? '--'
-        : '${snapshot!.checkedAt.hour.toString().padLeft(2, '0')}:'
-            '${snapshot!.checkedAt.minute.toString().padLeft(2, '0')}:'
-            '${snapshot!.checkedAt.second.toString().padLeft(2, '0')}';
-    final browserDnsCheckedAt = browserDnsSnapshot == null
-        ? '--'
-        : '${browserDnsSnapshot!.checkedAt.hour.toString().padLeft(2, '0')}:'
-            '${browserDnsSnapshot!.checkedAt.minute.toString().padLeft(2, '0')}:'
-            '${browserDnsSnapshot!.checkedAt.second.toString().padLeft(2, '0')}';
+    final _fmt = (DateTime dt) =>
+        '${dt.hour.toString().padLeft(2, '0')}:'
+        '${dt.minute.toString().padLeft(2, '0')}:'
+        '${dt.second.toString().padLeft(2, '0')}';
+    final checkedAt = snapshot == null ? '--' : _fmt(snapshot!.checkedAt);
+    final browserDnsCheckedAt = browserDnsSnapshot == null ? '--' : _fmt(browserDnsSnapshot!.checkedAt);
 
     return Container(
       decoration: const BoxDecoration(
@@ -1201,7 +1253,7 @@ class _HomeTab extends StatelessWidget {
                       ),
                     ),
                     child: Text(
-                      isConnected ? 'ACTIVE' : 'IDLE',
+                      isConnected ? l10n.statusActive : l10n.statusIdle,
                       style: TextStyle(
                         color: isConnected ? _kConnected : _kTextMuted,
                         fontSize: 10,
@@ -1266,7 +1318,7 @@ class _HomeTab extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            isConnected ? 'VPN 运行中' : 'VPN 未连接',
+                            isConnected ? l10n.vpnRunning : l10n.vpnIdle,
                             style: TextStyle(
                               color: accent,
                               fontSize: 16,
@@ -1275,25 +1327,27 @@ class _HomeTab extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            connectionStatus,
+                            connectionStatus.isEmpty ? l10n.connTapToConnect : connectionStatus,
                             style: const TextStyle(
                                 color: _kTextMuted, fontSize: 13, height: 1.4),
                           ),
                           const SizedBox(height: 10),
                           Row(
                             children: [
-                              FilledButton(
-                                onPressed: onToggle,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: accent.withAlpha(36),
-                                  foregroundColor: accent,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                    side: BorderSide(
-                                        color: accent.withAlpha(120)),
+                              Expanded(
+                                child: FilledButton(
+                                  onPressed: onToggle,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: accent.withAlpha(36),
+                                    foregroundColor: accent,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                      side: BorderSide(
+                                          color: accent.withAlpha(120)),
+                                    ),
                                   ),
+                                  child: Text(isConnected ? l10n.btnDisconnect : l10n.btnConnect),
                                 ),
-                                child: Text(isConnected ? '断开' : '连接'),
                               ),
                               const SizedBox(width: 8),
                               OutlinedButton(
@@ -1303,7 +1357,7 @@ class _HomeTab extends StatelessWidget {
                                   side: BorderSide(
                                       color: _kBorder.withAlpha(180)),
                                 ),
-                                child: const Text('更多节点'),
+                                child: Text(l10n.btnMoreNodes),
                               ),
                             ],
                           ),
@@ -1346,8 +1400,8 @@ class _HomeTab extends StatelessWidget {
               ],
               const SizedBox(height: 16),
               _HomeBlockCard(
-                title: '连通性检测',
-                subtitle: '切换节点后自动重新执行连通性检测',
+                title: l10n.connectivityTitle,
+                subtitle: l10n.connectivitySubtitle,
                 trailing: TextButton.icon(
                   onPressed:
                       probeLoading ? null : () => unawaited(onRecheckProbe()),
@@ -1364,7 +1418,7 @@ class _HomeTab extends StatelessWidget {
                               strokeWidth: 2, color: _kBrand),
                         )
                       : const Icon(Icons.refresh, size: 14),
-                  label: const Text('重测', style: TextStyle(fontSize: 12)),
+                  label: Text(l10n.btnRecheck, style: const TextStyle(fontSize: 12)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1372,7 +1426,7 @@ class _HomeTab extends StatelessWidget {
                     Row(
                       children: [
                         Text(
-                          '最近检测: $checkedAt',
+                          l10n.lastChecked(checkedAt),
                           style:
                               const TextStyle(color: _kTextFaint, fontSize: 11),
                         ),
@@ -1399,9 +1453,9 @@ class _HomeTab extends StatelessWidget {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: _kBorder),
                         ),
-                        child: const Text(
-                          '点击“重测”开始连通性检查',
-                          style: TextStyle(color: _kTextMuted, fontSize: 13),
+                        child: Text(
+                          l10n.hintClickRecheck,
+                          style: const TextStyle(color: _kTextMuted, fontSize: 13),
                         ),
                       ),
                     if (snapshot != null)
@@ -1411,8 +1465,8 @@ class _HomeTab extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               _HomeBlockCard(
-                title: '浏览器 DNS 专项检测',
-                subtitle: '定位“连通性通过但浏览器打不开域名”',
+                title: l10n.browserDnsTitle,
+                subtitle: l10n.browserDnsSubtitle,
                 trailing: TextButton.icon(
                   onPressed: browserDnsLoading
                       ? null
@@ -1430,7 +1484,7 @@ class _HomeTab extends StatelessWidget {
                               strokeWidth: 2, color: _kBrand),
                         )
                       : const Icon(Icons.refresh, size: 14),
-                  label: const Text('重测', style: TextStyle(fontSize: 12)),
+                  label: Text(l10n.btnRecheck, style: const TextStyle(fontSize: 12)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1438,7 +1492,7 @@ class _HomeTab extends StatelessWidget {
                     Row(
                       children: [
                         Text(
-                          '最近检测: $browserDnsCheckedAt',
+                          l10n.lastChecked(browserDnsCheckedAt),
                           style:
                               const TextStyle(color: _kTextFaint, fontSize: 11),
                         ),
@@ -1465,9 +1519,9 @@ class _HomeTab extends StatelessWidget {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: _kBorder),
                         ),
-                        child: const Text(
-                          '点击“重测”开始浏览器 DNS 专项排查',
-                          style: TextStyle(color: _kTextMuted, fontSize: 13),
+                        child: Text(
+                          l10n.hintClickRecheckBrowserDns,
+                          style: const TextStyle(color: _kTextMuted, fontSize: 13),
                         ),
                       ),
                     if (browserDnsSnapshot != null)
@@ -1477,8 +1531,8 @@ class _HomeTab extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               _HomeBlockCard(
-                title: '节点切换',
-                subtitle: '当前组：$_kMainProxyGroup',
+                title: l10n.nodeSwitchTitle,
+                subtitle: l10n.nodeSwitchSubtitle(_kMainProxyGroup),
                 trailing: isSwitchingNode
                     ? const SizedBox(
                         width: 16,
@@ -1488,9 +1542,9 @@ class _HomeTab extends StatelessWidget {
                       )
                     : null,
                 child: nodes.isEmpty
-                    ? const Text(
-                        '暂无节点，请先在 Subscriptions 导入订阅',
-                        style: TextStyle(color: _kTextMuted, fontSize: 13),
+                    ? Text(
+                        l10n.hintNoNodes,
+                        style: const TextStyle(color: _kTextMuted, fontSize: 13),
                       )
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1540,7 +1594,7 @@ class _HomeTab extends StatelessWidget {
                               foregroundColor: _kTextMuted,
                               padding: EdgeInsets.zero,
                             ),
-                            child: const Text('查看完整节点列表  →'),
+                            child: Text(l10n.linkViewAllNodes),
                           ),
                         ],
                       ),
@@ -1624,43 +1678,42 @@ class _ConnectivityPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── 出口 IP ──────────────────────────────────────────────
-        const _SectionLabel(label: '出口 IP'),
+        _SectionLabel(label: l10n.sectionExitIp),
         const SizedBox(height: 8),
         _IpGroup(
-          categoryTag: '直连',
+          categoryTag: l10n.categoryDirect,
           tagColor: _kBrand,
-          subtitle: '绕过手机 VPN，经路由器直出',
+          subtitle: l10n.directSubtitle,
           results: snapshot.directIpResults,
         ),
         const SizedBox(height: 6),
         _IpGroup(
-          categoryTag: 'VPN 出口',
+          categoryTag: l10n.categoryVpnExit,
           tagColor: const Color(0xFF64B5F6),
-          subtitle: '经手机 ClashForge 代理',
+          subtitle: l10n.vpnExitSubtitle,
           results: snapshot.proxyIpResults,
         ),
         const SizedBox(height: 14),
-        // ── 访问检查 ─────────────────────────────────────────────
-        const _SectionLabel(label: '访问检查'),
+        _SectionLabel(label: l10n.sectionAccessCheck),
         const SizedBox(height: 8),
         if (snapshot.domesticResults.isNotEmpty) ...[
-          const _CategoryTag(label: '直连路径', color: _kBrand),
+          _CategoryTag(label: l10n.categoryDirectPath, color: _kBrand),
           const SizedBox(height: 6),
           ...snapshot.domesticResults.map((r) => _SiteCheckRow(result: r)),
           const SizedBox(height: 8),
         ],
         if (snapshot.foreignResults.isNotEmpty) ...[
-          const _CategoryTag(label: 'VPN 代理', color: Color(0xFF64B5F6)),
+          _CategoryTag(label: l10n.categoryVpnProxy, color: const Color(0xFF64B5F6)),
           const SizedBox(height: 6),
           ...snapshot.foreignResults.map((r) => _SiteCheckRow(result: r)),
           const SizedBox(height: 8),
         ],
         if (snapshot.aiResults.isNotEmpty) ...[
-          const _CategoryTag(label: 'AI · VPN 代理', color: Color(0xFF9C6DFF)),
+          _CategoryTag(label: l10n.categoryAiVpnProxy, color: const Color(0xFF9C6DFF)),
           const SizedBox(height: 6),
           ...snapshot.aiResults.map((r) => _SiteCheckRow(result: r)),
         ],
@@ -1754,6 +1807,7 @@ class _IpCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final resolved = info != null;
     final badgeColor = resolved ? _kConnected : _kTextFaint;
     return Container(
@@ -1786,7 +1840,7 @@ class _IpCard extends StatelessWidget {
                   border: Border.all(color: badgeColor.withAlpha(100)),
                 ),
                 child: Text(
-                  resolved ? '已解析' : '未能获取',
+                  resolved ? l10n.ipResolved : l10n.ipFailed,
                   style: TextStyle(
                       color: badgeColor,
                       fontSize: 9,
@@ -1823,6 +1877,7 @@ class _SiteCheckRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final tone = result.ok ? _kConnected : _kError;
     return Padding(
       padding: const EdgeInsets.only(bottom: 7),
@@ -1856,7 +1911,7 @@ class _SiteCheckRow extends StatelessWidget {
                     border: Border.all(color: tone.withAlpha(100)),
                   ),
                   child: Text(
-                    result.ok ? '正常' : '异常',
+                    result.ok ? l10n.siteStatusOk : l10n.siteStatusError,
                     style: TextStyle(
                         color: tone,
                         fontSize: 10,
@@ -1920,6 +1975,7 @@ class _BrowserDnsPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final tone = snapshot.healthy ? _kConnected : _kError;
 
     return Container(
@@ -1935,10 +1991,10 @@ class _BrowserDnsPane extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  '浏览器 DNS 路径',
-                  style: TextStyle(
+                  l10n.browserDnsPathLabel,
+                  style: const TextStyle(
                       color: _kTextHi,
                       fontSize: 14,
                       fontWeight: FontWeight.w600),
@@ -1952,7 +2008,7 @@ class _BrowserDnsPane extends StatelessWidget {
                   border: Border.all(color: tone.withAlpha(120)),
                 ),
                 child: Text(
-                  snapshot.healthy ? '正常' : '风险',
+                  snapshot.healthy ? l10n.statusHealthy : l10n.statusRisk,
                   style: TextStyle(
                       color: tone, fontSize: 11, fontWeight: FontWeight.w600),
                 ),
@@ -2046,61 +2102,70 @@ class _ProxiesTab extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
             child: Row(
               children: [
-                const Text('Proxies',
-                    style: TextStyle(
-                        color: _kTextHi,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: -0.5)),
-                const Spacer(),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _kBrand.withAlpha(18),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _kBrand.withAlpha(55)),
-                  ),
-                  child: Text('${nodes.length} nodes',
+                Builder(builder: (context) {
+                  final l10n = AppLocalizations.of(context);
+                  return Text(l10n.proxiesTitle,
                       style: const TextStyle(
-                          color: _kBrand,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600)),
-                ),
+                          color: _kTextHi,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: -0.5));
+                }),
+                const Spacer(),
+                Builder(builder: (context) {
+                  final l10n = AppLocalizations.of(context);
+                  return Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _kBrand.withAlpha(18),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kBrand.withAlpha(55)),
+                    ),
+                    child: Text(l10n.nodesCount(nodes.length),
+                        style: const TextStyle(
+                            color: _kBrand,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  );
+                }),
               ],
             ),
           ),
           Expanded(
             child: nodes.isEmpty
                 ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 72,
-                          height: 72,
-                          decoration: BoxDecoration(
-                            color: _kBrand.withAlpha(15),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: _kBrand.withAlpha(40)),
+                    child: Builder(builder: (context) {
+                      final l10n = AppLocalizations.of(context);
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 72,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              color: _kBrand.withAlpha(15),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: _kBrand.withAlpha(40)),
+                            ),
+                            child: const Icon(Icons.cloud_off_outlined,
+                                size: 34, color: _kBrand),
                           ),
-                          child: const Icon(Icons.cloud_off_outlined,
-                              size: 34, color: _kBrand),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text('No nodes yet',
-                            style: TextStyle(
-                                color: _kTextHi,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 6),
-                        const Text(
-                            'Add a subscription in the\nSubscriptions tab',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                color: _kTextMuted, height: 1.5, fontSize: 13)),
-                      ],
-                    ),
+                          const SizedBox(height: 16),
+                          Text(l10n.noNodesYet,
+                              style: const TextStyle(
+                                  color: _kTextHi,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 6),
+                          Text(
+                              l10n.noNodesHint,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  color: _kTextMuted, height: 1.5, fontSize: 13)),
+                        ],
+                      );
+                    }),
                   )
                 : ListView.separated(
                     padding:
@@ -2309,10 +2374,11 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         logger.info('subscription', 'Fetch response',
             fields: {'status': statusCode, 'bytes': body.length});
         if (statusCode != 200) {
+          if (!mounted) return;
           setState(() {
             _loading = false;
             _success = false;
-            _message = 'Fetch failed: HTTP $statusCode';
+            _message = AppLocalizations.of(context).fetchFailed(statusCode);
           });
           return;
         }
@@ -2341,17 +2407,19 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 
       widget.onImported(parsed,
           url: input.startsWith('http') ? input : '', nickname: nickname);
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _success = true;
-        _message = 'Imported ${parsed.proxies.length} nodes as "$nickname"';
+        _message = AppLocalizations.of(context).importedNodes(parsed.proxies.length, nickname);
       });
     } catch (e) {
       logger.error('subscription', 'Import error: $e');
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _success = false;
-        _message = 'Error: $e';
+        _message = AppLocalizations.of(context).connError(e.toString());
       });
     }
   }
@@ -2369,10 +2437,11 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       logger.info('subscription', 'Parsed pasted nodes',
           fields: {'count': parsed.proxies.length, 'has_custom_rules': parsed.hasCustomRules});
       if (parsed.proxies.isEmpty) {
+        if (!mounted) return;
         setState(() {
           _pasteLoading = false;
           _pasteSuccess = false;
-          _pasteMessage = '未识别到有效节点，请检查格式（支持 ss:// vmess:// trojan:// vless:// 及 Clash YAML）';
+          _pasteMessage = AppLocalizations.of(context).noValidNodes;
         });
         return;
       }
@@ -2391,18 +2460,19 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       }
 
       widget.onImported(parsed, url: '', nickname: nickname);
+      if (!mounted) return;
       setState(() {
         _pasteLoading = false;
         _pasteSuccess = true;
-        _pasteMessage =
-            '已导入 ${parsed.proxies.length} 个节点，配置已生成（使用 Loyalsoldier 规则），可直接启动 VPN';
+        _pasteMessage = AppLocalizations.of(context).importedFromPaste(parsed.proxies.length);
       });
     } catch (e) {
       logger.error('subscription', 'Paste import error: $e');
+      if (!mounted) return;
       setState(() {
         _pasteLoading = false;
         _pasteSuccess = false;
-        _pasteMessage = '解析失败: $e';
+        _pasteMessage = AppLocalizations.of(context).parseFailedMsg(e);
       });
     }
   }
@@ -2430,17 +2500,18 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 
   Future<String?> _showNicknameDialog(String defaultName) {
     final controller = TextEditingController(text: defaultName);
+    final l10n = AppLocalizations.of(context);
     return showDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Name this subscription'),
+        title: Text(l10n.subNameDialogTitle),
         content: TextField(
           controller: controller,
           autofocus: false,
           style: const TextStyle(color: _kTextHi, fontSize: 14),
           decoration: InputDecoration(
-            hintText: 'e.g. Work VPN',
+            hintText: l10n.subNameHint,
             hintStyle: const TextStyle(color: _kTextFaint),
             filled: true,
             fillColor: _kBg,
@@ -2460,7 +2531,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: _kTextMuted)),
+            child: Text(l10n.btnCancel, style: const TextStyle(color: _kTextMuted)),
           ),
           FilledButton(
             key: const Key('save_nickname'),
@@ -2474,7 +2545,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
               final name = controller.text.trim();
               Navigator.pop(ctx, name.isEmpty ? defaultName : name);
             },
-            child: const Text('Save'),
+            child: Text(l10n.btnSave),
           ),
         ],
       ),
@@ -2492,15 +2563,16 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   }
 
   Future<void> _confirmDelete(Subscription sub) async {
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除订阅'),
-        content: Text('确认删除 "${sub.nickname}"？\n该操作不可撤销。'),
+        title: Text(l10n.deleteSubTitle),
+        content: Text(l10n.deleteSubContent(sub.nickname)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消', style: TextStyle(color: _kTextMuted)),
+            child: Text(l10n.btnCancel, style: const TextStyle(color: _kTextMuted)),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
@@ -2510,7 +2582,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                   borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
+            child: Text(l10n.btnDelete),
           ),
         ],
       ),
@@ -2565,46 +2637,55 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                         ),
                         if (isActive) ...[
                           const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _kBrand.withAlpha(30),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(color: _kBrand.withAlpha(80)),
-                            ),
-                            child: const Text('使用中',
-                                style: TextStyle(
-                                    color: _kBrand,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600)),
-                          ),
+                          Builder(builder: (ctx) {
+                            final l10n = AppLocalizations.of(ctx);
+                            return Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _kBrand.withAlpha(30),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: _kBrand.withAlpha(80)),
+                              ),
+                              child: Text(l10n.activeLabel,
+                                  style: const TextStyle(
+                                      color: _kBrand,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600)),
+                            );
+                          }),
                         ],
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      '${sub.nodes.length} 个节点${sub.isBuiltIn ? '' : _domainLabel(sub.url)}',
-                      style: const TextStyle(color: _kTextFaint, fontSize: 12),
-                    ),
+                    Builder(builder: (ctx) {
+                      final l10n = AppLocalizations.of(ctx);
+                      return Text(
+                        '${l10n.nodesCountSub(sub.nodes.length)}${sub.isBuiltIn ? '' : _domainLabel(sub.url)}',
+                        style: const TextStyle(color: _kTextFaint, fontSize: 12),
+                      );
+                    }),
                   ],
                 ),
               ),
               if (!isActive) ...[
                 const SizedBox(width: 8),
-                TextButton(
-                  onPressed: () => widget.onActivate(sub),
-                  style: TextButton.styleFrom(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    foregroundColor: _kBrand,
-                  ),
-                  child: const Text('切换',
-                      style:
-                          TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
+                Builder(builder: (ctx) {
+                  final l10n = AppLocalizations.of(ctx);
+                  return TextButton(
+                    onPressed: () => widget.onActivate(sub),
+                    style: TextButton.styleFrom(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      foregroundColor: _kBrand,
+                    ),
+                    child: Text(l10n.btnSwitch,
+                        style:
+                            const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  );
+                }),
               ],
               IconButton(
                 icon: const Icon(Icons.delete_outline,
@@ -2622,13 +2703,14 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         children: [
           const SizedBox(height: 20),
-          const Text('Subscriptions',
-              style: TextStyle(
+          Text(l10n.subscriptionsTitle,
+              style: const TextStyle(
                   color: _kTextHi,
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
@@ -2663,8 +2745,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                       child: const Icon(Icons.link, color: _kBrand, size: 17),
                     ),
                     const SizedBox(width: 10),
-                    const Text('SUBSCRIPTION URL',
-                        style: TextStyle(
+                    Text(l10n.subscriptionUrlLabel,
+                        style: const TextStyle(
                             color: _kTextFaint,
                             fontSize: 11,
                             letterSpacing: 1.2,
@@ -2726,7 +2808,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white54))
                         : const Icon(Icons.cloud_download, size: 18),
-                    label: Text(_loading ? 'Fetching…' : 'Import',
+                    label: Text(_loading ? l10n.btnFetching : l10n.btnImport,
                         style: const TextStyle(fontWeight: FontWeight.w600)),
                   ),
                 ),
@@ -2764,8 +2846,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                       child: const Icon(Icons.content_paste, color: _kConnected, size: 17),
                     ),
                     const SizedBox(width: 10),
-                    const Text('粘贴节点文本',
-                        style: TextStyle(
+                    Text(l10n.pasteNodesLabel,
+                        style: const TextStyle(
                             color: _kTextFaint,
                             fontSize: 11,
                             letterSpacing: 1.2,
@@ -2773,9 +2855,9 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  '支持 ss:// vmess:// trojan:// vless:// 链接或 Clash YAML，自动套用 Loyalsoldier 规则生成完整配置',
-                  style: TextStyle(color: _kTextMuted, fontSize: 12, height: 1.4),
+                Text(
+                  l10n.pasteNodesDesc,
+                  style: const TextStyle(color: _kTextMuted, fontSize: 12, height: 1.4),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -2823,7 +2905,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.black54))
                         : const Icon(Icons.bolt, size: 18),
-                    label: Text(_pasteLoading ? '解析中…' : '导入并生成配置',
+                    label: Text(_pasteLoading ? l10n.btnParsing : l10n.btnImportAndGenerate,
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                   ),
                 ),
@@ -2898,8 +2980,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
           // Saved subscriptions list
           if (widget.subscriptions.isNotEmpty) ...[
             const SizedBox(height: 28),
-            const Text('已保存的订阅',
-                style: TextStyle(
+            Text(l10n.savedSubscriptions,
+                style: const TextStyle(
                     color: _kTextMuted,
                     fontSize: 12,
                     letterSpacing: 0.8,
@@ -2919,19 +3001,77 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 // Tab 4 — Settings
 // ─────────────────────────────────────────────────────────────
 class _SettingsTab extends StatelessWidget {
-  const _SettingsTab({required this.nodeCount});
+  const _SettingsTab({
+    required this.nodeCount,
+    required this.onLocaleChanged,
+  });
   final int nodeCount;
+  final void Function(Locale) onLocaleChanged;
+
+  void _showLanguagePicker(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final current = Localizations.localeOf(context).languageCode;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: _kBorder, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(l10n.tileLanguageTitle,
+                style: const TextStyle(
+                    color: _kTextHi,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            _LanguageOption(
+              label: l10n.langEnglish,
+              selected: current == 'en',
+              onTap: () {
+                Navigator.pop(context);
+                onLocaleChanged(const Locale('en'));
+              },
+            ),
+            const SizedBox(height: 8),
+            _LanguageOption(
+              label: l10n.langChinese,
+              selected: current == 'zh',
+              onTap: () {
+                Navigator.pop(context);
+                onLocaleChanged(const Locale('zh'));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(24, 20, 24, 24),
-            child: Text('Settings',
-                style: TextStyle(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+            child: Text(l10n.settingsTitle,
+                style: const TextStyle(
                     color: _kTextHi,
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
@@ -2944,8 +3084,8 @@ class _SettingsTab extends StatelessWidget {
                 _SettingsTile(
                   iconColor: const Color(0xFF22D3EE),
                   icon: Icons.terminal_outlined,
-                  title: 'Logs',
-                  subtitle: 'Runtime events, VPN & core output',
+                  title: l10n.tileLogsTitle,
+                  subtitle: l10n.tileLogsSubtitle,
                   onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -2959,8 +3099,8 @@ class _SettingsTab extends StatelessWidget {
                 _SettingsTile(
                   iconColor: const Color(0xFF34D399),
                   icon: Icons.system_update_alt_outlined,
-                  title: 'Check for Updates',
-                  subtitle: 'See if a newer version is available',
+                  title: l10n.tileUpdatesTitle,
+                  subtitle: l10n.tileUpdatesSubtitle,
                   onTap: () => showModalBottomSheet(
                     context: context,
                     backgroundColor: _kCard,
@@ -2975,8 +3115,8 @@ class _SettingsTab extends StatelessWidget {
                 _SettingsTile(
                   iconColor: _kBrand,
                   icon: Icons.info_outline,
-                  title: 'About',
-                  subtitle: 'App version, runtime status, memory',
+                  title: l10n.tileAboutTitle,
+                  subtitle: l10n.tileAboutSubtitle,
                   onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -2986,10 +3126,59 @@ class _SettingsTab extends StatelessWidget {
                         ),
                       )),
                 ),
+                const SizedBox(height: 8),
+                _SettingsTile(
+                  iconColor: const Color(0xFFFFB74D),
+                  icon: Icons.language_outlined,
+                  title: l10n.tileLanguageTitle,
+                  subtitle: l10n.tileLanguageSubtitle,
+                  onTap: () => _showLanguagePicker(context),
+                ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LanguageOption extends StatelessWidget {
+  const _LanguageOption({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: selected ? _kBrand.withAlpha(20) : _kBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: selected ? _kBrand.withAlpha(160) : _kBorder),
+        ),
+        child: Row(
+          children: [
+            Text(label,
+                style: TextStyle(
+                    color: selected ? _kBrand : _kTextHi,
+                    fontSize: 15,
+                    fontWeight:
+                        selected ? FontWeight.w600 : FontWeight.normal)),
+            const Spacer(),
+            if (selected)
+              const Icon(Icons.check_circle, color: _kBrand, size: 18),
+          ],
+        ),
       ),
     );
   }
@@ -3120,10 +3309,11 @@ class _LogsTabState extends State<_LogsTab> {
   Future<void> _copyAll() async {
     await Clipboard.setData(ClipboardData(text: AppLogger.instance.export()));
     if (mounted) {
+      final l10n = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Logs copied to clipboard'),
-            duration: Duration(seconds: 2)),
+        SnackBar(
+            content: Text(l10n.logsCopied),
+            duration: const Duration(seconds: 2)),
       );
     }
   }
@@ -3132,6 +3322,7 @@ class _LogsTabState extends State<_LogsTab> {
   Widget build(BuildContext context) {
     final entries = _visible;
 
+    final l10n = AppLocalizations.of(context);
     return SafeArea(
       child: Column(
         children: [
@@ -3146,27 +3337,27 @@ class _LogsTabState extends State<_LogsTab> {
                     onPressed: () => Navigator.pop(context),
                     padding: EdgeInsets.zero,
                   ),
-                const Text('Logs',
-                    style: TextStyle(
+                Text(l10n.logsTitle,
+                    style: const TextStyle(
                         color: _kTextHi,
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
                         letterSpacing: -0.5)),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Copy all',
+                  tooltip: l10n.tooltipCopyAll,
                   icon: const Icon(Icons.copy_outlined,
                       size: 19, color: _kTextMuted),
                   onPressed: _copyAll,
                 ),
                 IconButton(
-                  tooltip: _autoScroll ? 'Auto-scroll on' : 'Auto-scroll off',
+                  tooltip: _autoScroll ? l10n.tooltipAutoScrollOn : l10n.tooltipAutoScrollOff,
                   icon: Icon(Icons.vertical_align_bottom,
                       size: 19, color: _autoScroll ? _kBrand : _kTextFaint),
                   onPressed: () => setState(() => _autoScroll = !_autoScroll),
                 ),
                 IconButton(
-                  tooltip: 'Clear',
+                  tooltip: l10n.tooltipClear,
                   icon: const Icon(Icons.delete_outline,
                       size: 19, color: _kTextMuted),
                   onPressed: () {
@@ -3230,8 +3421,8 @@ class _LogsTabState extends State<_LogsTab> {
                         const SizedBox(height: 12),
                         Text(
                           _filter == 'all'
-                              ? 'No logs yet.'
-                              : 'No $_filter logs.',
+                              ? l10n.noLogsYet
+                              : l10n.noFilterLogs(_filter),
                           style: const TextStyle(color: _kTextMuted),
                         ),
                       ],
@@ -3400,6 +3591,8 @@ class _AboutTabState extends State<_AboutTab> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+
     Widget row(String label, String value, {Color? valueColor}) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 10),
           child: Row(
@@ -3469,8 +3662,8 @@ class _AboutTabState extends State<_AboutTab> {
                   onPressed: () => Navigator.pop(context),
                   padding: EdgeInsets.zero,
                 ),
-              const Text('About',
-                  style: TextStyle(
+              Text(l10n.aboutTitle,
+                  style: const TextStyle(
                       color: _kTextHi,
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
@@ -3490,42 +3683,42 @@ class _AboutTabState extends State<_AboutTab> {
                     padding: EdgeInsets.zero),
             ]),
             const SizedBox(height: 20),
-            section('APPLICATION', [
-              row('Version', '$appVersion ($buildNum)'),
-              row('Nodes loaded', '${widget.nodeCount}'),
-              row('Device ABI', abi),
+            section(l10n.sectionApplication, [
+              row(l10n.rowVersion, '$appVersion ($buildNum)'),
+              row(l10n.rowNodesLoaded, '${widget.nodeCount}'),
+              row(l10n.rowDeviceAbi, abi),
             ]),
             const SizedBox(height: 14),
-            section('UPDATE', [
+            section(l10n.sectionUpdate, [
               if (_updateChecking)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Row(children: [
-                    SizedBox(
+                    const SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: _kBrand)),
-                    SizedBox(width: 12),
-                    Text('Checking for updates…',
-                        style: TextStyle(color: _kTextMuted, fontSize: 14)),
+                    const SizedBox(width: 12),
+                    Text(l10n.checkingUpdates,
+                        style: const TextStyle(color: _kTextMuted, fontSize: 14)),
                   ]),
                 )
               else if (!_updateChecked)
-                row('Status', '—')
+                row(l10n.updateStatus, '—')
               else if (_updateInfo == null)
-                row('Status', 'Could not check', valueColor: _kError)
+                row(l10n.updateStatus, l10n.updateCouldNotCheck, valueColor: _kError)
               else if (!_updateInfo!.isNewerThan(appVersion))
-                row('Status', 'Up to date  ✓', valueColor: _kConnected)
+                row(l10n.updateStatus, l10n.updateUpToDate, valueColor: _kConnected)
               else ...[
-                row('Latest', _updateInfo!.tag, valueColor: _kBrand),
+                row(l10n.rowLatest, _updateInfo!.tag, valueColor: _kBrand),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10, top: 4),
                   child: SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.download_rounded, size: 18),
-                      label: Text('Download ${_updateInfo!.tag}'),
+                      label: Text(l10n.downloadVersion(_updateInfo!.tag)),
                       onPressed: () => _launchUrl(_updateInfo!.htmlUrl),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _kBrand,
@@ -3544,27 +3737,28 @@ class _AboutTabState extends State<_AboutTab> {
                   child: TextButton(
                     onPressed: _checkUpdate,
                     style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                    child: const Text('Re-check',
-                        style: TextStyle(color: _kTextFaint, fontSize: 12)),
+                    child: Text(l10n.btnRecheck2,
+                        style: const TextStyle(color: _kTextFaint, fontSize: 12)),
                   ),
                 ),
             ]),
             const SizedBox(height: 14),
-            section('RUNTIME', [
-              row('VPN', vpnRunning ? 'Running' : 'Stopped',
+            section(l10n.sectionRuntime, [
+              row(l10n.rowVpn, vpnRunning ? l10n.rowRunning : l10n.rowStopped,
                   valueColor: vpnRunning ? _kConnected : _kTextMuted),
-              row('Mihomo', mihomoRunning ? 'Running (PID $pid)' : 'Stopped',
+              row(l10n.rowMihomo,
+                  mihomoRunning ? l10n.rowMihomoRunning(pid) : l10n.rowStopped,
                   valueColor: mihomoRunning ? _kConnected : _kTextMuted),
             ]),
             const SizedBox(height: 14),
-            section('MEMORY', [
-              row('App (PSS)', '${appPss.toStringAsFixed(1)} MB'),
-              row('Available', '${avail.toStringAsFixed(0)} MB'),
+            section(l10n.sectionMemory, [
+              row(l10n.rowAppPss, '${appPss.toStringAsFixed(1)} MB'),
+              row(l10n.rowAvailable, '${avail.toStringAsFixed(0)} MB'),
             ]),
             const SizedBox(height: 20),
-            const Center(
-                child: Text('Pull down to refresh',
-                    style: TextStyle(color: _kTextFaint, fontSize: 12))),
+            Center(
+                child: Text(l10n.pullDownToRefresh,
+                    style: const TextStyle(color: _kTextFaint, fontSize: 12))),
           ],
         ),
       ),
@@ -3608,6 +3802,7 @@ class _UpdateSheetState extends State<_UpdateSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final isNewer = _info != null && _info!.isNewerThan(_currentVersion);
 
     return Padding(
@@ -3640,8 +3835,8 @@ class _UpdateSheetState extends State<_UpdateSheet> {
                   color: Color(0xFF34D399), size: 20),
             ),
             const SizedBox(width: 12),
-            const Text('Check for Updates',
-                style: TextStyle(
+            Text(l10n.updateSheetTitle,
+                style: const TextStyle(
                     color: _kTextHi,
                     fontSize: 18,
                     fontWeight: FontWeight.bold)),
@@ -3650,17 +3845,17 @@ class _UpdateSheetState extends State<_UpdateSheet> {
           if (_loading) ...[
             const Center(child: CircularProgressIndicator(color: _kBrand)),
             const SizedBox(height: 12),
-            const Center(
-                child: Text('Checking…',
-                    style: TextStyle(color: _kTextMuted, fontSize: 13))),
+            Center(
+                child: Text(l10n.updateChecking,
+                    style: const TextStyle(color: _kTextMuted, fontSize: 13))),
           ] else if (_info == null) ...[
-            const Row(children: [
-              Icon(Icons.warning_amber_rounded, color: _kError, size: 22),
-              SizedBox(width: 10),
+            Row(children: [
+              const Icon(Icons.warning_amber_rounded, color: _kError, size: 22),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                    'Could not check for updates.\nVerify internet connection.',
-                    style: TextStyle(color: _kTextMuted, fontSize: 14)),
+                    l10n.updateCouldNotCheckLong,
+                    style: const TextStyle(color: _kTextMuted, fontSize: 14)),
               ),
             ]),
           ] else if (!isNewer) ...[
@@ -3672,12 +3867,12 @@ class _UpdateSheetState extends State<_UpdateSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('You are up to date',
-                        style: TextStyle(
+                    Text(l10n.updateUpToDateTitle,
+                        style: const TextStyle(
                             color: _kConnected,
                             fontSize: 15,
                             fontWeight: FontWeight.w600)),
-                    Text('Version: ${_info!.tag}',
+                    Text(l10n.updateVersionLabel(_info!.tag),
                         style:
                             const TextStyle(color: _kTextMuted, fontSize: 13)),
                   ],
@@ -3692,8 +3887,8 @@ class _UpdateSheetState extends State<_UpdateSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Update available',
-                        style: TextStyle(
+                    Text(l10n.updateAvailableTitle,
+                        style: const TextStyle(
                             color: _kBrand,
                             fontSize: 15,
                             fontWeight: FontWeight.w600)),
@@ -3710,7 +3905,7 @@ class _UpdateSheetState extends State<_UpdateSheet> {
               width: double.infinity,
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.download_rounded, size: 18),
-                label: Text('Download ${_info!.tag}'),
+                label: Text(l10n.downloadBtn(_info!.tag)),
                 onPressed: () => _launchUrl(_info!.htmlUrl),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _kBrand,
@@ -3728,8 +3923,8 @@ class _UpdateSheetState extends State<_UpdateSheet> {
               child: TextButton(
                 onPressed: () => _launchUrl(
                     'https://github.com/wujun4code/clashforge/releases'),
-                child: const Text('All releases →',
-                    style: TextStyle(color: _kTextMuted, fontSize: 13)),
+                child: Text(l10n.allReleases,
+                    style: const TextStyle(color: _kTextMuted, fontSize: 13)),
               ),
             ),
         ],
