@@ -14,7 +14,7 @@ void main() {
     expect(find.byIcon(Icons.power_settings_new), findsOneWidget);
     expect(find.text('Tap to connect'), findsOneWidget);
     expect(find.text('Home'), findsOneWidget);
-    expect(find.text('Proxies'), findsOneWidget);
+    expect(find.text('Routes'), findsOneWidget);
     expect(find.text('Subscriptions'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
   });
