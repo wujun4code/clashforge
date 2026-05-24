@@ -135,7 +135,7 @@ void main() {
 
       // ── Step 2: Verify nodes in Proxies tab ─────────────────────────
       _log('Checking Proxies tab');
-      await tester.tap(find.text('Proxies'));
+      await tester.tap(find.text('Routes'));
       await tester.pumpAndSettle();
       expect(
         find.text('No nodes yet').evaluate().isEmpty,
