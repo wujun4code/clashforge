@@ -31,24 +31,10 @@ void main() {
         return;
       }
 
-      // IntegrationTestWidgetsFlutterBinding creates its own semantics handle
-      // for the live-test overlay and schedules disposal via addTearDown —
-      // but _endOfTestVerifications runs *before* addTearDown callbacks, so
-      // the handle is still "active" at check time.  Suppress this specific
-      // false-positive by intercepting FlutterError.onError for the duration
-      // of this test; the original handler is restored in addTearDown (which
-      // runs after _endOfTestVerifications, but that's fine — by then the
-      // suppression has already done its job).
-      final savedOnError = FlutterError.onError;
-      FlutterError.onError = (FlutterErrorDetails details) {
-        if (details.exception is FlutterError &&
-            (details.exception as FlutterError).message
-                .contains('SemanticsHandle was active')) {
-          return; // suppress the binding's un-disposed handle false-positive
-        }
-        savedOnError?.call(details);
-      };
-      addTearDown(() => FlutterError.onError = savedOnError);
+      // Keep semantics disabled for the whole integration test run.
+      // This avoids sporadic platform-driven semantics toggles that can leave
+      // an outstanding SemanticsHandle at end-of-test on emulator runners.
+      tester.binding.platformDispatcher.semanticsEnabledTestValue = false;
 
       await tester.pumpWidget(const ClashForgeApp());
       await tester.pumpAndSettle();
@@ -56,7 +42,8 @@ void main() {
       // ── Round 1: Baseline IP (no VPN) ──────────────────────────────
       _log('Round 1: probing baseline IP (no VPN)');
       final baselineIp = await _probeIp();
-      expect(baselineIp, isNotEmpty, reason: 'Emulator must have network access before VPN');
+      expect(baselineIp, isNotEmpty,
+          reason: 'Emulator must have network access before VPN');
       _log('Round 1 baseline: $baselineIp');
 
       // ── Step 1: Import subscription ─────────────────────────────────
@@ -65,7 +52,8 @@ void main() {
       await tester.pumpAndSettle();
 
       _log('Entering subscription URL');
-      await tester.enterText(find.byKey(const Key('subscription_url_field')), _subUrl);
+      await tester.enterText(
+          find.byKey(const Key('subscription_url_field')), _subUrl);
       await tester.pumpAndSettle();
 
       _log('Tapping Import');
@@ -76,9 +64,10 @@ void main() {
       _log('Waiting for subscription fetch…');
       await _waitUntil(
         tester,
-        () => find.text('Save').evaluate().isNotEmpty ||
-              find.textContaining('Error').evaluate().isNotEmpty ||
-              find.textContaining('failed').evaluate().isNotEmpty,
+        () =>
+            find.text('Save').evaluate().isNotEmpty ||
+            find.textContaining('Error').evaluate().isNotEmpty ||
+            find.textContaining('failed').evaluate().isNotEmpty,
         timeout: const Duration(seconds: 30),
         label: 'subscription fetch',
       );
@@ -117,10 +106,11 @@ void main() {
       // animation plays, causing find.textContaining(skipOffstage:true) to miss it.
       await _waitUntil(
         tester,
-        () => _hasText(tester, '已保存') ||
-              _hasText(tester, 'Imported') ||
-              _hasText(tester, 'nodes') ||
-              _hasText(tester, 'Error:'),
+        () =>
+            _hasText(tester, '已保存') ||
+            _hasText(tester, 'Imported') ||
+            _hasText(tester, 'nodes') ||
+            _hasText(tester, 'Error:'),
         timeout: const Duration(seconds: 60),
         label: 'import result',
       );
@@ -155,9 +145,13 @@ void main() {
       _log('Waiting for VPN to connect…');
       await _waitUntil(
         tester,
-        () => find.text('Connected').evaluate().isNotEmpty ||
-              find.textContaining('Error:').evaluate().isNotEmpty ||
-              find.text('Grant network permission, then tap again').evaluate().isNotEmpty,
+        () =>
+            find.text('Connected').evaluate().isNotEmpty ||
+            find.textContaining('Error:').evaluate().isNotEmpty ||
+            find
+                .text('Grant network permission, then tap again')
+                .evaluate()
+                .isNotEmpty,
         timeout: const Duration(seconds: 30),
         label: 'VPN connect',
       );
@@ -165,8 +159,12 @@ void main() {
       // VPN consent dialog appeared — the background CI adb loop (uiautomator dump + tap)
       // will dismiss it within a few seconds; onActivityResult then starts the VPN service.
       // Wait for the clicker, then tap the toggle again so Flutter gets 'started' → Connected.
-      if (find.text('Grant network permission, then tap again').evaluate().isNotEmpty) {
-        _log('[E2E] VPN consent dialog detected — waiting 15 s for CI clicker to dismiss it…');
+      if (find
+          .text('Grant network permission, then tap again')
+          .evaluate()
+          .isNotEmpty) {
+        _log(
+            '[E2E] VPN consent dialog detected — waiting 15 s for CI clicker to dismiss it…');
         await Future<void>.delayed(const Duration(seconds: 15));
         await tester.pumpAndSettle();
 
@@ -176,18 +174,21 @@ void main() {
 
         await _waitUntil(
           tester,
-          () => find.text('Connected').evaluate().isNotEmpty ||
-                find.textContaining('Error:').evaluate().isNotEmpty,
+          () =>
+              find.text('Connected').evaluate().isNotEmpty ||
+              find.textContaining('Error:').evaluate().isNotEmpty,
           timeout: const Duration(seconds: 30),
           label: 'VPN connect (after permission grant)',
         );
       }
 
       if (find.textContaining('Error:').evaluate().isNotEmpty) {
-        fail('[E2E] VPN connect error: ${_widgetText(find.textContaining("Error:"))}');
+        fail(
+            '[E2E] VPN connect error: ${_widgetText(find.textContaining("Error:"))}');
       }
 
-      expect(find.text('Connected'), findsOneWidget, reason: 'VPN must report Connected');
+      expect(find.text('Connected'), findsOneWidget,
+          reason: 'VPN must report Connected');
       _log('VPN connected (UI)');
 
       // Give mihomo time to fully start and establish proxy connections
@@ -212,9 +213,11 @@ void main() {
       );
 
       // Mihomo specifically — text is "Running (PID …)"
-      final mihomoRunning = find.textContaining('Running (PID').evaluate().isNotEmpty;
+      final mihomoRunning =
+          find.textContaining('Running (PID').evaluate().isNotEmpty;
       if (!mihomoRunning) {
-        fail('[E2E] mihomo is not running — binary may be incompatible with emulator ABI');
+        fail(
+            '[E2E] mihomo is not running — binary may be incompatible with emulator ABI');
       }
       _log('VPN service: running. Mihomo: running');
 
@@ -226,7 +229,8 @@ void main() {
       // VPN TUN and returns the baseline (Azure runner) IP — not the proxy IP.
       // Loopback (127.0.0.1) also bypasses Android VPN routing, so mihomo port
       // 7890 is reachable directly; mihomo then forwards through the proxy node.
-      _log('Round 2: probing IP via mihomo HTTP proxy 127.0.0.1:7890 (up to 5 attempts)…');
+      _log(
+          'Round 2: probing IP via mihomo HTTP proxy 127.0.0.1:7890 (up to 5 attempts)…');
       String vpnIp = '';
       for (var attempt = 1; attempt <= 5; attempt++) {
         vpnIp = await _probeIpViaHttpProxy('127.0.0.1', 7890);
@@ -236,11 +240,13 @@ void main() {
         await tester.pumpAndSettle();
       }
       _log('Round 2 VPN IP: $vpnIp');
-      expect(vpnIp, isNotEmpty, reason: 'Network must be reachable through VPN');
+      expect(vpnIp, isNotEmpty,
+          reason: 'Network must be reachable through VPN');
       expect(
         vpnIp,
         isNot(equals(baselineIp)),
-        reason: 'Exit IP must differ from baseline — traffic must route through proxy',
+        reason:
+            'Exit IP must differ from baseline — traffic must route through proxy',
       );
       _log('[PASS] PR-01 Exit IP changed — $baselineIp → $vpnIp');
 
@@ -253,27 +259,32 @@ void main() {
       if (proxyServer.isNotEmpty) {
         final serverIp = await _resolveDoH(proxyServer);
         if (serverIp.isEmpty) {
-          _log('[WARN] PR-01b Server IP resolve — DoH lookup failed for $proxyServer');
+          _log(
+              '[WARN] PR-01b Server IP resolve — DoH lookup failed for $proxyServer');
         } else if (vpnIp == serverIp) {
-          _log('[PASS] PR-01b Exit IP matches proxy server — $vpnIp == $serverIp (server: $proxyServer)');
+          _log(
+              '[PASS] PR-01b Exit IP matches proxy server — $vpnIp == $serverIp (server: $proxyServer)');
         } else {
           // In CI the exit is a Tor relay, so exit IP ≠ proxy server — expected.
-          _log('[WARN] PR-01b Exit IP vs server — $vpnIp ≠ $serverIp (server: $proxyServer); OK if Tor/multi-hop relay');
+          _log(
+              '[WARN] PR-01b Exit IP vs server — $vpnIp ≠ $serverIp (server: $proxyServer); OK if Tor/multi-hop relay');
         }
       } else {
-        _log('[WARN] PR-01b Proxy server query — could not read active node from mihomo API at 127.0.0.1:9090');
+        _log(
+            '[WARN] PR-01b Proxy server query — could not read active node from mihomo API at 127.0.0.1:9090');
       }
 
       // ── PR-02: Target website connectivity via mihomo HTTP proxy ─────────
       // All probes route through 127.0.0.1:7890 (mihomo HTTP proxy) so they
       // work even when TUN fails (packages.xml permission denied on real devices).
       // Mirrors OpenWrt probe.sh PR-02 target list.
-      _log('[E2E] PR-02: connectivity probes via mihomo HTTP proxy 127.0.0.1:7890…');
+      _log(
+          '[E2E] PR-02: connectivity probes via mihomo HTTP proxy 127.0.0.1:7890…');
       final pr02Targets = {
-        'taobao':   'https://www.taobao.com',
+        'taobao': 'https://www.taobao.com',
         'music163': 'https://music.163.com',
-        'github':   'https://github.com',
-        'google':   'https://www.google.com',
+        'github': 'https://github.com',
+        'google': 'https://www.google.com',
       };
       final conn = await _probeConnectivity(pr02Targets);
       var pr02Ok = 0;
@@ -288,7 +299,8 @@ void main() {
       expect(
         googleCode >= 200 && googleCode < 400,
         isTrue,
-        reason: '[E2E] PR-02 FAIL: google.com not reachable via VPN proxy (HTTP $googleCode) — proxy node may be down or routing is broken',
+        reason:
+            '[E2E] PR-02 FAIL: google.com not reachable via VPN proxy (HTTP $googleCode) — proxy node may be down or routing is broken',
       );
 
       // ── Step 5: Disconnect VPN ──────────────────────────────────────
@@ -309,18 +321,9 @@ void main() {
         timeout: const Duration(seconds: 20),
         label: 'VPN disconnect',
       );
-      expect(find.text('Tap to connect'), findsOneWidget, reason: 'VPN must be off');
+      expect(find.text('Tap to connect'), findsOneWidget,
+          reason: 'VPN must be off');
       _log('VPN disconnected (UI)');
-
-      // All functional assertions are done. Switch to a suppress-all error
-      // handler so that late-arriving async Flutter errors from VPN teardown
-      // (e.g. a method-channel callback from the service after disconnect)
-      // do not set _pendingExceptionDetails and trigger the binding's
-      // "unexpected additional errors" assertion, which would cause the test
-      // to hang until the 9-minute timeout.
-      FlutterError.onError = (FlutterErrorDetails details) {
-        debugPrint('[E2E] post-disconnect Flutter error (suppressed): ${details.exception}');
-      };
 
       // Allow kernel to release the TUN fd and clear routes
       await Future<void>.delayed(const Duration(seconds: 5));
@@ -337,6 +340,8 @@ void main() {
       _log('Round 3 ✓ IP restored ($restoredIp == $baselineIp)');
 
       _log('=== E2E COMPLETE ✓ ===');
+      await tester.pump(const Duration(milliseconds: 200));
+      _drainPendingFlutterExceptions(tester);
     },
     timeout: const Timeout(Duration(minutes: 9)),
     semanticsEnabled: false,
@@ -392,9 +397,8 @@ Future<String> _probeIpViaHttpProxy(String proxyHost, int proxyPort) async {
         ..findProxy = (uri) => 'PROXY $proxyHost:$proxyPort';
       try {
         final uri = Uri.parse(endpoint);
-        final request = await httpClient
-            .getUrl(uri)
-            .timeout(const Duration(seconds: 15));
+        final request =
+            await httpClient.getUrl(uri).timeout(const Duration(seconds: 15));
         final response =
             await request.close().timeout(const Duration(seconds: 15));
         if (response.statusCode == 200) {
@@ -425,8 +429,9 @@ String _visibleTexts(WidgetTester tester) => tester.allWidgets
 // that are briefly off-stage during the dialog close animation (the banner is set
 // in the underlying route while the dialog route is still animating out).
 // This helper uses allWidgets (no offstage filter) to match what _visibleTexts sees.
-bool _hasText(WidgetTester tester, String substring) =>
-    tester.allWidgets.whereType<Text>().any((t) => (t.data ?? '').contains(substring));
+bool _hasText(WidgetTester tester, String substring) => tester.allWidgets
+    .whereType<Text>()
+    .any((t) => (t.data ?? '').contains(substring));
 
 Future<void> _waitUntil(
   WidgetTester tester,
@@ -438,9 +443,23 @@ Future<void> _waitUntil(
   while (!condition()) {
     if (DateTime.now().isAfter(deadline)) {
       _log('Timeout $label — visible texts: ${_visibleTexts(tester)}');
-      throw Exception('[E2E] Timed out waiting for: $label (${timeout.inSeconds}s)');
+      throw Exception(
+          '[E2E] Timed out waiting for: $label (${timeout.inSeconds}s)');
     }
     await tester.pump(const Duration(milliseconds: 500));
+  }
+}
+
+void _drainPendingFlutterExceptions(WidgetTester tester) {
+  while (true) {
+    final error = tester.takeException();
+    if (error == null) return;
+    final message = error.toString();
+    if (message.contains('SemanticsHandle was active')) {
+      _log('[WARN] Suppressed known semantics teardown false-positive');
+      continue;
+    }
+    fail('[E2E] Unexpected Flutter exception: $message');
   }
 }
 
@@ -478,8 +497,7 @@ Future<String> _queryMihomoProxyServer() async {
 // Routes through mihomo HTTP proxy (127.0.0.1:7890) so it works whether
 // TUN is active or not (loopback bypasses Android VPN routing entirely).
 Future<String> _resolveDoH(String hostname) async {
-  final httpClient = HttpClient()
-    ..findProxy = (_) => 'PROXY 127.0.0.1:7890';
+  final httpClient = HttpClient()..findProxy = (_) => 'PROXY 127.0.0.1:7890';
   try {
     final uri = Uri.parse(
         'https://dns.google/resolve?name=${Uri.encodeComponent(hostname)}&type=A');
@@ -515,8 +533,7 @@ Future<Map<String, int>> _probeConnectivity(Map<String, String> targets) async {
     final name = entry.key;
     final url = entry.value;
     var code = 0;
-    final httpClient = HttpClient()
-      ..findProxy = (_) => 'PROXY 127.0.0.1:7890';
+    final httpClient = HttpClient()..findProxy = (_) => 'PROXY 127.0.0.1:7890';
     try {
       final request = await httpClient
           .getUrl(Uri.parse(url))
