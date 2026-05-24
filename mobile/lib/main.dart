@@ -552,7 +552,7 @@ class _HomeScreenState extends State<HomeScreen> {
         logger.info('vpn', 'VPN stopped');
         setState(() {
           _isConnected = false;
-          _connectionStatus = 'Tap to connect';
+          _connectionStatus = '';
           _connectivitySnapshot = null;
           _browserDnsSnapshot = null;
           _probeMessage = null;
