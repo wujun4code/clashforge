@@ -3103,7 +3103,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   final _urlController = TextEditingController();
   final _pasteController = TextEditingController();
   final _newSubNameController = TextEditingController();
-  _SubscriptionPanel _panel = _SubscriptionPanel.mySubscriptions;
+  _SubscriptionPanel _panel = _SubscriptionPanel.importUrl;
   String? _targetStandardSubId;
   bool _loading = false;
   bool _pasteLoading = false;
