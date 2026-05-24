@@ -3718,8 +3718,10 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
     required bool success,
     required String message,
     double fontSize = 13,
+    Key? bannerKey,
   }) {
     return AnimatedContainer(
+      key: bannerKey,
       duration: const Duration(milliseconds: 250),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -3959,7 +3961,11 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         ),
         if (_message != null) ...[
           const SizedBox(height: 14),
-          _buildResultBanner(success: _success, message: _message!),
+          _buildResultBanner(
+            success: _success,
+            message: _message!,
+            bannerKey: const Key('subscription_import_result_banner'),
+          ),
         ],
       ],
     );
@@ -4216,6 +4222,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
               success: _pasteSuccess,
               message: _pasteMessage!,
               fontSize: 12,
+              bannerKey: const Key('subscription_node_import_result_banner'),
             ),
           ],
         ],
