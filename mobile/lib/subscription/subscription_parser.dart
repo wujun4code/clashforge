@@ -5,6 +5,7 @@ import 'proxy_node.dart';
 
 class SubscriptionParser {
   static ParsedSubscription parse(String content) {
+    content = _normalizePastedYaml(content);
     content = _stripCommonIndent(content);
     final trimmed = content.trim();
 
@@ -12,7 +13,9 @@ class SubscriptionParser {
     if (trimmed.contains('proxies:')) {
       try {
         final doc = loadYaml(trimmed);
-        if (doc is Map && doc.containsKey('proxies') && doc['proxies'] is List) {
+        if (doc is Map &&
+            doc.containsKey('proxies') &&
+            doc['proxies'] is List) {
           final proxies = _parseYamlList(doc['proxies'] as List);
 
           // Extract proxy-groups (pass-through raw maps).
@@ -65,6 +68,16 @@ class SubscriptionParser {
         }
       } catch (_) {}
     }
+
+    // 2b. Try a single YAML map node (users often paste one node block).
+    try {
+      final doc = loadYaml(trimmed);
+      if (doc is Map && _looksLikeSingleProxyMap(doc)) {
+        return ParsedSubscription(
+          proxies: [ProxyNode.fromJson(_convertYamlMap(doc))],
+        );
+      }
+    } catch (_) {}
 
     // 3. Try Base64 decoding
     if (_looksLikeBase64(trimmed)) {
@@ -129,7 +142,8 @@ class SubscriptionParser {
     try {
       final cleanUri = uri.substring(5);
       final parts = cleanUri.split('#');
-      final name = parts.length > 1 ? Uri.decodeComponent(parts[1]) : 'Shadowsocks';
+      final name =
+          parts.length > 1 ? Uri.decodeComponent(parts[1]) : 'Shadowsocks';
       final mainPart = parts[0];
 
       if (mainPart.contains('@')) {
@@ -141,7 +155,12 @@ class SubscriptionParser {
           type: 'ss',
           server: serverParts[0],
           port: int.parse(serverParts[1]),
-          raw: {'name': name, 'type': 'ss', 'server': serverParts[0], 'port': int.parse(serverParts[1])},
+          raw: {
+            'name': name,
+            'type': 'ss',
+            'server': serverParts[0],
+            'port': int.parse(serverParts[1])
+          },
         );
       }
     } catch (_) {}
@@ -176,7 +195,9 @@ class SubscriptionParser {
   static ProxyNode? _parseTrojan(String uri) {
     try {
       final parsed = Uri.parse(uri);
-      final name = parsed.fragment.isNotEmpty ? Uri.decodeComponent(parsed.fragment) : 'Trojan';
+      final name = parsed.fragment.isNotEmpty
+          ? Uri.decodeComponent(parsed.fragment)
+          : 'Trojan';
       return ProxyNode(
         name: name,
         type: 'trojan',
@@ -198,7 +219,9 @@ class SubscriptionParser {
   static ProxyNode? _parseVless(String uri) {
     try {
       final parsed = Uri.parse(uri);
-      final name = parsed.fragment.isNotEmpty ? Uri.decodeComponent(parsed.fragment) : 'VLESS';
+      final name = parsed.fragment.isNotEmpty
+          ? Uri.decodeComponent(parsed.fragment)
+          : 'VLESS';
       return ProxyNode(
         name: name,
         type: 'vless',
@@ -224,6 +247,45 @@ class SubscriptionParser {
     return validChars.hasMatch(s);
   }
 
+  static bool _looksLikeSingleProxyMap(Map map) {
+    final hasName = map.containsKey('name');
+    final hasType = map.containsKey('type');
+    final hasServer = map.containsKey('server');
+    return hasName && hasType && hasServer;
+  }
+
+  // Make pasted snippets more forgiving:
+  // - strip markdown code fences (```yaml ... ```)
+  // - normalize line endings
+  // - turn leading TAB indentation into spaces
+  static String _normalizePastedYaml(String content) {
+    var text = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+
+    final lines = LineSplitter.split(text).toList();
+    if (lines.length >= 2) {
+      final first = lines.first.trim();
+      final last = lines.last.trim();
+      final isBacktickFence = first.startsWith('```') && last.startsWith('```');
+      final isTildeFence = first.startsWith('~~~') && last.startsWith('~~~');
+      if (isBacktickFence || isTildeFence) {
+        text = lines.sublist(1, lines.length - 1).join('\n');
+      }
+    }
+
+    final normalized = <String>[];
+    for (final line in LineSplitter.split(text)) {
+      final replaced = line.replaceAll('\u00A0', ' ');
+      final indent = RegExp(r'^[\t ]+').firstMatch(replaced)?.group(0);
+      if (indent == null || indent.isEmpty) {
+        normalized.add(replaced);
+        continue;
+      }
+      final fixedIndent = indent.replaceAll('\t', '  ');
+      normalized.add('$fixedIndent${replaced.substring(indent.length)}');
+    }
+    return normalized.join('\n');
+  }
+
   static String _stripCommonIndent(String content) {
     final lines = LineSplitter.split(content).toList();
     if (lines.isEmpty) return content;
@@ -236,6 +298,9 @@ class SubscriptionParser {
       }
     }
     if (minIndent == null || minIndent == 0) return content;
-    return lines.map((line) => line.length >= minIndent! ? line.substring(minIndent) : '').join('\n');
+    return lines
+        .map((line) =>
+            line.length >= minIndent! ? line.substring(minIndent) : '')
+        .join('\n');
   }
 }

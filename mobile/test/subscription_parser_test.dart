@@ -44,6 +44,40 @@ proxies:
       expect(nodes[1].name, 'JP-01');
     });
 
+    test('Parse pasted node block wrapped in markdown fence', () {
+      const yaml = '''```yaml
+    - name: sg-sg01
+      password: xyp8KDrrnqFFk4JZ34U
+      port: 443
+      server: market.weichichibaole.com
+      skip-cert-verify: false
+      tls: true
+      type: http
+      username: u_98f2bcd7
+```''';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'sg-sg01');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].server, 'market.weichichibaole.com');
+      expect(nodes[0].port, 443);
+    });
+
+    test('Parse single YAML map node (without list dash)', () {
+      const yaml = '''
+name: hk-hk01
+type: ss
+server: hk01.node.com
+port: 443
+cipher: aes-256-gcm
+password: pass
+''';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'hk-hk01');
+      expect(nodes[0].type, 'ss');
+    });
+
     test('Parse Trojan URI', () {
       const trojanUri = 'trojan://password123@us.trojan.com:443#US-Trojan-Node';
       final nodes = SubscriptionParser.parse(trojanUri).proxies;
