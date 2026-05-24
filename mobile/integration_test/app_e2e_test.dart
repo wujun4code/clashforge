@@ -56,8 +56,8 @@ void main() {
           find.byKey(const Key('subscription_url_field')), _subUrl);
       await tester.pumpAndSettle();
 
-      // Dismiss keyboard so the import button is not obscured on emulators.
-      tester.testTextInput.hide();
+      // Unfocus URL field so soft keyboard does not obstruct the import button.
+      FocusManager.instance.primaryFocus?.unfocus();
       await tester.pumpAndSettle();
 
       _log('Tapping Import');
