@@ -365,11 +365,13 @@ class _HomeScreenState extends State<HomeScreen> {
         (s) => s.id == activeId,
         orElse: () => subs.first,
       );
+      final defaultSelectNow = _defaultSelectNowMapFor(active);
       setState(() {
         _subscriptions.addAll(subs);
         _activeSubscriptionId = active.id;
         _nodes.addAll(active.nodes);
         _selectedNode = active.nodes.isEmpty ? null : active.nodes.first;
+        _proxyNowMap = defaultSelectNow;
       });
       AppLogger.instance.info('app', 'Loaded subscriptions',
           fields: {'count': subs.length, 'active': active.nickname});
@@ -455,6 +457,169 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Subscription? _activeSubscription() {
+    for (final sub in _subscriptions) {
+      if (sub.id == _activeSubscriptionId) return sub;
+    }
+    return null;
+  }
+
+  Map<String, List<String>> _selectGroupsFromSubscription(Subscription? sub) {
+    final out = <String, List<String>>{};
+    if (sub == null) return out;
+
+    for (final raw in sub.customProxyGroups) {
+      final type = (raw['type'] ?? '').toString().trim().toLowerCase();
+      if (type != 'select') continue;
+      final name = (raw['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final proxies = raw['proxies'];
+      if (proxies is! List) continue;
+
+      final members = <String>[];
+      for (final item in proxies) {
+        final member = (item ?? '').toString().trim();
+        if (member.isNotEmpty) members.add(member);
+      }
+      if (members.isEmpty) continue;
+      out[name] = members;
+    }
+
+    // No custom select groups: use the app's default main selector.
+    if (out.isEmpty && _nodes.isNotEmpty) {
+      final memberNames = _nodes.map((n) => n.name).toList();
+      out[_kMainProxyGroup] = [...memberNames, 'Auto', 'DIRECT'];
+    }
+    return out;
+  }
+
+  Map<String, String> _defaultSelectNowMapFor(Subscription? sub) {
+    final groups = _selectGroupsFromSubscription(sub);
+    final out = <String, String>{};
+    for (final entry in groups.entries) {
+      if (entry.value.isNotEmpty) out[entry.key] = entry.value.first;
+    }
+    return out;
+  }
+
+  String? _resolveNodeFromSelectionValue({
+    required String value,
+    required Map<String, String> nowMap,
+    required Map<String, List<String>> selectGroups,
+    required Set<String> nodeNames,
+    required Set<String> visiting,
+  }) {
+    final current = value.trim();
+    if (current.isEmpty) return null;
+    if (nodeNames.contains(current)) return current;
+
+    final members = selectGroups[current];
+    if (members == null || members.isEmpty) return null;
+    if (!visiting.add(current)) return null;
+
+    final selected = (nowMap[current] ?? '').trim();
+    final fallback = members.first.trim();
+    final next = selected.isNotEmpty ? selected : fallback;
+    return _resolveNodeFromSelectionValue(
+      value: next,
+      nowMap: nowMap,
+      selectGroups: selectGroups,
+      nodeNames: nodeNames,
+      visiting: visiting,
+    );
+  }
+
+  String? _deriveSelectedNodeNameFromNowMap(Map<String, String> nowMap,
+      {Subscription? sub}) {
+    if (_nodes.isEmpty || nowMap.isEmpty) return null;
+    final nodeNames = _nodes.map((n) => n.name).toSet();
+    final groups = _selectGroupsFromSubscription(sub ?? _activeSubscription());
+    if (groups.isEmpty) return null;
+
+    const preferred = <String>[
+      '🚀 Proxy',
+      '🚀 节点选择',
+      'Proxy',
+      'GLOBAL',
+    ];
+
+    final order = <String>[];
+    for (final key in preferred) {
+      if (groups.containsKey(key)) order.add(key);
+    }
+    for (final key in groups.keys) {
+      if (!order.contains(key)) order.add(key);
+    }
+
+    for (final groupName in order) {
+      final selected = (nowMap[groupName] ?? '').trim();
+      final fallbackMembers = groups[groupName] ?? const <String>[];
+      final seed = selected.isNotEmpty
+          ? selected
+          : (fallbackMembers.isNotEmpty ? fallbackMembers.first : '');
+      if (seed.isEmpty) continue;
+      final nodeName = _resolveNodeFromSelectionValue(
+        value: seed,
+        nowMap: nowMap,
+        selectGroups: groups,
+        nodeNames: nodeNames,
+        visiting: {groupName},
+      );
+      if (nodeName != null) return nodeName;
+    }
+    return null;
+  }
+
+  ProxyNode? _nodeByName(String name) {
+    for (final node in _nodes) {
+      if (node.name == name) return node;
+    }
+    return null;
+  }
+
+  String? _preferredGroupForNodeName(String nodeName, {Subscription? sub}) {
+    final groups = _selectGroupsFromSubscription(sub ?? _activeSubscription());
+    if (groups.isEmpty) return null;
+
+    const preferred = <String>[
+      '🚀 Proxy',
+      '🚀 节点选择',
+      'Proxy',
+      'GLOBAL',
+    ];
+    for (final groupName in preferred) {
+      final members = groups[groupName];
+      if (members != null && members.contains(nodeName)) return groupName;
+    }
+    for (final entry in groups.entries) {
+      if (entry.value.contains(nodeName)) return entry.key;
+    }
+    return null;
+  }
+
+  Future<void> _applyDefaultSelectChoices() async {
+    if (!_isConnected) return;
+    final groups = _selectGroupsFromSubscription(_activeSubscription());
+    if (groups.isEmpty) return;
+
+    for (final entry in groups.entries) {
+      final members = entry.value;
+      if (members.isEmpty) continue;
+      final target = members.first;
+      final uri = Uri.parse(
+        'http://$_kClashControllerHost:$_kClashControllerPort/proxies/'
+        '${Uri.encodeComponent(entry.key)}',
+      );
+      try {
+        await http
+            .put(uri,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode({'name': target}))
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
+  }
+
   void _onNodesImported(ParsedSubscription parsed,
       {String url = '', String nickname = '', bool isBuiltIn = false}) {
     final id = '${DateTime.now().millisecondsSinceEpoch}';
@@ -488,6 +653,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ..clear()
         ..addAll(parsed.proxies);
       _selectedNode = nextSelected;
+      _proxyNowMap = _defaultSelectNowMapFor(sub);
     });
     SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
     SubscriptionStore.saveActiveId(id);
@@ -512,6 +678,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ..clear()
         ..addAll(sub.nodes);
       _selectedNode = nextSelected;
+      _proxyNowMap = _defaultSelectNowMapFor(sub);
     });
     SubscriptionStore.saveActiveId(sub.id);
     unawaited(_applyNodeSelectionIfRunning(triggerProbe: false));
@@ -672,12 +839,30 @@ class _HomeScreenState extends State<HomeScreen> {
             (e.value as Map<String, dynamic>?)?['now'] as String?;
         if (now != null && now.isNotEmpty) map[e.key] = now;
       }
-      if (mounted) setState(() => _proxyNowMap = map);
+      final merged = {
+        ..._defaultSelectNowMapFor(_activeSubscription()),
+        ...map,
+      };
+      final selectedName = _deriveSelectedNodeNameFromNowMap(merged);
+      final selectedNode =
+          selectedName == null ? null : _nodeByName(selectedName);
+      if (!mounted) return;
+      setState(() {
+        _proxyNowMap = merged;
+        if (selectedNode != null) _selectedNode = selectedNode;
+      });
     } catch (_) {}
   }
 
   Future<void> _switchGroupMember(String group, String member) async {
-    setState(() => _proxyNowMap = {..._proxyNowMap, group: member});
+    final nextMap = {..._proxyNowMap, group: member};
+    final selectedName = _deriveSelectedNodeNameFromNowMap(nextMap);
+    final selectedNode =
+        selectedName == null ? null : _nodeByName(selectedName);
+    setState(() {
+      _proxyNowMap = nextMap;
+      if (selectedNode != null) _selectedNode = selectedNode;
+    });
     if (!_isConnected) return;
     final uri = Uri.parse(
       'http://$_kClashControllerHost:$_kClashControllerPort/proxies/'
@@ -703,6 +888,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (!_isConnected || !mounted) return;
       try {
+        await _applyDefaultSelectChoices();
         final nodeName = _selectedNode?.name ?? '';
         final group = nodeName.isNotEmpty
             ? await _resolveProxyGroup(nodeName) ?? _kMainProxyGroup
@@ -774,6 +960,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (res.statusCode != 200 && res.statusCode != 204) {
         throw Exception('HTTP ${res.statusCode}');
       }
+      if (mounted) {
+        setState(() => _proxyNowMap = {..._proxyNowMap, group: nodeName});
+      }
       logger.info('proxy', 'Applied node selection',
           fields: {'group': group, 'node': nodeName});
       if (triggerProbe) {
@@ -791,8 +980,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _switchNodeFromHome(ProxyNode node) async {
     if (_switchingNode) return;
+    final mainGroupName = _preferredGroupForNodeName(node.name);
     setState(() {
       _selectedNode = node;
+      if (mainGroupName != null) {
+        _proxyNowMap = {..._proxyNowMap, mainGroupName: node.name};
+      }
       _switchingNode = _isConnected;
     });
 
@@ -806,6 +999,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() => _connectionStatus = AppLocalizations.of(context).connSwitchedTo(node.name));
       }
+      await _refreshProxyNow();
       await _runConnectivityChecks();
       await _runBrowserDnsDiagnostics();
     } finally {
@@ -2432,18 +2626,22 @@ class _ProxyGroupCard extends StatelessWidget {
         isAuto ? const Color(0xFF64B5F6) : _kBrand;
     final nowText = currentNow ??
         (vpnRunning ? '…' : '—');
+    final cardShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: const BorderSide(color: _kBorder),
+    );
 
-    return Container(
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kBorder),
-      ),
-      clipBehavior: Clip.hardEdge,
+    return Material(
+      color: _kCard,
+      shape: cardShape,
+      clipBehavior: Clip.antiAlias,
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           initiallyExpanded: initiallyExpanded,
+          shape: cardShape,
+          collapsedShape: cardShape,
+          clipBehavior: Clip.antiAlias,
           tilePadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           childrenPadding: EdgeInsets.zero,
