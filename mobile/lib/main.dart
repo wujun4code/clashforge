@@ -3929,6 +3929,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                 width: double.infinity,
                 height: 46,
                 child: FilledButton.icon(
+                  key: const Key('subscription_import_button'),
                   onPressed: _loading ? null : _import,
                   style: FilledButton.styleFrom(
                     backgroundColor: _kBrand,

@@ -56,8 +56,15 @@ void main() {
           find.byKey(const Key('subscription_url_field')), _subUrl);
       await tester.pumpAndSettle();
 
+      // Dismiss keyboard so the import button is not obscured on emulators.
+      tester.testTextInput.hide();
+      await tester.pumpAndSettle();
+
       _log('Tapping Import');
-      await tester.tap(find.text('Import'));
+      final importBtn = find.byKey(const Key('subscription_import_button'));
+      expect(importBtn, findsOneWidget);
+      await tester.ensureVisible(importBtn);
+      await tester.tap(importBtn, warnIfMissed: false);
       await tester.pump();
 
       // Wait for fetch + parse (real network; up to 30 s)
