@@ -238,21 +238,21 @@ class _AppLocalizationsDelegate
 
 class _AppLocalizationsEn extends AppLocalizations {
   @override String get navHome => 'Home';
-  @override String get navProxies => 'Proxies';
+  @override String get navProxies => 'Routes';
   @override String get navSubscriptions => 'Subscriptions';
   @override String get navSettings => 'Settings';
 
   @override String get statusActive => 'ACTIVE';
   @override String get statusIdle => 'IDLE';
 
-  @override String get vpnRunning => 'VPN Running';
-  @override String get vpnIdle => 'VPN Disconnected';
+  @override String get vpnRunning => 'Passage Active';
+  @override String get vpnIdle => 'Passage Off';
   @override String get btnConnect => 'Connect';
   @override String get btnDisconnect => 'Disconnect';
   @override String get btnMoreNodes => 'More Nodes';
 
   @override String get connTapToConnect => 'Tap to connect';
-  @override String get connGrantPermission => 'Grant VPN permission, then tap again';
+  @override String get connGrantPermission => 'Grant network permission, then tap again';
   @override String get connConnected => 'Connected';
   @override String get connNodeSelectedTapConnect => 'Node selected, tap connect';
   @override String get connNodeSwitchPending => 'Node switch pending, retry after core is ready';
@@ -276,13 +276,13 @@ class _AppLocalizationsEn extends AppLocalizations {
 
   @override String get sectionExitIp => 'Exit IP';
   @override String get categoryDirect => 'Direct';
-  @override String get directSubtitle => 'Bypasses phone VPN, exits via router';
-  @override String get categoryVpnExit => 'VPN Exit';
-  @override String get vpnExitSubtitle => 'Via ClashForge proxy';
+  @override String get directSubtitle => 'Direct path, exits via router';
+  @override String get categoryVpnExit => 'Passage Exit';
+  @override String get vpnExitSubtitle => 'Via ClashForge passage';
   @override String get sectionAccessCheck => 'Access Check';
   @override String get categoryDirectPath => 'Direct Path';
-  @override String get categoryVpnProxy => 'VPN Proxy';
-  @override String get categoryAiVpnProxy => 'AI · VPN Proxy';
+  @override String get categoryVpnProxy => 'Passage Route';
+  @override String get categoryAiVpnProxy => 'AI · Passage';
   @override String get ipResolved => 'resolved';
   @override String get ipFailed => 'failed';
   @override String get siteStatusOk => 'OK';
@@ -298,26 +298,26 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get checkPrivateDns => 'System Private DNS';
   @override String get checkMihomoDns => 'Mihomo DNS';
   @override String get checkSystemDns => 'System DNS';
-  @override String get checkProxyChain => 'Proxy Chain';
+  @override String get checkProxyChain => 'Outbound Chain';
 
   @override String get privateDnsOff => 'Off';
   @override String privateDnsOnHostname(String specifier) => 'On (strict hostname: $specifier)';
   @override String privateDnsOn(String mode) => 'On ($mode)';
   @override String get mihomoDnsNoRecord => 'No records returned (may prevent browser from resolving domains)';
   @override String get systemDnsNoAddr => 'No addresses from lookup';
-  @override String proxyChainSuccess(int ms) => 'HTTP proxy to gstatic succeeded (${ms}ms)';
+  @override String proxyChainSuccess(int ms) => 'Outbound check to gstatic succeeded (${ms}ms)';
 
   @override String get summaryPrivateDnsOn =>
       'Private DNS is enabled. Browsers may report DNS_PROBE_FINISHED_BAD_CONFIG. '
       'Disable Private DNS in system settings.';
   @override String get summaryMihomoDnsFailed =>
       'Mihomo DNS failed to resolve the target domain. '
-      'Check proxy nodes, upstream DNS, and anti-poisoning settings.';
+      'Check routing nodes, upstream DNS, and anti-poisoning settings.';
   @override String get summarySystemDnsFailed =>
       'System DNS resolution failed. '
       'If the proxy side works, check system DNS / router DNS.';
   @override String get summaryProxyChainFailed =>
-      'Proxy chain test failed. DNS may be OK but the outbound route is unreachable.';
+      'Outbound route test failed. DNS may be OK but the exit node is unreachable.';
   @override String get summaryAllOk =>
       'Browser DNS path is healthy. If browsers still fail, try switching networks.';
   @override String browserDnsFailed(String error) => 'Diagnostics failed: $error';
@@ -327,7 +327,7 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get hintNoNodes => 'No nodes — import a subscription in the Subscriptions tab';
   @override String get linkViewAllNodes => 'View all nodes  →';
 
-  @override String get proxiesTitle => 'Proxies';
+  @override String get proxiesTitle => 'Routes';
   @override String nodesCount(int count) => '$count nodes';
   @override String get noNodesYet => 'No nodes yet';
   @override String get noNodesHint => 'Add a subscription in the\nSubscriptions tab';
@@ -348,14 +348,14 @@ class _AppLocalizationsEn extends AppLocalizations {
       'No valid nodes found. Check format '
       '(supports ss:// vmess:// trojan:// vless:// and Clash YAML)';
   @override String importedFromPaste(int count) =>
-      'Imported $count nodes. Config generated with Loyalsoldier rules. VPN ready to start.';
+      'Imported $count nodes. Config generated with Loyalsoldier rules. Passage ready to activate.';
   @override String parseFailedMsg(Object error) => 'Parse error: $error';
   @override String get savedSubscriptions => 'SAVED SUBSCRIPTIONS';
   @override String get activeLabel => 'Active';
   @override String get btnSwitch => 'Switch';
   @override String nodesCountSub(int count) => '$count nodes';
   @override String get subNameDialogTitle => 'Name this subscription';
-  @override String get subNameHint => 'e.g. Work VPN';
+  @override String get subNameHint => 'e.g. Work Profile';
   @override String get btnCancel => 'Cancel';
   @override String get btnSave => 'Save';
   @override String get deleteSubTitle => 'Delete Subscription';
@@ -364,7 +364,7 @@ class _AppLocalizationsEn extends AppLocalizations {
 
   @override String get settingsTitle => 'Settings';
   @override String get tileLogsTitle => 'Logs';
-  @override String get tileLogsSubtitle => 'Runtime events, VPN & core output';
+  @override String get tileLogsSubtitle => 'Runtime events, passage & core output';
   @override String get tileUpdatesTitle => 'Check for Updates';
   @override String get tileUpdatesSubtitle => 'See if a newer version is available';
   @override String get tileAboutTitle => 'About';
@@ -389,7 +389,7 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get rowVersion => 'Version';
   @override String get rowNodesLoaded => 'Nodes loaded';
   @override String get rowDeviceAbi => 'Device ABI';
-  @override String get rowVpn => 'VPN';
+  @override String get rowVpn => 'Passage';
   @override String get rowMihomo => 'Mihomo';
   @override String get rowAppPss => 'App (PSS)';
   @override String get rowAvailable => 'Available';
@@ -419,10 +419,10 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get siteTaobaoDesc => 'Verify direct connectivity to domestic e-commerce';
   @override String get siteNeteaseName => 'NetEase Music';
   @override String get siteNeteaseDesc => 'Verify latency to domestic content sites';
-  @override String get siteGitHubDesc => 'Verify proxy access to international dev sites';
-  @override String get siteGoogleDesc => 'Verify Google search is accessible via proxy';
-  @override String get siteOpenAIDesc => 'Verify ChatGPT is accessible via proxy';
-  @override String get siteClaudeDesc => 'Verify Claude AI is accessible via proxy';
+  @override String get siteGitHubDesc => 'Verify routed access to international dev sites';
+  @override String get siteGoogleDesc => 'Verify Google search is reachable via passage';
+  @override String get siteOpenAIDesc => 'Verify ChatGPT is reachable via passage';
+  @override String get siteClaudeDesc => 'Verify Claude AI is reachable via passage';
 
   @override String get langEnglish => 'English';
   @override String get langChinese => '中文';
@@ -432,21 +432,21 @@ class _AppLocalizationsEn extends AppLocalizations {
 
 class _AppLocalizationsZh extends AppLocalizations {
   @override String get navHome => '主页';
-  @override String get navProxies => '代理';
+  @override String get navProxies => '线路';
   @override String get navSubscriptions => '订阅';
   @override String get navSettings => '设置';
 
   @override String get statusActive => '已连接';
   @override String get statusIdle => '未连接';
 
-  @override String get vpnRunning => 'VPN 运行中';
-  @override String get vpnIdle => 'VPN 未连接';
+  @override String get vpnRunning => '畅行已开启';
+  @override String get vpnIdle => '畅行未开启';
   @override String get btnConnect => '连接';
   @override String get btnDisconnect => '断开';
   @override String get btnMoreNodes => '更多节点';
 
   @override String get connTapToConnect => '轻触以连接';
-  @override String get connGrantPermission => '授予 VPN 权限后再次轻触';
+  @override String get connGrantPermission => '授予网络权限后再次轻触';
   @override String get connConnected => '已连接';
   @override String get connNodeSelectedTapConnect => '节点已选定，轻触连接';
   @override String get connNodeSwitchPending => '节点切换待生效，等待核心就绪后重试';
@@ -454,10 +454,10 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String connError(String error) => '错误：$error';
 
   @override String privateDnsWarningHostname(String specifier) =>
-      '检测到系统 Private DNS 严格主机名模式（$specifier），Android 可能无法劫持 DNS 请求，'
+      '检测到系统 Private DNS 严格主机名模式（$specifier），Android 可能无法接管 DNS 请求，'
       '浏览器可能报 DNS_PROBE_FINISHED_BAD_CONFIG。请先在系统设置中关闭 Private DNS 后重试。';
   @override String get privateDnsWarningAuto =>
-      '检测到系统 Private DNS 自动模式，Android 可能无法劫持 DNS 请求，'
+      '检测到系统 Private DNS 自动模式，Android 可能无法接管 DNS 请求，'
       '浏览器可能报 DNS_PROBE_FINISHED_BAD_CONFIG。请先在系统设置中关闭 Private DNS 后重试。';
 
   @override String get connectivityTitle => '连通性检测';
@@ -468,13 +468,13 @@ class _AppLocalizationsZh extends AppLocalizations {
 
   @override String get sectionExitIp => '出口 IP';
   @override String get categoryDirect => '直连';
-  @override String get directSubtitle => '绕过手机 VPN，经路由器直出';
-  @override String get categoryVpnExit => 'VPN 出口';
-  @override String get vpnExitSubtitle => '经手机 ClashForge 代理';
+  @override String get directSubtitle => '直连路径，经路由器直出';
+  @override String get categoryVpnExit => '畅行出口';
+  @override String get vpnExitSubtitle => '经 ClashForge 畅行';
   @override String get sectionAccessCheck => '访问检查';
   @override String get categoryDirectPath => '直连路径';
-  @override String get categoryVpnProxy => 'VPN 代理';
-  @override String get categoryAiVpnProxy => 'AI · VPN 代理';
+  @override String get categoryVpnProxy => '畅行线路';
+  @override String get categoryAiVpnProxy => 'AI · 畅行线路';
   @override String get ipResolved => '已解析';
   @override String get ipFailed => '未能获取';
   @override String get siteStatusOk => '正常';
@@ -490,24 +490,24 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get checkPrivateDns => '系统 Private DNS';
   @override String get checkMihomoDns => 'Mihomo DNS 解析';
   @override String get checkSystemDns => '系统 DNS 解析';
-  @override String get checkProxyChain => '代理链路';
+  @override String get checkProxyChain => '出口链路';
 
   @override String get privateDnsOff => '关闭';
   @override String privateDnsOnHostname(String specifier) => '开启（严格主机名：$specifier）';
   @override String privateDnsOn(String mode) => '开启（$mode）';
   @override String get mihomoDnsNoRecord => '无返回记录（可能导致浏览器域名无法打开）';
   @override String get systemDnsNoAddr => 'lookup 无可用地址';
-  @override String proxyChainSuccess(int ms) => '经 HTTP 代理访问 gstatic 成功（${ms}ms）';
+  @override String proxyChainSuccess(int ms) => '经出口访问 gstatic 成功（${ms}ms）';
 
   @override String get summaryPrivateDnsOn =>
       '检测到 Private DNS 已开启。该状态下浏览器可能出现 DNS_PROBE_FINISHED_BAD_CONFIG，'
       '建议先关闭系统 Private DNS 再重试。';
   @override String get summaryMihomoDnsFailed =>
-      'Mihomo DNS 当前未能解析目标域名，建议检查订阅节点、上游 DNS 和 DNS 防污染设置。';
+      'Mihomo DNS 当前未能解析目标域名，建议检查节点、上游 DNS 和 DNS 防污染设置。';
   @override String get summarySystemDnsFailed =>
       '系统 DNS 解析异常。若连通性页面"代理侧"正常，优先排查系统 DNS / 路由器 DNS。';
   @override String get summaryProxyChainFailed =>
-      '代理链路探测失败。DNS 可能正常，但出站链路不可达。';
+      '出口链路探测失败。DNS 可能正常，但出站线路不可达。';
   @override String get summaryAllOk =>
       '浏览器 DNS 链路整体正常。若浏览器仍报错，请切换网络后再测一次。';
   @override String browserDnsFailed(String error) => '专项检测失败: $error';
@@ -517,7 +517,7 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get hintNoNodes => '暂无节点，请先在"订阅"页面导入订阅';
   @override String get linkViewAllNodes => '查看完整节点列表  →';
 
-  @override String get proxiesTitle => '代理';
+  @override String get proxiesTitle => '线路';
   @override String nodesCount(int count) => '$count 个节点';
   @override String get noNodesYet => '暂无节点';
   @override String get noNodesHint => '请在"订阅"页面\n添加订阅';
@@ -537,14 +537,14 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get noValidNodes =>
       '未识别到有效节点，请检查格式（支持 ss:// vmess:// trojan:// vless:// 及 Clash YAML）';
   @override String importedFromPaste(int count) =>
-      '已导入 $count 个节点，配置已生成（使用 Loyalsoldier 规则），可直接启动 VPN';
+      '已导入 $count 个节点，配置已生成（使用 Loyalsoldier 规则），可直接开启畅行';
   @override String parseFailedMsg(Object error) => '解析失败: $error';
   @override String get savedSubscriptions => '已保存的订阅';
   @override String get activeLabel => '使用中';
   @override String get btnSwitch => '切换';
   @override String nodesCountSub(int count) => '$count 个节点';
   @override String get subNameDialogTitle => '为订阅命名';
-  @override String get subNameHint => '例：工作 VPN';
+  @override String get subNameHint => '例：工作线路';
   @override String get btnCancel => '取消';
   @override String get btnSave => '保存';
   @override String get deleteSubTitle => '删除订阅';
@@ -553,7 +553,7 @@ class _AppLocalizationsZh extends AppLocalizations {
 
   @override String get settingsTitle => '设置';
   @override String get tileLogsTitle => '日志';
-  @override String get tileLogsSubtitle => '运行时事件、VPN 及核心输出';
+  @override String get tileLogsSubtitle => '运行时事件、服务及核心输出';
   @override String get tileUpdatesTitle => '检查更新';
   @override String get tileUpdatesSubtitle => '查看是否有新版本可用';
   @override String get tileAboutTitle => '关于';
@@ -578,7 +578,7 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get rowVersion => '版本';
   @override String get rowNodesLoaded => '已加载节点';
   @override String get rowDeviceAbi => '设备 ABI';
-  @override String get rowVpn => 'VPN';
+  @override String get rowVpn => '畅行';
   @override String get rowMihomo => 'Mihomo';
   @override String get rowAppPss => '应用 (PSS)';
   @override String get rowAvailable => '可用内存';
@@ -607,10 +607,10 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get siteTaobaoDesc => '验证国内主要电商平台直连可达性';
   @override String get siteNeteaseName => '网易云音乐';
   @override String get siteNeteaseDesc => '验证国内常见内容站点延迟';
-  @override String get siteGitHubDesc => '验证国际开发站点的代理访问效果';
-  @override String get siteGoogleDesc => '验证 Google 搜索是否可通过代理访问';
-  @override String get siteOpenAIDesc => '验证 ChatGPT 是否可通过代理访问';
-  @override String get siteClaudeDesc => '验证 Claude AI 是否可通过代理访问';
+  @override String get siteGitHubDesc => '验证国际开发站点的访问效果';
+  @override String get siteGoogleDesc => '验证 Google 搜索是否可正常访问';
+  @override String get siteOpenAIDesc => '验证 ChatGPT 是否可正常访问';
+  @override String get siteClaudeDesc => '验证 Claude AI 是否可正常访问';
 
   @override String get langEnglish => 'English';
   @override String get langChinese => '中文';

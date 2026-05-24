@@ -1124,10 +1124,10 @@ sniffer:
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "ClashForge VPN",
+                "ClashForge",
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "VPN 连接状态"
+                description = "畅行服务连接状态"
                 setShowBadge(false)
                 setSound(null, null)       // silent — status notification, no alert sound
                 enableVibration(false)
@@ -1149,8 +1149,8 @@ sniffer:
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ClashForge VPN 运行中")
-            .setContentText("VPN 已接管网络流量")
+            .setContentTitle("ClashForge 畅行已开启")
+            .setContentText("服务已接管网络流量")
             .setSmallIcon(R.drawable.ic_vpn_notification)
             .setContentIntent(openIntent)
             .addAction(0, "断开连接", stopIntent)
@@ -1175,7 +1175,7 @@ sniffer:
                 val sbm = getSystemService(android.app.StatusBarManager::class.java)
                 sbm?.requestAddTileService(
                     ComponentName(this, ClashForgeTileService::class.java),
-                    "ClashForge VPN",
+                    "ClashForge 畅行",
                     android.graphics.drawable.Icon.createWithResource(
                         this, R.drawable.ic_vpn_notification
                     ),
@@ -1183,6 +1183,16 @@ sniffer:
                 ) { /* result ignored */ }
             } catch (_: Exception) { /* non-fatal: some OEMs don't implement this */ }
         }
+    }
+
+    override fun onRevoke() {
+        // Android calls this when another VPN app takes over the VPN slot.
+        // Without this override the default only calls stopSelf(), which routes
+        // through onDestroy() too slowly and may miss sending the state broadcast
+        // before the TUN fd is already invalid.
+        LogEventBridge.info("vpn", "VPN revoked by system — another VPN app took over")
+        stopVpn()
+        super.onRevoke()
     }
 
     override fun onDestroy() {
