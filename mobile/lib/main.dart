@@ -26,6 +26,9 @@ Future<void> _launchUrl(String url) async {
 }
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Cap Flutter's decoded-image cache at 20 MB (default: 100 MB).
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 20 << 20;
   runApp(const ClashForgeApp());
 }
 
