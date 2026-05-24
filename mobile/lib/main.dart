@@ -693,6 +693,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await _refreshProxyNow();
   }
 
+
   Future<void> _bootstrapAfterConnect() async {
     await _refreshPrivateDnsWarning();
 
