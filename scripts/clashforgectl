@@ -10,7 +10,7 @@
 #   ./scripts/clashforgectl --router 192.168.1.1 reset
 #   ./scripts/clashforgectl --router 192.168.1.1 reset --start
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade
-#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --version v0.1.0-rc.1
+#   ./scripts/clashforgectl --router 192.168.1.1 upgrade --version v0.1.0-beta.1
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade --mirror https://ghproxy.com
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade --base-url https://releases.example.com
 #   ./scripts/clashforgectl --router 192.168.1.1 upgrade --purge
@@ -586,10 +586,10 @@ if [ "$ACTION" = "upgrade" ] && [ "$REMOTE_DOWNLOAD" -eq 0 ]; then
               for (i=2; i<=NF; i++) {
                 split($i, a, "\"")
                 t=a[1]
-                if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$/) {
+                if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/) {
                   s=t
                   sub(/^v/, "", s)
-                  sub(/-rc\./, ".", s)
+                  sub(/-beta\./, ".", s)
                   n=split(s, p, ".")
                   key=sprintf("%09d.%09d.%09d.%09d", p[1], p[2], p[3], p[4])
                   if (key > best_key) {

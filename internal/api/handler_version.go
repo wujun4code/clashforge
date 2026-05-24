@@ -88,7 +88,7 @@ func fetchRelease(ctx context.Context, channel string) (info releaseInfo, err er
 	return
 }
 
-// stripV removes a leading "v" for semver comparison ("v1.2.3" → "1.2.3").
+// stripV removes a leading "v" from git-style tags ("v1.2.3" → "1.2.3").
 func stripV(s string) string { return strings.TrimPrefix(s, "v") }
 
 func handleClashforgeVersion(deps Dependencies) http.HandlerFunc {
@@ -117,7 +117,7 @@ func handleClashforgeVersion(deps Dependencies) http.HandlerFunc {
 			return
 		}
 
-		hasUpdate := stripV(info.TagName) != stripV(current) && stripV(current) != "0.1.0-dev"
+		hasUpdate := hasVersionUpdate(current, info.TagName)
 		JSON(w, http.StatusOK, map[string]any{
 			"current":       current,
 			"latest":        info.TagName,
