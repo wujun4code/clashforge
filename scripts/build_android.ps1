@@ -210,7 +210,13 @@ if ($Install) {
     }
 
     Write-Step "Installing to $target..."
-    & $adb -s $target install -r $apkPath
+    $installArgs = @('-s', $target, 'install', '-r')
+    if ($Debug) {
+        # Dev loop often reuses older debug versionCode; allow downgrade only in debug mode.
+        $installArgs += '-d'
+    }
+    $installArgs += $apkPath
+    & $adb @installArgs
     if ($LASTEXITCODE -ne 0) { throw "adb install failed on $target" }
     Write-Ok "Installed on $target."
 }

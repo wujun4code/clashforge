@@ -78,6 +78,129 @@ password: pass
       expect(nodes[0].type, 'ss');
     });
 
+    test('Parse indented HTTP proxy YAML list entry from paste', () {
+      const yaml = '''
+    - name: sg-sg01
+      password: xyp8KDrrnqFFk4JZ34U
+      port: 443
+      server: market.weichichibaole.com
+      skip-cert-verify: false
+      tls: true
+      type: http
+      username: u_98f2bcd7
+''';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'sg-sg01');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].server, 'market.weichichibaole.com');
+      expect(nodes[0].port, 443);
+    });
+
+    test('Parse YAML node when port is quoted string', () {
+      const yaml = '''
+name: sg-http01
+type: http
+server: market.weichichibaole.com
+port: "443"
+username: user
+password: pass
+tls: true
+''';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'sg-http01');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].port, 443);
+    });
+
+    test('Parse pasted YAML with UTF-8 BOM prefix', () {
+      const yaml = '\ufeff- name: sg-sg01\n'
+          '  password: xyp8KDrrnqFFk4JZ34U\n'
+          '  port: 443\n'
+          '  server: market.weichichibaole.com\n'
+          '  skip-cert-verify: false\n'
+          '  tls: true\n'
+          '  type: http\n'
+          '  username: u_98f2bcd7\n';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'sg-sg01');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].port, 443);
+    });
+
+    test('Parse pasted YAML with zero-width space prefix', () {
+      const yaml = '\u200b- name: sg-sg01\n'
+          '  password: xyp8KDrrnqFFk4JZ34U\n'
+          '  port: 443\n'
+          '  server: market.weichichibaole.com\n'
+          '  skip-cert-verify: false\n'
+          '  tls: true\n'
+          '  type: http\n'
+          '  username: u_98f2bcd7\n';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'sg-sg01');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].port, 443);
+    });
+
+    test('sanitizeInput strips fence and compacts blank lines', () {
+      const raw = '''
+```yaml
+
+    - name: sg-sg01
+      type: http    
+      server: market.weichichibaole.com
+      port: 443
+
+
+```
+''';
+      final cleaned = SubscriptionParser.sanitizeInput(raw);
+      expect(cleaned, '''
+- name: sg-sg01
+  type: http
+  server: market.weichichibaole.com
+  port: 443''');
+    });
+
+    test('Parse non-standard bullet with full-width colon', () {
+      const yaml = '''
+• name：sg-sg01
+  password：xyp8KDrrnqFFk4JZ34U
+  port：443
+  server：market.weichichibaole.com
+  skip-cert-verify：false
+  tls：true
+  type：http
+  username：u_98f2bcd7
+''';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'sg-sg01');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].server, 'market.weichichibaole.com');
+      expect(nodes[0].port, 443);
+    });
+
+    test('Parse key-value proxy block without name by synthesizing name', () {
+      const yaml = '''
+server: market.weichichibaole.com
+skip-cert-verify: false
+tls: true
+type: http
+username: u_98f2bcd7
+''';
+      final nodes = SubscriptionParser.parse(yaml).proxies;
+      expect(nodes.length, 1);
+      expect(nodes[0].name, 'http-market.weichichibaole.com');
+      expect(nodes[0].type, 'http');
+      expect(nodes[0].server, 'market.weichichibaole.com');
+      expect(nodes[0].port, 443);
+    });
+
     test('Parse Trojan URI', () {
       const trojanUri = 'trojan://password123@us.trojan.com:443#US-Trojan-Node';
       final nodes = SubscriptionParser.parse(trojanUri).proxies;

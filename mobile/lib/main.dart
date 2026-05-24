@@ -54,7 +54,8 @@ const _kHttpProxyPort = 7890;
 const _kMainProxyGroup = '🚀 Proxy';
 
 class _IpInfo {
-  const _IpInfo({required this.ip, required this.location, required this.source});
+  const _IpInfo(
+      {required this.ip, required this.location, required this.source});
   final String ip;
   final String location;
   final String source;
@@ -294,12 +295,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // (url, source-label, parse-type)  parse-type: 'upaiyun' | 'ipsb' | 'ipinfo'
   static const _directIpCandidates = [
     ('https://pubstatic.b0.upaiyun.com/?_upnode', 'UpaiYun', 'upaiyun'),
-    ('https://api.ip.sb/geoip',                   'IP.SB',   'ipsb'),
-    ('https://ipinfo.io/json',                     'IPInfo',  'ipinfo'),
+    ('https://api.ip.sb/geoip', 'IP.SB', 'ipsb'),
+    ('https://ipinfo.io/json', 'IPInfo', 'ipinfo'),
   ];
   static const _proxyIpCandidates = [
-    ('https://api.ip.sb/geoip',  'IP.SB',  'ipsb'),
-    ('https://ipinfo.io/json',   'IPInfo', 'ipinfo'),
+    ('https://api.ip.sb/geoip', 'IP.SB', 'ipsb'),
+    ('https://ipinfo.io/json', 'IPInfo', 'ipinfo'),
   ];
 
   // (url, domain-for-DNS-query) — names and descriptions come from l10n
@@ -316,18 +317,41 @@ class _HomeScreenState extends State<HomeScreen> {
     ('https://claude.ai', 'claude.ai'),
   ];
 
-  List<(String, String, String, String)> _domesticSites(AppLocalizations l10n) => [
-    (l10n.siteTaobaoName, l10n.siteTaobaoDesc, _domesticSiteUrls[0].$1, _domesticSiteUrls[0].$2),
-    (l10n.siteNeteaseName, l10n.siteNeteaseDesc, _domesticSiteUrls[1].$1, _domesticSiteUrls[1].$2),
-  ];
-  List<(String, String, String, String)> _foreignSites(AppLocalizations l10n) => [
-    ('GitHub', l10n.siteGitHubDesc, _foreignSiteUrls[0].$1, _foreignSiteUrls[0].$2),
-    ('Google', l10n.siteGoogleDesc, _foreignSiteUrls[1].$1, _foreignSiteUrls[1].$2),
-  ];
+  List<(String, String, String, String)> _domesticSites(
+          AppLocalizations l10n) =>
+      [
+        (
+          l10n.siteTaobaoName,
+          l10n.siteTaobaoDesc,
+          _domesticSiteUrls[0].$1,
+          _domesticSiteUrls[0].$2
+        ),
+        (
+          l10n.siteNeteaseName,
+          l10n.siteNeteaseDesc,
+          _domesticSiteUrls[1].$1,
+          _domesticSiteUrls[1].$2
+        ),
+      ];
+  List<(String, String, String, String)> _foreignSites(AppLocalizations l10n) =>
+      [
+        (
+          'GitHub',
+          l10n.siteGitHubDesc,
+          _foreignSiteUrls[0].$1,
+          _foreignSiteUrls[0].$2
+        ),
+        (
+          'Google',
+          l10n.siteGoogleDesc,
+          _foreignSiteUrls[1].$1,
+          _foreignSiteUrls[1].$2
+        ),
+      ];
   List<(String, String, String, String)> _aiSites(AppLocalizations l10n) => [
-    ('OpenAI', l10n.siteOpenAIDesc, _aiSiteUrls[0].$1, _aiSiteUrls[0].$2),
-    ('Claude', l10n.siteClaudeDesc, _aiSiteUrls[1].$1, _aiSiteUrls[1].$2),
-  ];
+        ('OpenAI', l10n.siteOpenAIDesc, _aiSiteUrls[0].$1, _aiSiteUrls[0].$2),
+        ('Claude', l10n.siteClaudeDesc, _aiSiteUrls[1].$1, _aiSiteUrls[1].$2),
+      ];
 
   int _tabIndex = 0;
   bool _isConnected = false;
@@ -404,7 +428,8 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         setState(() => _subscriptions[existingIdx] = fixed);
         await SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
-        AppLogger.instance.info('app', 'Retroactively marked built-in subscription');
+        AppLogger.instance
+            .info('app', 'Retroactively marked built-in subscription');
       }
       return;
     }
@@ -414,7 +439,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final response =
           await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) return;
-      final content = _decryptResponseOrFallback(response.bodyBytes, response.body);
+      final content =
+          _decryptResponseOrFallback(response.bodyBytes, response.body);
       final parsed = SubscriptionParser.parse(content);
       if (parsed.proxies.isEmpty) return;
       _onNodesImported(parsed, url: url, nickname: 'Free', isBuiltIn: true);
@@ -704,6 +730,246 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  bool _isClashForgeStandardSubscription(Subscription sub) {
+    if (sub.isBuiltIn) return false;
+    if (sub.url.isNotEmpty) return false;
+    if (sub.customRules.isNotEmpty) return false;
+    if (sub.customProxyGroups.isNotEmpty) return false;
+    return true;
+  }
+
+  ({List<ProxyNode> nodes, int added, int replaced}) _mergeNodesByName(
+    List<ProxyNode> base,
+    List<ProxyNode> incoming,
+  ) {
+    final merged = List<ProxyNode>.from(base);
+    final nameIndex = <String, int>{};
+    for (var i = 0; i < merged.length; i++) {
+      final name = merged[i].name.trim();
+      if (name.isEmpty) continue;
+      nameIndex[name] = i;
+    }
+
+    var added = 0;
+    var replaced = 0;
+    for (final node in incoming) {
+      final name = node.name.trim();
+      if (name.isEmpty) continue;
+      final idx = nameIndex[name];
+      if (idx == null) {
+        nameIndex[name] = merged.length;
+        merged.add(node);
+        added++;
+      } else {
+        merged[idx] = node;
+        replaced++;
+      }
+    }
+    return (nodes: merged, added: added, replaced: replaced);
+  }
+
+  Future<_NodeImportActionResult> _restartVpnAfterSubscriptionChange() async {
+    if (!_isConnected) {
+      return const _NodeImportActionResult(
+        success: true,
+        message: '当前未连接，已保存改动（连接后自动生效）',
+      );
+    }
+    final l10n = AppLocalizations.of(context);
+    final activeSub = _activeSubscription();
+    if (_selectedNode == null || activeSub == null) {
+      return const _NodeImportActionResult(
+        success: false,
+        message: '重启失败：当前无可用节点',
+      );
+    }
+
+    final logger = AppLogger.instance;
+    setState(() => _isConnecting = true);
+    try {
+      final stopRes = await VpnManager.stopVpn();
+      logger.info('vpn', 'Restart (stop) result: $stopRes');
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = '';
+        _connectivitySnapshot = null;
+        _browserDnsSnapshot = null;
+        _probeMessage = null;
+        _browserDnsMessage = null;
+      });
+
+      final filesDir = await VpnManager.getFilesDir();
+      final configMap = ConfigGenerator.generate(
+        nodes: _nodes,
+        geodataPath: filesDir,
+        selectedNodeName: _selectedNode!.name,
+        customRules: activeSub.customRules,
+        customProxyGroups: activeSub.customProxyGroups,
+        customRuleProviders: activeSub.customRuleProviders,
+      );
+      final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
+      logger.debug('vpn', 'Restart config write result: $writeResult');
+      if (writeResult.toLowerCase().startsWith('error')) {
+        throw Exception(writeResult);
+      }
+
+      final startRes = await VpnManager.startVpn();
+      logger.info('vpn', 'Restart (start) result: $startRes');
+      if (startRes == 'permission_needed') {
+        setState(() => _connectionStatus = l10n.connGrantPermission);
+        return const _NodeImportActionResult(
+          success: false,
+          message: '重启失败：需要系统授权',
+        );
+      }
+      if (startRes.toLowerCase().startsWith('error')) {
+        throw Exception(startRes);
+      }
+
+      if (!mounted) {
+        return const _NodeImportActionResult(
+          success: true,
+          message: '服务已重启',
+        );
+      }
+      setState(() {
+        _isConnected = true;
+        _connectionStatus = l10n.connConnected;
+      });
+      unawaited(_bootstrapAfterConnect());
+      return const _NodeImportActionResult(
+        success: true,
+        message: '服务重启成功',
+      );
+    } catch (e) {
+      logger.error('vpn', 'Restart failed: $e');
+      if (mounted) {
+        setState(() {
+          _isConnected = false;
+          _connectionStatus =
+              AppLocalizations.of(context).connError(e.toString());
+        });
+      }
+      return _NodeImportActionResult(
+        success: false,
+        message: '服务重启失败：$e',
+      );
+    } finally {
+      if (mounted) setState(() => _isConnecting = false);
+    }
+  }
+
+  Future<_NodeImportActionResult> _mergeParsedNodesIntoSubscription(
+    ParsedSubscription parsed, {
+    required String targetSubscriptionId,
+  }) async {
+    final targetIdx =
+        _subscriptions.indexWhere((s) => s.id == targetSubscriptionId);
+    if (targetIdx < 0) {
+      return const _NodeImportActionResult(
+        success: false,
+        message: '未找到目标订阅',
+      );
+    }
+    final target = _subscriptions[targetIdx];
+    if (!_isClashForgeStandardSubscription(target)) {
+      return const _NodeImportActionResult(
+        success: false,
+        message: '目标订阅不是 ClashForge 本地标准订阅',
+      );
+    }
+
+    final merged = _mergeNodesByName(target.nodes, parsed.proxies);
+    if (merged.added == 0 && merged.replaced == 0) {
+      return const _NodeImportActionResult(
+        success: true,
+        message: '未发现可新增节点（可能全部重名且内容相同）',
+      );
+    }
+
+    final updated = Subscription(
+      id: target.id,
+      nickname: target.nickname,
+      url: target.url,
+      nodes: merged.nodes,
+      customRules: target.customRules,
+      customProxyGroups: target.customProxyGroups,
+      customRuleProviders: target.customRuleProviders,
+      isBuiltIn: target.isBuiltIn,
+    );
+
+    final previousSelectedName = _selectedNode?.name;
+    ProxyNode? nextSelected;
+    if (previousSelectedName != null) {
+      for (final node in updated.nodes) {
+        if (node.name == previousSelectedName) {
+          nextSelected = node;
+          break;
+        }
+      }
+    }
+    nextSelected ??= updated.nodes.isEmpty ? null : updated.nodes.first;
+
+    setState(() {
+      _subscriptions[targetIdx] = updated;
+      _activeSubscriptionId = updated.id;
+      _nodes
+        ..clear()
+        ..addAll(updated.nodes);
+      _selectedNode = nextSelected;
+      _proxyNowMap = _defaultSelectNowMapFor(updated);
+    });
+    await SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
+    await SubscriptionStore.saveActiveId(updated.id);
+
+    final restartResult = await _restartVpnAfterSubscriptionChange();
+    final changedSummary = '新增 ${merged.added} / 覆盖 ${merged.replaced}';
+    return _NodeImportActionResult(
+      success: restartResult.success,
+      message: '$changedSummary，${restartResult.message}',
+    );
+  }
+
+  Future<_NodeImportActionResult> _createStandardSubFromParsedNodes(
+    ParsedSubscription parsed, {
+    required String nickname,
+  }) async {
+    if (parsed.proxies.isEmpty) {
+      return const _NodeImportActionResult(
+        success: false,
+        message: '未识别到可用节点',
+      );
+    }
+    final name =
+        nickname.trim().isEmpty ? 'Local Subscription' : nickname.trim();
+    final id = '${DateTime.now().millisecondsSinceEpoch}';
+    final sub = Subscription(
+      id: id,
+      nickname: name,
+      url: '',
+      nodes: parsed.proxies,
+    );
+
+    setState(() {
+      _subscriptions.add(sub);
+      _activeSubscriptionId = sub.id;
+      _nodes
+        ..clear()
+        ..addAll(sub.nodes);
+      _selectedNode = sub.nodes.isEmpty ? null : sub.nodes.first;
+      _proxyNowMap = _defaultSelectNowMapFor(sub);
+    });
+    await SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
+    await SubscriptionStore.saveActiveId(sub.id);
+
+    final restartResult = await _restartVpnAfterSubscriptionChange();
+    return _NodeImportActionResult(
+      success: restartResult.success,
+      message:
+          '已创建 "$name"（${parsed.proxies.length} 节点），${restartResult.message}',
+    );
+  }
+
   Future<void> _onNodeSelected(ProxyNode node) async {
     setState(() {
       _selectedNode = node;
@@ -738,7 +1004,10 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         Subscription? activeSub;
         for (final s in _subscriptions) {
-          if (s.id == _activeSubscriptionId) { activeSub = s; break; }
+          if (s.id == _activeSubscriptionId) {
+            activeSub = s;
+            break;
+          }
         }
         // Never log server/port/type for built-in nodes — they must stay hidden.
         logger.info('vpn', 'Starting VPN', fields: {
@@ -801,10 +1070,9 @@ class _HomeScreenState extends State<HomeScreen> {
               'http://$_kClashControllerHost:$_kClashControllerPort/proxies'))
           .timeout(const Duration(seconds: 3));
       if (res.statusCode != 200) return null;
-      final proxies =
-          ((jsonDecode(res.body) as Map<String, dynamic>)['proxies']
+      final proxies = ((jsonDecode(res.body) as Map<String, dynamic>)['proxies']
               as Map<String, dynamic>?) ??
-              {};
+          {};
       const preferred = ['🚀 Proxy', '🚀 节点选择', 'Proxy', 'GLOBAL'];
       for (final name in preferred) {
         final g = proxies[name] as Map<String, dynamic>?;
@@ -829,14 +1097,12 @@ class _HomeScreenState extends State<HomeScreen> {
               'http://$_kClashControllerHost:$_kClashControllerPort/proxies'))
           .timeout(const Duration(seconds: 3));
       if (res.statusCode != 200 || !mounted) return;
-      final data =
-          ((jsonDecode(res.body) as Map<String, dynamic>)['proxies']
+      final data = ((jsonDecode(res.body) as Map<String, dynamic>)['proxies']
               as Map<String, dynamic>?) ??
-              {};
+          {};
       final map = <String, String>{};
       for (final e in data.entries) {
-        final now =
-            (e.value as Map<String, dynamic>?)?['now'] as String?;
+        final now = (e.value as Map<String, dynamic>?)?['now'] as String?;
         if (now != null && now.isNotEmpty) map[e.key] = now;
       }
       final merged = {
@@ -878,7 +1144,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _refreshProxyNow();
   }
 
-
   Future<void> _bootstrapAfterConnect() async {
     await _refreshPrivateDnsWarning();
 
@@ -905,7 +1170,8 @@ class _HomeScreenState extends State<HomeScreen> {
             )
             .timeout(const Duration(seconds: 2));
         if (mounted) {
-          setState(() => _connectionStatus = AppLocalizations.of(context).connConnected);
+          setState(() =>
+              _connectionStatus = AppLocalizations.of(context).connConnected);
         }
         break; // controller responded — stop retrying
       } catch (_) {
@@ -990,14 +1256,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     if (!_isConnected) {
-      setState(() => _connectionStatus = AppLocalizations.of(context).connNodeSelectedTapConnect);
+      setState(() => _connectionStatus =
+          AppLocalizations.of(context).connNodeSelectedTapConnect);
       return;
     }
 
     try {
       await _applyNodeSelectionIfRunning(triggerProbe: false);
       if (mounted) {
-        setState(() => _connectionStatus = AppLocalizations.of(context).connSwitchedTo(node.name));
+        setState(() => _connectionStatus =
+            AppLocalizations.of(context).connSwitchedTo(node.name));
       }
       await _refreshProxyNow();
       await _runConnectivityChecks();
@@ -1053,7 +1321,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       AppLogger.instance.error('probe', 'Connectivity probe failed: $e');
       if (!mounted) return;
-      setState(() => _probeMessage = AppLocalizations.of(context).browserDnsFailed(e.toString()));
+      setState(() => _probeMessage =
+          AppLocalizations.of(context).browserDnsFailed(e.toString()));
     } finally {
       directClient.close(force: true);
       proxyClient.close(force: true);
@@ -1106,8 +1375,10 @@ class _HomeScreenState extends State<HomeScreen> {
         final city = (data['city'] ?? '').toString();
         final country = (data['country'] ?? '').toString();
         final org = (data['organization'] ?? '').toString();
-        final orgClean = org.contains(' ') ? org.substring(org.indexOf(' ') + 1) : org;
-        location = [city, country, orgClean].where((s) => s.isNotEmpty).join(' · ');
+        final orgClean =
+            org.contains(' ') ? org.substring(org.indexOf(' ') + 1) : org;
+        location =
+            [city, country, orgClean].where((s) => s.isNotEmpty).join(' · ');
       } else {
         // ipinfo.io: {"ip":"...","city":"Tokyo","country":"JP","org":"AS8075 Microsoft Corporation"}
         ip = (data['ip'] ?? '').toString().trim();
@@ -1159,7 +1430,8 @@ class _HomeScreenState extends State<HomeScreen> {
         ));
       } on TimeoutException {
         watch.stop();
-        results.add(_SiteCheckResult(name: name, description: desc, ok: false, error: 'timeout'));
+        results.add(_SiteCheckResult(
+            name: name, description: desc, ok: false, error: 'timeout'));
       } catch (e) {
         watch.stop();
         results.add(_SiteCheckResult(
@@ -1227,7 +1499,8 @@ class _HomeScreenState extends State<HomeScreen> {
             .toSet()
             .toList();
         systemDnsOk = ips.isNotEmpty;
-        systemDnsDetail = systemDnsOk ? ips.take(3).join(', ') : l10n.systemDnsNoAddr;
+        systemDnsDetail =
+            systemDnsOk ? ips.take(3).join(', ') : l10n.systemDnsNoAddr;
       } catch (e) {
         systemDnsDetail = e.toString();
       }
@@ -1284,7 +1557,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       logger.error('browser-dns', 'Browser DNS diagnostics failed: $e');
       if (!mounted) return;
-      setState(() => _browserDnsMessage = AppLocalizations.of(context).browserDnsFailed(e.toString()));
+      setState(() => _browserDnsMessage =
+          AppLocalizations.of(context).browserDnsFailed(e.toString()));
     } finally {
       if (mounted) {
         setState(() => _browserDnsLoading = false);
@@ -1292,7 +1566,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  String _buildBrowserDnsSummary(List<_BrowserDnsCheckResult> checks, AppLocalizations l10n) {
+  String _buildBrowserDnsSummary(
+      List<_BrowserDnsCheckResult> checks, AppLocalizations l10n) {
     bool failed(String name) =>
         checks.any((item) => item.name == name && !item.ok);
 
@@ -1332,14 +1607,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-
   @override
   Widget build(BuildContext context) {
     Subscription? activeSub;
     for (final s in _subscriptions) {
-      if (s.id == _activeSubscriptionId) { activeSub = s; break; }
+      if (s.id == _activeSubscriptionId) {
+        activeSub = s;
+        break;
+      }
     }
     final activeIsBuiltIn = activeSub?.isBuiltIn ?? false;
+    final standardLocalSubs =
+        _subscriptions.where(_isClashForgeStandardSubscription).toList();
 
     final tabs = <Widget>[
       _HomeTab(
@@ -1378,9 +1657,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _SubscriptionsTab(
         onImported: _onNodesImported,
         subscriptions: _subscriptions,
+        standardLocalSubscriptions: standardLocalSubs,
         activeSubId: _activeSubscriptionId,
         onActivate: _activateSubscription,
         onDelete: _deleteSubscription,
+        onMergeParsedNodes: _mergeParsedNodesIntoSubscription,
+        onCreateStandardFromParsed: _createStandardSubFromParsedNodes,
       ),
       _SettingsTab(
         nodeCount: _nodes.length,
@@ -1469,12 +1751,12 @@ class _HomeTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final accent = isConnected ? _kConnected : _kBrand;
-    final _fmt = (DateTime dt) =>
-        '${dt.hour.toString().padLeft(2, '0')}:'
+    final _fmt = (DateTime dt) => '${dt.hour.toString().padLeft(2, '0')}:'
         '${dt.minute.toString().padLeft(2, '0')}:'
         '${dt.second.toString().padLeft(2, '0')}';
     final checkedAt = snapshot == null ? '--' : _fmt(snapshot!.checkedAt);
-    final browserDnsCheckedAt = browserDnsSnapshot == null ? '--' : _fmt(browserDnsSnapshot!.checkedAt);
+    final browserDnsCheckedAt =
+        browserDnsSnapshot == null ? '--' : _fmt(browserDnsSnapshot!.checkedAt);
 
     return Container(
       decoration: const BoxDecoration(
@@ -1603,7 +1885,9 @@ class _HomeTab extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            connectionStatus.isEmpty ? l10n.connTapToConnect : connectionStatus,
+                            connectionStatus.isEmpty
+                                ? l10n.connTapToConnect
+                                : connectionStatus,
                             style: const TextStyle(
                                 color: _kTextMuted, fontSize: 13, height: 1.4),
                           ),
@@ -1622,7 +1906,9 @@ class _HomeTab extends StatelessWidget {
                                           color: accent.withAlpha(120)),
                                     ),
                                   ),
-                                  child: Text(isConnected ? l10n.btnDisconnect : l10n.btnConnect),
+                                  child: Text(isConnected
+                                      ? l10n.btnDisconnect
+                                      : l10n.btnConnect),
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -1694,7 +1980,8 @@ class _HomeTab extends StatelessWidget {
                               strokeWidth: 2, color: _kBrand),
                         )
                       : const Icon(Icons.refresh, size: 14),
-                  label: Text(l10n.btnRecheck, style: const TextStyle(fontSize: 12)),
+                  label: Text(l10n.btnRecheck,
+                      style: const TextStyle(fontSize: 12)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1731,7 +2018,8 @@ class _HomeTab extends StatelessWidget {
                         ),
                         child: Text(
                           l10n.hintClickRecheck,
-                          style: const TextStyle(color: _kTextMuted, fontSize: 13),
+                          style:
+                              const TextStyle(color: _kTextMuted, fontSize: 13),
                         ),
                       ),
                     if (snapshot != null)
@@ -1760,7 +2048,8 @@ class _HomeTab extends StatelessWidget {
                               strokeWidth: 2, color: _kBrand),
                         )
                       : const Icon(Icons.refresh, size: 14),
-                  label: Text(l10n.btnRecheck, style: const TextStyle(fontSize: 12)),
+                  label: Text(l10n.btnRecheck,
+                      style: const TextStyle(fontSize: 12)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1797,7 +2086,8 @@ class _HomeTab extends StatelessWidget {
                         ),
                         child: Text(
                           l10n.hintClickRecheckBrowserDns,
-                          style: const TextStyle(color: _kTextMuted, fontSize: 13),
+                          style:
+                              const TextStyle(color: _kTextMuted, fontSize: 13),
                         ),
                       ),
                     if (browserDnsSnapshot != null)
@@ -1820,7 +2110,8 @@ class _HomeTab extends StatelessWidget {
                 child: nodes.isEmpty
                     ? Text(
                         l10n.hintNoNodes,
-                        style: const TextStyle(color: _kTextMuted, fontSize: 13),
+                        style:
+                            const TextStyle(color: _kTextMuted, fontSize: 13),
                       )
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1983,13 +2274,15 @@ class _ConnectivityPane extends StatelessWidget {
           const SizedBox(height: 8),
         ],
         if (snapshot.foreignResults.isNotEmpty) ...[
-          _CategoryTag(label: l10n.categoryVpnProxy, color: const Color(0xFF64B5F6)),
+          _CategoryTag(
+              label: l10n.categoryVpnProxy, color: const Color(0xFF64B5F6)),
           const SizedBox(height: 6),
           ...snapshot.foreignResults.map((r) => _SiteCheckRow(result: r)),
           const SizedBox(height: 8),
         ],
         if (snapshot.aiResults.isNotEmpty) ...[
-          _CategoryTag(label: l10n.categoryAiVpnProxy, color: const Color(0xFF9C6DFF)),
+          _CategoryTag(
+              label: l10n.categoryAiVpnProxy, color: const Color(0xFF9C6DFF)),
           const SizedBox(height: 6),
           ...snapshot.aiResults.map((r) => _SiteCheckRow(result: r)),
         ],
@@ -2027,8 +2320,8 @@ class _CategoryTag extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(
-            color: color, fontSize: 11, fontWeight: FontWeight.w700),
+        style:
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -2108,8 +2401,7 @@ class _IpCard extends StatelessWidget {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: badgeColor.withAlpha(20),
                   borderRadius: BorderRadius.circular(999),
@@ -2189,9 +2481,7 @@ class _SiteCheckRow extends StatelessWidget {
                   child: Text(
                     result.ok ? l10n.siteStatusOk : l10n.siteStatusError,
                     style: TextStyle(
-                        color: tone,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600),
+                        color: tone, fontSize: 10, fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
@@ -2219,8 +2509,8 @@ class _SiteCheckRow extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'DNS → ${result.dnsLabel}',
-                        style: const TextStyle(
-                            color: _kTextFaint, fontSize: 11),
+                        style:
+                            const TextStyle(color: _kTextFaint, fontSize: 11),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -2231,8 +2521,8 @@ class _SiteCheckRow extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 result.error!,
-                style: const TextStyle(
-                    color: _kError, fontSize: 11, height: 1.3),
+                style:
+                    const TextStyle(color: _kError, fontSize: 11, height: 1.3),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2387,8 +2677,7 @@ class _ProxiesTabState extends State<_ProxiesTab> {
   void initState() {
     super.initState();
     if (widget.vpnRunning) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => widget.onRefresh());
+      WidgetsBinding.instance.addPostFrameCallback((_) => widget.onRefresh());
     }
   }
 
@@ -2517,8 +2806,7 @@ class _ProxiesTabState extends State<_ProxiesTab> {
           onTap: () => widget.onSelect(node),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
               gradient: selected
                   ? LinearGradient(
@@ -2622,10 +2910,8 @@ class _ProxyGroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isAuto = type == 'url-test' || type == 'fallback';
     final typeLabel = isAuto ? 'AUTO' : 'SELECT';
-    final typeColor =
-        isAuto ? const Color(0xFF64B5F6) : _kBrand;
-    final nowText = currentNow ??
-        (vpnRunning ? '…' : '—');
+    final typeColor = isAuto ? const Color(0xFF64B5F6) : _kBrand;
+    final nowText = currentNow ?? (vpnRunning ? '…' : '—');
     final cardShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(16),
       side: const BorderSide(color: _kBorder),
@@ -2642,8 +2928,7 @@ class _ProxyGroupCard extends StatelessWidget {
           shape: cardShape,
           collapsedShape: cardShape,
           clipBehavior: Clip.antiAlias,
-          tilePadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           childrenPadding: EdgeInsets.zero,
           title: Row(
             children: [
@@ -2656,8 +2941,7 @@ class _ProxyGroupCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: typeColor.withAlpha(22),
                   borderRadius: BorderRadius.circular(6),
@@ -2686,9 +2970,8 @@ class _ProxyGroupCard extends StatelessWidget {
                   member: member,
                   isCurrent: member == currentNow,
                   canTap: onMemberTap != null,
-                  onTap: onMemberTap != null
-                      ? () => onMemberTap!(member)
-                      : null,
+                  onTap:
+                      onMemberTap != null ? () => onMemberTap!(member) : null,
                 )),
           ],
         ),
@@ -2724,12 +3007,10 @@ class _GroupMemberTile extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         decoration: BoxDecoration(
           color: isCurrent ? _kBrand.withAlpha(10) : Colors.transparent,
-          border: const Border(
-              top: BorderSide(color: _kBorder, width: 0.5)),
+          border: const Border(top: BorderSide(color: _kBorder, width: 0.5)),
         ),
         child: Row(
           children: [
@@ -2740,26 +3021,22 @@ class _GroupMemberTile extends StatelessWidget {
                 color: isCurrent ? _kBrand.withAlpha(25) : _kBg,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                    color:
-                        isCurrent ? _kBrand.withAlpha(90) : _kBorder),
+                    color: isCurrent ? _kBrand.withAlpha(90) : _kBorder),
               ),
               child: Icon(_icon(member),
-                  size: 15,
-                  color: isCurrent ? _kBrand : _kTextMuted),
+                  size: 15, color: isCurrent ? _kBrand : _kTextMuted),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(member,
                   style: TextStyle(
                       color: isCurrent ? _kTextHi : _kTextMuted,
-                      fontWeight: isCurrent
-                          ? FontWeight.w600
-                          : FontWeight.normal,
+                      fontWeight:
+                          isCurrent ? FontWeight.w600 : FontWeight.normal,
                       fontSize: 14)),
             ),
             if (isCurrent)
-              const Icon(Icons.check_circle_outline,
-                  color: _kBrand, size: 18)
+              const Icon(Icons.check_circle_outline, color: _kBrand, size: 18)
             else if (canTap)
               Icon(Icons.chevron_right,
                   color: _kBorder.withAlpha(180), size: 18),
@@ -2777,20 +3054,46 @@ typedef _OnImported = void Function(ParsedSubscription parsed,
     {String url, String nickname});
 typedef _OnSubActivated = void Function(Subscription sub);
 typedef _OnSubDeleted = void Function(Subscription sub);
+typedef _OnMergeParsedNodes = Future<_NodeImportActionResult>
+    Function(ParsedSubscription parsed, {required String targetSubscriptionId});
+typedef _OnCreateStandardSubFromParsed = Future<_NodeImportActionResult>
+    Function(ParsedSubscription parsed, {required String nickname});
+
+class _NodeImportActionResult {
+  const _NodeImportActionResult({
+    required this.success,
+    required this.message,
+  });
+
+  final bool success;
+  final String message;
+}
+
+enum _SubscriptionPanel {
+  mySubscriptions,
+  importUrl,
+  importNodes,
+}
 
 class _SubscriptionsTab extends StatefulWidget {
   const _SubscriptionsTab({
     required this.onImported,
     required this.subscriptions,
+    required this.standardLocalSubscriptions,
     required this.activeSubId,
     required this.onActivate,
     required this.onDelete,
+    required this.onMergeParsedNodes,
+    required this.onCreateStandardFromParsed,
   });
   final _OnImported onImported;
   final List<Subscription> subscriptions;
+  final List<Subscription> standardLocalSubscriptions;
   final String? activeSubId;
   final _OnSubActivated onActivate;
   final _OnSubDeleted onDelete;
+  final _OnMergeParsedNodes onMergeParsedNodes;
+  final _OnCreateStandardSubFromParsed onCreateStandardFromParsed;
 
   @override
   State<_SubscriptionsTab> createState() => _SubscriptionsTabState();
@@ -2799,6 +3102,9 @@ class _SubscriptionsTab extends StatefulWidget {
 class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   final _urlController = TextEditingController();
   final _pasteController = TextEditingController();
+  final _newSubNameController = TextEditingController();
+  _SubscriptionPanel _panel = _SubscriptionPanel.mySubscriptions;
+  String? _targetStandardSubId;
   bool _loading = false;
   bool _pasteLoading = false;
   String? _message;
@@ -2818,7 +3124,18 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   void dispose() {
     _urlController.dispose();
     _pasteController.dispose();
+    _newSubNameController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SubscriptionsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final exists = widget.standardLocalSubscriptions
+        .any((s) => s.id == _targetStandardSubId);
+    if (!exists) {
+      _targetStandardSubId = null;
+    }
   }
 
   static const _httpChannel = MethodChannel('com.clashforge.mobile/http');
@@ -2883,8 +3200,10 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       }
 
       final parsed = SubscriptionParser.parse(content);
-      logger.info('subscription', 'Parsed nodes',
-          fields: {'count': parsed.proxies.length, 'has_custom_rules': parsed.hasCustomRules});
+      logger.info('subscription', 'Parsed nodes', fields: {
+        'count': parsed.proxies.length,
+        'has_custom_rules': parsed.hasCustomRules
+      });
       if (parsed.proxies.isEmpty) {
         logger.warn('subscription', 'No nodes parsed');
       }
@@ -2908,7 +3227,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       setState(() {
         _loading = false;
         _success = true;
-        _message = AppLocalizations.of(context).importedNodes(parsed.proxies.length, nickname);
+        _message = AppLocalizations.of(context)
+            .importedNodes(parsed.proxies.length, nickname);
       });
     } catch (e) {
       logger.error('subscription', 'Import error: $e');
@@ -2922,8 +3242,16 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   }
 
   Future<void> _importFromPaste() async {
-    final content = _pasteController.text.trim();
+    final rawContent = _pasteController.text;
+    final cleanedContent = SubscriptionParser.sanitizeInput(rawContent);
+    final content = cleanedContent.trim();
     if (content.isEmpty) return;
+    if (cleanedContent != rawContent) {
+      _pasteController.value = TextEditingValue(
+        text: cleanedContent,
+        selection: TextSelection.collapsed(offset: cleanedContent.length),
+      );
+    }
     final logger = AppLogger.instance;
     setState(() {
       _pasteLoading = true;
@@ -2931,8 +3259,10 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
     });
     try {
       final parsed = SubscriptionParser.parse(content);
-      logger.info('subscription', 'Parsed pasted nodes',
-          fields: {'count': parsed.proxies.length, 'has_custom_rules': parsed.hasCustomRules});
+      logger.info('subscription', 'Parsed pasted nodes', fields: {
+        'count': parsed.proxies.length,
+        'has_custom_rules': parsed.hasCustomRules
+      });
       if (parsed.proxies.isEmpty) {
         if (!mounted) return;
         setState(() {
@@ -2943,25 +3273,37 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         return;
       }
 
-      final defaultName = await SubscriptionStore.generateDefaultNickname();
-      if (!mounted) return;
-      final nickname = await _showNicknameDialog(defaultName);
-      if (!mounted) return;
-      if (nickname == null) {
-        setState(() {
-          _pasteLoading = false;
-          _pasteSuccess = false;
-          _pasteMessage = null;
-        });
-        return;
+      final targetExists = _targetStandardSubId != null &&
+          widget.standardLocalSubscriptions
+              .any((s) => s.id == _targetStandardSubId);
+      _NodeImportActionResult result;
+      if (targetExists) {
+        result = await widget.onMergeParsedNodes(
+          parsed,
+          targetSubscriptionId: _targetStandardSubId!,
+        );
+      } else {
+        var nickname = _newSubNameController.text.trim();
+        if (nickname.isEmpty) {
+          nickname = await SubscriptionStore.generateDefaultNickname();
+        }
+        result = await widget.onCreateStandardFromParsed(
+          parsed,
+          nickname: nickname,
+        );
       }
 
-      widget.onImported(parsed, url: '', nickname: nickname);
       if (!mounted) return;
       setState(() {
         _pasteLoading = false;
-        _pasteSuccess = true;
-        _pasteMessage = AppLocalizations.of(context).importedFromPaste(parsed.proxies.length);
+        _pasteSuccess = result.success;
+        _pasteMessage = result.message;
+        if (result.success) {
+          _pasteController.clear();
+          if (_targetStandardSubId == null) {
+            _newSubNameController.clear();
+          }
+        }
       });
     } catch (e) {
       logger.error('subscription', 'Paste import error: $e');
@@ -2972,6 +3314,36 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         _pasteMessage = AppLocalizations.of(context).parseFailedMsg(e);
       });
     }
+  }
+
+  void _clearPastedNodeInput() {
+    if (_pasteLoading || _pasteController.text.isEmpty) return;
+    setState(() {
+      _pasteController.clear();
+      _pasteMessage = null;
+    });
+  }
+
+  void _sanitizePastedNodeInput({bool showFeedback = true}) {
+    if (_pasteLoading) return;
+    final raw = _pasteController.text;
+    if (raw.trim().isEmpty) return;
+    final cleaned = SubscriptionParser.sanitizeInput(raw);
+    final changed = cleaned != raw;
+    if (changed) {
+      _pasteController.value = TextEditingValue(
+        text: cleaned,
+        selection: TextSelection.collapsed(offset: cleaned.length),
+      );
+    }
+    if (!showFeedback) {
+      if (changed) setState(() {});
+      return;
+    }
+    setState(() {
+      _pasteSuccess = true;
+      _pasteMessage = changed ? '已完成格式化清理' : '内容已是规范格式';
+    });
   }
 
   String _redactSubscriptionUrl(String raw) {
@@ -3028,7 +3400,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text(l10n.btnCancel, style: const TextStyle(color: _kTextMuted)),
+            child: Text(l10n.btnCancel,
+                style: const TextStyle(color: _kTextMuted)),
           ),
           FilledButton(
             key: const Key('save_nickname'),
@@ -3069,7 +3442,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text(l10n.btnCancel, style: const TextStyle(color: _kTextMuted)),
+            child: Text(l10n.btnCancel,
+                style: const TextStyle(color: _kTextMuted)),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
@@ -3142,7 +3516,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                               decoration: BoxDecoration(
                                 color: _kBrand.withAlpha(30),
                                 borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: _kBrand.withAlpha(80)),
+                                border:
+                                    Border.all(color: _kBrand.withAlpha(80)),
                               ),
                               child: Text(l10n.activeLabel,
                                   style: const TextStyle(
@@ -3159,7 +3534,8 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                       final l10n = AppLocalizations.of(ctx);
                       return Text(
                         '${l10n.nodesCountSub(sub.nodes.length)}${sub.isBuiltIn ? '' : _domainLabel(sub.url)}',
-                        style: const TextStyle(color: _kTextFaint, fontSize: 12),
+                        style:
+                            const TextStyle(color: _kTextFaint, fontSize: 12),
                       );
                     }),
                   ],
@@ -3172,15 +3548,15 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                   return TextButton(
                     onPressed: () => widget.onActivate(sub),
                     style: TextButton.styleFrom(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       foregroundColor: _kBrand,
                     ),
                     child: Text(l10n.btnSwitch,
-                        style:
-                            const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
                   );
                 }),
               ],
@@ -3198,6 +3574,665 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
     );
   }
 
+  Widget _buildPanelSwitcher() {
+    Widget item({
+      required _SubscriptionPanel panel,
+      required IconData icon,
+      required String label,
+    }) {
+      final selected = _panel == panel;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _panel = panel),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            decoration: BoxDecoration(
+              color: selected ? _kBrand.withAlpha(26) : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? _kBrand.withAlpha(120) : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 14, color: selected ? _kBrand : _kTextMuted),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? _kTextHi : _kTextMuted,
+                      fontSize: 12,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Row(
+        children: [
+          item(
+            panel: _SubscriptionPanel.mySubscriptions,
+            icon: Icons.folder_copy_outlined,
+            label: '我的订阅',
+          ),
+          const SizedBox(width: 6),
+          item(
+            panel: _SubscriptionPanel.importUrl,
+            icon: Icons.cloud_download_outlined,
+            label: '导入机场订阅',
+          ),
+          const SizedBox(width: 6),
+          item(
+            panel: _SubscriptionPanel.importNodes,
+            icon: Icons.merge_type_outlined,
+            label: '导入节点',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionIntro({
+    required IconData icon,
+    required Color accent,
+    required String eyebrow,
+    required String title,
+    required String description,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: accent.withAlpha(22),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: accent.withAlpha(70)),
+            ),
+            child: Icon(icon, size: 16, color: accent),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  eyebrow,
+                  style: const TextStyle(
+                    color: _kTextFaint,
+                    fontSize: 11,
+                    letterSpacing: 0.9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: _kTextHi,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  description,
+                  style: const TextStyle(
+                      color: _kTextMuted, fontSize: 12, height: 1.45),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultBanner({
+    required bool success,
+    required String message,
+    double fontSize = 13,
+  }) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: (success ? _kConnected : _kError).withAlpha(15),
+        borderRadius: BorderRadius.circular(12),
+        border:
+            Border.all(color: (success ? _kConnected : _kError).withAlpha(70)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            success ? Icons.check_circle_outline : Icons.error_outline,
+            color: success ? _kConnected : _kError,
+            size: 18,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: success ? _kConnected : _kError,
+                fontSize: fontSize,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMySubscriptionsPanel(AppLocalizations l10n) {
+    Subscription? activeSub;
+    for (final sub in widget.subscriptions) {
+      if (sub.id == widget.activeSubId) {
+        activeSub = sub;
+        break;
+      }
+    }
+
+    return Column(
+      key: const ValueKey('panel_my_subscriptions'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionIntro(
+          icon: Icons.folder_copy_outlined,
+          accent: _kBrand,
+          eyebrow: '订阅管理',
+          title: '统一管理本地订阅与生效配置',
+          description: '在这里切换当前生效订阅、删除历史订阅，并查看标准订阅数量。',
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: _kCard,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _StatBadge(
+                icon: Icons.inventory_2_outlined,
+                label: '总订阅',
+                value: '${widget.subscriptions.length}',
+              ),
+              _StatBadge(
+                icon: Icons.verified_outlined,
+                label: '标准订阅',
+                value: '${widget.standardLocalSubscriptions.length}',
+              ),
+              _StatBadge(
+                icon: Icons.flash_on_outlined,
+                label: '当前生效',
+                value: activeSub?.nickname ?? '未选择',
+                maxWidth: 170,
+              ),
+            ],
+          ),
+        ),
+        if (widget.subscriptions.isEmpty) ...[
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _kCard,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kBorder),
+            ),
+            child: const Text(
+              '暂无本地订阅，请切换到“导入机场订阅”或“导入节点”创建。',
+              style: TextStyle(color: _kTextMuted, fontSize: 13, height: 1.45),
+            ),
+          ),
+        ] else ...[
+          const SizedBox(height: 18),
+          Text(
+            l10n.savedSubscriptions,
+            style: const TextStyle(
+              color: _kTextMuted,
+              fontSize: 12,
+              letterSpacing: 0.8,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...widget.subscriptions.map(_buildSubCard),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildUrlImportPanel(AppLocalizations l10n) {
+    return Column(
+      key: const ValueKey('panel_import_url'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionIntro(
+          icon: Icons.cloud_download_outlined,
+          accent: _kBrand,
+          eyebrow: '机场订阅',
+          title: '导入第三方机场提供的订阅链接',
+          description: '保持原有导入流程不变，适用于常见的一键订阅地址。',
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_kCardGrad, _kCard],
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: _kBrand.withAlpha(22),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: _kBrand.withAlpha(60)),
+                    ),
+                    child: const Icon(Icons.link, color: _kBrand, size: 17),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    l10n.subscriptionUrlLabel,
+                    style: const TextStyle(
+                      color: _kTextFaint,
+                      fontSize: 11,
+                      letterSpacing: 1.2,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                key: const Key('subscription_url_field'),
+                controller: _urlController,
+                style: const TextStyle(color: _kTextHi, fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'https://',
+                  hintStyle: const TextStyle(color: _kTextFaint),
+                  filled: true,
+                  fillColor: _kBg,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _kBorder),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _kBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _kBrand, width: 1.5),
+                  ),
+                  suffixIcon: _urlController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear,
+                              color: _kTextFaint, size: 18),
+                          onPressed: () {
+                            _urlController.clear();
+                            setState(() {});
+                          },
+                        )
+                      : null,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: FilledButton.icon(
+                  onPressed: _loading ? null : _import,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kBrand,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: _kBrand.withAlpha(80),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(11)),
+                  ),
+                  icon: _loading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white54,
+                          ),
+                        )
+                      : const Icon(Icons.cloud_download, size: 18),
+                  label: Text(
+                    _loading ? l10n.btnFetching : l10n.btnImport,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_message != null) ...[
+          const SizedBox(height: 14),
+          _buildResultBanner(success: _success, message: _message!),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildNodeImportPanel(AppLocalizations l10n) {
+    return Column(
+      key: const ValueKey('panel_import_nodes'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionIntro(
+          icon: Icons.merge_type_outlined,
+          accent: _kConnected,
+          eyebrow: '节点导入',
+          title: '粘贴节点并合并到订阅，或直接生成新订阅',
+          description: '可选“合并到已有标准订阅”，也可不选择目标并直接创建新标准订阅。',
+        ),
+        const SizedBox(height: 14),
+        _buildNodeInjectionCard(l10n),
+      ],
+    );
+  }
+
+  Widget _buildNodeInjectionCard(AppLocalizations l10n) {
+    final standardSubs = widget.standardLocalSubscriptions;
+    final hasPasteText = _pasteController.text.trim().isNotEmpty;
+    final canSubmit = !_pasteLoading && _pasteController.text.trim().isNotEmpty;
+    final targetExists = _targetStandardSubId != null &&
+        standardSubs.any((s) => s.id == _targetStandardSubId);
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_kCardGrad, _kCard],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '粘贴节点配置',
+            style: TextStyle(
+              color: _kTextFaint,
+              fontSize: 11,
+              letterSpacing: 1.2,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '支持链接与 YAML 节点，导入后会自动写入并根据当前运行状态尝试重启服务。',
+            style: TextStyle(color: _kTextMuted, fontSize: 12, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: hasPasteText && !_pasteLoading
+                      ? _sanitizePastedNodeInput
+                      : null,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _kConnected,
+                    side: BorderSide(color: _kConnected.withAlpha(120)),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: const Icon(Icons.auto_fix_high_outlined, size: 16),
+                  label: const Text(
+                    '格式化清理',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: hasPasteText && !_pasteLoading
+                      ? _clearPastedNodeInput
+                      : null,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _kTextMuted,
+                    side: BorderSide(color: _kBorder.withAlpha(220)),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: const Icon(Icons.backspace_outlined, size: 16),
+                  label: const Text(
+                    '快速清空',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _pasteController,
+            maxLines: 6,
+            minLines: 4,
+            style: const TextStyle(
+              color: _kTextHi,
+              fontSize: 12,
+              fontFamily: 'monospace',
+            ),
+            decoration: InputDecoration(
+              hintText:
+                  'ss://...\nvmess://...\n- name: node-a\n  type: trojan\n  ...',
+              hintStyle: const TextStyle(color: _kTextFaint, fontSize: 12),
+              filled: true,
+              fillColor: _kBg,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _kConnected, width: 1.5),
+              ),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String?>(
+            key: ValueKey(
+                'target_sub_${targetExists ? _targetStandardSubId : 'new'}'),
+            initialValue: targetExists ? _targetStandardSubId : null,
+            dropdownColor: _kCard,
+            borderRadius: BorderRadius.circular(12),
+            menuMaxHeight: 320,
+            isExpanded: true,
+            iconEnabledColor: _kTextMuted,
+            decoration: InputDecoration(
+              labelText: '目标标准订阅（可选）',
+              labelStyle: const TextStyle(color: _kTextMuted, fontSize: 12),
+              filled: true,
+              fillColor: _kBg,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: _kBrand, width: 1.3),
+              ),
+            ),
+            items: [
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text(
+                  '不选择，创建全新标准订阅',
+                  style: TextStyle(color: _kTextHi, fontSize: 13),
+                ),
+              ),
+              ...standardSubs.map(
+                (sub) => DropdownMenuItem<String?>(
+                  value: sub.id,
+                  child: Text(
+                    '${sub.nickname}  (${sub.nodes.length})',
+                    style: const TextStyle(color: _kTextHi, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ],
+            onChanged: (value) => setState(() => _targetStandardSubId = value),
+          ),
+          const SizedBox(height: 10),
+          if (_targetStandardSubId == null)
+            TextField(
+              controller: _newSubNameController,
+              style: const TextStyle(color: _kTextHi, fontSize: 13),
+              decoration: InputDecoration(
+                labelText: '新订阅名称（可留空自动生成）',
+                labelStyle: const TextStyle(color: _kTextMuted, fontSize: 12),
+                hintText: '例如：我的节点池',
+                hintStyle: const TextStyle(color: _kTextFaint, fontSize: 12),
+                filled: true,
+                fillColor: _kBg,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _kBorder),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _kBorder),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _kConnected, width: 1.3),
+                ),
+              ),
+            )
+          else
+            const Text(
+              '将把同名节点替换、不同名节点追加到所选标准订阅，并更新节点选择与自动选择分组。',
+              style: TextStyle(color: _kTextMuted, fontSize: 12, height: 1.4),
+            ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: FilledButton.icon(
+              onPressed: canSubmit ? _importFromPaste : null,
+              style: FilledButton.styleFrom(
+                backgroundColor: _kConnected,
+                foregroundColor: Colors.black87,
+                disabledBackgroundColor: _kConnected.withAlpha(60),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(11)),
+              ),
+              icon: _pasteLoading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black54,
+                      ),
+                    )
+                  : const Icon(Icons.bolt, size: 18),
+              label: Text(
+                _pasteLoading ? l10n.btnParsing : '导入并应用',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+          if (_pasteMessage != null) ...[
+            const SizedBox(height: 12),
+            _buildResultBanner(
+              success: _pasteSuccess,
+              message: _pasteMessage!,
+              fontSize: 12,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPanelBody(AppLocalizations l10n) {
+    switch (_panel) {
+      case _SubscriptionPanel.mySubscriptions:
+        return _buildMySubscriptionsPanel(l10n);
+      case _SubscriptionPanel.importUrl:
+        return _buildUrlImportPanel(l10n);
+      case _SubscriptionPanel.importNodes:
+        return _buildNodeImportPanel(l10n);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -3206,288 +4241,87 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         padding: const EdgeInsets.symmetric(horizontal: 24),
         children: [
           const SizedBox(height: 20),
-          Text(l10n.subscriptionsTitle,
-              style: const TextStyle(
-                  color: _kTextHi,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: -0.5)),
-          const SizedBox(height: 24),
-
-          // URL import card
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [_kCardGrad, _kCard],
-              ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _kBorder),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: _kBrand.withAlpha(22),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _kBrand.withAlpha(60)),
-                      ),
-                      child: const Icon(Icons.link, color: _kBrand, size: 17),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(l10n.subscriptionUrlLabel,
-                        style: const TextStyle(
-                            color: _kTextFaint,
-                            fontSize: 11,
-                            letterSpacing: 1.2,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  key: const Key('subscription_url_field'),
-                  controller: _urlController,
-                  style: const TextStyle(color: _kTextHi, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'https://',
-                    hintStyle: const TextStyle(color: _kTextFaint),
-                    filled: true,
-                    fillColor: _kBg,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kBorder)),
-                    enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kBorder)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            const BorderSide(color: _kBrand, width: 1.5)),
-                    suffixIcon: _urlController.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear,
-                                color: _kTextFaint, size: 18),
-                            onPressed: () {
-                              _urlController.clear();
-                              setState(() {});
-                            },
-                          )
-                        : null,
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  height: 46,
-                  child: FilledButton.icon(
-                    onPressed: _loading ? null : _import,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _kBrand,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: _kBrand.withAlpha(80),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(11)),
-                    ),
-                    icon: _loading
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white54))
-                        : const Icon(Icons.cloud_download, size: 18),
-                    label: Text(_loading ? l10n.btnFetching : l10n.btnImport,
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                  ),
-                ),
-              ],
+          Text(
+            l10n.subscriptionsTitle,
+            style: const TextStyle(
+              color: _kTextHi,
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              letterSpacing: -0.5,
             ),
           ),
-
-          const SizedBox(height: 14),
-
-          // Paste nodes card
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [_kCardGrad, _kCard],
-              ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _kBorder),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: _kConnected.withAlpha(22),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _kConnected.withAlpha(60)),
-                      ),
-                      child: const Icon(Icons.content_paste, color: _kConnected, size: 17),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(l10n.pasteNodesLabel,
-                        style: const TextStyle(
-                            color: _kTextFaint,
-                            fontSize: 11,
-                            letterSpacing: 1.2,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  l10n.pasteNodesDesc,
-                  style: const TextStyle(color: _kTextMuted, fontSize: 12, height: 1.4),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _pasteController,
-                  maxLines: 5,
-                  minLines: 3,
-                  style: const TextStyle(color: _kTextHi, fontSize: 12, fontFamily: 'monospace'),
-                  decoration: InputDecoration(
-                    hintText: 'ss://...\nvmess://...\nvless://...',
-                    hintStyle: const TextStyle(color: _kTextFaint, fontSize: 12),
-                    filled: true,
-                    fillColor: _kBg,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kBorder)),
-                    enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kBorder)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kConnected, width: 1.5)),
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 46,
-                  child: FilledButton.icon(
-                    onPressed: _pasteLoading || _pasteController.text.trim().isEmpty
-                        ? null
-                        : _importFromPaste,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _kConnected,
-                      foregroundColor: Colors.black87,
-                      disabledBackgroundColor: _kConnected.withAlpha(60),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(11)),
-                    ),
-                    icon: _pasteLoading
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.black54))
-                        : const Icon(Icons.bolt, size: 18),
-                    label: Text(_pasteLoading ? l10n.btnParsing : l10n.btnImportAndGenerate,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                  ),
-                ),
-                if (_pasteMessage != null) ...[
-                  const SizedBox(height: 12),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: (_pasteSuccess ? _kConnected : _kError).withAlpha(15),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                          color: (_pasteSuccess ? _kConnected : _kError).withAlpha(70)),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                            _pasteSuccess
-                                ? Icons.check_circle_outline
-                                : Icons.error_outline,
-                            color: _pasteSuccess ? _kConnected : _kError,
-                            size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(_pasteMessage!,
-                              style: TextStyle(
-                                  color: _pasteSuccess ? _kConnected : _kError,
-                                  fontSize: 12,
-                                  height: 1.4)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ],
-            ),
+          const SizedBox(height: 8),
+          const Text(
+            '将订阅管理、机场导入、节点导入拆分为独立区域，避免操作混淆。',
+            style: TextStyle(color: _kTextMuted, fontSize: 13, height: 1.35),
           ),
-
-          // URL result banner
-          if (_message != null) ...[
-            const SizedBox(height: 14),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: (_success ? _kConnected : _kError).withAlpha(15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: (_success ? _kConnected : _kError).withAlpha(70)),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                      _success
-                          ? Icons.check_circle_outline
-                          : Icons.error_outline,
-                      color: _success ? _kConnected : _kError,
-                      size: 18),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(_message!,
-                        style: TextStyle(
-                            color: _success ? _kConnected : _kError,
-                            fontSize: 13)),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          // Saved subscriptions list
-          if (widget.subscriptions.isNotEmpty) ...[
-            const SizedBox(height: 28),
-            Text(l10n.savedSubscriptions,
-                style: const TextStyle(
-                    color: _kTextMuted,
-                    fontSize: 12,
-                    letterSpacing: 0.8,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 12),
-            ...widget.subscriptions.map(_buildSubCard),
-          ],
-
+          const SizedBox(height: 16),
+          _buildPanelSwitcher(),
+          const SizedBox(height: 16),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            child: _buildPanelBody(l10n),
+          ),
           const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBadge extends StatelessWidget {
+  const _StatBadge({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.maxWidth,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final double? maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: maxWidth == null
+          ? null
+          : BoxConstraints(
+              maxWidth: maxWidth!,
+            ),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: _kBg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: _kTextMuted),
+          const SizedBox(width: 6),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              color: _kTextMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Flexible(
+            child: Text(
+              value,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: _kTextHi,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -3660,8 +4494,8 @@ class _LanguageOption extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? _kBrand.withAlpha(20) : _kBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: selected ? _kBrand.withAlpha(160) : _kBorder),
+          border:
+              Border.all(color: selected ? _kBrand.withAlpha(160) : _kBorder),
         ),
         child: Row(
           children: [
@@ -3848,7 +4682,9 @@ class _LogsTabState extends State<_LogsTab> {
                   onPressed: _copyAll,
                 ),
                 IconButton(
-                  tooltip: _autoScroll ? l10n.tooltipAutoScrollOn : l10n.tooltipAutoScrollOff,
+                  tooltip: _autoScroll
+                      ? l10n.tooltipAutoScrollOn
+                      : l10n.tooltipAutoScrollOff,
                   icon: Icon(Icons.vertical_align_bottom,
                       size: 19, color: _autoScroll ? _kBrand : _kTextFaint),
                   onPressed: () => setState(() => _autoScroll = !_autoScroll),
@@ -4198,15 +5034,18 @@ class _AboutTabState extends State<_AboutTab> {
                             strokeWidth: 2, color: _kBrand)),
                     const SizedBox(width: 12),
                     Text(l10n.checkingUpdates,
-                        style: const TextStyle(color: _kTextMuted, fontSize: 14)),
+                        style:
+                            const TextStyle(color: _kTextMuted, fontSize: 14)),
                   ]),
                 )
               else if (!_updateChecked)
                 row(l10n.updateStatus, '—')
               else if (_updateInfo == null)
-                row(l10n.updateStatus, l10n.updateCouldNotCheck, valueColor: _kError)
+                row(l10n.updateStatus, l10n.updateCouldNotCheck,
+                    valueColor: _kError)
               else if (!_updateInfo!.isNewerThan(appVersion))
-                row(l10n.updateStatus, l10n.updateUpToDate, valueColor: _kConnected)
+                row(l10n.updateStatus, l10n.updateUpToDate,
+                    valueColor: _kConnected)
               else ...[
                 row(l10n.rowLatest, _updateInfo!.tag, valueColor: _kBrand),
                 Padding(
@@ -4235,7 +5074,8 @@ class _AboutTabState extends State<_AboutTab> {
                     onPressed: _checkUpdate,
                     style: TextButton.styleFrom(padding: EdgeInsets.zero),
                     child: Text(l10n.btnRecheck2,
-                        style: const TextStyle(color: _kTextFaint, fontSize: 12)),
+                        style:
+                            const TextStyle(color: _kTextFaint, fontSize: 12)),
                   ),
                 ),
             ]),
@@ -4350,8 +5190,7 @@ class _UpdateSheetState extends State<_UpdateSheet> {
               const Icon(Icons.warning_amber_rounded, color: _kError, size: 22),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                    l10n.updateCouldNotCheckLong,
+                child: Text(l10n.updateCouldNotCheckLong,
                     style: const TextStyle(color: _kTextMuted, fontSize: 14)),
               ),
             ]),

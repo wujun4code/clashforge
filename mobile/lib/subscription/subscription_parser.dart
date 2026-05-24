@@ -5,8 +5,7 @@ import 'proxy_node.dart';
 
 class SubscriptionParser {
   static ParsedSubscription parse(String content) {
-    content = _normalizePastedYaml(content);
-    content = _stripCommonIndent(content);
+    content = sanitizeInput(content);
     final trimmed = content.trim();
 
     // 1. Try Clash YAML with "proxies" key — also extract rules / proxy-groups.
@@ -49,12 +48,17 @@ class SubscriptionParser {
             });
           }
 
-          return ParsedSubscription(
-            proxies: proxies,
-            proxyGroups: proxyGroups,
-            rules: rules,
-            ruleProviders: ruleProviders,
-          );
+          if (proxies.isNotEmpty ||
+              proxyGroups.isNotEmpty ||
+              rules.isNotEmpty ||
+              ruleProviders.isNotEmpty) {
+            return ParsedSubscription(
+              proxies: proxies,
+              proxyGroups: proxyGroups,
+              rules: rules,
+              ruleProviders: ruleProviders,
+            );
+          }
         }
       } catch (_) {}
     }
@@ -64,7 +68,10 @@ class SubscriptionParser {
       try {
         final doc = loadYaml(trimmed);
         if (doc is List) {
-          return ParsedSubscription(proxies: _parseYamlList(doc));
+          final proxies = _parseYamlList(doc);
+          if (proxies.isNotEmpty) {
+            return ParsedSubscription(proxies: proxies);
+          }
         }
       } catch (_) {}
     }
@@ -73,11 +80,18 @@ class SubscriptionParser {
     try {
       final doc = loadYaml(trimmed);
       if (doc is Map && _looksLikeSingleProxyMap(doc)) {
+        final normalized = _normalizeProxyMap(_convertYamlMap(doc));
         return ParsedSubscription(
-          proxies: [ProxyNode.fromJson(_convertYamlMap(doc))],
+          proxies: [ProxyNode.fromJson(normalized)],
         );
       }
     } catch (_) {}
+
+    // 2c. Try parsing key/value lines as a single proxy block (clipboard fallback).
+    final kvProxy = _parseSingleProxyFromKeyValueLines(trimmed);
+    if (kvProxy != null) {
+      return ParsedSubscription(proxies: [kvProxy]);
+    }
 
     // 3. Try Base64 decoding
     if (_looksLikeBase64(trimmed)) {
@@ -91,11 +105,44 @@ class SubscriptionParser {
     return ParsedSubscription(proxies: _parseLineBased(trimmed));
   }
 
+  static String sanitizeInput(String content) {
+    var text = _normalizePastedYaml(content);
+    text = _stripCommonIndent(text);
+
+    final compacted = <String>[];
+    var previousBlank = false;
+    for (final rawLine in LineSplitter.split(text)) {
+      final line = rawLine.replaceAll(RegExp(r'[ \t]+$'), '');
+      final isBlank = line.trim().isEmpty;
+      if (isBlank) {
+        if (previousBlank) continue;
+        compacted.add('');
+        previousBlank = true;
+        continue;
+      }
+      compacted.add(line);
+      previousBlank = false;
+    }
+
+    while (compacted.isNotEmpty && compacted.first.trim().isEmpty) {
+      compacted.removeAt(0);
+    }
+    while (compacted.isNotEmpty && compacted.last.trim().isEmpty) {
+      compacted.removeLast();
+    }
+    return compacted.join('\n');
+  }
+
   static List<ProxyNode> _parseYamlList(List list) {
     final nodes = <ProxyNode>[];
     for (final item in list) {
       if (item is Map) {
-        nodes.add(ProxyNode.fromJson(_convertYamlMap(item)));
+        try {
+          nodes.add(
+              ProxyNode.fromJson(_normalizeProxyMap(_convertYamlMap(item))));
+        } catch (_) {
+          // Skip malformed entries and continue parsing remaining nodes.
+        }
       }
     }
     return nodes;
@@ -248,18 +295,31 @@ class SubscriptionParser {
   }
 
   static bool _looksLikeSingleProxyMap(Map map) {
-    final hasName = map.containsKey('name');
-    final hasType = map.containsKey('type');
-    final hasServer = map.containsKey('server');
-    return hasName && hasType && hasServer;
+    final normalizedKeys =
+        map.keys.map((e) => e.toString().trim().toLowerCase()).toSet();
+    final hasType = normalizedKeys.contains('type');
+    final hasServer = normalizedKeys.contains('server');
+    // "name" is optional in fallback mode; we'll synthesize one from server.
+    return hasType && hasServer;
   }
 
   // Make pasted snippets more forgiving:
   // - strip markdown code fences (```yaml ... ```)
   // - normalize line endings
   // - turn leading TAB indentation into spaces
+  // - remove invisible clipboard chars (BOM / zero-width chars)
   static String _normalizePastedYaml(String content) {
     var text = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    text = text
+        .replaceAll('\uFEFF', '')
+        .replaceAll('\u200B', '')
+        .replaceAll('\u200C', '')
+        .replaceAll('\u200D', '')
+        .replaceAll('\u2060', '')
+        .replaceAll('\u2028', '\n')
+        .replaceAll('\u2029', '\n')
+        .replaceAll('：', ':')
+        .replaceAll('，', ',');
 
     final lines = LineSplitter.split(text).toList();
     if (lines.length >= 2) {
@@ -274,7 +334,12 @@ class SubscriptionParser {
 
     final normalized = <String>[];
     for (final line in LineSplitter.split(text)) {
-      final replaced = line.replaceAll('\u00A0', ' ');
+      var replaced = line.replaceAll('\u00A0', ' ');
+      // Normalize common non-ASCII list bullets to YAML list marker "- ".
+      replaced = replaced.replaceFirstMapped(
+        RegExp(r'^([\t ]*)[–—−•·●▪◦]+\s+'),
+        (m) => '${m.group(1) ?? ''}- ',
+      );
       final indent = RegExp(r'^[\t ]+').firstMatch(replaced)?.group(0);
       if (indent == null || indent.isEmpty) {
         normalized.add(replaced);
@@ -302,5 +367,110 @@ class SubscriptionParser {
         .map((line) =>
             line.length >= minIndent! ? line.substring(minIndent) : '')
         .join('\n');
+  }
+
+  static ProxyNode? _parseSingleProxyFromKeyValueLines(String content) {
+    if (content.isEmpty) return null;
+    final map = <String, dynamic>{};
+
+    for (final rawLine in LineSplitter.split(content)) {
+      var line = rawLine.trim();
+      if (line.isEmpty || line.startsWith('#')) continue;
+      line = line.replaceFirst(
+        RegExp(r'^[\-\u2013\u2014\u2212\u2022\u00B7\u25CF\u25AA\u25E6]+\s*'),
+        '',
+      );
+      final m = RegExp(r'^([A-Za-z0-9_-]+)\s*:\s*(.*)$').firstMatch(line);
+      if (m == null) continue;
+      final key = m.group(1)!.trim().toLowerCase();
+      final rawValue = m.group(2)!.trim();
+      map[key] = _parseLooseScalar(rawValue);
+    }
+
+    if (!_looksLikeSingleProxyMap(map)) return null;
+
+    final server = (map['server'] ?? '').toString().trim();
+    final type = (map['type'] ?? '').toString().trim();
+    if (server.isEmpty || type.isEmpty) return null;
+    map['server'] = server;
+    map['type'] = type;
+
+    final name = (map['name'] ?? '').toString().trim();
+    if (name.isEmpty) {
+      map['name'] = '$type-$server';
+    }
+
+    if (!map.containsKey('port')) {
+      map['port'] = _defaultPortByType(type);
+    }
+
+    try {
+      return ProxyNode.fromJson(_normalizeProxyMap(map));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static dynamic _parseLooseScalar(String raw) {
+    var value = raw.trim();
+    if (value.isEmpty) return '';
+
+    if (value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith('\'') && value.endsWith('\'')))) {
+      value = value.substring(1, value.length - 1).trim();
+    }
+
+    final lower = value.toLowerCase();
+    if (lower == 'true') return true;
+    if (lower == 'false') return false;
+
+    final intValue = int.tryParse(value);
+    if (intValue != null) return intValue;
+
+    final doubleValue = double.tryParse(value);
+    if (doubleValue != null) return doubleValue;
+
+    return value;
+  }
+
+  static int _defaultPortByType(String type) {
+    switch (type.toLowerCase()) {
+      case 'http':
+      case 'https':
+      case 'trojan':
+      case 'vmess':
+      case 'vless':
+      case 'ss':
+      case 'hysteria':
+      case 'hysteria2':
+        return 443;
+      default:
+        return 0;
+    }
+  }
+
+  static Map<String, dynamic> _normalizeProxyMap(Map<String, dynamic> map) {
+    final normalized = <String, dynamic>{};
+    map.forEach((k, v) {
+      normalized[k.toString().trim().toLowerCase()] = v;
+    });
+
+    final server = (normalized['server'] ?? '').toString().trim();
+    final type = (normalized['type'] ?? '').toString().trim();
+    if (server.isNotEmpty) normalized['server'] = server;
+    if (type.isNotEmpty) normalized['type'] = type;
+
+    final name = (normalized['name'] ?? '').toString().trim();
+    if (name.isEmpty && server.isNotEmpty) {
+      normalized['name'] = type.isEmpty ? server : '$type-$server';
+    }
+
+    final currentPort = int.tryParse((normalized['port'] ?? '').toString());
+    if ((currentPort == null || currentPort <= 0) && type.isNotEmpty) {
+      normalized['port'] = _defaultPortByType(type);
+    }
+
+    return normalized;
   }
 }
