@@ -1074,6 +1074,18 @@ sniffer:
             Os.dup2(tunFdObj, 0)   // fd 0 in this process = TUN fd
 
             val pb = ProcessBuilder(coreBin.absolutePath, "-d", appDir, "-f", configFile.absolutePath)
+            pb.environment().apply {
+                // MADV_DONTNEED: return freed pages to the kernel immediately instead of
+                // MADV_FREE (default), which keeps pages mapped until kernel needs them.
+                // Eliminates ~300 MB of "Private Clean" PSS that would otherwise sit in
+                // the process address space until memory pressure forces a reclaim.
+                put("GODEBUG",    "madvdontneed=1")
+                // GC at 40% heap growth (default 100%) — reduces peak live-object dirty pages.
+                put("GOGC",       "40")
+                // Soft memory cap: runtime scavenges more aggressively to stay under limit.
+                // Current Private Dirty is ~56 MB; 100 MiB gives comfortable headroom.
+                put("GOMEMLIMIT", "100MiB")
+            }
             pb.redirectInput(ProcessBuilder.Redirect.INHERIT)  // fd 0 = TUN (no dup2 by JVM)
             pb.redirectErrorStream(true)                       // merge stderr into stdout pipe
             coreProcess = pb.start()
