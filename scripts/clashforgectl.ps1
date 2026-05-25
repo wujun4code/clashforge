@@ -9,7 +9,7 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 reset -Start
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade
-#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Version v0.1.0-rc.1
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Version v0.1.0-beta.1
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Mirror https://ghproxy.com
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -BaseUrl https://releases.example.com
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Purge
@@ -542,11 +542,11 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
                 -Headers @{ "Accept" = "application/vnd.github+json" } `
                 -TimeoutSec 15
             $Tags = @($Releases | ForEach-Object { $_.tag_name } | Where-Object { $_ })
-            $RcTags = @($Tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+-rc\.\d+$' })
-            if ($RcTags.Count -gt 0) {
-                $Tag = $RcTags |
+            $BetaTags = @($Tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+-beta\.\d+$' })
+            if ($BetaTags.Count -gt 0) {
+                $Tag = $BetaTags |
                     Sort-Object {
-                        if ($_ -match '^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$') {
+                        if ($_ -match '^v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') {
                             [string]::Format('{0:D9}.{1:D9}.{2:D9}.{3:D9}',
                                 [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
                         } else {

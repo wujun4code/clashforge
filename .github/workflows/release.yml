@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version string (e.g. v0.1.0-rc.1)'
+        description: 'Version string (e.g. v0.1.0-beta.1)'
         required: false
         default: 'dev'
 
@@ -345,7 +345,7 @@ jobs:
           RAW="${{ needs.build-ui.outputs.version }}"
           PKG_VERSION="${RAW#v}"
           # APK/OpenWrt version field must be numeric dot-separated segments.
-          # Example: 0.1.0-rc.1 -> 0.1.0.1
+          # Example: 0.1.0-beta.1 -> 0.1.0.1
           APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
           [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
           APK_VERSION="${APK_CORE_VERSION}-r1"
@@ -705,7 +705,7 @@ jobs:
 
             见附件 `SHA256SUMS.txt`
           draft: false
-          prerelease: ${{ contains(steps.ver.outputs.tag, 'alpha') || contains(steps.ver.outputs.tag, 'beta') || contains(steps.ver.outputs.tag, 'rc') }}
+          prerelease: ${{ contains(steps.ver.outputs.tag, 'alpha') || contains(steps.ver.outputs.tag, 'rc') }}
           files: |
             release-assets/*.ipk
             release-assets/*.apk

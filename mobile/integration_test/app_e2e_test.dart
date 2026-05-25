@@ -56,29 +56,56 @@ void main() {
           find.byKey(const Key('subscription_url_field')), _subUrl);
       await tester.pumpAndSettle();
 
+      // Unfocus URL field so soft keyboard does not obstruct the import button.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+
       _log('Tapping Import');
-      await tester.tap(find.text('Import'));
+      final importBtn = find.byKey(const Key('subscription_import_button'));
+      expect(importBtn, findsOneWidget);
+      await tester.ensureVisible(importBtn);
+      await tester.tap(importBtn);
       await tester.pump();
 
-      // Wait for fetch + parse (real network; up to 30 s)
+      _log('Waiting for import flow to start…');
+      final importStarted = await _waitUntilQuiet(
+        tester,
+        () =>
+            !_isButtonEnabled<FilledButton>(tester, importBtn) ||
+            find.byKey(const Key('save_nickname')).evaluate().isNotEmpty ||
+            find
+                .byKey(const Key('subscription_import_result_banner'))
+                .evaluate()
+                .isNotEmpty,
+        timeout: const Duration(seconds: 12),
+      );
+      if (!importStarted) {
+        _log('Import did not start on first tap, retrying via tapAt center');
+        await tester.tapAt(tester.getCenter(importBtn));
+        await tester.pump();
+      }
+
+      // Wait for fetch + parse + dialog/result (real network; native+fallback can hit ~30s)
       _log('Waiting for subscription fetch…');
       await _waitUntil(
         tester,
         () =>
-            find.text('Save').evaluate().isNotEmpty ||
-            find.textContaining('Error').evaluate().isNotEmpty ||
-            find.textContaining('failed').evaluate().isNotEmpty,
-        timeout: const Duration(seconds: 30),
+            find.byKey(const Key('save_nickname')).evaluate().isNotEmpty ||
+            find
+                .byKey(const Key('subscription_import_result_banner'))
+                .evaluate()
+                .isNotEmpty,
+        timeout: const Duration(seconds: 75),
         label: 'subscription fetch',
       );
 
-      final errFinder = find.textContaining('Error');
-      final failFinder = find.textContaining('failed');
-      if (errFinder.evaluate().isNotEmpty || failFinder.evaluate().isNotEmpty) {
-        final msg = errFinder.evaluate().isNotEmpty
-            ? _widgetText(errFinder)
-            : _widgetText(failFinder);
-        fail('[E2E] Subscription fetch failed: $msg');
+      final saveNickname = find.byKey(const Key('save_nickname'));
+      final importBanner =
+          find.byKey(const Key('subscription_import_result_banner'));
+      if (saveNickname.evaluate().isEmpty &&
+          importBanner.evaluate().isNotEmpty) {
+        fail(
+            '[E2E] Subscription fetch failed before nickname dialog. Screen: ${_visibleTexts(tester)}');
       }
 
       // Dismiss nickname dialog.
@@ -89,7 +116,7 @@ void main() {
       // - _waitUntil already pumped every 500ms until 'Save' appeared, so the
       //   dialog open animation has long since completed.
       _log('Saving subscription nickname');
-      await tester.tap(find.byKey(const Key('save_nickname')));
+      await tester.tap(saveNickname);
       // One pump (not pumpAndSettle) to process the tap gesture and run the
       // microtask that resumes _import() after showDialog resolves. The spinner
       // (_loading=true) would cause pumpAndSettle to hang indefinitely, but a
@@ -108,18 +135,18 @@ void main() {
         tester,
         () =>
             _hasText(tester, '已保存') ||
-            _hasText(tester, 'Imported') ||
-            _hasText(tester, 'nodes') ||
-            _hasText(tester, 'Error:'),
+            find
+                .byKey(const Key('subscription_import_result_banner'))
+                .evaluate()
+                .isNotEmpty,
         timeout: const Duration(seconds: 60),
         label: 'import result',
       );
 
       _log('Screen after import: ${_visibleTexts(tester)}');
 
-      final importErrFinder = find.textContaining('Error:');
-      if (importErrFinder.evaluate().isNotEmpty) {
-        fail('[E2E] Import failed: ${_widgetText(importErrFinder)}');
+      if (_hasAnyTextCI(tester, const ['error', 'failed', '错误', '失败'])) {
+        fail('[E2E] Import failed. Screen: ${_visibleTexts(tester)}');
       }
       _log('Subscription imported successfully');
 
@@ -432,6 +459,35 @@ String _visibleTexts(WidgetTester tester) => tester.allWidgets
 bool _hasText(WidgetTester tester, String substring) => tester.allWidgets
     .whereType<Text>()
     .any((t) => (t.data ?? '').contains(substring));
+
+bool _hasAnyTextCI(WidgetTester tester, List<String> keywords) => tester
+    .allWidgets
+    .whereType<Text>()
+    .map((t) => (t.data ?? '').toLowerCase())
+    .any((text) => keywords.any((k) => text.contains(k.toLowerCase())));
+
+bool _isButtonEnabled<T extends ButtonStyleButton>(
+    WidgetTester tester, Finder finder) {
+  if (finder.evaluate().isEmpty) return false;
+  try {
+    return tester.widget<T>(finder).enabled;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> _waitUntilQuiet(
+  WidgetTester tester,
+  bool Function() condition, {
+  required Duration timeout,
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) return false;
+    await tester.pump(const Duration(milliseconds: 500));
+  }
+  return true;
+}
 
 Future<void> _waitUntil(
   WidgetTester tester,
