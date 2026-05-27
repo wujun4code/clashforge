@@ -33,7 +33,10 @@ jobs:
             --repo "${{ github.repository }}" \
             --dir dist \
             --pattern "*.ipk" \
-            --pattern "install.sh" \
+            --pattern "*.apk" \
+            --pattern "clashforgectl.sh" \
+            --pattern "clashforgectl.ps1" \
+            --pattern "clashforgectl" \
             --pattern "SHA256SUMS.txt"
           echo "=== Downloaded assets ==="
           ls -lh dist/
