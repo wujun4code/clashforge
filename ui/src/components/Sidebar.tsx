@@ -11,6 +11,7 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   X,
 } from 'lucide-react'
 import { getOverviewCore } from '../api/client'
@@ -83,8 +84,9 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: '系统',
     items: [
-      { to: '/activity', icon: Activity,  label: '活动日志', caption: '连接轨迹 · 实时日志' },
-      { to: '/settings', icon: Settings,  label: '高级管理', caption: '系统参数 · 重置' },
+      { to: '/activity',    icon: Activity,   label: '活动日志', caption: '连接轨迹 · 实时日志' },
+      { to: '/settings',    icon: Settings,   label: '高级管理', caption: '系统参数 · 重置' },
+      { to: '/quickstart',  icon: Sparkles,   label: '快速启动', caption: 'VPS · CF Workers 一键部署' },
     ],
   },
 ]

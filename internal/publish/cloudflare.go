@@ -754,6 +754,69 @@ func pickDetail(ok bool, yes, no string) string {
 	return no
 }
 
+// ── DNS record helpers (used by quickstart VPS path) ─────────────────────────
+
+// CreateDNSARecord creates an unproxied A record and returns the record ID.
+func (c *CloudflareClient) CreateDNSARecord(ctx context.Context, zoneID, name, ip string) (string, error) {
+	return c.createDNSRecord(ctx, zoneID, "A", name, ip, false)
+}
+
+// CreateDNSTXTRecord creates a TXT record (for ACME DNS-01 challenges) and returns the record ID.
+func (c *CloudflareClient) CreateDNSTXTRecord(ctx context.Context, zoneID, name, content string) (string, error) {
+	return c.createDNSRecord(ctx, zoneID, "TXT", name, content, false)
+}
+
+// DeleteDNSRecord deletes a DNS record by its ID.
+func (c *CloudflareClient) DeleteDNSRecord(ctx context.Context, zoneID, recordID string) error {
+	path := fmt.Sprintf("/zones/%s/dns_records/%s", url.PathEscape(zoneID), url.PathEscape(recordID))
+	body, status, err := c.doRequest(ctx, http.MethodDelete, path, nil, "")
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return c.parseStatusError(status, body)
+	}
+	return nil
+}
+
+func (c *CloudflareClient) createDNSRecord(
+	ctx context.Context,
+	zoneID, recType, name, content string,
+	proxied bool,
+) (string, error) {
+	payload := map[string]any{
+		"type":    recType,
+		"name":    name,
+		"content": content,
+		"proxied": proxied,
+		"ttl":     1, // auto TTL
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("/zones/%s/dns_records", url.PathEscape(zoneID))
+	body, status, err := c.doRequest(ctx, http.MethodPost, path, bytes.NewReader(raw), "application/json")
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status >= 300 {
+		return "", c.parseStatusError(status, body)
+	}
+	var resp cloudflareEnvelope[struct {
+		ID string `json:"id"`
+	}]
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("parse dns record response: %w", err)
+	}
+	if !resp.Success {
+		return "", c.parseEnvelopeError(resp.Errors, "cloudflare create dns record failed")
+	}
+	return resp.Result.ID, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 func trimForError(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) <= 220 {

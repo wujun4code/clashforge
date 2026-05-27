@@ -1011,3 +1011,102 @@ export const updateGeoDataConfig = (cfg: Partial<GeoDataConfig>) => request<{ up
 export const triggerGeoDataUpdate = (proxy_server?: string) =>
   request<{ id: string; status: string }>('POST', '/geodata/update', { proxy_server: proxy_server ?? '' })
 export const getGeoDataLogs    = () => request<GeoDataLogs>('GET', '/geodata/logs')
+
+// ---- quickstart v2 ----
+
+export type QSDeployType = 'cf_workers' | 'vps'
+
+export interface QSCFZone {
+  id: string
+  name: string
+}
+
+export interface QSValidateCFRequest {
+  token: string
+  account_id?: string
+}
+
+export interface QSValidateCFResult {
+  valid: boolean
+  zones?: QSCFZone[]
+  error?: string
+}
+
+export interface QSValidateVPSRequest {
+  host: string
+  port?: number
+  user?: string
+  auth_type: 'password' | 'key'
+  password?: string
+  priv_key?: string
+}
+
+export interface QSValidateVPSResult {
+  valid: boolean
+  os?: string
+  os_version?: string
+  arch?: string
+  error?: string
+}
+
+export interface QSDeployState {
+  id: string
+  deploy_type: QSDeployType
+  status: 'running' | 'done' | 'failed'
+  node_id?: string
+  sub_id?: string
+  started_at: string
+  finished_at?: string
+  last_error?: string
+  node_name?: string
+  node_host?: string
+}
+
+export interface QSDeployRequest {
+  deploy_type: QSDeployType
+  node_name?: string
+  node_prefix?: string
+  cloudflare?: {
+    token: string
+    account_id: string
+    zone_id: string
+    zone_name: string
+  }
+  vps?: {
+    host: string
+    port: number
+    user: string
+    auth_type: 'password' | 'key'
+    password?: string
+    priv_key?: string
+  }
+  workers_domain?: {
+    worker_name: string
+    custom_domain: string
+    zone_id: string
+  }
+}
+
+/** One SSE event from POST /quickstart/deploy */
+export interface QSEvent {
+  phase: string
+  step: string
+  status: 'running' | 'ok' | 'error' | 'warning' | 'info'
+  message: string
+  detail?: string
+}
+
+export const quickStartValidateCF = (req: QSValidateCFRequest) =>
+  request<QSValidateCFResult>('POST', '/quickstart/validate-cf', req)
+
+export const quickStartValidateVPS = (req: QSValidateVPSRequest) =>
+  request<QSValidateVPSResult>('POST', '/quickstart/validate-vps', req)
+
+export const getQuickStartDeploys = () =>
+  request<{ deploys: QSDeployState[] }>('GET', '/quickstart/deploys')
+
+export const getQuickStartDeploy = (id: string) =>
+  request<QSDeployState>('GET', `/quickstart/deploys/${encodeURIComponent(id)}`)
+
+/** Returns the full URL for the SSE deploy stream. */
+export const QUICKSTART_DEPLOY_URL = () => `${BASE}/quickstart/deploy`

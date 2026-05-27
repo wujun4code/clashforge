@@ -23,6 +23,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
+	"github.com/wujun4code/clashforge/internal/quickstart"
 	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"github.com/wujun4code/clashforge/internal/workernode"
@@ -192,6 +193,10 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("init worker-node store")
 	}
+	quickStartStore, err := quickstart.NewStore(cfg.Core.DataDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("init quickstart store")
+	}
 
 	// Router SSH key pair — LoadOrGenerateKeyPair prefers /root/.ssh/ (opkg-safe)
 	// and auto-migrates from dataDir on first run after an upgrade.
@@ -222,6 +227,7 @@ func main() {
 		PublishStore:    publishStore,
 		WorkerNodeStore: workerNodeStore,
 		GeoDataManager:  geoManager,
+		QuickStartStore: quickStartStore,
 	}
 	// HTTP server
 	router := api.NewRouter(deps)
