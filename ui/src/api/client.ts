@@ -525,6 +525,8 @@ export interface NodeListItem {
   port: number
   username: string
   domain: string
+  /** "managed" (default / ClashForge-deployed) | "external" (manually deployed, SSH-only) */
+  kind?: 'managed' | 'external'
   status: 'pending' | 'connected' | 'deploying' | 'deployed' | 'error'
   deployed_at?: string
   cert_expiry?: string
@@ -545,6 +547,27 @@ export interface NodeCreateRequest {
   cf_token: string
   cf_account_id: string
   cf_zone_id: string
+  /** Pass "external" when registering a manually-deployed node */
+  kind?: 'managed' | 'external'
+}
+
+/** One check item streamed from POST /nodes/{id}/diag */
+export interface NodeDiagCheck {
+  id: string
+  category: 'network' | 'process' | 'system' | 'cert'
+  name: string
+  status: 'ok' | 'warn' | 'error' | 'skip'
+  value?: string
+  detail?: string
+  message: string
+}
+
+export interface NodeDiagSummary {
+  total: number
+  ok: number
+  warn: number
+  error: number
+  skip: number
 }
 
 export interface NodeProbeResult {
@@ -573,6 +596,12 @@ export const deleteNode = (id: string) => request<{ ok: boolean }>('DELETE', `/n
 export const testNodeConnection = (id: string) => request<{ ok: boolean; message: string }>('POST', `/nodes/${encodeURIComponent(id)}/test`)
 export const probeNode = (id: string, mode: 'ip' | 'domain' = 'ip') =>
   request<{ mode: 'ip' | 'domain'; proxy_host: string; proxy_port: number; probe_results: NodeProbeResult[]; summary: { ok: number; total: number; success: boolean } }>('POST', `/nodes/${encodeURIComponent(id)}/probe`, { mode })
+/** diagNode is consumed as an SSE stream — see streamSSE() in Nodes.tsx */
+export const DIAG_NODE_URL = (id: string) => `${BASE}/nodes/${encodeURIComponent(id)}/diag`
+/** fixNode is consumed as an SSE stream — same format as deploy */
+export const FIX_NODE_URL = (id: string) => `${BASE}/nodes/${encodeURIComponent(id)}/fix`
+
+export type NodeFixKind = 'add_swap' | 'restart_gost'
 
 export interface GeoIPResult {
   ip: string

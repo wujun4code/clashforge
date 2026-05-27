@@ -137,6 +137,8 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/nodes/{id}/probe", handleProbeNode(deps.NodeStore))
 		api.Post("/nodes/{id}/deploy", handleDeployNode(deps.NodeStore, deps.NodeKeyPair))
 		api.Post("/nodes/{id}/destroy", handleDestroyNode(deps.NodeStore, deps.NodeKeyPair))
+		api.Post("/nodes/{id}/diag", handleDiagNode(deps.NodeStore, deps.NodeKeyPair))
+		api.Post("/nodes/{id}/fix", handleFixNode(deps.NodeStore, deps.NodeKeyPair))
 		api.Get("/nodes/{id}/proxy-config", handleExportProxyConfig(deps.NodeStore))
 		// Worker-based proxy nodes
 		api.Get("/worker-nodes", handleListWorkerNodes(deps.WorkerNodeStore))
