@@ -21,8 +21,10 @@ import {
   selectProxy,
   testLatency,
   probeDomain,
+  getDNSLeakTest,
+  getBrowserDNSLeakResults,
 } from '../api/client'
-import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote } from '../api/client'
+import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote, DnsLeakTestResult, ExternalResolver } from '../api/client'
 import type {
   OverviewAccessCheck,
   OverviewCoreData,
@@ -716,6 +718,265 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
 }
 
 
+// ── DNS Leak Detection Panel ────────────────────────────────────────────────
+
+function ResolverCard({ r }: { r: ExternalResolver }) {
+  const isDoh = r.ip.startsWith('https://')
+  const isIntercepted = r.upstream_intercepted === true
+
+  // Visual state precedence: DoH > intercepted > leak > ok
+  const borderBg = isDoh
+    ? 'border-brand/15 bg-brand/[0.03]'
+    : isIntercepted
+      ? 'border-white/8 bg-white/[0.02]'
+      : r.is_leak
+        ? 'border-warning/25 bg-warning/[0.06]'
+        : 'border-white/8 bg-white/[0.02]'
+
+  const ipColor = r.is_leak ? 'text-warning' : isIntercepted ? 'text-muted/70' : 'text-slate-200'
+
+  const tag = isDoh
+    ? { cls: 'border-brand/25 bg-brand/10 text-brand', label: '加密 DoH' }
+    : isIntercepted
+      ? { cls: 'border-white/15 bg-white/[0.05] text-muted/80', label: '上游拦截' }
+      : r.is_leak
+        ? { cls: 'border-warning/30 bg-warning/15 text-warning', label: '泄露' }
+        : { cls: 'border-success/25 bg-success/10 text-success', label: '正确' }
+
+  return (
+    <div className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-[11px] ${borderBg}`}>
+      {/* Flag / DoH / intercepted icon */}
+      <span className="shrink-0 text-base leading-none" aria-hidden>
+        {isDoh ? '🔒' : isIntercepted ? '🛡️' : countryFlag(r.country_code)}
+      </span>
+
+      {/* IP + ISP */}
+      <div className="min-w-0 flex-1">
+        <p className={`font-mono font-medium truncate ${ipColor}`}>
+          {r.ip}
+        </p>
+        <p className="text-muted/70 truncate">
+          {r.isp || r.country_name || '—'}
+          {r.country_name && r.isp && r.country_name !== r.isp && (
+            <span className="ml-1 text-muted/40">· {r.country_name}</span>
+          )}
+          {isIntercepted && (
+            <span className="ml-1 text-muted/40">· 查询已被上游 Mihomo 拦截</span>
+          )}
+        </p>
+      </div>
+
+      {/* Status tag */}
+      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tag.cls}`}>
+        {tag.label}
+      </span>
+    </div>
+  )
+}
+
+function DnsLeakPanel({ result, loading, onRun }: {
+  result: DnsLeakTestResult | null
+  loading: boolean
+  onRun: () => void
+}) {
+  const [showPaths, setShowPaths] = useState(false)
+
+  const externalResolvers = result?.external_resolvers ?? []
+  const leakCount = externalResolvers.filter(r => r.is_leak).length
+  const interceptedCount = externalResolvers.filter(r => r.upstream_intercepted).length
+  const hasExternal = externalResolvers.length > 0
+
+  return (
+    <div className="glass-card overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/8 bg-white/[0.02]">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-white">🛡️ DNS 泄露检测</p>
+            {result && !loading && (
+              <Pill
+                tone={result.error ? 'danger' : result.has_leak ? 'warning' : 'success'}
+                label={result.error ? '检测失败' : result.has_leak ? `⚠ 检测到泄露 (${leakCount})` : '✓ 未发现泄露'}
+              />
+            )}
+            {loading && <Loader2 size={12} className="animate-spin text-muted" />}
+          </div>
+          <p className="text-xs text-muted mt-0.5">
+            检测您的 DNS 查询由哪些服务器处理，判断是否存在隐私泄露风险
+            {result?.external_method === 'browser-bash.ws' && !loading && (
+              <span className="ml-1 text-muted/40">· 浏览器侧权威 DNS 探测（与 ip.net.coffee 同原理）</span>
+            )}
+            {result?.external_method === 'bash.ws' && !loading && (
+              <span className="ml-1 text-muted/40">· 路由器侧权威 DNS 探测</span>
+            )}
+            {result?.external_method === 'geoip-nameservers' && !loading && (
+              <span className="ml-1 text-muted/40">· 已配置上游 DNS GeoIP（bash.ws 探测失败）</span>
+            )}
+          </p>
+        </div>
+        <button
+          onClick={onRun}
+          disabled={loading}
+          className="btn-primary flex items-center gap-1.5 text-xs px-3 py-1.5 shrink-0"
+        >
+          {loading && <Loader2 size={11} className="animate-spin" />}
+          {loading ? '检测中…' : result ? '重新检测' : '开始检测'}
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="px-4 py-4 space-y-4">
+        {loading && !result ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-sm text-muted">
+            <Loader2 size={22} className="animate-spin text-brand/50" />
+            <span>正在探测 DNS 解析器，约需 15–20 秒…</span>
+            <span className="text-xs text-muted/60">
+              浏览器发起 DNS 探测 → 经路由器 Mihomo → 上游 DNS → bash.ws 权威 NS
+            </span>
+          </div>
+        ) : !result ? (
+          <div className="py-8 text-center space-y-1.5">
+            <p className="text-sm text-muted">点击"开始检测"查看您的 DNS 解析器</p>
+            <p className="text-xs text-muted/50 max-w-sm mx-auto">
+              与 ip.net.coffee 同原理：浏览器发出 DNS 探测请求，经过路由器 Mihomo 的上游 DNS
+              到达外部权威服务器，由此确认哪些 DNS 解析器实际处理了您的查询
+            </p>
+          </div>
+        ) : result.error ? (
+          <div className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs text-danger leading-relaxed">
+            {result.error}
+          </div>
+        ) : (
+          <>
+            {/* Summary banner */}
+            {result.summary && (() => {
+              const isInterceptedOnly = !result.has_leak && interceptedCount > 0 && leakCount === 0
+              const bannerCls = result.has_leak
+                ? 'border-warning/25 bg-warning/10 text-warning'
+                : isInterceptedOnly
+                  ? 'border-brand/15 bg-brand/[0.05] text-muted/90'
+                  : 'border-success/20 bg-success/[0.06] text-success/90'
+              const icon = result.has_leak ? '⚠️' : isInterceptedOnly ? '🛡️' : '✅'
+              return (
+                <div className={`rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${bannerCls}`}>
+                  {icon}{'  '}{result.summary}
+                </div>
+              )
+            })()}
+
+            {/* External resolver cards (ip.net.coffee style) */}
+            {hasExternal && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-medium text-muted/70 uppercase tracking-wider px-0.5">
+                  检测到的 DNS 解析器 · {externalResolvers.length} 个
+                  {leakCount > 0 && (
+                    <span className="ml-2 text-warning">（{leakCount} 个泄露）</span>
+                  )}
+                  {interceptedCount > 0 && leakCount === 0 && (
+                    <span className="ml-2 text-muted/60">（{interceptedCount} 个被上游 Mihomo 拦截）</span>
+                  )}
+                </p>
+                {externalResolvers.map((r, i) => (
+                  <ResolverCard key={i} r={r} />
+                ))}
+              </div>
+            )}
+
+            {/* Mihomo intercept status badge */}
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                result.mihomo_intercepting ? 'bg-brand' : 'bg-muted/30'
+              }`} />
+              <span className="text-muted">
+                Mihomo DNS 拦截：
+                <span className={result.mihomo_intercepting ? 'text-brand ml-1' : 'text-muted/60 ml-1'}>
+                  {result.mihomo_intercepting ? '✓ 已启用（Fake-IP 模式正常）' : '未检测到'}
+                </span>
+              </span>
+            </div>
+
+            {/* Collapsible internal path comparison */}
+            {result.paths.length > 0 && (
+              <div>
+                <button
+                  onClick={() => setShowPaths(v => !v)}
+                  className="text-[11px] text-muted/60 hover:text-muted flex items-center gap-1 transition-colors"
+                >
+                  <span className={`transition-transform ${showPaths ? 'rotate-90' : ''}`}>▶</span>
+                  {showPaths ? '收起' : '展开'} DNS 路径详情
+                </button>
+                {showPaths && (
+                  <div className="mt-2 overflow-x-auto rounded-lg border border-white/8 text-[11px]">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-white/8 bg-white/[0.02]">
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">DNS 路径</th>
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">服务器</th>
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70">解析结果</th>
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">状态</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.paths.map((p, i) => {
+                          const isRef = p.name.includes('参考')
+                          const isMihomo = p.name.startsWith('Mihomo')
+                          const rowBg = p.error ? 'bg-danger/5' : ''
+                          return (
+                            <tr key={i} className={`border-b border-white/5 last:border-0 ${rowBg}`}>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <span className={`font-medium ${isMihomo ? 'text-brand' : isRef ? 'text-muted/60' : 'text-slate-300'}`}>
+                                  {p.name}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 font-mono text-muted/70 max-w-[180px] truncate">{p.server}</td>
+                              <td className="px-3 py-2 font-mono">
+                                {p.error ? (
+                                  <span className="text-danger/70">{p.error.slice(0, 50)}</span>
+                                ) : p.is_fake_ip ? (
+                                  <span className="text-brand/80">
+                                    {(p.ips ?? []).slice(0, 2).join(', ')}
+                                    {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300">
+                                    {(p.ips ?? []).slice(0, 2).join(', ')}
+                                    {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {p.error ? (
+                                  <span className="rounded-full border border-danger/25 bg-danger/10 px-2 py-0.5 text-[10px] font-medium text-danger">失败</span>
+                                ) : p.is_fake_ip ? (
+                                  <span className="rounded-full border border-brand/25 bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">Fake-IP ✓</span>
+                                ) : isRef ? (
+                                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-muted">真实 IP</span>
+                                ) : (
+                                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-muted">真实 IP</span>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {result.tested_at && (
+              <p className="text-[10px] text-muted/40">
+                检测时间：{new Date(result.tested_at).toLocaleString('zh-CN')}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const SKIP_VERSION_KEY = 'cf_skip_version'
 
 function ResourceDrawer({
@@ -864,7 +1125,11 @@ export function Dashboard() {
 
   // resource drawer + probe tab + last-switched-proxy tracking
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
-  const [probeTab, setProbeTab] = useState<'router' | 'browser' | 'domain'>('router')
+  const [probeTab, setProbeTab] = useState<'router' | 'browser' | 'domain' | 'dns-leak'>('router')
+
+  // DNS leak detection state
+  const [dnsLeakResult, setDnsLeakResult] = useState<DnsLeakTestResult | null>(null)
+  const [dnsLeakLoading, setDnsLeakLoading] = useState(false)
   const [lastSwitchedProxy, setLastSwitchedProxy] = useState<{ group: string; proxy: string } | null>(null)
 
   // domain probe state (tab 3)
@@ -992,6 +1257,106 @@ export function Dashboard() {
     ])
     setDomainResult({ domain: clean, router: routerRes, browser: browserRes })
     setDomainLoading(false)
+  }
+
+  /**
+   * Browser-side DNS probe — the correct way to detect DNS leaks.
+   *
+   * The browser makes fetch() requests to unique bash.ws subdomains.
+   * Those requests trigger real DNS lookups through the browser's OS resolver,
+   * which travels the full path: Browser → OS DNS → Router dnsmasq → Mihomo →
+   * upstream DNS (e.g. 223.5.5.5) → bash.ws authoritative NS.
+   * bash.ws records which resolver IPs queried for the test subdomains —
+   * this is exactly what ip.net.coffee does.
+   *
+   * The browser cannot read bash.ws's cross-origin JSON response directly,
+   * so we ask the backend to proxy the results fetch.
+   */
+  const runBrowserDNSProbe = async (): Promise<ExternalResolver[]> => {
+    const testId = String(Math.floor(Math.random() * 900000) + 100000)
+
+    // Register the test with bash.ws (ignore errors — may not be strictly required).
+    try {
+      await fetch(`https://bash.ws/dnsleak/test/start/${testId}`, { mode: 'no-cors', cache: 'no-store' })
+    } catch { /* ignore */ }
+
+    // Fire DNS probe requests concurrently.
+    // Even if the HTTP connections fail, the DNS lookups already happened —
+    // the browser resolved each hostname via its OS resolver before attempting TCP.
+    const probes: Promise<unknown>[] = []
+    for (let n = 1; n <= 10; n++) {
+      probes.push(
+        fetch(`https://${testId}-${n}.bash.ws/`, { mode: 'no-cors', cache: 'no-store' }).catch(() => {})
+      )
+    }
+    await Promise.allSettled(probes)
+
+    // Wait for bash.ws to index the incoming resolver queries.
+    await new Promise<void>(resolve => setTimeout(resolve, 3000))
+
+    // Retrieve results via backend proxy (bypasses CORS restriction).
+    const res = await getBrowserDNSLeakResults(testId)
+    return res.resolvers
+  }
+
+  const handleDNSLeakRun = async () => {
+    setDnsLeakLoading(true)
+    try {
+      // Run browser DNS probe and backend Mihomo health check in parallel.
+      // The browser probe is authoritative for external resolver detection;
+      // the backend provides the internal fake-ip path analysis.
+      const [browserResolvers, backendResult] = await Promise.all([
+        runBrowserDNSProbe().catch((): ExternalResolver[] => []),
+        getDNSLeakTest().catch((e: unknown) => ({
+          test_domain: 'google.com',
+          paths: [],
+          external_resolvers: [] as ExternalResolver[],
+          external_method: undefined,
+          mihomo_intercepting: false,
+          has_leak: false,
+          summary: '',
+          tested_at: new Date().toISOString(),
+          error: e instanceof Error ? e.message : '请求失败',
+        } satisfies DnsLeakTestResult)),
+      ])
+
+      // If the browser probe returned results, they supersede the backend's
+      // GeoIP-fallback external resolvers.  has_leak is re-evaluated accordingly.
+      const externalResolvers = browserResolvers.length > 0
+        ? browserResolvers
+        : (backendResult.external_resolvers ?? [])
+      const externalMethod = browserResolvers.length > 0
+        ? 'browser-bash.ws'
+        : backendResult.external_method
+
+      const browserHasLeak = browserResolvers.some(r => r.is_leak)
+      const hasLeak = browserResolvers.length > 0
+        ? browserHasLeak
+        : backendResult.has_leak
+
+      // Build a user-facing summary when the browser probe has results.
+      let summary = backendResult.summary
+      if (browserResolvers.length > 0) {
+        const leakCount = browserResolvers.filter(r => r.is_leak).length
+        if (leakCount > 0) {
+          summary = `检测到 DNS 泄露！${leakCount} 个 DNS 解析器位于中国境内，` +
+            '这意味着您的 DNS 查询对中国实体可见。' +
+            '建议在 Mihomo 配置中将上游 DNS 改为经代理转发的 DoH（如 https://1.1.1.1/dns-query）。'
+        } else {
+          summary = '未检测到 DNS 泄露。所有 DNS 解析器均在中国境外，您的 DNS 查询通过代理或境外 DNS 处理。'
+        }
+      }
+
+      setDnsLeakResult({
+        ...backendResult,
+        external_resolvers: externalResolvers,
+        external_method: externalMethod,
+        has_leak: hasLeak,
+        summary,
+      })
+    } finally {
+      setDnsLeakLoading(false)
+    }
   }
 
   const handleTestLatency = async () => {
@@ -1161,10 +1526,31 @@ export function Dashboard() {
                     ? <span className={`h-1.5 w-1.5 rounded-full ${domainResult.router?.ok && domainResult.browser?.ok ? 'bg-success' : 'bg-warning'}`} />
                     : null}
               </button>
+
+              {/* DNS leak tab */}
+              <button
+                onClick={() => setProbeTab('dns-leak')}
+                className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
+                  probeTab === 'dns-leak' ? 'border-brand text-white' : 'border-transparent text-muted hover:text-slate-300'
+                }`}
+              >
+                DNS 泄露
+                {dnsLeakLoading
+                  ? <Loader2 size={10} className="animate-spin text-muted" />
+                  : dnsLeakResult
+                    ? <span className={`h-1.5 w-1.5 rounded-full ${dnsLeakResult.error ? 'bg-danger' : dnsLeakResult.has_leak ? 'bg-warning' : 'bg-success'}`} />
+                    : null}
+              </button>
             </div>
 
             <div className="pt-3">
-              {probeTab === 'domain' ? (
+              {probeTab === 'dns-leak' ? (
+                <DnsLeakPanel
+                  result={dnsLeakResult}
+                  loading={dnsLeakLoading}
+                  onRun={() => void handleDNSLeakRun()}
+                />
+              ) : probeTab === 'domain' ? (
                 <DomainProbePanel
                   domain={domainInput}
                   onDomainChange={setDomainInput}

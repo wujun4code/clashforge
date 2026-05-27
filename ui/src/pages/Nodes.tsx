@@ -20,6 +20,9 @@ import {
   ChevronDown,
   ChevronRight,
   FileCode2,
+  Activity,
+  Cable,
+  Wrench,
 } from 'lucide-react'
 import {
   getNodes,
@@ -41,8 +44,10 @@ import {
   getSubscriptionNodes,
   getSubscriptionCache,
   updateSubscriptionContent,
+  DIAG_NODE_URL,
+  FIX_NODE_URL,
 } from '../api/client'
-import type { NodeListItem, NodeCreateRequest, NodeProbeResult, CloudflareZone, WorkerNodeListItem, Subscription } from '../api/client'
+import type { NodeListItem, NodeCreateRequest, NodeProbeResult, NodeDiagCheck, NodeDiagSummary, NodeFixKind, CloudflareZone, WorkerNodeListItem, Subscription } from '../api/client'
 import { PageHeader, SectionCard, ModalShell, EmptyState } from '../components/ui'
 import {
   CFGate,
@@ -103,6 +108,16 @@ interface SSEDone {
   probe_results?: NodeProbeResult[]
 }
 
+// Diag-specific SSE shape
+interface SSEDiagCheck {
+  type: 'check'
+  check: NodeDiagCheck
+}
+interface SSEDiagDone {
+  type: 'done'
+  summary: NodeDiagSummary
+}
+
 async function streamSSE(
   url: string,
   secret: string,
@@ -155,6 +170,47 @@ async function streamSSE(
         } else {
           onEvent(data as SSEEvent)
         }
+      } catch { /* skip malformed */ }
+    }
+  }
+}
+
+async function streamDiagSSE(
+  url: string,
+  secret: string,
+  onCheck: (ev: NodeDiagCheck) => void,
+  onDone: (done: SSEDiagDone) => void,
+  signal?: AbortSignal,
+) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secret}` },
+    signal,
+  })
+  if (!resp.ok) {
+    let detail = `请求失败 (${resp.status})`
+    try {
+      const body = await resp.json()
+      detail = body?.error?.message ?? detail
+    } catch { /* ignore */ }
+    throw new Error(detail)
+  }
+  const reader = resp.body?.getReader()
+  if (!reader) return
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      try {
+        const data = JSON.parse(line.slice(6))
+        if (data.type === 'done') onDone(data as SSEDiagDone)
+        else if (data.type === 'check') onCheck((data as SSEDiagCheck).check)
       } catch { /* skip malformed */ }
     }
   }
@@ -367,6 +423,375 @@ function NodeEditModal({
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 保存修改
           </button>
         </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── External Node Modal (3-step: pick node → SSH info → key auth) ──────────
+//
+// Step 1: select from imported subscription nodes OR enter host manually.
+// Step 2: configure SSH credentials (port / user / password) → create node.
+// Step 3: SSH key authorization instructions + verify.
+
+function ExternalNodeModal({
+  onClose,
+  onDone,
+}: {
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
+  const [createdNode, setCreatedNode] = useState<NodeListItem | null>(null)
+
+  // ── Step 1: source selection ─────────────────────────────────────────────
+  type SourceTab = 'sub' | 'manual'
+  const [sourceTab, setSourceTab] = useState<SourceTab>('sub')
+
+  type SubNode = { name: string; type: string; server: string; port: number }
+  type SubGroup = { subId: string; subName: string; nodes: SubNode[] }
+  const [subGroups, setSubGroups] = useState<SubGroup[]>([])
+  const [subLoading, setSubLoading] = useState(true)
+  const [selectedSubId, setSelectedSubId] = useState('')
+  const [pickedNode, setPickedNode] = useState<SubNode | null>(null)
+  const [nodeFilter, setNodeFilter] = useState('')
+
+  // ── Form fields (SSH port lives here; subscription port is display-only) ──
+  const [form, setForm] = useState({ name: '', host: '', port: 22, username: 'root', password: '' })
+  const update = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
+    setForm(f => ({ ...f, [k]: v }))
+
+  // ── SSH public key (for step 3) ──────────────────────────────────────────
+  const [sshPubKey, setSSHPubKey] = useState('')
+  useEffect(() => { getNodeSSHPubKey().then(r => setSSHPubKey(r.public_key)).catch(() => {}) }, [])
+
+  // ── Load subscription groups ─────────────────────────────────────────────
+  useEffect(() => {
+    setSubLoading(true)
+    getNodeImports()
+      .then(async data => {
+        const groups: SubGroup[] = []
+        await Promise.all((data.subscriptions ?? []).map(async (sub: Subscription) => {
+          try {
+            const res = await getSubscriptionNodes(sub.id)
+            if (res.nodes.length > 0) {
+              groups.push({
+                subId: sub.id,
+                subName: sub.name,
+                nodes: res.nodes.map(n => ({ name: n.name, type: n.type, server: n.server, port: n.port })),
+              })
+            }
+          } catch { /* skip */ }
+        }))
+        setSubGroups(groups)
+        if (groups.length > 0) setSelectedSubId(groups[0].subId)
+        else setSourceTab('manual')
+      })
+      .catch(() => setSourceTab('manual'))
+      .finally(() => setSubLoading(false))
+  }, [])
+
+  const currentGroup = subGroups.find(g => g.subId === selectedSubId)
+  const filteredNodes = (currentGroup?.nodes ?? []).filter(n =>
+    !nodeFilter ||
+    n.name.toLowerCase().includes(nodeFilter.toLowerCase()) ||
+    n.server.toLowerCase().includes(nodeFilter.toLowerCase()),
+  )
+
+  const handlePickNode = (n: SubNode) => {
+    setPickedNode(n)
+    setForm(f => ({ ...f, name: n.name, host: n.server }))
+  }
+
+  const canStep1Proceed = sourceTab === 'sub'
+    ? pickedNode !== null
+    : form.name.trim() !== '' && form.host.trim() !== ''
+
+  // ── Actions ──────────────────────────────────────────────────────────────
+
+  const handleCreate = async () => {
+    setBusy(true); setMessage(null)
+    try {
+      const data = await createNode({
+        name: form.name, host: form.host, port: form.port,
+        username: form.username, password: form.password,
+        domain: '', email: '', cf_token: '', cf_account_id: '', cf_zone_id: '',
+        kind: 'external',
+      })
+      setCreatedNode(data.node)
+      onDone()
+      setStep(3)
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : '创建失败', ok: false })
+    } finally { setBusy(false) }
+  }
+
+  const handleTest = async () => {
+    if (!createdNode) return
+    setBusy(true); setMessage(null)
+    try {
+      const r = await testNodeConnection(createdNode.id)
+      setMessage({ text: r.ok ? 'SSH 连接验证成功，节点已就绪' : r.message, ok: r.ok })
+      if (r.ok) onDone()
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : 'SSH 验证失败', ok: false })
+    } finally { setBusy(false) }
+  }
+
+  const authorizeCmd = sshPubKey && form.host && form.username
+    ? `ssh -p ${form.port} ${form.username}@${form.host} "echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"`
+    : ''
+  const localCmd = sshPubKey
+    ? `mkdir -p ~/.ssh && echo '${sshPubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh`
+    : ''
+
+  const stepTitles = ['选择节点', 'SSH 连接配置', '授权 SSH Key']
+
+  return (
+    <ModalShell
+      title={`接入外部节点 · ${stepTitles[step - 1]}`}
+      description="手动部署的 gost 节点，SSH Key 授权后可进行链路诊断"
+      onClose={!busy ? onClose : undefined}
+      size="lg"
+      icon={<Cable size={18} />}
+    >
+      <div className="space-y-4">
+        {/* Step indicator */}
+        <div className="flex items-center gap-1.5">
+          {[1, 2, 3].map(s => (
+            <div key={s} className={`h-1 flex-1 rounded-full transition-colors ${s < step ? 'bg-brand/60' : s === step ? 'bg-brand' : 'bg-white/10'}`} />
+          ))}
+          <span className="text-[10px] text-muted ml-1 shrink-0">{step}/3</span>
+        </div>
+
+        {/* ── Step 1: 选择节点 ── */}
+        {step === 1 && (
+          <div className="space-y-3">
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] px-3 py-2 text-xs text-violet-300 flex items-start gap-2">
+              <Cable size={13} className="shrink-0 mt-0.5" />
+              <span>外部节点不会由 ClashForge 管理部署，仅通过 SSH Key 接入以执行链路诊断。</span>
+            </div>
+
+            {/* Source mode tabs */}
+            <div className="flex rounded-xl border border-white/10 bg-black/20 overflow-hidden text-xs">
+              <button
+                className={`flex-1 px-3 py-2 transition-colors ${sourceTab === 'sub' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-slate-300 hover:bg-white/5'}`}
+                onClick={() => setSourceTab('sub')}
+              >
+                从导入节点选择
+                {!subLoading && subGroups.length > 0 && (
+                  <span className="ml-1 opacity-70">({subGroups.reduce((s, g) => s + g.nodes.length, 0)})</span>
+                )}
+              </button>
+              <div className="w-px bg-white/10" />
+              <button
+                className={`flex-1 px-3 py-2 transition-colors ${sourceTab === 'manual' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-slate-300 hover:bg-white/5'}`}
+                onClick={() => setSourceTab('manual')}
+              >
+                手动填写
+              </button>
+            </div>
+
+            {/* ── Sub selector ── */}
+            {sourceTab === 'sub' && (
+              subLoading ? (
+                <div className="flex items-center justify-center gap-2 text-xs text-muted py-6">
+                  <Loader2 size={12} className="animate-spin" /> 加载导入节点…
+                </div>
+              ) : subGroups.length === 0 ? (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-3 text-xs text-amber-300 text-center leading-relaxed">
+                  暂无导入节点，请先在「导入节点」栏目中导入 Clash 配置，或切换至「手动填写」模式。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {subGroups.length > 1 ? (
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">订阅分组</label>
+                      <select
+                        className="glass-input"
+                        value={selectedSubId}
+                        onChange={e => { setSelectedSubId(e.target.value); setPickedNode(null); setNodeFilter('') }}
+                      >
+                        {subGroups.map(g => (
+                          <option key={g.subId} value={g.subId}>{g.subName} ({g.nodes.length})</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400">
+                      来自 <span className="text-slate-200 font-medium">{subGroups[0].subName}</span> · {subGroups[0].nodes.length} 个节点
+                    </p>
+                  )}
+                  <input
+                    className="glass-input text-xs"
+                    placeholder="搜索节点名称或服务器地址…"
+                    value={nodeFilter}
+                    onChange={e => setNodeFilter(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="rounded-xl border border-white/8 bg-black/20 max-h-52 overflow-y-auto divide-y divide-white/5">
+                    {filteredNodes.length === 0 ? (
+                      <p className="px-3 py-3 text-xs text-muted text-center">无匹配节点</p>
+                    ) : filteredNodes.map((n, i) => {
+                      const isPicked = pickedNode?.server === n.server && pickedNode?.name === n.name
+                      return (
+                        <div
+                          key={i}
+                          className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer text-xs transition-colors ${isPicked ? 'bg-brand/10' : 'hover:bg-white/[0.04]'}`}
+                          onClick={() => handlePickNode(n)}
+                        >
+                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-mono uppercase ${isPicked ? 'bg-brand/20 text-brand' : 'bg-white/8 text-muted'}`}>
+                            {n.type || '?'}
+                          </span>
+                          <span className={`flex-1 truncate ${isPicked ? 'text-brand font-medium' : 'text-slate-300'}`}>{n.name}</span>
+                          <span className="shrink-0 font-mono text-[11px] text-muted">{n.server}</span>
+                          {isPicked && <Check size={11} className="shrink-0 text-brand" />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {pickedNode && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
+                      <CheckCircle2 size={10} className="shrink-0" />
+                      <span className="truncate">已选: {pickedNode.name} · {pickedNode.server}</span>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+
+            {/* ── Manual entry ── */}
+            {sourceTab === 'manual' && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">名称</label>
+                  <input className="glass-input" value={form.name} onChange={e => update('name', e.target.value)} placeholder="如: 自建-新加坡" autoFocus />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">主机地址 (IP 或域名)</label>
+                  <input className="glass-input font-mono" value={form.host} onChange={e => update('host', e.target.value)} placeholder="1.2.3.4" />
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-1">
+              <button className="btn-ghost" onClick={onClose} disabled={busy}>取消</button>
+              <button className="btn-primary" disabled={busy || !canStep1Proceed} onClick={() => setStep(2)}>
+                下一步 →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 2: SSH 连接配置 ── */}
+        {step === 2 && (
+          <div className="space-y-3">
+            {/* Node summary */}
+            <div className="rounded-xl border border-white/10 bg-black/15 px-3 py-2.5 text-xs space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-muted shrink-0">节点</span>
+                <span className="font-medium text-slate-200 truncate flex-1">{form.name}</span>
+                <span className="font-mono text-muted shrink-0">{form.host}</span>
+              </div>
+              {pickedNode && (
+                <p className="text-[10px] text-muted pl-8">来自导入订阅 · 代理端口 {pickedNode.port}</p>
+              )}
+            </div>
+
+            {/* SSH credentials */}
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">备注名称 <span className="text-muted">(可修改)</span></label>
+              <input className="glass-input" value={form.name} onChange={e => update('name', e.target.value)} autoFocus />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">SSH 端口</label>
+                <input className="glass-input" type="number" value={form.port} onChange={e => update('port', Number(e.target.value))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">SSH 用户名</label>
+                <input className="glass-input" value={form.username} onChange={e => update('username', e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">SSH 密码 <span className="text-muted">(可选，授权 Key 后留空)</span></label>
+              <input className="glass-input" type="password" value={form.password} onChange={e => update('password', e.target.value)} placeholder="已授权 SSH Key 可留空" />
+            </div>
+
+            {/* Inline pubkey import — shown right here so user can run it without waiting */}
+            {sshPubKey && (
+              <div className="rounded-xl border border-white/8 bg-black/20 p-3 space-y-2">
+                <p className="text-[11px] font-semibold text-slate-300">导入路由器 SSH 公钥至目标服务器</p>
+                <p className="text-[10px] text-muted leading-relaxed">
+                  在目标服务器上执行以下命令（二选一），完成后无需密码即可通过 SSH Key 连接：
+                </p>
+                <div>
+                  <p className="text-[10px] text-muted mb-1">
+                    方式一：本地终端一键推送（需本地已能 SSH 登录服务器）
+                  </p>
+                  {authorizeCmd
+                    ? <CopyableCode text={authorizeCmd} />
+                    : <p className="text-[10px] text-muted italic">填写 SSH 用户名后自动生成</p>}
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted mb-1">方式二：登录服务器后直接执行</p>
+                  <CopyableCode text={localCmd} />
+                </div>
+              </div>
+            )}
+
+            {message && (
+              <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${message.ok ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-red-500/20 bg-red-500/5 text-red-400'}`}>
+                {message.ok ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                {message.text}
+              </div>
+            )}
+            <div className="flex justify-between gap-3 pt-1">
+              <button className="btn-ghost" onClick={() => { setStep(1); setMessage(null) }} disabled={busy}>← 上一步</button>
+              <button className="btn-primary" disabled={busy || !form.name || !form.host} onClick={handleCreate}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 创建节点 →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 3: 授权 SSH Key ── */}
+        {step === 3 && (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400 leading-relaxed">将路由器公钥加入服务器，之后即可通过 SSH Key 免密连接。</p>
+            {sshPubKey && (
+              <>
+                <div>
+                  <p className="text-[11px] text-muted mb-1">公钥</p>
+                  <CopyableCode text={sshPubKey} />
+                </div>
+                <div>
+                  <p className="text-[11px] text-muted mb-1">方式一：在本地终端执行（需本地已有服务器 SSH 权限）</p>
+                  {authorizeCmd ? <CopyableCode text={authorizeCmd} /> : <p className="text-[11px] text-muted italic">填写主机地址后自动生成</p>}
+                </div>
+                <div>
+                  <p className="text-[11px] text-muted mb-1">方式二：SSH 登录服务器后直接执行</p>
+                  <CopyableCode text={localCmd} />
+                </div>
+              </>
+            )}
+            {message && (
+              <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${message.ok ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-red-500/20 bg-red-500/5 text-red-400'}`}>
+                {message.ok ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                {message.text}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button className="btn-primary flex-1" disabled={busy} onClick={handleTest}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {busy ? '验证中…' : '已完成授权，验证 SSH 连接'}
+              </button>
+              <button className="btn-ghost" onClick={onClose} disabled={busy}>稍后验证</button>
+            </div>
+          </div>
+        )}
       </div>
     </ModalShell>
   )
@@ -1375,6 +1800,386 @@ function NodeProbeModal({
   )
 }
 
+// ── Node Diag Modal ───────────────────────────────────────────────────────────
+
+const DIAG_CATEGORY_LABELS: Record<string, string> = {
+  network: '网络',
+  process: '进程',
+  system:  '系统',
+  cert:    '证书',
+}
+
+function DiagStatusIcon({ status, size = 13 }: { status: string; size?: number }) {
+  switch (status) {
+    case 'ok':    return <CheckCircle2 size={size} className="text-emerald-400 shrink-0" />
+    case 'warn':  return <AlertCircle  size={size} className="text-amber-400 shrink-0" />
+    case 'error': return <X            size={size} className="text-red-400 shrink-0" />
+    case 'skip':  return <span className="inline-block rounded-full bg-white/20 shrink-0" style={{ width: size - 1, height: size - 1 }} />
+    default:      return <Loader2      size={size} className="text-brand shrink-0 animate-spin" />
+  }
+}
+
+// ── Fix suggestions ───────────────────────────────────────────────────────────
+
+interface FixSuggestion {
+  id: string
+  fixKind: NodeFixKind
+  title: string
+  description: string
+  /** check IDs whose status drives this suggestion */
+  relatedChecks: string[]
+}
+
+function deriveFixSuggestions(checks: NodeDiagCheck[]): FixSuggestion[] {
+  const byId = new Map(checks.map(c => [c.id, c]))
+  const is = (id: string, ...statuses: string[]) => {
+    const c = byId.get(id)
+    return c ? statuses.includes(c.status) : false
+  }
+  const suggestions: FixSuggestion[] = []
+
+  // ── Swap / OOM ──
+  if (is('mem_usage', 'error') || is('oom_log', 'warn', 'error')) {
+    const restartVal = byId.get('gost_restarts')?.value ?? ''
+    suggestions.push({
+      id: 'add_swap',
+      fixKind: 'add_swap',
+      title: '添加 1 GB Swap 交换分区',
+      description:
+        `服务器物理内存不足（${byId.get('mem_usage')?.value ?? '—'}），OOM Killer 正在终止进程` +
+        (restartVal ? `，已导致 gost 崩溃重启 ${restartVal} 次` : '') +
+        '。添加 Swap 可有效缓解内存压力，防止进程被强制终止。',
+      relatedChecks: ['mem_usage', 'oom_log', 'gost_restarts'],
+    })
+  }
+
+  // ── Gost restart ──
+  const gostDown   = is('gost_service', 'error') || is('gost_process', 'error') || is('port_listen', 'error')
+  const highRestart = is('gost_restarts', 'error')
+  if (gostDown || highRestart) {
+    suggestions.push({
+      id: 'restart_gost',
+      fixKind: 'restart_gost',
+      title: gostDown ? '启动 gost 服务' : '重启 gost 并清零故障计数',
+      description: gostDown
+        ? 'gost 进程或服务未运行，代理功能不可用。将重启服务并确认其正常启动。'
+        : `gost 意外重启次数过多（${byId.get('gost_restarts')?.value ?? ''}），将重置 systemd 故障计数并重启服务，确保以干净状态运行。`,
+      relatedChecks: gostDown
+        ? ['gost_service', 'gost_process', 'port_listen']
+        : ['gost_restarts'],
+    })
+  }
+
+  return suggestions
+}
+
+// ── Fix panel (shown after diagnosis when issues are found) ───────────────────
+
+function NodeFixPanel({
+  nodeId,
+  suggestions,
+  onRequestRediag,
+}: {
+  nodeId: string
+  suggestions: FixSuggestion[]
+  onRequestRediag: () => void
+}) {
+  const [runningId, setRunningId] = useState<string | null>(null)
+  const [fixEvents, setFixEvents]   = useState<Record<string, SSEEvent[]>>({})
+  const [fixResult, setFixResult]   = useState<Record<string, { ok: boolean; error?: string }>>({})
+
+  const runFix = async (s: FixSuggestion) => {
+    setRunningId(s.id)
+    setFixEvents(prev => ({ ...prev, [s.id]: [] }))
+    const secret = localStorage.getItem('cf_secret') || ''
+    try {
+      await streamSSE(
+        FIX_NODE_URL(nodeId),
+        secret,
+        ev  => setFixEvents(prev => ({ ...prev, [s.id]: [...(prev[s.id] ?? []), ev] })),
+        done => setFixResult(prev => ({ ...prev, [s.id]: { ok: done.success, error: done.error } })),
+        undefined,
+        { fix_kind: s.fixKind },
+      )
+    } catch (e) {
+      setFixResult(prev => ({ ...prev, [s.id]: { ok: false, error: e instanceof Error ? e.message : '修复失败' } }))
+    } finally {
+      setRunningId(null)
+    }
+  }
+
+  if (suggestions.length === 0) return null
+
+  const anyFixed = suggestions.some(s => fixResult[s.id]?.ok)
+
+  return (
+    <div className="rounded-xl border border-amber-500/15 bg-amber-500/[0.03] p-3 space-y-3">
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        <Wrench size={13} className="text-amber-400 shrink-0" />
+        <p className="text-xs font-semibold text-amber-300">修复建议</p>
+        <span className="text-[10px] text-muted ml-1">
+          {suggestions.length} 个可自动修复的问题
+        </span>
+        {anyFixed && (
+          <button
+            className="ml-auto btn-ghost h-6 px-2.5 text-[11px] flex items-center gap-1"
+            onClick={onRequestRediag}
+          >
+            <RotateCw size={11} /> 重新诊断
+          </button>
+        )}
+      </div>
+
+      {/* Fix cards */}
+      {suggestions.map(s => {
+        const isRunning = runningId === s.id
+        const result    = fixResult[s.id]
+        const events    = fixEvents[s.id] ?? []
+        const isDone    = Boolean(result)
+
+        return (
+          <div key={s.id} className="rounded-lg border border-white/8 bg-black/20 p-3 space-y-2">
+            <div className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-200">{s.title}</p>
+                <p className="text-[11px] text-muted mt-0.5 leading-relaxed">{s.description}</p>
+              </div>
+              {!isDone && (
+                <button
+                  className="shrink-0 btn-primary h-7 px-3 text-xs"
+                  disabled={!!runningId}
+                  onClick={() => void runFix(s)}
+                >
+                  {isRunning
+                    ? <><Loader2 size={11} className="animate-spin" /> 修复中…</>
+                    : <><Wrench size={11} /> 立即修复</>}
+                </button>
+              )}
+              {isDone && (
+                <span className={`shrink-0 text-xs font-semibold flex items-center gap-1 ${result.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {result.ok ? <CheckCircle2 size={12} /> : <X size={12} />}
+                  {result.ok ? '已修复' : '失败'}
+                </span>
+              )}
+            </div>
+
+            {/* Inline progress log */}
+            {events.length > 0 && (
+              <div className="rounded-lg border border-white/8 bg-black/30 px-3 py-2 font-mono text-[10px] space-y-0.5 max-h-28 overflow-y-auto">
+                {events.map((ev, i) => (
+                  <div key={i} className={
+                    ev.status === 'error'   ? 'text-red-300'   :
+                    ev.status === 'warning' ? 'text-amber-300' :
+                    ev.status === 'ok'      ? 'text-emerald-300' :
+                    'text-slate-400'
+                  }>
+                    <span className="text-muted mr-1">[{ev.step}]</span>
+                    {ev.message}
+                    {ev.detail && <span className="text-muted/60 ml-1 break-all">{ev.detail}</span>}
+                  </div>
+                ))}
+                {isRunning && (
+                  <div className="flex items-center gap-1 text-muted">
+                    <Loader2 size={9} className="animate-spin shrink-0" /> 执行中…
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Error */}
+            {isDone && !result.ok && result.error && (
+              <p className="text-[11px] text-red-300 flex items-center gap-1">
+                <AlertCircle size={10} className="shrink-0" /> {result.error}
+              </p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── NodeDiagModal ─────────────────────────────────────────────────────────────
+
+function NodeDiagModal({
+  node,
+  onClose,
+}: {
+  node: NodeListItem
+  onClose: () => void
+}) {
+  const [checks, setChecks] = useState<NodeDiagCheck[]>([])
+  const [summary, setSummary] = useState<NodeDiagSummary | null>(null)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState('')
+  const [expandedDetail, setExpandedDetail] = useState<Set<string>>(new Set())
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const runDiag = useCallback(async () => {
+    setChecks([])
+    setSummary(null)
+    setError('')
+    setExpandedDetail(new Set())
+    setRunning(true)
+    const secret = localStorage.getItem('cf_secret') || ''
+    const abort = new AbortController()
+    try {
+      await streamDiagSSE(
+        DIAG_NODE_URL(node.id),
+        secret,
+        (check) => setChecks(prev => [...prev, check]),
+        (done) => { setSummary(done.summary); setRunning(false) },
+        abort.signal,
+      )
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        setError(e instanceof Error ? e.message : '诊断失败')
+      }
+      setRunning(false)
+    }
+    return () => abort.abort()
+  }, [node.id])
+
+  useEffect(() => { void runDiag() }, [runDiag])
+
+  useEffect(() => {
+    containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' })
+  }, [checks])
+
+  const toggleDetail = (id: string) =>
+    setExpandedDetail(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+
+  // Group checks by category for display
+  const grouped = checks.reduce<Record<string, NodeDiagCheck[]>>((acc, c) => {
+    const cat = c.category || 'other'
+    ;(acc[cat] ??= []).push(c)
+    return acc
+  }, {})
+
+  const summaryColor = !summary ? '' :
+    summary.error > 0 ? 'border-red-500/20 bg-red-500/[0.04] text-red-300' :
+    summary.warn  > 0 ? 'border-amber-500/20 bg-amber-500/[0.04] text-amber-300' :
+    'border-emerald-500/20 bg-emerald-500/[0.04] text-emerald-300'
+
+  // Derive fix suggestions once diagnosis is done
+  const fixSuggestions = summary ? deriveFixSuggestions(checks) : []
+
+  return (
+    <ModalShell
+      title="链路诊断"
+      description={`${node.username}@${node.host}:${node.port}`}
+      onClose={running ? undefined : onClose}
+      size="lg"
+      icon={running ? <Loader2 size={18} className="animate-spin" /> : <Activity size={18} />}
+      dismissible={!running}
+    >
+      <div className="space-y-4">
+        {/* Node info strip */}
+        <div className="rounded-xl border border-white/10 bg-black/15 px-3 py-2 text-xs flex items-center gap-3">
+          <span className="font-medium text-slate-200 truncate">{node.name}</span>
+          {node.kind === 'external' && (
+            <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/20">外部节点</span>
+          )}
+          <span className="shrink-0 font-mono text-[11px] text-muted ml-auto">{node.host}</span>
+        </div>
+
+        {/* Live check list */}
+        <div ref={containerRef} className="space-y-3 max-h-[46vh] overflow-y-auto pr-1">
+          {Object.entries(grouped).map(([cat, catChecks]) => (
+            <div key={cat} className="space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted px-1">
+                {DIAG_CATEGORY_LABELS[cat] ?? cat}
+              </p>
+              <div className="rounded-xl border border-white/8 bg-white/[0.02] divide-y divide-white/5 overflow-hidden">
+                {catChecks.map(check => (
+                  <div key={check.id}>
+                    <div
+                      className={`flex items-center gap-2.5 px-3 py-2.5 text-xs ${check.detail ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}
+                      onClick={() => check.detail && toggleDetail(check.id)}
+                    >
+                      <DiagStatusIcon status={check.status} />
+                      <span className={`flex-1 font-medium ${
+                        check.status === 'error' ? 'text-red-300' :
+                        check.status === 'warn'  ? 'text-amber-300' :
+                        check.status === 'skip'  ? 'text-muted' :
+                        'text-slate-200'
+                      }`}>{check.name}</span>
+                      {check.value && (
+                        <span className="shrink-0 font-mono text-[11px] text-muted">{check.value}</span>
+                      )}
+                      {check.detail && (
+                        <ChevronDown size={11} className={`shrink-0 text-muted transition-transform ${expandedDetail.has(check.id) ? 'rotate-180' : ''}`} />
+                      )}
+                    </div>
+                    <p className="px-3 pb-2 -mt-1 pl-8 text-[11px] text-muted leading-relaxed">{check.message}</p>
+                    {check.detail && expandedDetail.has(check.id) && (
+                      <pre className="mx-3 mb-2 max-h-40 overflow-y-auto rounded-lg border border-white/8 bg-black/30 px-3 py-2 font-mono text-[10px] text-slate-300/90 whitespace-pre-wrap">
+                        {check.detail}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {running && checks.length === 0 && (
+            <div className="flex items-center gap-2 text-xs text-muted py-4 justify-center">
+              <Loader2 size={14} className="animate-spin" /> 正在通过 SSH 连接节点，执行诊断检查…
+            </div>
+          )}
+
+          {running && checks.length > 0 && (
+            <div className="flex items-center gap-2 text-xs text-muted px-1">
+              <Loader2 size={11} className="animate-spin" /> 检查中…
+            </div>
+          )}
+        </div>
+
+        {/* Summary strip */}
+        {summary && (
+          <div className={`rounded-xl border px-3 py-2.5 text-xs flex items-center gap-3 ${summaryColor}`}>
+            <Activity size={13} className="shrink-0" />
+            <span className="font-semibold">诊断完成</span>
+            <span className="text-emerald-400/90">✓ {summary.ok}</span>
+            {summary.warn  > 0 && <span className="text-amber-400/90">⚠ {summary.warn}</span>}
+            {summary.error > 0 && <span className="text-red-400/90">✗ {summary.error}</span>}
+            {summary.skip  > 0 && <span className="text-muted">— {summary.skip} 跳过</span>}
+          </div>
+        )}
+
+        {/* Fix suggestions panel — only when there are actionable issues */}
+        {fixSuggestions.length > 0 && (
+          <NodeFixPanel
+            nodeId={node.id}
+            suggestions={fixSuggestions}
+            onRequestRediag={() => void runDiag()}
+          />
+        )}
+
+        {error && (
+          <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-300 flex items-center gap-2">
+            <AlertCircle size={12} /> {error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-3 pt-1">
+          {!running && (
+            <button className="btn-ghost" onClick={() => void runDiag()}>
+              <RotateCw size={14} /> 重新诊断
+            </button>
+          )}
+          <button className="btn-ghost" onClick={onClose} disabled={running}>
+            {running ? <Loader2 size={14} className="animate-spin" /> : null}
+            {running ? '诊断中…' : '关闭'}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
 // ── Export Modal ─────────────────────────────────────────────────────────────
 
 function ExportModal({ node, onClose }: { node: NodeListItem; onClose: () => void }) {
@@ -1809,6 +2614,8 @@ export function Nodes() {
   const [exportNode, setExportNode] = useState<NodeListItem | null>(null)
   const [workerExportNode, setWorkerExportNode] = useState<WorkerNodeListItem | null>(null)
   const [probeTargetNode, setProbeTargetNode] = useState<NodeListItem | null>(null)
+  const [diagTargetNode, setDiagTargetNode] = useState<NodeListItem | null>(null)
+  const [showExternalModal, setShowExternalModal] = useState(false)
   const [testLoading, setTestLoading] = useState<Record<string, boolean>>({})
 
   // ── Worker nodes state ───────────────────────────────────────────────────
@@ -1948,19 +2755,26 @@ export function Nodes() {
           { label: '已连接', value: String(connectedNodes) },
           { label: '已部署', value: String(deployedNodes) },
         ]}
-        actions={cfGlobal?.cf_token ? (
+        actions={
           <div className="flex items-center gap-2">
-            <button className="btn-ghost flex items-center gap-2" onClick={() => setShowImportModal(true)}>
-              <Upload size={14} /> 导入节点
+            <button className="btn-ghost flex items-center gap-2" onClick={() => setShowExternalModal(true)}>
+              <Cable size={14} /> 接入外部节点
             </button>
-            <button className="btn-ghost flex items-center gap-2" onClick={() => setShowWorkerWizard(true)}>
-              <CloudCog size={14} /> Worker 节点
-            </button>
-            <button className="btn-primary" onClick={() => openWizard()}>
-              <Plus size={14} /> 新增节点
-            </button>
+            {cfGlobal?.cf_token && (
+              <>
+                <button className="btn-ghost flex items-center gap-2" onClick={() => setShowImportModal(true)}>
+                  <Upload size={14} /> 导入节点
+                </button>
+                <button className="btn-ghost flex items-center gap-2" onClick={() => setShowWorkerWizard(true)}>
+                  <CloudCog size={14} /> Worker 节点
+                </button>
+                <button className="btn-primary" onClick={() => openWizard()}>
+                  <Plus size={14} /> 新增节点
+                </button>
+              </>
+            )}
           </div>
-        ) : null}
+        }
       />
 
       <CFGate config={cfGlobal} loading={cfLoading} save={saveCFGlobal}>
@@ -2003,11 +2817,17 @@ export function Nodes() {
             </div>
             {/* Rows */}
             {nodes.map(node => {
-              const fullyDeployed = isNodeFullyDeployed(node)
+              const isExternal = node.kind === 'external'
+              const fullyDeployed = !isExternal && isNodeFullyDeployed(node)
               return (
               <div key={node.id} className="grid grid-cols-12 gap-3 px-4 py-3.5 table-row items-center">
                 <div className="col-span-3">
-                  <p className="text-sm font-semibold text-white truncate">{node.name}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-semibold text-white truncate">{node.name}</p>
+                    {isExternal && (
+                      <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/20 leading-none">外部</span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-muted mt-0.5 truncate">{node.username}@{node.host}:{node.port}</p>
                 </div>
                 <div className="col-span-2">
@@ -2026,42 +2846,49 @@ export function Nodes() {
                   {/* Test connection */}
                   <button
                     className="btn-icon-sm btn-ghost"
-                    title="测试连接"
+                    title="测试 SSH 连接"
                     onClick={() => handleTest(node.id)}
                     disabled={testLoading[node.id]}
                   >
                     {testLoading[node.id] ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
                   </button>
 
-                  {/* Deploy / resume wizard for non-fully-deployed nodes */}
-                  {!fullyDeployed && (
+                  {/* Link diag — available for all nodes with SSH access */}
+                  {(isExternal || node.status === 'connected' || node.status === 'deployed') && (
+                    <button className="btn-icon-sm btn-ghost" title="链路诊断" onClick={() => setDiagTargetNode(node)}>
+                      <Activity size={14} className="text-violet-400" />
+                    </button>
+                  )}
+
+                  {/* Deploy / resume wizard — managed nodes only */}
+                  {!isExternal && !fullyDeployed && (
                     <button className="btn-icon-sm btn-ghost" title="继续部署向导" onClick={() => openWizard(node)}>
                       <Play size={14} className="text-brand" />
                     </button>
                   )}
 
-                  {/* Proxy probe for fully deployed nodes */}
+                  {/* Proxy probe — managed fully-deployed nodes only */}
                   {fullyDeployed && (
                     <button className="btn-icon-sm btn-ghost" title="代理探测" onClick={() => setProbeTargetNode(node)}>
                       <CheckCircle2 size={14} className="text-cyan-400" />
                     </button>
                   )}
 
-                  {/* Redeploy for fully deployed nodes */}
+                  {/* Redeploy — managed fully-deployed nodes only */}
                   {fullyDeployed && (
                     <button className="btn-icon-sm btn-ghost" title="重新部署" onClick={() => handleDeploy(node.id)}>
                       <RotateCw size={14} className="text-amber-400" />
                     </button>
                   )}
 
-                  {/* Destroy */}
+                  {/* Destroy — managed fully-deployed nodes only */}
                   {fullyDeployed && (
                     <button className="btn-icon-sm btn-ghost" title="销毁部署" onClick={() => handleDestroy(node.id)}>
                       <ShieldOff size={14} className="text-red-400" />
                     </button>
                   )}
 
-                  {/* Export */}
+                  {/* Export — managed fully-deployed nodes only */}
                   {fullyDeployed && (
                     <button className="btn-icon-sm btn-ghost" title="导出配置" onClick={() => setExportNode(node)}>
                       <Download size={14} className="text-emerald-400" />
@@ -2070,8 +2897,8 @@ export function Nodes() {
 
                   {/* Edit */}
                   <button className="btn-icon-sm btn-ghost" title="编辑" onClick={() => {
-                    if (!fullyDeployed) { openWizard(node) }
-                    else { setEditNode(node); setShowEditModal(true) }
+                    if (isExternal || fullyDeployed) { setEditNode(node); setShowEditModal(true) }
+                    else { openWizard(node) }
                   }}>
                     <Pencil size={14} />
                   </button>
@@ -2278,6 +3105,20 @@ export function Nodes() {
         <NodeProbeModal
           node={probeTargetNode}
           onClose={() => setProbeTargetNode(null)}
+        />
+      )}
+
+      {diagTargetNode && (
+        <NodeDiagModal
+          node={diagTargetNode}
+          onClose={() => setDiagTargetNode(null)}
+        />
+      )}
+
+      {showExternalModal && (
+        <ExternalNodeModal
+          onClose={() => setShowExternalModal(false)}
+          onDone={() => { setShowExternalModal(false); void loadNodes() }}
         />
       )}
 

@@ -525,6 +525,8 @@ export interface NodeListItem {
   port: number
   username: string
   domain: string
+  /** "managed" (default / ClashForge-deployed) | "external" (manually deployed, SSH-only) */
+  kind?: 'managed' | 'external'
   status: 'pending' | 'connected' | 'deploying' | 'deployed' | 'error'
   deployed_at?: string
   cert_expiry?: string
@@ -545,6 +547,27 @@ export interface NodeCreateRequest {
   cf_token: string
   cf_account_id: string
   cf_zone_id: string
+  /** Pass "external" when registering a manually-deployed node */
+  kind?: 'managed' | 'external'
+}
+
+/** One check item streamed from POST /nodes/{id}/diag */
+export interface NodeDiagCheck {
+  id: string
+  category: 'network' | 'process' | 'system' | 'cert'
+  name: string
+  status: 'ok' | 'warn' | 'error' | 'skip'
+  value?: string
+  detail?: string
+  message: string
+}
+
+export interface NodeDiagSummary {
+  total: number
+  ok: number
+  warn: number
+  error: number
+  skip: number
 }
 
 export interface NodeProbeResult {
@@ -573,6 +596,12 @@ export const deleteNode = (id: string) => request<{ ok: boolean }>('DELETE', `/n
 export const testNodeConnection = (id: string) => request<{ ok: boolean; message: string }>('POST', `/nodes/${encodeURIComponent(id)}/test`)
 export const probeNode = (id: string, mode: 'ip' | 'domain' = 'ip') =>
   request<{ mode: 'ip' | 'domain'; proxy_host: string; proxy_port: number; probe_results: NodeProbeResult[]; summary: { ok: number; total: number; success: boolean } }>('POST', `/nodes/${encodeURIComponent(id)}/probe`, { mode })
+/** diagNode is consumed as an SSE stream — see streamSSE() in Nodes.tsx */
+export const DIAG_NODE_URL = (id: string) => `${BASE}/nodes/${encodeURIComponent(id)}/diag`
+/** fixNode is consumed as an SSE stream — same format as deploy */
+export const FIX_NODE_URL = (id: string) => `${BASE}/nodes/${encodeURIComponent(id)}/fix`
+
+export type NodeFixKind = 'add_swap' | 'restart_gost'
 
 export interface GeoIPResult {
   ip: string
@@ -856,6 +885,75 @@ export const updateRuleSet = (id: string, rules: string[]) =>
   request<{ rule_set: RuleSet }>('PUT', `/publish/rulesets/${encodeURIComponent(id)}`, { rules })
 export const deleteRuleSet = (id: string) =>
   request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/rulesets/${encodeURIComponent(id)}`)
+
+// ---- DNS leak test ----
+
+/** One DNS path probed (Mihomo DNS port, system DNS, upstream NS, DoH reference). */
+export interface DnsPathResult {
+  /** Human-readable label */
+  name: string
+  /** Address actually queried */
+  server: string
+  /** A-record IPs returned (absent on error) */
+  ips?: string[]
+  /** true when ANY returned IP is in Mihomo's fake-ip range (198.18/15 or 28/8) */
+  is_fake_ip: boolean
+  error?: string
+}
+
+/**
+ * An actual DNS resolver observed from the internet side — the resolver IP that
+ * queried an authoritative DNS server for our test subdomain.  This is what
+ * services like ip.net.coffee show: the outside world's view of which DNS
+ * server is handling the user's queries.
+ */
+export interface ExternalResolver {
+  ip: string
+  country_name: string
+  country_code: string
+  isp: string
+  /** true when the resolver is in China — DNS queries are visible to Chinese entities */
+  is_leak: boolean
+  /**
+   * true when this nameserver returned Fake-IP in the internal path test,
+   * meaning an upstream Mihomo transparently intercepted its traffic.
+   * The server never actually received the DNS query, so is_leak is false.
+   */
+  upstream_intercepted?: boolean
+}
+
+export interface DnsLeakTestResult {
+  test_domain: string
+  /** Internal multi-path fake-ip comparison results */
+  paths: DnsPathResult[]
+  /**
+   * External resolver IPs detected from the internet perspective.
+   * Populated from bash.ws probe or GeoIP-enriched nameserver list as fallback.
+   */
+  external_resolvers?: ExternalResolver[]
+  /** How external_resolvers was obtained: "bash.ws" | "geoip-nameservers" */
+  external_method?: string
+  /** Mihomo's DNS port returned fake-ip → it is actively intercepting DNS */
+  mihomo_intercepting: boolean
+  has_leak: boolean
+  summary: string
+  tested_at: string
+  error?: string
+}
+
+export const getDNSLeakTest = () => request<DnsLeakTestResult>('GET', '/health/dns-leak')
+
+/**
+ * Fetches bash.ws resolver results for a browser-initiated DNS probe.
+ * The browser makes the actual DNS probe requests (fetch to unique subdomains),
+ * then calls this to retrieve the logged resolver IPs — bypassing CORS.
+ */
+export interface BrowserDNSProbeResult {
+  resolvers: ExternalResolver[]
+}
+
+export const getBrowserDNSLeakResults = (testId: string) =>
+  request<BrowserDNSProbeResult>('GET', `/health/dns-leak/browser-results?id=${encodeURIComponent(testId)}`)
 
 // ---- geodata management ----
 export interface GeoDataFileStatus {

@@ -24,6 +24,9 @@ type nodeCreateRequest struct {
 	CFToken     string `json:"cf_token"`
 	CFAccountID string `json:"cf_account_id"`
 	CFZoneID    string `json:"cf_zone_id"`
+	// Kind indicates whether this is a ClashForge-managed node ("managed", default)
+	// or an externally-deployed node ("external") that is only SSH-accessible.
+	Kind string `json:"kind,omitempty"`
 }
 
 type nodeProbeRequest struct {
@@ -59,6 +62,10 @@ func handleCreateNode(store *nodes.Store) http.HandlerFunc {
 			req.Port = 22
 		}
 
+		kind := nodes.NodeKindManaged
+		if req.Kind == string(nodes.NodeKindExternal) {
+			kind = nodes.NodeKindExternal
+		}
 		node := &nodes.Node{
 			Name:        req.Name,
 			Host:        req.Host,
@@ -70,6 +77,7 @@ func handleCreateNode(store *nodes.Store) http.HandlerFunc {
 			CFToken:     req.CFToken,
 			CFAccountID: req.CFAccountID,
 			CFZoneID:    req.CFZoneID,
+			Kind:        kind,
 		}
 
 		if err := store.Create(node); err != nil {
@@ -506,6 +514,7 @@ func nodeListItem(n *nodes.Node) nodes.NodeListItem {
 		Port:       n.Port,
 		Username:   n.Username,
 		Domain:     n.Domain,
+		Kind:       n.Kind,
 		Status:     n.Status,
 		DeployedAt: n.DeployedAt,
 		CertExpiry: n.CertExpiry,
@@ -513,5 +522,102 @@ func nodeListItem(n *nodes.Node) nodes.NodeListItem {
 		DeployLog:  n.DeployLog,
 		CreatedAt:  n.CreatedAt,
 		UpdatedAt:  n.UpdatedAt,
+	}
+}
+
+// handleFixNode applies a specific remediation to a node via SSH and streams
+// progress events (same SSE format as deploy) until done.
+func handleFixNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		node, ok := store.Get(id)
+		if !ok {
+			Err(w, http.StatusNotFound, "NODE_NOT_FOUND", "节点不存在")
+			return
+		}
+
+		var req struct {
+			FixKind string            `json:"fix_kind"`
+			Params  map[string]string `json:"params,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FixKind == "" {
+			Err(w, http.StatusBadRequest, "INVALID_REQUEST", "缺少 fix_kind 字段")
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			Err(w, http.StatusInternalServerError, "SSE_UNSUPPORTED", "SSE not supported")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		flusher.Flush()
+
+		sendStep := func(step, status, message, detail string) {
+			data, _ := json.Marshal(map[string]interface{}{
+				"step":    step,
+				"status":  status,
+				"message": message,
+				"detail":  detail,
+			})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		err := nodes.RunNodeFix(r.Context(), node, kp, nodes.FixKind(req.FixKind), req.Params, sendStep)
+
+		done := map[string]interface{}{"type": "done", "success": err == nil}
+		if err != nil {
+			done["error"] = err.Error()
+		}
+		doneData, _ := json.Marshal(done)
+		fmt.Fprintf(w, "data: %s\n\n", doneData)
+		flusher.Flush()
+	}
+}
+
+// handleDiagNode runs an SSH-based diagnostic suite against a node and streams
+// each check result via SSE as it completes.
+func handleDiagNode(store *nodes.Store, kp *nodes.KeyPair) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		node, ok := store.Get(id)
+		if !ok {
+			Err(w, http.StatusNotFound, "NODE_NOT_FOUND", "节点不存在")
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			Err(w, http.StatusInternalServerError, "SSE_UNSUPPORTED", "SSE not supported")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		sendCheck := func(check nodes.NodeDiagCheck) {
+			data, _ := json.Marshal(map[string]interface{}{
+				"type":  "check",
+				"check": check,
+			})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		summary, _ := nodes.RunNodeDiag(r.Context(), node, kp, sendCheck)
+
+		doneData, _ := json.Marshal(map[string]interface{}{
+			"type":    "done",
+			"summary": summary,
+		})
+		fmt.Fprintf(w, "data: %s\n\n", doneData)
+		flusher.Flush()
 	}
 }
