@@ -43,6 +43,10 @@ type externalResolver struct {
 	// IsLeak is true when the resolver is in a country that indicates a DNS leak
 	// (currently: China-based resolvers, which mean queries are visible to Chinese entities).
 	IsLeak bool `json:"is_leak"`
+	// UpstreamIntercepted is true when this nameserver returned Fake-IP in the internal
+	// path test, meaning an upstream Mihomo is transparently intercepting its traffic.
+	// In this case IsLeak is forced to false — the server never actually received the query.
+	UpstreamIntercepted bool `json:"upstream_intercepted,omitempty"`
 }
 
 // dnsLeakTestResult is the payload returned by GET /api/v1/health/dns-leak.
@@ -502,12 +506,19 @@ func handleDNSLeakTest(deps Dependencies) http.HandlerFunc {
 
 		// ── Analyse results ───────────────────────────────────────────────────
 
-		// Internal analysis: check system DNS leak against Mihomo
+		// Internal analysis: check system DNS state and build a set of upstream
+		// nameserver IPs that returned fake-ip (meaning an upstream Mihomo is
+		// transparently intercepting their traffic — they never received the query).
 		systemFakeIP := false
 		systemError := false
 		systemHasData := false
+		interceptedNS := make(map[string]bool) // nameserver IPs intercepted by upstream Mihomo
+		allUpstreamIntercepted := true          // true when EVERY configured NS returned fake-ip
+		anyUpstreamConfigured := false
+
 		for _, p := range internalPaths {
-			if p.Name == "系统 DNS" {
+			switch {
+			case p.Name == "系统 DNS":
 				systemHasData = true
 				if p.IsFakeIP {
 					systemFakeIP = true
@@ -515,15 +526,51 @@ func handleDNSLeakTest(deps Dependencies) http.HandlerFunc {
 				if p.Error != "" {
 					systemError = true
 				}
+			case strings.HasPrefix(p.Name, "上游 DNS:"):
+				anyUpstreamConfigured = true
+				host, _, err := net.SplitHostPort(p.Server)
+				if err != nil {
+					host = p.Server
+				}
+				if p.IsFakeIP {
+					interceptedNS[host] = true
+					interceptedNS[p.Server] = true
+				} else {
+					// At least one upstream got a real response → not all intercepted.
+					allUpstreamIntercepted = false
+				}
+			}
+		}
+		if !anyUpstreamConfigured {
+			allUpstreamIntercepted = false
+		}
+
+		// Cross-reference: when using the GeoIP fallback (not a real external probe),
+		// a CN nameserver that returned fake-ip was intercepted by an upstream Mihomo
+		// and never actually handled the query — mark it accordingly.
+		if externalMethod == "geoip-nameservers" {
+			for i := range externalResolvers {
+				r := &externalResolvers[i]
+				host, _, err := net.SplitHostPort(r.IP)
+				if err != nil {
+					host = r.IP
+				}
+				if r.IsLeak && (interceptedNS[host] || interceptedNS[r.IP]) {
+					r.IsLeak = false
+					r.UpstreamIntercepted = true
+				}
 			}
 		}
 
 		// External analysis: any leak-tagged resolver means DNS is exposed.
 		externalHasLeak := false
+		interceptedLeakCount := 0
 		for _, r := range externalResolvers {
 			if r.IsLeak {
 				externalHasLeak = true
-				break
+			}
+			if r.UpstreamIntercepted {
+				interceptedLeakCount++
 			}
 		}
 
@@ -548,6 +595,13 @@ func handleDNSLeakTest(deps Dependencies) http.HandlerFunc {
 					"建议在 Mihomo 配置中将上游 DNS 改为 DoH（如 https://1.1.1.1/dns-query）并经代理转发。",
 				leakCount,
 			)
+
+		case externalMethod == "geoip-nameservers" && allUpstreamIntercepted && interceptedLeakCount > 0 && systemFakeIP:
+			// All configured nameservers were intercepted by an upstream Mihomo.
+			// The CN nameservers in config never received queries — no actual leak.
+			summary = "您的 DNS 查询已被上游 Mihomo 完全拦截（所有上游服务器均返回 Fake-IP），" +
+				"配置中的中国 DNS 服务器实际上并未收到任何查询。DNS 隐私取决于上游路由器的 DNS 配置。"
+			hasLeak = false
 
 		case len(externalResolvers) > 0 && !externalHasLeak:
 			summary = "未检测到 DNS 泄露。所有 DNS 解析器均在中国境外，您的 DNS 查询通过代理或境外 DNS 处理。"

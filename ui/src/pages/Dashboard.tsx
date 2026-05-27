@@ -721,20 +721,37 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
 
 function ResolverCard({ r }: { r: ExternalResolver }) {
   const isDoh = r.ip.startsWith('https://')
-  return (
-    <div className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-[11px] ${
-      r.is_leak
+  const isIntercepted = r.upstream_intercepted === true
+
+  // Visual state precedence: DoH > intercepted > leak > ok
+  const borderBg = isDoh
+    ? 'border-brand/15 bg-brand/[0.03]'
+    : isIntercepted
+      ? 'border-white/8 bg-white/[0.02]'
+      : r.is_leak
         ? 'border-warning/25 bg-warning/[0.06]'
         : 'border-white/8 bg-white/[0.02]'
-    }`}>
-      {/* Flag / DoH icon */}
+
+  const ipColor = r.is_leak ? 'text-warning' : isIntercepted ? 'text-muted/70' : 'text-slate-200'
+
+  const tag = isDoh
+    ? { cls: 'border-brand/25 bg-brand/10 text-brand', label: '加密 DoH' }
+    : isIntercepted
+      ? { cls: 'border-white/15 bg-white/[0.05] text-muted/80', label: '上游拦截' }
+      : r.is_leak
+        ? { cls: 'border-warning/30 bg-warning/15 text-warning', label: '泄露' }
+        : { cls: 'border-success/25 bg-success/10 text-success', label: '正确' }
+
+  return (
+    <div className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-[11px] ${borderBg}`}>
+      {/* Flag / DoH / intercepted icon */}
       <span className="shrink-0 text-base leading-none" aria-hidden>
-        {isDoh ? '🔒' : countryFlag(r.country_code)}
+        {isDoh ? '🔒' : isIntercepted ? '🛡️' : countryFlag(r.country_code)}
       </span>
 
       {/* IP + ISP */}
       <div className="min-w-0 flex-1">
-        <p className={`font-mono font-medium truncate ${r.is_leak ? 'text-warning' : 'text-slate-200'}`}>
+        <p className={`font-mono font-medium truncate ${ipColor}`}>
           {r.ip}
         </p>
         <p className="text-muted/70 truncate">
@@ -742,18 +759,15 @@ function ResolverCard({ r }: { r: ExternalResolver }) {
           {r.country_name && r.isp && r.country_name !== r.isp && (
             <span className="ml-1 text-muted/40">· {r.country_name}</span>
           )}
+          {isIntercepted && (
+            <span className="ml-1 text-muted/40">· 查询已被上游 Mihomo 拦截</span>
+          )}
         </p>
       </div>
 
       {/* Status tag */}
-      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-        isDoh
-          ? 'border-brand/25 bg-brand/10 text-brand'
-          : r.is_leak
-            ? 'border-warning/30 bg-warning/15 text-warning'
-            : 'border-success/25 bg-success/10 text-success'
-      }`}>
-        {isDoh ? '加密 DoH' : r.is_leak ? '泄露' : '正确'}
+      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tag.cls}`}>
+        {tag.label}
       </span>
     </div>
   )
@@ -768,6 +782,7 @@ function DnsLeakPanel({ result, loading, onRun }: {
 
   const externalResolvers = result?.external_resolvers ?? []
   const leakCount = externalResolvers.filter(r => r.is_leak).length
+  const interceptedCount = externalResolvers.filter(r => r.upstream_intercepted).length
   const hasExternal = externalResolvers.length > 0
 
   return (
@@ -830,15 +845,20 @@ function DnsLeakPanel({ result, loading, onRun }: {
         ) : (
           <>
             {/* Summary banner */}
-            {result.summary && (
-              <div className={`rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${
-                result.has_leak
-                  ? 'border-warning/25 bg-warning/10 text-warning'
+            {result.summary && (() => {
+              const isInterceptedOnly = !result.has_leak && interceptedCount > 0 && leakCount === 0
+              const bannerCls = result.has_leak
+                ? 'border-warning/25 bg-warning/10 text-warning'
+                : isInterceptedOnly
+                  ? 'border-brand/15 bg-brand/[0.05] text-muted/90'
                   : 'border-success/20 bg-success/[0.06] text-success/90'
-              }`}>
-                {result.has_leak ? '⚠️  ' : '✅  '}{result.summary}
-              </div>
-            )}
+              const icon = result.has_leak ? '⚠️' : isInterceptedOnly ? '🛡️' : '✅'
+              return (
+                <div className={`rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${bannerCls}`}>
+                  {icon}{'  '}{result.summary}
+                </div>
+              )
+            })()}
 
             {/* External resolver cards (ip.net.coffee style) */}
             {hasExternal && (
@@ -847,6 +867,9 @@ function DnsLeakPanel({ result, loading, onRun }: {
                   检测到的 DNS 解析器 · {externalResolvers.length} 个
                   {leakCount > 0 && (
                     <span className="ml-2 text-warning">（{leakCount} 个泄露）</span>
+                  )}
+                  {interceptedCount > 0 && leakCount === 0 && (
+                    <span className="ml-2 text-muted/60">（{interceptedCount} 个被上游 Mihomo 拦截）</span>
                   )}
                 </p>
                 {externalResolvers.map((r, i) => (

@@ -885,6 +885,12 @@ export interface ExternalResolver {
   isp: string
   /** true when the resolver is in China — DNS queries are visible to Chinese entities */
   is_leak: boolean
+  /**
+   * true when this nameserver returned Fake-IP in the internal path test,
+   * meaning an upstream Mihomo transparently intercepted its traffic.
+   * The server never actually received the DNS query, so is_leak is false.
+   */
+  upstream_intercepted?: boolean
 }
 
 export interface DnsLeakTestResult {
