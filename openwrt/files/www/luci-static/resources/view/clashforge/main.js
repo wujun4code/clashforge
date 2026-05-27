@@ -131,9 +131,12 @@ return view.extend({
             ])
         ]);
 
+        // ── Connectivity / DNS-leak tab ───────────────────────────────────
+        var connTab = self.buildConnTab();
+
         var mapEl = E('div', { 'class': 'cbi-map' }, [
             E('h2', {}, ['ClashForge']),
-            E('div', { 'class': 'cbi-map-tabbox' }, [ overviewTab, logTab ])
+            E('div', { 'class': 'cbi-map-tabbox' }, [ overviewTab, connTab, logTab ])
         ]);
 
         ui.tabs.initTabGroup(mapEl.lastElementChild.childNodes);
@@ -204,6 +207,204 @@ return view.extend({
                 logEl.scrollTop = logEl.scrollHeight;
             }
         });
+    },
+
+    // ── Connectivity tab builder ──────────────────────────────────────────
+
+    buildConnTab: function() {
+        var self = this;
+
+        // ── DNS Leak Detection ─────────────────────────────────────────────
+        var dnsStatusBadge = E('span', {
+            'id': 'cf-dns-badge',
+            'style': 'display:none; padding:4px 10px; border-radius:20px; font-size:12px; font-weight:600; margin-left:12px; vertical-align:middle;'
+        });
+
+        var dnsResultBody = E('tbody', { 'id': 'cf-dns-tbody' });
+
+        var dnsTable = E('table', {
+            'id': 'cf-dns-table',
+            'style': 'display:none; width:100%; border-collapse:collapse; font-size:13px; margin-top:14px;'
+        }, [
+            E('thead', {}, [
+                E('tr', { 'style': 'color:#94a3b8; text-align:left; border-bottom:1px solid #334155;' }, [
+                    E('th', { 'style': 'padding:6px 10px; width:36px; text-align:center;' }, ['#']),
+                    E('th', { 'style': 'padding:6px 10px;' }, ['DNS 解析器 IP']),
+                    E('th', { 'style': 'padding:6px 10px;' }, ['地理位置']),
+                    E('th', { 'style': 'padding:6px 10px;' }, ['服务提供商']),
+                    E('th', { 'style': 'padding:6px 10px; text-align:center;' }, ['类型'])
+                ])
+            ]),
+            dnsResultBody
+        ]);
+
+        var dnsSummaryEl = E('div', {
+            'id': 'cf-dns-summary',
+            'style': 'display:none; margin-top:12px; padding:10px 14px; border-radius:8px; font-size:13px; line-height:1.5;'
+        });
+
+        var dnsSpinner = E('span', {
+            'id': 'cf-dns-spinner',
+            'style': 'display:none; margin-left:10px; font-size:12px; color:#94a3b8; vertical-align:middle;'
+        }, ['⏳ 检测中，约需 15–20 秒…']);
+
+        var dnsBtn = E('button', {
+            'class': 'btn cbi-button cbi-button-apply',
+            'style': 'padding:7px 18px; font-size:13px;',
+            'click': function() {
+                self.runDNSLeakTest(dnsBtn, dnsSpinner, dnsStatusBadge, dnsResultBody, dnsTable, dnsSummaryEl);
+            }
+        }, ['🔍 开始检测']);
+
+        var dnsLastEl = E('span', {
+            'id': 'cf-dns-last',
+            'style': 'font-size:11px; color:#475569; margin-left:14px; vertical-align:middle;'
+        });
+
+        var dnsCard = E('div', {
+            'style': 'background:#1e293b; border-radius:12px; padding:20px; color:#f1f5f9; margin-bottom:16px;'
+        }, [
+            E('div', { 'style': 'display:flex; align-items:center; margin-bottom:6px;' }, [
+                E('span', { 'style': 'font-size:15px; font-weight:600;' }, ['🛡️ DNS 泄露检测']),
+                dnsStatusBadge
+            ]),
+            E('p', { 'style': 'font-size:12px; color:#94a3b8; margin:0 0 14px;' }, [
+                '检测 DNS 查询是否通过代理隧道，还是泄露至 ISP 的 DNS 服务器。',
+                '检测时路由器会向 bash.ws 发起探测请求，结果反映路由器本机的 DNS 出口。'
+            ]),
+            E('div', { 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:8px;' }, [
+                dnsBtn, dnsSpinner, dnsLastEl
+            ]),
+            dnsTable,
+            dnsSummaryEl
+        ]);
+
+        return E('div', { 'data-tab': 'connectivity', 'data-tab-title': '连通性测试' }, [
+            E('div', { 'class': 'cbi-section', 'style': 'margin-top:16px;' }, [ dnsCard ])
+        ]);
+    },
+
+    runDNSLeakTest: function(btn, spinner, badge, tbody, table, summaryEl) {
+        var self = this;
+
+        btn.disabled = true;
+        spinner.style.display = 'inline';
+        badge.style.display = 'none';
+        table.style.display = 'none';
+        summaryEl.style.display = 'none';
+        tbody.innerHTML = '';
+
+        fetch(self.getApiBase() + '/api/v1/health/dns-leak')
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(resp) {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+
+                if (!resp || !resp.ok || !resp.data) {
+                    badge.textContent = '请求失败';
+                    badge.style.cssText += '; background:#7f1d1d; color:#fca5a5; display:inline;';
+                    return;
+                }
+
+                var d = resp.data;
+                var entries  = d.entries  || [];
+                var hasLeak  = d.has_leak;
+                var summary  = d.summary  || '';
+                var testedAt = d.tested_at || '';
+
+                // Last-tested timestamp
+                var lastEl = document.getElementById('cf-dns-last');
+                if (lastEl && testedAt) {
+                    try {
+                        lastEl.textContent = '上次检测: ' + new Date(testedAt).toLocaleString('zh-CN');
+                    } catch(e) { lastEl.textContent = ''; }
+                }
+
+                // Error path
+                if (d.error) {
+                    badge.textContent = '检测失败';
+                    badge.style.background = '#7f1d1d';
+                    badge.style.color = '#fca5a5';
+                    badge.style.display = 'inline';
+                    summaryEl.textContent = d.error;
+                    summaryEl.style.background = '#450a0a';
+                    summaryEl.style.color = '#fca5a5';
+                    summaryEl.style.display = 'block';
+                    return;
+                }
+
+                // Status badge
+                if (hasLeak) {
+                    badge.textContent = '⚠ 检测到泄露';
+                    badge.style.background = '#7c2d12';
+                    badge.style.color = '#fdba74';
+                } else {
+                    badge.textContent = '✓ 未发现泄露';
+                    badge.style.background = '#14532d';
+                    badge.style.color = '#86efac';
+                }
+                badge.style.display = 'inline';
+
+                // Build table rows
+                var dnsIdx = 0;
+                entries.forEach(function(e) {
+                    var isDNS = (e.type === 'dns');
+                    dnsIdx += isDNS ? 1 : 0;
+
+                    var typeTag = isDNS
+                        ? E('span', { 'style': 'background:#1d4ed8; color:#bfdbfe; padding:2px 8px; border-radius:10px; font-size:11px;' }, ['DNS 解析器'])
+                        : E('span', { 'style': 'background:#065f46; color:#a7f3d0; padding:2px 8px; border-radius:10px; font-size:11px;' }, ['出口 IP']);
+
+                    var statusDot = isDNS
+                        ? (hasLeak
+                            ? E('span', { 'style': 'color:#f97316; margin-right:4px;' }, ['⚠'])
+                            : E('span', { 'style': 'color:#22c55e; margin-right:4px;' }, ['✓']))
+                        : null;
+
+                    var ipCell = E('td', {
+                        'style': 'padding:8px 10px; font-family:monospace; color:#e2e8f0;'
+                    }, [ statusDot, document.createTextNode(e.ip || '-') ]);
+
+                    var loc = [e.country_name, e.country_code]
+                        .filter(Boolean).join(' ');
+
+                    var tr = E('tr', {
+                        'style': 'border-bottom:1px solid #1e293b;' + (isDNS && hasLeak ? ' background:rgba(239,68,68,0.07);' : '')
+                    }, [
+                        E('td', { 'style': 'padding:8px 10px; text-align:center; color:#64748b; font-size:12px;' }, [isDNS ? String(dnsIdx) : '—']),
+                        ipCell,
+                        E('td', { 'style': 'padding:8px 10px; color:#94a3b8;' }, [loc || '-']),
+                        E('td', { 'style': 'padding:8px 10px; color:#94a3b8;' }, [e.isp || '-']),
+                        E('td', { 'style': 'padding:8px 10px; text-align:center;' }, [typeTag])
+                    ]);
+                    tbody.appendChild(tr);
+                });
+
+                if (entries.length > 0) {
+                    table.style.display = 'table';
+                }
+
+                // Summary banner
+                if (summary) {
+                    summaryEl.textContent = (hasLeak ? '⚠️  ' : 'ℹ️  ') + summary;
+                    summaryEl.style.background = hasLeak ? '#450a0a' : '#0f172a';
+                    summaryEl.style.color      = hasLeak ? '#fca5a5' : '#94a3b8';
+                    summaryEl.style.border     = hasLeak ? '1px solid #7f1d1d' : '1px solid #334155';
+                    summaryEl.style.display    = 'block';
+                }
+            })
+            .catch(function(e) {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+                badge.textContent = '连接失败';
+                badge.style.background = '#7f1d1d';
+                badge.style.color = '#fca5a5';
+                badge.style.display = 'inline';
+                summaryEl.textContent = '无法连接到 ClashForge API: ' + String(e);
+                summaryEl.style.background = '#450a0a';
+                summaryEl.style.color = '#fca5a5';
+                summaryEl.style.display = 'block';
+            });
     },
 
     handleSave: null,
