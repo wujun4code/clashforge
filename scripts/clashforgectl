@@ -19,6 +19,7 @@
 #   ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
 #   ./scripts/clashforgectl --router 192.168.1.1 deploy --skip go
 #   ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
+#   ./scripts/clashforgectl --router 192.168.1.1 compat
 #   ./scripts/clashforgectl --router 192.168.1.1 uninstall
 #   ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
 #   ./scripts/clashforgectl --router 192.168.1.1 diag
@@ -241,7 +242,7 @@ DRY_RUN=0
 # First positional arg that is not a flag is the ACTION.
 while [ $# -gt 0 ]; do
     case "$1" in
-        status|stop|reset|upgrade|deploy|check|uninstall|diag|openclash|flush-dns|help)
+        status|stop|reset|upgrade|deploy|check|compat|uninstall|diag|openclash|flush-dns|help)
             ACTION="$1"; shift ;;
         --router)     ROUTER="$2";      shift 2 ;;
         --router=*)   ROUTER="${1#*=}"; shift ;;
@@ -304,6 +305,7 @@ SUBCOMMANDS
     upgrade     Install latest or a specific version
     deploy      Build locally, package as IPK, upload and install on router
     uninstall   Completely remove ClashForge from the router
+    compat      Pre-install compatibility check (arch, memory, kernel, ports)
     diag        Collect a full diagnostic report
     openclash   Scan OpenClash processes/services; optionally kill them
     flush-dns   Flush dnsmasq DNS cache (and Mihomo fake-ip cache if core is running)
@@ -360,6 +362,7 @@ EXAMPLES
     ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
     ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
     ./scripts/clashforgectl --router 192.168.1.1 check
+    ./scripts/clashforgectl --router 192.168.1.1 compat
     ./scripts/clashforgectl --router 192.168.1.1 uninstall --keep-config
     ./scripts/clashforgectl --router 192.168.1.1 uninstall --purge-all
     ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --redact
