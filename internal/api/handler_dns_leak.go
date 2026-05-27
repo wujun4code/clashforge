@@ -124,59 +124,10 @@ type bashWSEntry struct {
 	ISP         string `json:"isp"`
 }
 
-func probeBashWS(ctx context.Context, nameservers []string, httpClient *http.Client) ([]externalResolver, bool) {
-	testID := fmt.Sprintf("%d", rand.Intn(900000)+100000)
-
-	// Register the test so bash.ws expects our probe subdomains.
-	startURL := fmt.Sprintf("https://bash.ws/dnsleak/test/start/%s", testID)
-	if req, err := http.NewRequestWithContext(ctx, "GET", startURL, nil); err == nil {
-		resp, err := httpClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
-		}
-	}
-
-	// Trigger DNS lookups for the test subdomains via each nameserver.
-	// QueryUDPDirect bypasses Mihomo's DNS interception and hits each upstream
-	// nameserver directly; that server then performs recursive resolution and
-	// hits bash.ws's authoritative NS, which logs the resolver IP.
-	var wg sync.WaitGroup
-	for n := 1; n <= 10; n++ {
-		domain := fmt.Sprintf("%s-%d.bash.ws", testID, n)
-
-		// System resolver (may route through Mihomo → upstream NS → bash.ws).
-		wg.Add(1)
-		go func(d string) {
-			defer wg.Done()
-			pCtx, c := context.WithTimeout(ctx, 5*time.Second)
-			defer c()
-			net.DefaultResolver.LookupHost(pCtx, d) //nolint:errcheck
-		}(domain)
-
-		// Each configured UDP nameserver.
-		for _, ns := range nameservers {
-			if strings.HasPrefix(ns, "https://") {
-				continue
-			}
-			wg.Add(1)
-			go func(server, d string) {
-				defer wg.Done()
-				pCtx, c := context.WithTimeout(ctx, 5*time.Second)
-				defer c()
-				cfDNS.QueryUDPDirect(pCtx, server, d) //nolint:errcheck
-			}(ns, domain)
-		}
-	}
-	wg.Wait()
-
-	// Give bash.ws a moment to index the incoming queries.
-	select {
-	case <-time.After(2 * time.Second):
-	case <-ctx.Done():
-		return nil, false
-	}
-
-	// Retrieve the logged resolver list.
+// fetchBashWSResults retrieves the resolver list for testID from bash.ws.
+// It is called both by the server-side probe (probeBashWS) and by the
+// browser-results proxy endpoint (handleDNSLeakBrowserResults).
+func fetchBashWSResults(ctx context.Context, testID string, httpClient *http.Client) ([]externalResolver, bool) {
 	resultsURL := fmt.Sprintf("https://bash.ws/dnsleak/test/%s?lang=en", testID)
 	req, err := http.NewRequestWithContext(ctx, "GET", resultsURL, nil)
 	if err != nil {
@@ -188,9 +139,8 @@ func probeBashWS(ctx context.Context, nameservers []string, httpClient *http.Cli
 	}
 	defer resp.Body.Close()
 
-	// bash.ws returns text/html on unknown test IDs or when no queries arrived.
-	ct := resp.Header.Get("Content-Type")
-	if strings.Contains(ct, "text/html") {
+	// bash.ws returns text/html when the test ID is unknown or no queries arrived.
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
 		return nil, false
 	}
 
@@ -210,6 +160,92 @@ func probeBashWS(ctx context.Context, nameservers []string, httpClient *http.Cli
 		})
 	}
 	return resolvers, true
+}
+
+// probeBashWS is the server-side fallback: it triggers DNS lookups for the
+// test subdomains directly via each configured nameserver (bypassing Mihomo
+// fake-ip) so their recursive resolvers hit bash.ws's authoritative NS.
+//
+// NOTE: this path only fires when the browser-side probe did not supply results.
+// The browser-side probe (runBrowserDNSProbe in Dashboard.tsx) is more accurate
+// because the DNS queries travel the real client→router→upstream chain.
+func probeBashWS(ctx context.Context, nameservers []string, httpClient *http.Client) ([]externalResolver, bool) {
+	testID := fmt.Sprintf("%d", rand.Intn(900000)+100000)
+
+	// Register the test.
+	startURL := fmt.Sprintf("https://bash.ws/dnsleak/test/start/%s", testID)
+	if req, err := http.NewRequestWithContext(ctx, "GET", startURL, nil); err == nil {
+		resp, err := httpClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	// Trigger DNS lookups via each nameserver directly.
+	var wg sync.WaitGroup
+	for n := 1; n <= 10; n++ {
+		domain := fmt.Sprintf("%s-%d.bash.ws", testID, n)
+		wg.Add(1)
+		go func(d string) {
+			defer wg.Done()
+			pCtx, c := context.WithTimeout(ctx, 5*time.Second)
+			defer c()
+			net.DefaultResolver.LookupHost(pCtx, d) //nolint:errcheck
+		}(domain)
+		for _, ns := range nameservers {
+			if strings.HasPrefix(ns, "https://") {
+				continue
+			}
+			wg.Add(1)
+			go func(server, d string) {
+				defer wg.Done()
+				pCtx, c := context.WithTimeout(ctx, 5*time.Second)
+				defer c()
+				cfDNS.QueryUDPDirect(pCtx, server, d) //nolint:errcheck
+			}(ns, domain)
+		}
+	}
+	wg.Wait()
+
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
+		return nil, false
+	}
+
+	return fetchBashWSResults(ctx, testID, httpClient)
+}
+
+// handleDNSLeakBrowserResults is a lightweight CORS-proxy endpoint.
+//
+// The browser-side DNS probe (Dashboard.tsx → runBrowserDNSProbe) makes fetch()
+// requests to unique bash.ws subdomains to trigger real DNS lookups through the
+// browser's OS resolver (→ router's Mihomo → upstream DNS → bash.ws auth NS).
+// It then asks this endpoint to fetch the logged resolver list from bash.ws on
+// its behalf, since the browser cannot read cross-origin bash.ws responses.
+//
+// GET /api/v1/health/dns-leak/browser-results?id={testId}
+func handleDNSLeakBrowserResults(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		testID := r.URL.Query().Get("id")
+		if testID == "" || len(testID) > 20 {
+			JSON(w, http.StatusBadRequest, map[string]string{"error": "missing or invalid id"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		httpClient := newDNSBypassClient(8 * time.Second)
+		resolvers, _ := fetchBashWSResults(ctx, testID, httpClient)
+		if resolvers == nil {
+			resolvers = []externalResolver{}
+		}
+
+		JSON(w, http.StatusOK, struct {
+			Resolvers []externalResolver `json:"resolvers"`
+		}{Resolvers: resolvers})
+	}
 }
 
 // ── GeoIP fallback: enrich configured nameservers via ip-api.com ─────────────

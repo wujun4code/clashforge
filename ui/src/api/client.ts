@@ -914,6 +914,18 @@ export interface DnsLeakTestResult {
 
 export const getDNSLeakTest = () => request<DnsLeakTestResult>('GET', '/health/dns-leak')
 
+/**
+ * Fetches bash.ws resolver results for a browser-initiated DNS probe.
+ * The browser makes the actual DNS probe requests (fetch to unique subdomains),
+ * then calls this to retrieve the logged resolver IPs — bypassing CORS.
+ */
+export interface BrowserDNSProbeResult {
+  resolvers: ExternalResolver[]
+}
+
+export const getBrowserDNSLeakResults = (testId: string) =>
+  request<BrowserDNSProbeResult>('GET', `/health/dns-leak/browser-results?id=${encodeURIComponent(testId)}`)
+
 // ---- geodata management ----
 export interface GeoDataFileStatus {
   name: string

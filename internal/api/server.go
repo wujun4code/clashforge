@@ -62,6 +62,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/health/probe-domain", handleProbeDomain(deps))
 		api.Get("/health/proxy-diag", handleProxyDiag(deps))
 		api.Get("/health/dns-leak", handleDNSLeakTest(deps))
+		api.Get("/health/dns-leak/browser-results", handleDNSLeakBrowserResults(deps))
 		api.Get("/cf-config", handleGetCFConfig(deps))
 		api.Put("/cf-config", handlePutCFConfig(deps))
 		api.Delete("/cf-config", handleDeleteCFConfig(deps))

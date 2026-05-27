@@ -22,6 +22,7 @@ import {
   testLatency,
   probeDomain,
   getDNSLeakTest,
+  getBrowserDNSLeakResults,
 } from '../api/client'
 import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote, DnsLeakTestResult, ExternalResolver } from '../api/client'
 import type {
@@ -802,11 +803,14 @@ function DnsLeakPanel({ result, loading, onRun }: {
           </div>
           <p className="text-xs text-muted mt-0.5">
             检测您的 DNS 查询由哪些服务器处理，判断是否存在隐私泄露风险
+            {result?.external_method === 'browser-bash.ws' && !loading && (
+              <span className="ml-1 text-muted/40">· 浏览器侧权威 DNS 探测（与 ip.net.coffee 同原理）</span>
+            )}
             {result?.external_method === 'bash.ws' && !loading && (
-              <span className="ml-1 text-muted/40">· 数据来源：bash.ws 权威 DNS 探测</span>
+              <span className="ml-1 text-muted/40">· 路由器侧权威 DNS 探测</span>
             )}
             {result?.external_method === 'geoip-nameservers' && !loading && (
-              <span className="ml-1 text-muted/40">· 数据来源：已配置上游 DNS GeoIP</span>
+              <span className="ml-1 text-muted/40">· 已配置上游 DNS GeoIP（bash.ws 探测失败）</span>
             )}
           </p>
         </div>
@@ -827,15 +831,15 @@ function DnsLeakPanel({ result, loading, onRun }: {
             <Loader2 size={22} className="animate-spin text-brand/50" />
             <span>正在探测 DNS 解析器，约需 15–20 秒…</span>
             <span className="text-xs text-muted/60">
-              外部权威 DNS 探测 · Mihomo 拦截检测 · GeoIP 解析
+              浏览器发起 DNS 探测 → 经路由器 Mihomo → 上游 DNS → bash.ws 权威 NS
             </span>
           </div>
         ) : !result ? (
           <div className="py-8 text-center space-y-1.5">
             <p className="text-sm text-muted">点击"开始检测"查看您的 DNS 解析器</p>
             <p className="text-xs text-muted/50 max-w-sm mx-auto">
-              检测原理：通过权威 DNS 探测，识别实际处理您 DNS 查询的服务器，
-              标注中国境内解析器（可能泄露浏览记录）和境外/代理解析器（✓ 正确）
+              与 ip.net.coffee 同原理：浏览器发出 DNS 探测请求，经过路由器 Mihomo 的上游 DNS
+              到达外部权威服务器，由此确认哪些 DNS 解析器实际处理了您的查询
             </p>
           </div>
         ) : result.error ? (
@@ -1255,19 +1259,101 @@ export function Dashboard() {
     setDomainLoading(false)
   }
 
+  /**
+   * Browser-side DNS probe — the correct way to detect DNS leaks.
+   *
+   * The browser makes fetch() requests to unique bash.ws subdomains.
+   * Those requests trigger real DNS lookups through the browser's OS resolver,
+   * which travels the full path: Browser → OS DNS → Router dnsmasq → Mihomo →
+   * upstream DNS (e.g. 223.5.5.5) → bash.ws authoritative NS.
+   * bash.ws records which resolver IPs queried for the test subdomains —
+   * this is exactly what ip.net.coffee does.
+   *
+   * The browser cannot read bash.ws's cross-origin JSON response directly,
+   * so we ask the backend to proxy the results fetch.
+   */
+  const runBrowserDNSProbe = async (): Promise<ExternalResolver[]> => {
+    const testId = String(Math.floor(Math.random() * 900000) + 100000)
+
+    // Register the test with bash.ws (ignore errors — may not be strictly required).
+    try {
+      await fetch(`https://bash.ws/dnsleak/test/start/${testId}`, { mode: 'no-cors', cache: 'no-store' })
+    } catch { /* ignore */ }
+
+    // Fire DNS probe requests concurrently.
+    // Even if the HTTP connections fail, the DNS lookups already happened —
+    // the browser resolved each hostname via its OS resolver before attempting TCP.
+    const probes: Promise<unknown>[] = []
+    for (let n = 1; n <= 10; n++) {
+      probes.push(
+        fetch(`https://${testId}-${n}.bash.ws/`, { mode: 'no-cors', cache: 'no-store' }).catch(() => {})
+      )
+    }
+    await Promise.allSettled(probes)
+
+    // Wait for bash.ws to index the incoming resolver queries.
+    await new Promise<void>(resolve => setTimeout(resolve, 3000))
+
+    // Retrieve results via backend proxy (bypasses CORS restriction).
+    const res = await getBrowserDNSLeakResults(testId)
+    return res.resolvers
+  }
+
   const handleDNSLeakRun = async () => {
     setDnsLeakLoading(true)
     try {
-      const result = await getDNSLeakTest().catch((e: unknown) => ({
-        test_domain: 'google.com',
-        paths: [],
-        mihomo_intercepting: false,
-        has_leak: false,
-        summary: '',
-        tested_at: new Date().toISOString(),
-        error: e instanceof Error ? e.message : '请求失败',
-      } satisfies DnsLeakTestResult))
-      setDnsLeakResult(result)
+      // Run browser DNS probe and backend Mihomo health check in parallel.
+      // The browser probe is authoritative for external resolver detection;
+      // the backend provides the internal fake-ip path analysis.
+      const [browserResolvers, backendResult] = await Promise.all([
+        runBrowserDNSProbe().catch((): ExternalResolver[] => []),
+        getDNSLeakTest().catch((e: unknown) => ({
+          test_domain: 'google.com',
+          paths: [],
+          external_resolvers: [] as ExternalResolver[],
+          external_method: undefined,
+          mihomo_intercepting: false,
+          has_leak: false,
+          summary: '',
+          tested_at: new Date().toISOString(),
+          error: e instanceof Error ? e.message : '请求失败',
+        } satisfies DnsLeakTestResult)),
+      ])
+
+      // If the browser probe returned results, they supersede the backend's
+      // GeoIP-fallback external resolvers.  has_leak is re-evaluated accordingly.
+      const externalResolvers = browserResolvers.length > 0
+        ? browserResolvers
+        : (backendResult.external_resolvers ?? [])
+      const externalMethod = browserResolvers.length > 0
+        ? 'browser-bash.ws'
+        : backendResult.external_method
+
+      const browserHasLeak = browserResolvers.some(r => r.is_leak)
+      const hasLeak = browserResolvers.length > 0
+        ? browserHasLeak
+        : backendResult.has_leak
+
+      // Build a user-facing summary when the browser probe has results.
+      let summary = backendResult.summary
+      if (browserResolvers.length > 0) {
+        const leakCount = browserResolvers.filter(r => r.is_leak).length
+        if (leakCount > 0) {
+          summary = `检测到 DNS 泄露！${leakCount} 个 DNS 解析器位于中国境内，` +
+            '这意味着您的 DNS 查询对中国实体可见。' +
+            '建议在 Mihomo 配置中将上游 DNS 改为经代理转发的 DoH（如 https://1.1.1.1/dns-query）。'
+        } else {
+          summary = '未检测到 DNS 泄露。所有 DNS 解析器均在中国境外，您的 DNS 查询通过代理或境外 DNS 处理。'
+        }
+      }
+
+      setDnsLeakResult({
+        ...backendResult,
+        external_resolvers: externalResolvers,
+        external_method: externalMethod,
+        has_leak: hasLeak,
+        summary,
+      })
     } finally {
       setDnsLeakLoading(false)
     }
