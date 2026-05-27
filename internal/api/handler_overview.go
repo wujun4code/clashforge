@@ -555,17 +555,19 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 	nftTables := listNFTTables()
 	dnsPortOwners := selectPortOwners(listeners, 53, deps.Config.Ports.DNS)
 	proxyPortOwners := selectPortOwners(listeners, 7890, 7891, 7892, 7893, 7895, deps.Config.Ports.HTTP, deps.Config.Ports.SOCKS, deps.Config.Ports.Redir, deps.Config.Ports.Mixed, deps.Config.Ports.TProxy, deps.Config.Ports.MihomoAPI)
-	// IsApplied() is in-memory only; also check the actual kernel table so status
-	// survives process restarts when rules were previously applied.
-	clashforgeOwned := deps.Netfilter != nil && (deps.Netfilter.IsApplied() || nftTablePresent())
+	firewallBackend := actualNetfilterBackend(deps)
+	// IsApplied() is in-memory only; also check kernel-side nftables/iptables
+	// markers so status can survive process restarts.
+	firewallManagedByClashforge := clashforgeFirewallManaged(deps, firewallBackend)
+	clashforgeOwned := firewallManagedByClashforge
 	// dnsManaged reflects actual runtime state: config intent AND core is currently running.
 	// When mihomo stops, this becomes false so the UI correctly shows "让 ClashForge 接管".
 	dnsManaged := coreStatus.Ready && deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart && deps.Config.DNS.DnsmasqMode != "none"
 	dnsListenerReady := isDNSPortListening(deps.Config.Ports.DNS)
 	stopTargets := collectStopServices(influences, "transparent_proxy", "nft_firewall")
 	dnsStopTargets := collectStopServices(influences, "dns_entry")
-	transparentOwner := detectTransparentProxyOwner(deps, nftTables, proxyPortOwners, influences)
-	nftOwner := detectNFTFirewallOwner(deps, nftTables)
+	transparentOwner := detectTransparentProxyOwner(nftTables, proxyPortOwners, influences, clashforgeOwned)
+	nftOwner := detectNFTFirewallOwner(nftTables, firewallBackend, firewallManagedByClashforge)
 	dnsOwner := detectDNSEntryOwner(deps, dnsPortOwners, influences)
 	controlOwner := "ClashForge"
 	if !isTCPPortListening(deps.Config.Ports.UI) {
@@ -609,17 +611,17 @@ func buildOverviewModules(deps Dependencies, listeners []listeningPort, influenc
 		},
 		{
 			ID:                  "nft_firewall",
-			Title:               "NFT / 防火墙",
+			Title:               "防火墙规则",
 			Category:            "接管模块",
-			Status:              moduleStatus(clashforgeOwned && nftTablePresent(), hasConflictingNFTTables(nftTables)),
+			Status:              moduleStatus(firewallManagedByClashforge, hasConflictingNFTTables(nftTables)),
 			CurrentOwner:        nftOwner,
-			ManagedByClashforge: clashforgeOwned && nftTablePresent(),
+			ManagedByClashforge: firewallManagedByClashforge,
 			Purpose:             "NFT / iptables 是透明代理真正落地的内核规则层，负责把 53、TCP、UDP 流量重定向到 ClashForge。",
 			TakeoverEffect:      "接管后，ClashForge 会安装自己的 metaclash 规则表，并把透明代理 / DNS 重定向交给自己管理。",
-			CurrentMode:         actualNetfilterBackend(deps),
-			RecommendedMode:     actualNetfilterBackend(deps),
+			CurrentMode:         firewallBackend,
+			RecommendedMode:     firewallBackend,
 			TakeoverSupported:   true,
-			Action:              moduleAction("nft_firewall", clashforgeOwned && nftTablePresent(), actualNetfilterBackend(deps), stopTargets),
+			Action:              moduleAction("nft_firewall", firewallManagedByClashforge, firewallBackend, stopTargets),
 			Processes:           processRefsForModule(influences, "nft_firewall"),
 			Notes:               append([]string{fmt.Sprintf("检测到的 nftables 表: %s", strings.Join(nftTables, ", "))}, firewallNotes(nftTables)...),
 		},
@@ -1127,9 +1129,9 @@ func collectStopServices(influences []overviewInfluence, modules ...string) []st
 	return dedupeStrings(services)
 }
 
-func detectTransparentProxyOwner(deps Dependencies, nftTables []string, owners []overviewPortOwner, influences []overviewInfluence) string {
-	// Check in-memory flag first, then fall back to kernel table presence.
-	if deps.Netfilter != nil && (deps.Netfilter.IsApplied() || nftTablePresent()) {
+func detectTransparentProxyOwner(nftTables []string, owners []overviewPortOwner, influences []overviewInfluence, managedByClashforge bool) string {
+	// Check in-memory + kernel markers first.
+	if managedByClashforge {
 		return "ClashForge"
 	}
 	for _, influence := range influences {
@@ -1152,10 +1154,13 @@ func detectTransparentProxyOwner(deps Dependencies, nftTables []string, owners [
 	return "无人接管"
 }
 
-func detectNFTFirewallOwner(deps Dependencies, nftTables []string) string {
-	// Also check kernel table so ownership is detected after process restarts.
-	if nftTablePresent() {
+func detectNFTFirewallOwner(nftTables []string, backend string, managedByClashforge bool) string {
+	// Also check kernel-side markers so ownership is detected after process restarts.
+	if managedByClashforge {
 		return "ClashForge"
+	}
+	if backend == "iptables" {
+		return "系统防火墙（iptables）"
 	}
 	if len(nftTables) == 0 {
 		return "未检测到 nftables 表"
@@ -1179,6 +1184,41 @@ func detectNFTFirewallOwner(deps Dependencies, nftTables []string) string {
 		return "系统防火墙（正常）"
 	}
 	return strings.Join(dedupeStrings(owners), " / ")
+}
+
+func clashforgeFirewallManaged(deps Dependencies, backend string) bool {
+	inMemory := deps.Netfilter != nil && deps.Netfilter.IsApplied()
+	switch backend {
+	case "nftables":
+		return inMemory || nftTablePresent()
+	case "iptables":
+		return inMemory || iptablesMetaclashPresent()
+	default:
+		return inMemory || nftTablePresent() || iptablesMetaclashPresent()
+	}
+}
+
+func iptablesMetaclashPresent() bool {
+	if _, err := exec.LookPath("iptables"); err != nil {
+		return false
+	}
+
+	// Preferred fast-path: user-defined chain exists and can be listed.
+	out, err := exec.Command("iptables", "-t", "mangle", "-S", "METACLASH").CombinedOutput()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		return true
+	}
+
+	// Fallback for platforms where "-S <chain>" behaves differently.
+	if _, err := exec.LookPath("iptables-save"); err != nil {
+		return false
+	}
+	out, err = exec.Command("iptables-save", "-t", "mangle").CombinedOutput()
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(string(out), "METACLASH")
 }
 
 // hasConflictingNFTTables returns true only if there are nftables tables that
