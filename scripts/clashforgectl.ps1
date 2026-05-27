@@ -14,6 +14,7 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -BaseUrl https://releases.example.com
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -Purge
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -RemoteDownload   # legacy: let router download
+#   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 upgrade -LocalIpkFile C:\Downloads\clashforge.ipk
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 deploy
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 deploy -Skip ui
 #   .\scripts\clashforgectl.ps1 -Router 192.168.1.1 deploy -Skip go
@@ -60,6 +61,7 @@ param(
     [string]$BaseUrl        = "",
     [switch]$Purge,
     [switch]$RemoteDownload,               # Have the router download the IPK itself (legacy fallback)
+    [string]$LocalIpkFile = "",            # Pre-downloaded IPK path; skips arch detect, version resolve, and download
 
     # reset options
     [switch]$Start,
@@ -516,120 +518,133 @@ if ($Action -eq "deploy") {
 # ══════════════════════════════════════════════════════════════════════════════
 if ($Action -eq "upgrade" -and -not $RemoteDownload) {
 
-    # ── 1. Detect router architecture via SSH ─────────────────────────────────
-    Log "── Step 1: Detecting router architecture..."
-    $SshMachineArgs = $SshBase + @($Target, 'uname -m')
-    $RouterMachine  = (ssh @SshMachineArgs).Trim()
+    $CleanupLocalIpk = $false   # true only when we create a temp download
 
-    $IpkArch = $null
-    if ($RouterMachine -in @("x86_64", "amd64")) {
-        $IpkArch = "x86_64"
-    } elseif ($RouterMachine -in @("aarch64", "arm64")) {
-        $SshCpuArgs = $SshBase + @($Target, "grep -m1 'CPU part' /proc/cpuinfo 2>/dev/null | awk '{print tolower(`$NF)}'")
-        $CpuPart    = (ssh @SshCpuArgs).Trim()
-        $IpkArch    = if ($CpuPart -eq "0xd03") { "aarch64_cortex-a53" } else { "aarch64_generic" }
+    if ($LocalIpkFile -ne "") {
+        # ── User-supplied local IPK — skip arch detect, version resolve, download ─
+        if (-not (Test-Path $LocalIpkFile)) { Die "Local IPK not found: $LocalIpkFile" }
+        $IpkItem = Get-Item $LocalIpkFile
+        if ($IpkItem.Length -eq 0) { Die "Local IPK is empty: $LocalIpkFile" }
+        $IpkName  = $IpkItem.Name
+        $LocalIpk = $LocalIpkFile
+        Ok "Local IPK   : $LocalIpkFile ($($IpkItem.Length) bytes)"
     } else {
-        Die "Unsupported router architecture: $RouterMachine (supported: x86_64, aarch64)"
-    }
-    Ok "Router arch : $RouterMachine → $IpkArch"
+        # ── 1. Detect router architecture via SSH ─────────────────────────────────
+        Log "── Step 1: Detecting router architecture..."
+        $SshMachineArgs = $SshBase + @($Target, 'uname -m')
+        $RouterMachine  = (ssh @SshMachineArgs).Trim()
 
-    # ── 2. Resolve version ─────────────────────────────────────────────────────
-    $Tag = $Version
-    if ($Tag -eq "latest") {
-        Log "── Step 2: Resolving latest release version..."
-        try {
-            $Releases = Invoke-RestMethod `
-                -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50" `
-                -Headers @{ "Accept" = "application/vnd.github+json" } `
-                -TimeoutSec 15
-            $Tags = @($Releases | ForEach-Object { $_.tag_name } | Where-Object { $_ })
-            $BetaTags = @($Tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+-beta\.\d+$' })
-            if ($BetaTags.Count -gt 0) {
-                $Tag = $BetaTags |
-                    Sort-Object {
-                        if ($_ -match '^v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') {
-                            [string]::Format('{0:D9}.{1:D9}.{2:D9}.{3:D9}',
-                                [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
-                        } else {
-                            ''
-                        }
-                    } |
-                    Select-Object -Last 1
-            } else {
-                $Tag = $Tags | Select-Object -First 1
+        $IpkArch = $null
+        if ($RouterMachine -in @("x86_64", "amd64")) {
+            $IpkArch = "x86_64"
+        } elseif ($RouterMachine -in @("aarch64", "arm64")) {
+            $SshCpuArgs = $SshBase + @($Target, "grep -m1 'CPU part' /proc/cpuinfo 2>/dev/null | awk '{print tolower(`$NF)}'")
+            $CpuPart    = (ssh @SshCpuArgs).Trim()
+            $IpkArch    = if ($CpuPart -eq "0xd03") { "aarch64_cortex-a53" } else { "aarch64_generic" }
+        } else {
+            Die "Unsupported router architecture: $RouterMachine (supported: x86_64, aarch64)"
+        }
+        Ok "Router arch : $RouterMachine → $IpkArch"
+
+        # ── 2. Resolve version ─────────────────────────────────────────────────
+        $Tag = $Version
+        if ($Tag -eq "latest") {
+            Log "── Step 2: Resolving latest release version..."
+            try {
+                $Releases = Invoke-RestMethod `
+                    -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50" `
+                    -Headers @{ "Accept" = "application/vnd.github+json" } `
+                    -TimeoutSec 15
+                $Tags = @($Releases | ForEach-Object { $_.tag_name } | Where-Object { $_ })
+                $BetaTags = @($Tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+-beta\.\d+$' })
+                if ($BetaTags.Count -gt 0) {
+                    $Tag = $BetaTags |
+                        Sort-Object {
+                            if ($_ -match '^v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') {
+                                [string]::Format('{0:D9}.{1:D9}.{2:D9}.{3:D9}',
+                                    [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+                            } else {
+                                ''
+                            }
+                        } |
+                        Select-Object -Last 1
+                } else {
+                    $Tag = $Tags | Select-Object -First 1
+                }
+            } catch {
+                Die "Failed to resolve latest version from GitHub API: $_"
             }
-        } catch {
-            Die "Failed to resolve latest version from GitHub API: $_"
         }
-    }
-    if (-not $Tag) { Die "Could not resolve release version." }
-    $PkgVer  = $Tag.TrimStart("v")
-    $IpkName = "clashforge_${PkgVer}_${IpkArch}.ipk"
-    Ok "Version     : $Tag"
-    Ok "Package     : $IpkName"
+        if (-not $Tag) { Die "Could not resolve release version." }
+        $PkgVer  = $Tag.TrimStart("v")
+        $IpkName = "clashforge_${PkgVer}_${IpkArch}.ipk"
+        Ok "Version     : $Tag"
+        Ok "Package     : $IpkName"
 
-    # ── 3. Download IPK to local machine ──────────────────────────────────────
-    Log "── Step 3: Downloading IPK locally..."
-    $LocalIpk  = Join-Path ([System.IO.Path]::GetTempPath()) $IpkName
-    $GhUrl     = "https://github.com/wujun4code/clashforge/releases/download/$Tag/$IpkName"
-    $GhProxies = @(
-        "https://ghproxy.com",
-        "https://mirror.ghproxy.com",
-        "https://ghfast.top",
-        "https://github.moeyy.xyz"
-    )
-    $Downloaded = $false
+        # ── 3. Download IPK to local machine ──────────────────────────────────
+        Log "── Step 3: Downloading IPK locally..."
+        $LocalIpk  = Join-Path ([System.IO.Path]::GetTempPath()) $IpkName
+        $GhUrl     = "https://github.com/wujun4code/clashforge/releases/download/$Tag/$IpkName"
+        $GhProxies = @(
+            "https://ghproxy.com",
+            "https://mirror.ghproxy.com",
+            "https://ghfast.top",
+            "https://github.moeyy.xyz"
+        )
+        $Downloaded = $false
 
-    if ($BaseUrl -ne "") {
-        $Url = "$($BaseUrl.TrimEnd('/'))/releases/$Tag/$IpkName"
-        Log "Downloading from custom base URL: $BaseUrl"
-        try {
-            Invoke-WebRequest -Uri $Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
-            $Downloaded = $true
-        } catch {
-            Die "Download failed from base URL: $Url`n$_"
-        }
-    } elseif ($Mirror -ne "") {
-        $Url = "$($Mirror.TrimEnd('/'))/$GhUrl"
-        Log "Downloading via mirror: $Mirror"
-        try {
-            Invoke-WebRequest -Uri $Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
-            $Downloaded = $true
-        } catch {
-            Die "Download failed from mirror ${Mirror}: $_"
-        }
-    } else {
-        try {
-            Log "Downloading from GitHub..."
-            Invoke-WebRequest -Uri $GhUrl -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
-            $Downloaded = $true
-            Ok "Downloaded from GitHub"
-        } catch {
-            Warn "Direct GitHub download failed, trying mirrors..."
-            Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
-        }
+        if ($BaseUrl -ne "") {
+            $Url = "$($BaseUrl.TrimEnd('/'))/releases/$Tag/$IpkName"
+            Log "Downloading from custom base URL: $BaseUrl"
+            try {
+                Invoke-WebRequest -Uri $Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                $Downloaded = $true
+            } catch {
+                Die "Download failed from base URL: $Url`n$_"
+            }
+        } elseif ($Mirror -ne "") {
+            $Url = "$($Mirror.TrimEnd('/'))/$GhUrl"
+            Log "Downloading via mirror: $Mirror"
+            try {
+                Invoke-WebRequest -Uri $Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                $Downloaded = $true
+            } catch {
+                Die "Download failed from mirror ${Mirror}: $_"
+            }
+        } else {
+            try {
+                Log "Downloading from GitHub..."
+                Invoke-WebRequest -Uri $GhUrl -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                $Downloaded = $true
+                Ok "Downloaded from GitHub"
+            } catch {
+                Warn "Direct GitHub download failed, trying mirrors..."
+                Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+            }
 
-        if (-not $Downloaded) {
-            foreach ($Proxy in $GhProxies) {
-                try {
-                    Log "Trying mirror: $Proxy"
-                    Invoke-WebRequest -Uri "$Proxy/$GhUrl" -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
-                    $Downloaded = $true
-                    Ok "Downloaded via $Proxy"
-                    break
-                } catch {
-                    Warn "Mirror $Proxy failed"
-                    Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+            if (-not $Downloaded) {
+                foreach ($Proxy in $GhProxies) {
+                    try {
+                        Log "Trying mirror: $Proxy"
+                        Invoke-WebRequest -Uri "$Proxy/$GhUrl" -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                        $Downloaded = $true
+                        Ok "Downloaded via $Proxy"
+                        break
+                    } catch {
+                        Warn "Mirror $Proxy failed"
+                        Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+                    }
                 }
             }
         }
-    }
 
-    if (-not $Downloaded) {
-        Die "Failed to download IPK from all sources.`nTry: -Mirror https://ghproxy.com  or  -BaseUrl <your-cdn>"
+        if (-not $Downloaded) {
+            Die "Failed to download IPK from all sources.`nTry: -Mirror https://ghproxy.com  or  -BaseUrl <your-cdn>"
+        }
+        $IpkBytes = (Get-Item $LocalIpk).Length
+        Ok "Local IPK   : $LocalIpk ($IpkBytes bytes)"
+        $CleanupLocalIpk = $true
     }
-    $IpkBytes = (Get-Item $LocalIpk).Length
-    Ok "Local IPK   : $LocalIpk ($IpkBytes bytes)"
 
     # ── 4. Upload clashforgectl.sh ─────────────────────────────────────────────
     Log "── Step 4: Uploading clashforgectl.sh → ${Target}:${RemoteScript}"
@@ -645,7 +660,7 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
     scp @ScpIpkArgs
     if ($LASTEXITCODE -ne 0) { Die "scp upload of IPK failed" }
     Ok "IPK pushed to router"
-    Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+    if ($CleanupLocalIpk) { Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue }
 
     # ── 6. Install on router via --local-ipk (no download needed on router) ──
     $PurgeFlag  = if ($Purge)  { " --purge"   } else { "" }

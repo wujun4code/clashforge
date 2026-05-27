@@ -220,6 +220,7 @@ MIRROR=""
 BASE_URL=""
 PURGE=0
 REMOTE_DOWNLOAD=0
+LOCAL_IPK_PATH=""
 
 SKIP=""    # for deploy: comma-separated steps to skip (ui, go)
 REPO_ROOT=""  # for deploy: auto-detected from script location
@@ -261,6 +262,8 @@ while [ $# -gt 0 ]; do
         --base-url=*) BASE_URL="${1#*=}"; shift ;;
         --purge)         PURGE=1;           shift ;;
         --remote-download) REMOTE_DOWNLOAD=1; shift ;;
+        --local-ipk)       LOCAL_IPK_PATH="$2"; shift 2 ;;
+        --local-ipk=*)     LOCAL_IPK_PATH="${1#*=}"; shift ;;
         # deploy options
         --skip)       SKIP="$2";        shift 2 ;;
         --skip=*)     SKIP="${1#*=}";   shift ;;
@@ -328,6 +331,7 @@ UPGRADE OPTIONS
     --base-url <url>     Custom release base URL for local download
     --purge              Full cleanup before install
     --remote-download    Legacy: have the router download the IPK itself
+    --local-ipk <path>   Use a pre-downloaded IPK file; skips arch detect, version resolve, and download
 
 RESET OPTIONS
     --start              Start ClashForge after reset
@@ -358,6 +362,7 @@ EXAMPLES
     ./scripts/clashforgectl --router 192.168.1.1 reset --start
     ./scripts/clashforgectl --router 192.168.1.1 upgrade --version latest
     ./scripts/clashforgectl --router 192.168.1.1 upgrade --purge
+    ./scripts/clashforgectl --router 192.168.1.1 upgrade --local-ipk /tmp/clashforge_0.1.0-beta.3_aarch64_generic.ipk
     ./scripts/clashforgectl --router 192.168.1.1 deploy
     ./scripts/clashforgectl --router 192.168.1.1 deploy --skip ui
     ./scripts/clashforgectl --router 192.168.1.1 deploy --purge
@@ -556,108 +561,120 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$ACTION" = "upgrade" ] && [ "$REMOTE_DOWNLOAD" -eq 0 ]; then
 
-    # ── 1. Detect router architecture ─────────────────────────────────────────
-    log "── Step 1: Detecting router architecture..."
-    ROUTER_MACHINE="$(ssh "${SSH_OPTS[@]}" "$TARGET" 'uname -m')"
+    CLEANUP_LOCAL_IPK=0   # set to 1 only when we create a temp download
 
-    case "$ROUTER_MACHINE" in
-        x86_64|amd64)
-            IPK_ARCH="x86_64" ;;
-        aarch64|arm64)
-            CPU_PART="$(ssh "${SSH_OPTS[@]}" "$TARGET" \
-                "grep -m1 'CPU part' /proc/cpuinfo 2>/dev/null | awk '{print tolower(\$NF)}'")"
-            if [ "$CPU_PART" = "0xd03" ]; then
-                IPK_ARCH="aarch64_cortex-a53"
-            else
-                IPK_ARCH="aarch64_generic"
-            fi ;;
-        *)
-            die "Unsupported router architecture: $ROUTER_MACHINE (supported: x86_64, aarch64)" ;;
-    esac
-    ok "Router arch : $ROUTER_MACHINE → $IPK_ARCH"
+    if [ -n "$LOCAL_IPK_PATH" ]; then
+        # ── User-supplied local IPK — skip arch detect, version resolve, download ─
+        [ -f "$LOCAL_IPK_PATH" ] || die "Local IPK not found: $LOCAL_IPK_PATH"
+        [ -s "$LOCAL_IPK_PATH" ] || die "Local IPK is empty: $LOCAL_IPK_PATH"
+        IPK_NAME="$(basename "$LOCAL_IPK_PATH")"
+        LOCAL_IPK="$LOCAL_IPK_PATH"
+        ok "Local IPK   : $LOCAL_IPK_PATH ($(wc -c < "$LOCAL_IPK_PATH" | tr -d ' ') bytes)"
+    else
+        # ── 1. Detect router architecture ─────────────────────────────────────
+        log "── Step 1: Detecting router architecture..."
+        ROUTER_MACHINE="$(ssh "${SSH_OPTS[@]}" "$TARGET" 'uname -m')"
 
-    # ── 2. Resolve version ─────────────────────────────────────────────────────
-    TAG="$VERSION"
-    if [ "$TAG" = "latest" ]; then
-        log "── Step 2: Resolving latest release version..."
-        _api="https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50"
-        _json="$(curl -fsSL --connect-timeout 15 --max-time 20 \
-                    -H "Accept: application/vnd.github+json" \
-                    "$_api" 2>/dev/null || true)"
-        TAG="$(printf '%s' "$_json" | awk -F'"tag_name":"' '
-            NF>1{
-              for (i=2; i<=NF; i++) {
-                split($i, a, "\"")
-                t=a[1]
-                if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/) {
-                  s=t
-                  sub(/^v/, "", s)
-                  sub(/-beta\./, ".", s)
-                  n=split(s, p, ".")
-                  key=sprintf("%09d.%09d.%09d.%09d", p[1], p[2], p[3], p[4])
-                  if (key > best_key) {
-                    best_key=key
-                    best_tag=t
+        case "$ROUTER_MACHINE" in
+            x86_64|amd64)
+                IPK_ARCH="x86_64" ;;
+            aarch64|arm64)
+                CPU_PART="$(ssh "${SSH_OPTS[@]}" "$TARGET" \
+                    "grep -m1 'CPU part' /proc/cpuinfo 2>/dev/null | awk '{print tolower(\$NF)}'")"
+                if [ "$CPU_PART" = "0xd03" ]; then
+                    IPK_ARCH="aarch64_cortex-a53"
+                else
+                    IPK_ARCH="aarch64_generic"
+                fi ;;
+            *)
+                die "Unsupported router architecture: $ROUTER_MACHINE (supported: x86_64, aarch64)" ;;
+        esac
+        ok "Router arch : $ROUTER_MACHINE → $IPK_ARCH"
+
+        # ── 2. Resolve version ─────────────────────────────────────────────────
+        TAG="$VERSION"
+        if [ "$TAG" = "latest" ]; then
+            log "── Step 2: Resolving latest release version..."
+            _api="https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50"
+            _json="$(curl -fsSL --connect-timeout 15 --max-time 20 \
+                        -H "Accept: application/vnd.github+json" \
+                        "$_api" 2>/dev/null || true)"
+            TAG="$(printf '%s' "$_json" | awk -F'"tag_name":"' '
+                NF>1{
+                  for (i=2; i<=NF; i++) {
+                    split($i, a, "\"")
+                    t=a[1]
+                    if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/) {
+                      s=t
+                      sub(/^v/, "", s)
+                      sub(/-beta\./, ".", s)
+                      n=split(s, p, ".")
+                      key=sprintf("%09d.%09d.%09d.%09d", p[1], p[2], p[3], p[4])
+                      if (key > best_key) {
+                        best_key=key
+                        best_tag=t
+                      }
+                    }
                   }
                 }
-              }
-            }
-            END{
-              if (best_tag != "") print best_tag
-            }
-          ')"
-        if [ -z "$TAG" ]; then
-            TAG="$(printf '%s' "$_json" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)"
+                END{
+                  if (best_tag != "") print best_tag
+                }
+              ')"
+            if [ -z "$TAG" ]; then
+                TAG="$(printf '%s' "$_json" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)"
+            fi
+            [ -n "$TAG" ] || die "Failed to resolve latest version from GitHub API."
         fi
-        [ -n "$TAG" ] || die "Failed to resolve latest version from GitHub API."
-    fi
-    PKG_VER="${TAG#v}"
-    IPK_NAME="clashforge_${PKG_VER}_${IPK_ARCH}.ipk"
-    ok "Version     : $TAG"
-    ok "Package     : $IPK_NAME"
+        PKG_VER="${TAG#v}"
+        IPK_NAME="clashforge_${PKG_VER}_${IPK_ARCH}.ipk"
+        ok "Version     : $TAG"
+        ok "Package     : $IPK_NAME"
 
-    # ── 3. Download IPK to local machine ──────────────────────────────────────
-    log "── Step 3: Downloading IPK locally..."
-    LOCAL_IPK="$(mktemp /tmp/clashforge_XXXXXX).ipk"
-    GH_URL="https://github.com/wujun4code/clashforge/releases/download/$TAG/$IPK_NAME"
-    GH_PROXIES="https://ghproxy.com https://mirror.ghproxy.com https://ghfast.top https://github.moeyy.xyz"
-    DOWNLOADED=0
+        # ── 3. Download IPK to local machine ──────────────────────────────────
+        log "── Step 3: Downloading IPK locally..."
+        LOCAL_IPK="$(mktemp /tmp/clashforge_XXXXXX).ipk"
+        GH_URL="https://github.com/wujun4code/clashforge/releases/download/$TAG/$IPK_NAME"
+        GH_PROXIES="https://ghproxy.com https://mirror.ghproxy.com https://ghfast.top https://github.moeyy.xyz"
+        DOWNLOADED=0
 
-    _dl() { curl -fsSL --connect-timeout 15 --max-time 300 -o "$LOCAL_IPK" "$1" 2>/dev/null && [ -s "$LOCAL_IPK" ]; }
+        _dl() { curl -fsSL --connect-timeout 15 --max-time 300 -o "$LOCAL_IPK" "$1" 2>/dev/null && [ -s "$LOCAL_IPK" ]; }
 
-    if [ -n "$BASE_URL" ]; then
-        _url="${BASE_URL%/}/releases/$TAG/$IPK_NAME"
-        log "Downloading from custom base URL: $BASE_URL"
-        _dl "$_url" && DOWNLOADED=1 \
-            || die "Download failed from base URL: $_url"
-    elif [ -n "$MIRROR" ]; then
-        _url="${MIRROR%/}/$GH_URL"
-        log "Downloading via mirror: $MIRROR"
-        _dl "$_url" && DOWNLOADED=1 \
-            || die "Download failed from mirror: $MIRROR"
-    else
-        log "Downloading from GitHub..."
-        if _dl "$GH_URL"; then
-            DOWNLOADED=1
-            ok "Downloaded from GitHub"
+        if [ -n "$BASE_URL" ]; then
+            _url="${BASE_URL%/}/releases/$TAG/$IPK_NAME"
+            log "Downloading from custom base URL: $BASE_URL"
+            _dl "$_url" && DOWNLOADED=1 \
+                || die "Download failed from base URL: $_url"
+        elif [ -n "$MIRROR" ]; then
+            _url="${MIRROR%/}/$GH_URL"
+            log "Downloading via mirror: $MIRROR"
+            _dl "$_url" && DOWNLOADED=1 \
+                || die "Download failed from mirror: $MIRROR"
         else
-            warn "Direct GitHub download failed, trying mirrors..."
-            rm -f "$LOCAL_IPK"
-            for _proxy in $GH_PROXIES; do
-                log "Trying mirror: $_proxy"
-                if _dl "$_proxy/$GH_URL"; then
-                    DOWNLOADED=1
-                    ok "Downloaded via $_proxy"
-                    break
-                fi
+            log "Downloading from GitHub..."
+            if _dl "$GH_URL"; then
+                DOWNLOADED=1
+                ok "Downloaded from GitHub"
+            else
+                warn "Direct GitHub download failed, trying mirrors..."
                 rm -f "$LOCAL_IPK"
-            done
+                for _proxy in $GH_PROXIES; do
+                    log "Trying mirror: $_proxy"
+                    if _dl "$_proxy/$GH_URL"; then
+                        DOWNLOADED=1
+                        ok "Downloaded via $_proxy"
+                        break
+                    fi
+                    rm -f "$LOCAL_IPK"
+                done
+            fi
         fi
-    fi
 
-    [ "$DOWNLOADED" -eq 1 ] \
-        || die "Failed to download IPK from all sources.\nTry: --mirror https://ghproxy.com  or  --base-url <your-cdn>"
-    ok "Local IPK   : $LOCAL_IPK ($(wc -c < "$LOCAL_IPK" | tr -d ' ') bytes)"
+        [ "$DOWNLOADED" -eq 1 ] \
+            || die "Failed to download IPK from all sources.\nTry: --mirror https://ghproxy.com  or  --base-url <your-cdn>"
+        ok "Local IPK   : $LOCAL_IPK ($(wc -c < "$LOCAL_IPK" | tr -d ' ') bytes)"
+        CLEANUP_LOCAL_IPK=1
+    fi
 
     # ── 4. Upload clashforgectl.sh ─────────────────────────────────────────────
     log "── Step 4: Uploading clashforgectl.sh → ${TARGET}:${REMOTE_SCRIPT}"
@@ -671,7 +688,7 @@ if [ "$ACTION" = "upgrade" ] && [ "$REMOTE_DOWNLOAD" -eq 0 ]; then
     scp "${SCP_OPTS[@]}" "$LOCAL_IPK" "${TARGET}:${REMOTE_IPK}" \
         || die "scp upload of IPK failed"
     ok "IPK pushed to router"
-    rm -f "$LOCAL_IPK"
+    [ "$CLEANUP_LOCAL_IPK" -eq 1 ] && rm -f "$LOCAL_IPK"
 
     # ── 6. Install on router via --local-ipk (no download needed on router) ──
     PURGE_FLAG="";  [ "$PURGE"   -eq 1 ] && PURGE_FLAG=" --purge"
