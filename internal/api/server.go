@@ -16,6 +16,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/netfilter"
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
+	"github.com/wujun4code/clashforge/internal/quickstart"
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"github.com/wujun4code/clashforge/internal/workernode"
 )
@@ -39,6 +40,7 @@ type Dependencies struct {
 	PublishStore    *publish.Store
 	WorkerNodeStore *workernode.Store
 	GeoDataManager  *geodata.Manager
+	QuickStartStore *quickstart.Store
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -181,6 +183,12 @@ func NewRouter(deps Dependencies) http.Handler {
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}
+		// QuickStart v2
+		api.Post("/quickstart/validate-cf", handleQuickStartValidateCF())
+		api.Post("/quickstart/validate-vps", handleQuickStartValidateVPS())
+		api.Post("/quickstart/deploy", handleQuickStartDeploy(deps))
+		api.Get("/quickstart/deploys", handleQuickStartListDeploys(deps))
+		api.Get("/quickstart/deploys/{id}", handleQuickStartGetDeploy(deps))
 	})
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

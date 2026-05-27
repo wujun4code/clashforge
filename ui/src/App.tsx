@@ -10,6 +10,7 @@ import { ActivityLog } from './pages/ActivityLog'
 import { Setup } from './pages/Setup'
 import { Settings } from './pages/Settings'
 import { Publish } from './pages/Publish'
+import { QuickStart } from './pages/QuickStart'
 
 export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -70,6 +71,7 @@ export default function App() {
                 <Route path="/activity" element={<ActivityLog />} />
                 <Route path="/setup" element={<Setup />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/quickstart" element={<QuickStart />} />
               </Routes>
             </div>
           </div>
