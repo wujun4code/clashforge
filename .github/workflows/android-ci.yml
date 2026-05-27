@@ -4,12 +4,34 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - 'mobile/**'
-      - '.github/workflows/android-ci.yml'
-      - '.github/workflows/android-release.yml'
+    # NOTE: paths filter intentionally removed from the trigger.
+    # Required status checks must always report a result; if the workflow
+    # never fires (because paths didn't match) GitHub shows
+    # "Expected — Waiting for status to be reported" and blocks the PR.
+    # Path detection is handled inside each job via the `changes` output
+    # so non-mobile PRs skip quickly instead of blocking forever.
 
 jobs:
+  # ── Detect whether mobile-relevant files changed ──────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      mobile: ${{ steps.filter.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect mobile changes
+        id: filter
+        run: |
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.event.pull_request.head.sha }}
+          if git diff --name-only "$BASE" "$HEAD" | grep -qE '^mobile/|^\.github/workflows/android'; then
+            echo "mobile=true" >> $GITHUB_OUTPUT
+          else
+            echo "mobile=false" >> $GITHUB_OUTPUT
+          fi
+
   # ────────────────────────────────────────────────────────────
   # Job 0: Verify arm64-v8a binary is GOOS=android -tags cmfa,with_gvisor
   #
@@ -20,17 +42,24 @@ jobs:
   # ────────────────────────────────────────────────────────────
   verify-arm64-binary:
     name: Verify arm64-v8a (GOOS=android -tags cmfa,with_gvisor)
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: Skip — no mobile changes
+        if: needs.changes.outputs.mobile != 'true'
+        run: echo "No mobile changes — skipping arm64 verify"
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.mobile == 'true'
 
       - name: Set up Go
+        if: needs.changes.outputs.mobile == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
           cache: false
 
       - name: Build arm64-v8a mihomo from source and verify metadata
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           MIHOMO_VER="v1.18.10"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
@@ -59,27 +88,36 @@ jobs:
   # ────────────────────────────────────────────────────────────
   test:
     name: Flutter Unit & Widget Tests
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: Skip — no mobile changes
+        if: needs.changes.outputs.mobile != 'true'
+        run: echo "No mobile changes — skipping Flutter tests"
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.mobile == 'true'
 
       - name: Set up Java
+        if: needs.changes.outputs.mobile == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
       - name: Set up Flutter
+        if: needs.changes.outputs.mobile == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.6'
           channel: 'stable'
 
       - name: Install dependencies
+        if: needs.changes.outputs.mobile == 'true'
         run: flutter pub get
         working-directory: mobile
 
       - name: Download geodata assets
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           mkdir -p assets/geodata
           curl -fSL -o assets/geodata/country.mmdb \
@@ -89,6 +127,7 @@ jobs:
         working-directory: mobile
 
       - name: Run tests
+        if: needs.changes.outputs.mobile == 'true'
         run: flutter test
         working-directory: mobile
 
@@ -99,39 +138,49 @@ jobs:
   e2e:
     name: Android E2E Emulated Test
     runs-on: ubuntu-latest
-    needs: [test, verify-arm64-binary]
+    needs: [changes, test, verify-arm64-binary]
     timeout-minutes: 60
     steps:
+      - name: Skip — no mobile changes
+        if: needs.changes.outputs.mobile != 'true'
+        run: echo "No mobile changes — skipping Android E2E"
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.mobile == 'true'
 
       - name: Enable KVM group permissions
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger
 
       - name: Set up Java
+        if: needs.changes.outputs.mobile == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
       - name: Set up Flutter
+        if: needs.changes.outputs.mobile == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.6'
           channel: 'stable'
 
       - name: Install dependencies
+        if: needs.changes.outputs.mobile == 'true'
         run: flutter pub get
         working-directory: mobile
 
       - name: Set up Go
+        if: needs.changes.outputs.mobile == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
           cache: false
 
       - name: Build Mihomo Core (x86_64, GOOS=linux -tags cmfa,with_gvisor + sing-tun fd-0 patch)
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           # Pinned to v1.18.10: v1.19.x reads /data/system/packages.xml unconditionally
           # during TUN init ("build android rules"), which is denied by SELinux on API 29.
@@ -178,6 +227,7 @@ jobs:
           ls -lh "${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/x86_64/"
 
       - name: Download GeoData
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           mkdir -p mobile/assets/geodata/
           curl -fSL -o mobile/assets/geodata/country.mmdb \
@@ -191,6 +241,7 @@ jobs:
       # the open port via adb-reverse and rewrites mihomo's config to use it, so the
       # Round-2 VPN IP probe reliably returns a different IP than the baseline.
       - name: Install and start Tor (CI VPN exit relay)
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           sudo apt-get install -y tor
           sudo systemctl start tor 2>/dev/null || sudo tor --RunAsDaemon 1 --DataDirectory /tmp/tor-data
@@ -202,6 +253,7 @@ jobs:
       # android-emulator-runner@v2 runs each script: line in a separate sh -c invocation,
       # so "cd mobile" on one line does NOT persist to the next line's flutter call.
       - name: Pre-build debug APK (SUBSCRIPTION_URL embedded at compile time)
+        if: needs.changes.outputs.mobile == 'true'
         run: |
           flutter build apk --debug \
             "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
@@ -211,6 +263,7 @@ jobs:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
 
       - name: Run Android E2E Tests inside Emulator
+        if: needs.changes.outputs.mobile == 'true'
         uses: reactivecircus/android-emulator-runner@v2
         env:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
