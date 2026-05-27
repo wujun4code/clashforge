@@ -78,37 +78,32 @@ OpenWrt Router
 
 ### 快速安装
 
-推荐从电脑远程安装。远程脚本会在本机下载 Release IPK，再上传到路由器安装，比让路由器直接访问 GitHub 更稳。
+推荐从电脑远程安装。管理脚本在本机下载 IPK 再上传到路由器，比让路由器直接访问 GitHub 更稳。
 
-Windows:
-
-```powershell
-git clone https://github.com/wujun4code/clashforge.git
-cd clashforge
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
-```
-
-macOS / Linux:
-
-```sh
-git clone https://github.com/wujun4code/clashforge.git
-cd clashforge
-./scripts/clashforgectl --router 192.168.20.1 upgrade
-```
-
-路由器本机临时安装：
-
-```sh
-cd /tmp
-wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
-sh clashforgectl.sh compat
-sh clashforgectl.sh upgrade
-```
-
-GitHub 下载慢时：
+**Windows（一行命令下载管理脚本）：**
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
+.\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+```
+
+**macOS / Linux（一行命令下载管理脚本）：**
+
+```sh
+curl -fsSL https://dl.wei1xuan.com/releases/latest/clashforgectl -o clashforgectl && chmod +x clashforgectl
+./clashforgectl --router 192.168.20.1 upgrade
+```
+
+**路由器本机（SSH 进入后执行）：**
+
+```sh
+wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh
+```
+
+GitHub 下载慢时（Windows）：
+
+```powershell
+.\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
 ```
 
 安装完成后打开：
@@ -121,23 +116,25 @@ http://<router-ip>:7777
 
 ### 运维命令
 
-Windows 远程：
+Windows 远程（下载脚本后使用）：
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
+.\clashforgectl.ps1 -Router 192.168.20.1 compat      # 安装前兼容性检查（CPU架构、内存、内核）
+.\clashforgectl.ps1 -Router 192.168.20.1 status
+.\clashforgectl.ps1 -Router 192.168.20.1 check
+.\clashforgectl.ps1 -Router 192.168.20.1 stop
+.\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
+.\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
 ```
 
-macOS / Linux 远程：
+macOS / Linux 远程（下载脚本后使用）：
 
 ```sh
-./scripts/clashforgectl --router 192.168.20.1 status
-./scripts/clashforgectl --router 192.168.20.1 check
-./scripts/clashforgectl --router 192.168.20.1 stop
-./scripts/clashforgectl --router 192.168.20.1 diag --fetch --redact
+./clashforgectl --router 192.168.20.1 compat          # 安装前兼容性检查
+./clashforgectl --router 192.168.20.1 status
+./clashforgectl --router 192.168.20.1 check
+./clashforgectl --router 192.168.20.1 stop
+./clashforgectl --router 192.168.20.1 diag --fetch --redact
 ```
 
 路由器本机：
@@ -310,29 +307,24 @@ OpenWrt Router
 
 ### Quick Install
 
-Windows:
+**Windows — download the management script in one line:**
 
 ```powershell
-git clone https://github.com/wujun4code/clashforge.git
-cd clashforge
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
+.\clashforgectl.ps1 -Router 192.168.20.1 upgrade
 ```
 
-macOS / Linux:
+**macOS / Linux — download the management script in one line:**
 
 ```sh
-git clone https://github.com/wujun4code/clashforge.git
-cd clashforge
-./scripts/clashforgectl --router 192.168.20.1 upgrade
+curl -fsSL https://dl.wei1xuan.com/releases/latest/clashforgectl -o clashforgectl && chmod +x clashforgectl
+./clashforgectl --router 192.168.20.1 upgrade
 ```
 
-Router-local temporary install:
+**Router-local (run inside SSH session):**
 
 ```sh
-cd /tmp
-wget -O clashforgectl.sh https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh
-sh clashforgectl.sh compat
-sh clashforgectl.sh upgrade
+wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh
 ```
 
 Open the Web UI:
@@ -345,22 +337,24 @@ See the [Quick Start](https://wujun4code.github.io/clashforge/en/guide/quick-sta
 
 ### Operations
 
-Windows:
+Windows (after downloading `clashforgectl.ps1`):
 
 ```powershell
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 status
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 check
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 stop
-.\scripts\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
+.\clashforgectl.ps1 -Router 192.168.20.1 compat      # Pre-install check: CPU arch, memory, kernel
+.\clashforgectl.ps1 -Router 192.168.20.1 status
+.\clashforgectl.ps1 -Router 192.168.20.1 check
+.\clashforgectl.ps1 -Router 192.168.20.1 stop
+.\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
 ```
 
-macOS / Linux:
+macOS / Linux (after downloading `clashforgectl`):
 
 ```sh
-./scripts/clashforgectl --router 192.168.20.1 status
-./scripts/clashforgectl --router 192.168.20.1 check
-./scripts/clashforgectl --router 192.168.20.1 stop
-./scripts/clashforgectl --router 192.168.20.1 diag --fetch --redact
+./clashforgectl --router 192.168.20.1 compat          # Pre-install check: CPU arch, memory, kernel
+./clashforgectl --router 192.168.20.1 status
+./clashforgectl --router 192.168.20.1 check
+./clashforgectl --router 192.168.20.1 stop
+./clashforgectl --router 192.168.20.1 diag --fetch --redact
 ```
 
 ### Development
