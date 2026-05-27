@@ -26,7 +26,10 @@ jobs:
         run: |
           BASE=${{ github.event.pull_request.base.sha }}
           HEAD=${{ github.event.pull_request.head.sha }}
-          if git diff --name-only "$BASE" "$HEAD" | grep -qE '^mobile/|^\.github/workflows/android'; then
+          # Only trigger on actual mobile source changes — NOT on workflow-file-only
+          # edits.  Including workflow files in the trigger caused the E2E to run
+          # on every CI tweak, even when no Dart/Android code changed.
+          if git diff --name-only "$BASE" "$HEAD" | grep -q '^mobile/'; then
             echo "mobile=true" >> $GITHUB_OUTPUT
           else
             echo "mobile=false" >> $GITHUB_OUTPUT
@@ -281,4 +284,4 @@ jobs:
             adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-debug.apk"
             adb reverse tcp:9050 tcp:9050
             adb logcat -c 2>/dev/null || true
-            (adb logcat -v time > /tmp/logcat.txt 2>&1) & LOGCAT_PID=$!; (while true; do adb shell chmod o+r /data/system/packages.xml 2>/dev/null; sleep 1; done) & CHMOD_PID=$!; (while true; do if adb shell uiautomator dump /sdcard/d.xml >/dev/null 2>&1 && adb pull /sdcard/d.xml /tmp/vd.xml >/dev/null 2>&1 && grep -q vpndialogs /tmp/vd.xml 2>/dev/null; then python3 -c "import xml.etree.ElementTree as ET,re; [print((int(m.group(1))+int(m.group(3)))//2,(int(m.group(2))+int(m.group(4)))//2) for n in ET.parse('/tmp/vd.xml').iter() if n.get('text') in ('OK','Allow','ALLOW') for m in [re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.get('bounds',''))] if m]" 2>/dev/null | head -1 | xargs -r adb shell input tap >/dev/null 2>&1; fi; sleep 1; done) & BGPID=$!; cd "${GITHUB_WORKSPACE}/mobile" && timeout 900 flutter test integration_test/app_e2e_test.dart "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" --reporter=expanded --timeout=540s; TEST_RC=$?; kill $BGPID 2>/dev/null; kill $CHMOD_PID 2>/dev/null; kill $LOGCAT_PID 2>/dev/null; sleep 2; echo "=== MihomoCore + ClashVpn + E2E Probe logcat ==="; grep -E "MihomoCore|ClashVpn|E2E|TUN|gvisor|mihomo|PR-01|PR-02|PASS|FAIL|WARN|CONNECTIVITY|proxy|flutter|CF_IMPORT" /tmp/logcat.txt 2>/dev/null | tail -300 || true; exit $TEST_RC
+            (adb logcat -v time > /tmp/logcat.txt 2>&1) & LOGCAT_PID=$!; (while true; do adb shell chmod o+r /data/system/packages.xml 2>/dev/null; sleep 1; done) & CHMOD_PID=$!; (while true; do if adb shell uiautomator dump /sdcard/d.xml >/dev/null 2>&1 && adb pull /sdcard/d.xml /tmp/vd.xml >/dev/null 2>&1 && grep -q vpndialogs /tmp/vd.xml 2>/dev/null; then python3 -c "import xml.etree.ElementTree as ET,re; [print((int(m.group(1))+int(m.group(3)))//2,(int(m.group(2))+int(m.group(4)))//2) for n in ET.parse('/tmp/vd.xml').iter() if n.get('text') in ('OK','Allow','ALLOW') for m in [re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.get('bounds',''))] if m]" 2>/dev/null | head -1 | xargs -r adb shell input tap >/dev/null 2>&1; fi; sleep 1; done) & BGPID=$!; cd "${GITHUB_WORKSPACE}/mobile" && timeout 900 flutter test integration_test/app_e2e_test.dart --device-id emulator-5554 "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" --reporter=expanded --timeout=540s; TEST_RC=$?; kill $BGPID 2>/dev/null; kill $CHMOD_PID 2>/dev/null; kill $LOGCAT_PID 2>/dev/null; sleep 2; echo "=== MihomoCore + ClashVpn + E2E Probe logcat ==="; grep -E "MihomoCore|ClashVpn|E2E|TUN|gvisor|mihomo|PR-01|PR-02|PASS|FAIL|WARN|CONNECTIVITY|proxy|flutter|CF_IMPORT" /tmp/logcat.txt 2>/dev/null | tail -300 || true; exit $TEST_RC
