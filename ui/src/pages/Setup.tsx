@@ -5,6 +5,7 @@ import {
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
   Sparkles, RotateCw, Link2, PowerOff, ShieldOff, Database, Radio,
   Minus, Terminal, ShieldCheck, Network, ServerCog, Gauge, Eye, Plus, Trash2,
+  Shield, Check, Info,
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
@@ -73,6 +74,8 @@ interface ClashParsed {
   dns?: ClashDNS
 }
 
+type DnsStrategy = 'legacy' | 'split' | 'privacy'
+
 interface FormDNS {
   enable: boolean
   mode: string          // fake-ip | redir-host
@@ -80,6 +83,7 @@ interface FormDNS {
   apply_on_start: boolean
   listen: string
   ipv6: boolean
+  strategy: DnsStrategy
 }
 
 interface FormNetwork {
@@ -128,6 +132,7 @@ const DNS_FIELD_LABELS: Record<string, string> = {
   'proxy-server-nameserver': '节点域名专用解析，防止节点地址被 fake-ip 虚构',
   'respect-rules':           '节点域名遵守规则集分流（false = 直接解析）',
   'ipv6':                    'IPv6 解析开关',
+  'nameserver-policy':       '分流策略：查询前按 geosite 分类，国内走 ISP DNS，国际走 DoH',
 }
 const PORT_INFO: Record<string, string> = {
   'port':                'ClashForge 接管：HTTP 代理端口',
@@ -897,6 +902,7 @@ export function Setup() {
   const [dns, setDns] = useState<FormDNS>({
     enable: true, mode: 'fake-ip', dnsmasq_mode: 'upstream',
     apply_on_start: true, listen: '0.0.0.0:17874', ipv6: false,
+    strategy: 'split',
   })
 
   // ── dns probe ──
@@ -968,12 +974,18 @@ export function Setup() {
     getConfig().then(cfg => {
       const c = cfg as Record<string, Record<string, unknown>>
       if (c.dns) {
+        const rawStrategy = String(c.dns?.strategy || '')
+        const validStrategies: DnsStrategy[] = ['legacy', 'split', 'privacy']
+        const strategy: DnsStrategy = validStrategies.includes(rawStrategy as DnsStrategy)
+          ? (rawStrategy as DnsStrategy)
+          : 'split' // new install or config without strategy → default to split
         setDns(prev => ({
           ...prev,
           enable: c.dns?.enable !== undefined ? Boolean(c.dns.enable) : prev.enable,
           mode: String(c.dns?.mode || prev.mode),
           dnsmasq_mode: String(c.dns?.dnsmasq_mode || prev.dnsmasq_mode),
           apply_on_start: c.dns?.apply_on_start !== undefined ? Boolean(c.dns.apply_on_start) : prev.apply_on_start,
+          strategy,
         }))
       }
       if (c.network) {
@@ -1065,6 +1077,7 @@ export function Setup() {
     dns: {
       enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode,
       apply_on_start: dns.apply_on_start, listen: dns.listen, ipv6: dns.ipv6,
+      strategy: dns.strategy,
       // Canonical values that drive buildDNSMap
       nameservers: ['223.5.5.5', '119.29.29.29'],
       fallback: ['tls://8.8.4.4', 'tls://1.1.1.1', 'https://dns.google/dns-query', 'https://cloudflare-dns.com/dns-query'],
@@ -2136,6 +2149,64 @@ export function Setup() {
               </div>
             </div>
 
+            {/* ── DNS 分流策略选择器 ── */}
+            <div className="glass-card px-5 py-4 space-y-3">
+              <h3 className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-2">
+                <Shield size={13} className="text-brand" />DNS 分流策略
+              </h3>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {([
+                  {
+                    value: 'split' as DnsStrategy,
+                    label: '分流优先',
+                    badge: '推荐',
+                    badgeStyle: 'bg-brand/20 text-brand',
+                    desc: '国内域名走 ISP DNS（最优 CDN），国际域名走 Google / Cloudflare DoH。ISP 无法看到国际查询，DNS 泄露检测显示洁净。需要 GeoData。',
+                  },
+                  {
+                    value: 'privacy' as DnsStrategy,
+                    label: '全链路加密',
+                    badge: '隐私最大',
+                    badgeStyle: 'bg-violet-500/20 text-violet-300',
+                    desc: '所有 DNS 查询走 DoH。ISP 完全看不到任何 DNS 记录，DNS 泄露检测 100% 洁净。国内 CDN 路由略有损耗。需要 GeoData。',
+                  },
+                  {
+                    value: 'legacy' as DnsStrategy,
+                    label: '传统模式',
+                    badge: '兼容',
+                    badgeStyle: 'bg-slate-500/20 text-slate-400',
+                    desc: '保持原有 fallback-filter 行为，不生成 nameserver-policy。适合已有自定义 DNS 配置、不需要分流的场景。',
+                  },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => dnsSet('strategy', opt.value)}
+                    className={`rounded-xl border px-4 py-3 text-left transition-all space-y-1.5 cursor-pointer ${
+                      dns.strategy === opt.value
+                        ? 'border-brand/50 bg-brand/[0.08] shadow-[0_0_12px_rgba(139,92,246,0.12)]'
+                        : 'border-white/[0.07] bg-white/[0.018] hover:border-white/[0.13]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-200">{opt.label}</span>
+                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${opt.badgeStyle}`}>{opt.badge}</span>
+                      {dns.strategy === opt.value && (
+                        <span className="ml-auto text-brand"><Check size={13} /></span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted/90 leading-relaxed">{opt.desc}</p>
+                  </button>
+                ))}
+              </div>
+              {(dns.strategy === 'split' || dns.strategy === 'privacy') && (
+                <div className="flex items-start gap-2 text-[11px] text-amber-400/80 bg-amber-400/[0.05] border border-amber-400/20 rounded-lg px-3 py-2">
+                  <Info size={12} className="flex-shrink-0 mt-0.5" />
+                  <span>需要 GeoData（geosite.dat）。若文件尚未下载，将自动降级到传统模式。请先在 GeoData 页面完成下载。</span>
+                </div>
+              )}
+            </div>
+
             {/* ── Full-width DNS config preview ── */}
             <div className="glass-card px-4 py-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -2217,15 +2288,34 @@ export function Setup() {
                   </div>
                 ))}
               </div>
-              <div className="rounded-xl bg-black/20 border border-white/6 px-4 py-3 text-[11px] text-muted leading-relaxed">
-                <span className="text-slate-300 font-semibold">解析流程：</span>
-                收到 DNS 查询 →
-                <span className="text-amber-300/90 mx-1">proxy-server-nameserver</span>（节点域名优先） →
-                <span className="text-emerald-300/90 mx-1">nameserver</span>（主查询） →
-                fallback-filter 判断 →
-                若非 CN 域名则<span className="text-violet-300/90 mx-1">fallback</span>防污染 →
-                返回真实 IP（fake-ip 模式下客户端仍收到虚构 IP，真实 IP 由 Mihomo 内部保留建连）
-              </div>
+              {(dns.strategy === 'split' || dns.strategy === 'privacy') ? (
+                <div className="rounded-xl bg-black/20 border border-brand/20 px-4 py-3 text-[11px] text-muted leading-relaxed space-y-1">
+                  <div>
+                    <span className="text-slate-300 font-semibold">分流策略解析流程：</span>
+                  </div>
+                  <div>
+                    收到 DNS 查询 →
+                    <span className="text-amber-300/90 mx-1">proxy-server-nameserver</span>（节点域名优先） →
+                    <span className="text-brand/90 mx-1">nameserver-policy</span> 按 geosite 分类：
+                  </div>
+                  <div className="pl-3 space-y-0.5">
+                    <div>• <span className="text-emerald-300/90">geosite:cn</span> 命中 → {dns.strategy === 'privacy' ? '阿里 / 腾讯 DoH（加密）' : 'ISP DNS（最优 CDN IP）'} — 直接返回，不经 fallback</div>
+                    <div>• <span className="text-violet-300/90">geosite:geolocation-!cn</span> 命中 → Google / Cloudflare DoH — 直接返回，ISP 无法截获</div>
+                    <div>• 未命中（新域名）→ <span className="text-emerald-300/90">nameserver</span> 主查询 → fallback-filter 判断 → 非 CN 则<span className="text-violet-300/90 mx-1">fallback</span>兜底</div>
+                  </div>
+                  <div className="text-[10px] text-brand/60">fake-ip 模式下客户端收到虚构 IP，真实 IP 由 Mihomo 内部保留建连</div>
+                </div>
+              ) : (
+                <div className="rounded-xl bg-black/20 border border-white/6 px-4 py-3 text-[11px] text-muted leading-relaxed">
+                  <span className="text-slate-300 font-semibold">传统解析流程：</span>
+                  收到 DNS 查询 →
+                  <span className="text-amber-300/90 mx-1">proxy-server-nameserver</span>（节点域名优先） →
+                  <span className="text-emerald-300/90 mx-1">nameserver</span>（主查询） →
+                  fallback-filter 判断 →
+                  若非 CN 域名则<span className="text-violet-300/90 mx-1">fallback</span>防污染 →
+                  返回真实 IP（fake-ip 模式下客户端仍收到虚构 IP，真实 IP 由 Mihomo 内部保留建连）
+                </div>
+              )}
             </div>
 
             {/* ── Fake-IP 劫持检测 ── */}

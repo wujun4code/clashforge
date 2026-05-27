@@ -55,6 +55,23 @@ type NetworkConfig struct {
 	WANInterfaceAutoDetected bool `toml:"-" json:"wan_interface_auto_detected"`
 }
 
+// DNSStrategy controls how Mihomo's nameserver-policy is generated.
+//
+//   - ""       / "legacy"  — backward-compatible: no nameserver-policy, rely on
+//     fallback-filter GeoIP check after ISP DNS responds.
+//   - "split"              — query-time routing: geosite:cn → bootstrap IPs (best
+//     CN CDN), geosite:geolocation-!cn → international DoH, unknowns fall through
+//     to fallback-filter as a safety net. Requires geosite.dat.
+//   - "privacy"            — same routing as split, but nameserver is also replaced
+//     with CN DoH so the ISP never sees any DNS query. Requires geosite.dat.
+type DNSStrategy = string
+
+const (
+	DNSStrategyLegacy  DNSStrategy = "legacy"
+	DNSStrategysplit   DNSStrategy = "split"
+	DNSStrategyPrivacy DNSStrategy = "privacy"
+)
+
 type DNSConfig struct {
 	Enable       bool     `toml:"enable" json:"enable"`
 	Mode         string   `toml:"mode" json:"mode"`
@@ -65,6 +82,9 @@ type DNSConfig struct {
 	FakeIPFilter []string `toml:"fake_ip_filter" json:"fake_ip_filter"`
 	DnsmasqMode  string   `toml:"dnsmasq_mode" json:"dnsmasq_mode"`
 	ApplyOnStart bool     `toml:"apply_on_start" json:"apply_on_start"`
+	// Strategy selects the DNS routing mode. See DNSStrategy constants.
+	// Empty string is treated as "legacy" for backward compatibility.
+	Strategy DNSStrategy `toml:"strategy" json:"strategy"`
 }
 
 type UpdateConfig struct {
@@ -105,7 +125,7 @@ func Default() *MetaclashConfig {
 		},
 		Ports:    PortsConfig{HTTP: 17890, SOCKS: 17891, Mixed: 17893, Redir: 17892, TProxy: 17895, DNS: 17874, MihomoAPI: 19090, UI: 7777},
 		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}, WANInterface: "eth1"},
-		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"223.5.5.5", "119.29.29.29"}, Fallback: []string{"tls://8.8.4.4", "tls://1.1.1.1", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, DoH: []string{}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "none", ApplyOnStart: true},
+		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"223.5.5.5", "119.29.29.29"}, Fallback: []string{"tls://8.8.4.4", "tls://1.1.1.1", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, DoH: []string{}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "none", ApplyOnStart: true, Strategy: DNSStrategysplit},
 		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"},
 		Security: SecurityConfig{APISecret: "", AllowLAN: true},
 		Log:      LogConfig{Level: "info", File: "", MaxSizeMB: 10},

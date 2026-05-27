@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -128,15 +129,79 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	return out, nil
 }
 
+// geositeExists reports whether the geosite.dat file at path exists and is
+// readable.  nameserver-policy requires geosite data; if the file is missing
+// we silently fall back to "legacy" behaviour.
+func geositeExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// buildNameserverPolicy returns the Mihomo nameserver-policy map for "split"
+// and "privacy" strategies, or nil when the strategy is "legacy" / empty.
+//
+// Policy layout:
+//
+//	geosite:cn                → cnDNS   (ISP-optimal CDN IPs for domestic domains)
+//	geosite:geolocation-!cn   → intlDNS (encrypted DoH; ISP cannot intercept)
+//
+// The caller is responsible for verifying that geosite.dat exists before
+// using the returned map.
+func buildNameserverPolicy(cfg *MetaclashConfig, bootstrapIPs []string) map[string]interface{} {
+	strategy := strings.ToLower(strings.TrimSpace(cfg.DNS.Strategy))
+	if strategy != DNSStrategysplit && strategy != DNSStrategyPrivacy {
+		return nil
+	}
+
+	// International resolver list: prefer DoH entries from user-configured
+	// fallback, fall back to hardcoded Google / Cloudflare DoH.
+	intlDNS := []string{
+		"https://dns.google/dns-query",
+		"https://cloudflare-dns.com/dns-query",
+	}
+	var userDoH []string
+	for _, f := range cfg.DNS.Fallback {
+		if strings.HasPrefix(f, "https://") || strings.HasPrefix(f, "tls://") {
+			userDoH = append(userDoH, f)
+		}
+	}
+	if len(userDoH) > 0 {
+		intlDNS = userDoH
+	}
+
+	// CN resolver list:
+	//   split   → pure-IP bootstrap DNS (ISP CDN-optimal, plain UDP)
+	//   privacy → CN DoH (encrypted; Alibaba / Tencent, ISP cannot observe)
+	var cnDNS []string
+	if strategy == DNSStrategyPrivacy {
+		cnDNS = []string{
+			"https://dns.alidns.com/dns-query",
+			"https://doh.pub/dns-query",
+		}
+	} else {
+		cnDNS = append([]string{}, bootstrapIPs...)
+		if len(cnDNS) == 0 {
+			cnDNS = []string{"223.5.5.5", "119.29.29.29"}
+		}
+	}
+
+	return map[string]interface{}{
+		"geosite:cn":              cnDNS,
+		"geosite:geolocation-!cn": intlDNS,
+	}
+}
+
 // buildDNSMap constructs the Mihomo DNS config map from ClashForge's DNS settings.
 //
 // Field mapping:
 //
-//	nameserver            — dhcp://<wan_interface> (reads ISP DNS from DHCP lease)
-//	default-nameserver    — pure-IP entries from cfg.DNS.Nameservers (used to bootstrap DoH/DoT)
-//	proxy-server-nameserver — same as default-nameserver (node hostname resolution, avoids fake-ip)
-//	fallback              — cfg.DNS.Fallback (DoT/DoH for international/non-CN domains)
-//	fallback-filter       — hardcoded: geoip CN + 240.0.0.0/4
+//	nameserver              — dhcp://<wan_interface> (reads ISP DNS from DHCP lease)
+//	                          overridden to CN DoH when strategy=="privacy"
+//	default-nameserver      — pure-IP entries from cfg.DNS.Nameservers (bootstrap DoH/DoT)
+//	proxy-server-nameserver — same as default-nameserver (node hostname resolution)
+//	fallback                — cfg.DNS.Fallback (DoT/DoH for international/non-CN domains)
+//	fallback-filter         — hardcoded: geoip CN + 240.0.0.0/4 + 0.0.0.0/8
+//	nameserver-policy       — split/privacy strategies: geosite-based pre-query routing
 func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 	// WAN interface for dhcp:// nameserver — reads ISP-assigned DNS automatically.
 	// The value is validated and auto-corrected at startup (see main.go); here
@@ -208,12 +273,43 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 
 	if len(cfg.DNS.Fallback) > 0 {
 		dnsMap["fallback"] = cfg.DNS.Fallback
+		// Expanded ipcidr: 240.0.0.0/4 (reserved / poisoned) + 0.0.0.0/8
+		// (invalid) catch more ISP pollution patterns.
 		dnsMap["fallback-filter"] = map[string]interface{}{
 			"geoip":      true,
 			"geoip-code": "CN",
-			"ipcidr":     []string{"240.0.0.0/4"},
+			"ipcidr":     []string{"240.0.0.0/4", "0.0.0.0/8"},
 		}
 	}
+
+	// ── nameserver-policy (split / privacy strategies) ────────────────────────
+	// Requires geosite.dat to be present; silently skips otherwise.
+	strategy := strings.ToLower(strings.TrimSpace(cfg.DNS.Strategy))
+	policy := buildNameserverPolicy(cfg, bootstrapIPs)
+	policyApplied := false
+	if policy != nil {
+		if geositeExists(cfg.Core.GeositePath) {
+			dnsMap["nameserver-policy"] = policy
+			policyApplied = true
+			// privacy mode: replace nameserver with CN DoH so ISP sees zero queries.
+			if strategy == DNSStrategyPrivacy {
+				dnsMap["nameserver"] = []string{
+					"https://dns.alidns.com/dns-query",
+					"https://doh.pub/dns-query",
+				}
+			}
+		} else {
+			log.Warn().
+				Str("geosite_path", cfg.Core.GeositePath).
+				Str("strategy", cfg.DNS.Strategy).
+				Msg("config: geosite.dat 不存在，nameserver-policy 降级到 legacy 模式（请先下载 GeoData）")
+		}
+	}
+
+	log.Info().
+		Str("strategy", cfg.DNS.Strategy).
+		Bool("nameserver_policy_applied", policyApplied).
+		Msg("config: DNS 策略")
 
 	return dnsMap
 }
