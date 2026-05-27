@@ -48,6 +48,28 @@ func DetectEnv(c *SSHClient) (*EnvInfo, error) {
 	return info, nil
 }
 
+// CleanupGost stops any running gost service and kills whatever process holds port 443,
+// then removes the old gost binary so a fresh install can proceed cleanly.
+// All errors are swallowed — this is best-effort pre-cleanup.
+func CleanupGost(c *SSHClient) {
+	// Stop + disable gost.service if it exists (ignore errors — unit may not exist yet)
+	_, _ = c.Run("systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null; true")
+
+	// Force-kill whatever process is holding port 443.
+	// Try fuser first (procps), fall back to lsof (busybox/minimal images).
+	_, _ = c.Run(
+		`fuser -k 443/tcp 2>/dev/null; ` +
+			`PIDS=$(lsof -ti:443 2>/dev/null); ` +
+			`[ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null; true`,
+	)
+
+	// Short pause to let the port release
+	_, _ = c.Run("sleep 1")
+
+	// Remove old binary so tar extraction below can overwrite cleanly
+	_, _ = c.Run("rm -f " + GostBin + " 2>/dev/null; true")
+}
+
 // InstallGost downloads and installs gost on the VPS via SSH.
 func InstallGost(c *SSHClient, info *EnvInfo) error {
 	arch := info.Arch

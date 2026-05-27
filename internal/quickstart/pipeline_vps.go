@@ -39,13 +39,18 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 		fmt.Sprintf("OS：%s %s (%s)", env.OS, env.OSVersion, env.Arch))
 
 	if env.Port443In {
-		emit(out, PhaseEnvDetect, "port_check", StatusWarning,
-			"443 端口已被占用，gost 可能无法启动 — 请确认没有其他服务在使用 443")
+		emit(out, PhaseEnvDetect, "port_check", StatusInfo,
+			"443 端口当前已被占用，将在下一步自动清理")
 	} else {
 		emit(out, PhaseEnvDetect, "port_check", StatusOK, "443 端口未被占用")
 	}
 
-	// ── Phase 3: Install gost ────────────────────────────────────────────────
+	// ── Phase 3: Clean up any existing gost / port-443 occupant ─────────────
+	emit(out, PhaseProvision, "cleanup_gost", StatusRunning, "清理旧 gost 服务及占用 443 端口的进程...")
+	CleanupGost(sshClient)
+	emit(out, PhaseProvision, "cleanup_gost", StatusOK, "旧服务已停止，443 端口已释放")
+
+	// ── Phase 4: Install gost ────────────────────────────────────────────────
 	emit(out, PhaseProvision, "install_gost", StatusRunning, "下载并安装 gost...")
 	if err := InstallGost(sshClient, env); err != nil {
 		emit(out, PhaseProvision, "install_gost", StatusError, "gost 安装失败", err.Error())
@@ -54,7 +59,7 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 	emit(out, PhaseProvision, "install_gost", StatusOK,
 		fmt.Sprintf("gost v%s 安装完成", GostVersion))
 
-	// ── Phase 4: Open firewall port 443 ─────────────────────────────────────
+	// ── Phase 5: Open firewall port 443 ─────────────────────────────────────
 	if env.Firewall != "none" && env.Firewall != "" {
 		emit(out, PhaseProvision, "firewall", StatusRunning,
 			fmt.Sprintf("开放 443 端口（%s）...", env.Firewall))
@@ -66,7 +71,7 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 		}
 	}
 
-	// ── Phase 5: CF DNS A record ─────────────────────────────────────────────
+	// ── Phase 6: CF DNS A record ─────────────────────────────────────────────
 	nodeHost := req.NodePrefix + "." + req.Cloudflare.ZoneName
 	if req.NodePrefix == "" {
 		nodeHost = req.Cloudflare.ZoneName
@@ -89,7 +94,7 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 	emit(out, PhaseCertDNS, "create_a_record", StatusOK,
 		fmt.Sprintf("A 记录已创建：%s → %s", nodeHost, req.VPS.Host))
 
-	// ── Phase 6: Issue Let's Encrypt certificate ──────────────────────────────
+	// ── Phase 7: Issue Let's Encrypt certificate ──────────────────────────────
 	emit(out, PhaseCertDNS, "issue_cert", StatusRunning, "申请 Let's Encrypt 证书（DNS-01）...")
 
 	certCtx, certCancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -106,7 +111,7 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 	}
 	emit(out, PhaseCertDNS, "issue_cert", StatusOK, "TLS 证书申请成功（有效期 90 天）")
 
-	// ── Phase 7: Upload cert + write gost config + start service ─────────────
+	// ── Phase 8: Upload cert + write gost config + start service ─────────────
 	emit(out, PhaseProvision, "upload_cert", StatusRunning, "上传证书到 VPS...")
 	if err := UploadCert(sshClient, certPair.FullChainPEM, certPair.PrivKeyPEM); err != nil {
 		emit(out, PhaseProvision, "upload_cert", StatusError, "证书上传失败", err.Error())
@@ -121,7 +126,7 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 	}
 	emit(out, PhaseProvision, "start_gost", StatusOK, "gost.service 已启动")
 
-	// ── Phase 8: Import subscription ─────────────────────────────────────────
+	// ── Phase 9: Import subscription ─────────────────────────────────────────
 	emit(out, PhaseImport, "build_yaml", StatusRunning, "生成订阅配置...")
 	nodeName := req.NodeName
 	if nodeName == "" {
@@ -142,11 +147,11 @@ func (p *VPSPipeline) Run(ctx context.Context, req *DeployRequest, out EventWrit
 	emit(out, PhaseImport, "import_sub", StatusOK,
 		fmt.Sprintf("订阅已导入（%d 个节点，ID: %s）", nodeCount, subID))
 
-	// ── Phase 9: Auto-configure ClashForge ───────────────────────────────────
-	if err := autoConfigureClashForge(ctx, p.deps, out); err != nil {
+	// ── Phase 10: Auto-configure ClashForge ──────────────────────────────────
+	if err := autoConfigureClashForge(ctx, p.deps, out, nil); err != nil {
 		return err
 	}
 
-	// ── Phase 10: Verify connectivity ────────────────────────────────────────
+	// ── Phase 11: Verify connectivity ────────────────────────────────────────
 	return verifyConnectivity(ctx, out)
 }
