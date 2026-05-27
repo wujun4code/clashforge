@@ -29,6 +29,7 @@ import {
   type QSValidateCFResult,
   type QSValidateVPSResult,
 } from '../api/client'
+import { CFConfigBanner, CFConfigModal, useCFConfig } from '../components/CFConfig'
 
 // ── types ──────────────────────────────────────────────────────────────────────
 
@@ -210,6 +211,10 @@ export function QuickStart() {
   const [step, setStep] = useState<WizardStep>('select')
   const [deployType, setDeployType] = useState<QSDeployType>('vps')
 
+  // Shared CF config (persisted on the router at /etc/metaclash/cf-config.json)
+  const { config: cfGlobal, loading: cfGlobalLoading, save: saveCFGlobal } = useCFConfig()
+  const [showCFModal, setShowCFModal] = useState(false)
+
   // SSH form (VPS only)
   const [ssh, setSSH] = useState<SSHForm>({
     host: '', port: '22', user: 'root', auth_type: 'password', password: '', priv_key: '',
@@ -218,12 +223,21 @@ export function QuickStart() {
   const [sshResult, setSSHResult] = useState<QSValidateVPSResult | null>(null)
   const [sshError, setSSHError] = useState('')
 
-  // CF form
+  // CF form — pre-filled from stored global config
   const [cf, setCF] = useState<CFForm>({ token: '', account_id: '' })
   const [cfValidating, setCFValidating] = useState(false)
   const [cfResult, setCFResult] = useState<QSValidateCFResult | null>(null)
   const [cfError, setCFError] = useState('')
   const [selectedZoneId, setSelectedZoneId] = useState('')
+
+  // Pre-fill CF form when global config loads (async)
+  useEffect(() => {
+    if (!cfGlobal?.cf_token) return
+    setCF(prev => ({
+      token: prev.token || cfGlobal.cf_token,
+      account_id: prev.account_id || cfGlobal.cf_account_id,
+    }))
+  }, [cfGlobal?.cf_token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // CF Workers config
   const [workers, setWorkers] = useState<WorkersForm>({
@@ -399,6 +413,16 @@ export function QuickStart() {
     if (deployType === 'cf_workers') setWorkers(w => ({ ...w, zone_id: id }))
   }
 
+  // ── auto-validate on cf_creds step whenever a token is available ─────────
+  // Fires when: (a) user navigates to cf_creds with token already pre-filled,
+  //             (b) cfGlobal loads AFTER user arrived at cf_creds (token changes from '' to value).
+  useEffect(() => {
+    if (step !== 'cf_creds') return
+    if (cfResult?.valid) return     // already validated
+    if (!cf.token.trim()) return    // no token yet
+    void validateCF()
+  }, [step, cf.token]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── step navigation helpers ────────────────────────────────────────────────
   const stepOrder: WizardStep[] =
     deployType === 'cf_workers'
@@ -418,6 +442,7 @@ export function QuickStart() {
     setWorkers({ worker_name: '', custom_domain: '', zone_id: '' }); setWorkerNameEdited(false)
     setVPSConfig({ node_prefix: 'node', node_name: '' }); setVPSNameEdited(false)
     setEvents([]); setDeployError(''); setDeployDone(false); setDeployId('')
+    setShowCFModal(false)
   }
 
   // ── render ─────────────────────────────────────────────────────────────────
@@ -626,23 +651,35 @@ export function QuickStart() {
       {step === 'cf_creds' && (
         <Card title="Cloudflare 凭据" icon={<Globe size={16} />}>
           <div className="space-y-4">
-            <FieldRow label="API Token" hint="需要 Zone:Read + DNS:Edit 权限">
-              <Input
-                type="password"
-                value={cf.token}
-                onChange={v => { setCF(c => ({ ...c, token: v })); setCFResult(null) }}
-                placeholder="Cloudflare API Token"
-                mono
-              />
-            </FieldRow>
-            <FieldRow label="Account ID (可选)" hint="留空则自动检测">
-              <Input
-                value={cf.account_id}
-                onChange={v => setCF(c => ({ ...c, account_id: v }))}
-                placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                mono
-              />
-            </FieldRow>
+            {/* Shared CF config banner — shows configured status and modify button */}
+            <CFConfigBanner
+              config={cfGlobal}
+              loading={cfGlobalLoading}
+              onConfigure={() => setShowCFModal(true)}
+            />
+
+            {/* Only show manual token entry if not pre-filled from global config */}
+            {!cfGlobal?.cf_token && (
+              <>
+                <FieldRow label="API Token" hint="需要 Zone:Read + DNS:Edit 权限">
+                  <Input
+                    type="password"
+                    value={cf.token}
+                    onChange={v => { setCF(c => ({ ...c, token: v })); setCFResult(null) }}
+                    placeholder="Cloudflare API Token"
+                    mono
+                  />
+                </FieldRow>
+                <FieldRow label="Account ID (可选)" hint="留空则自动检测">
+                  <Input
+                    value={cf.account_id}
+                    onChange={v => setCF(c => ({ ...c, account_id: v }))}
+                    placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    mono
+                  />
+                </FieldRow>
+              </>
+            )}
 
             <div className="flex items-center gap-3">
               <button
@@ -651,7 +688,7 @@ export function QuickStart() {
                 className="inline-flex items-center gap-2 rounded-lg bg-white/[0.07] px-4 py-2 text-sm font-medium text-white/80 hover:bg-white/[0.10] disabled:opacity-50"
               >
                 {cfValidating ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
-                验证 Token
+                {cfResult?.valid ? '重新验证' : '验证 Token'}
               </button>
               {cfResult?.valid && (
                 <span className="flex items-center gap-1.5 text-[12px] text-emerald-400">
@@ -888,6 +925,21 @@ export function QuickStart() {
             </div>
           )}
         </Card>
+      )}
+
+      {/* CF config modal — opened from the banner's 修改 button */}
+      {showCFModal && (
+        <CFConfigModal
+          initial={cfGlobal}
+          save={saveCFGlobal}
+          onClose={() => setShowCFModal(false)}
+          onSaved={() => {
+            setShowCFModal(false)
+            // Clear validation result so it re-validates with the new token
+            setCFResult(null)
+            setCFError('')
+          }}
+        />
       )}
     </div>
   )
