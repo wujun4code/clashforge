@@ -442,6 +442,7 @@ export const previewSetupFinalConfig = (payload: {
     enable: boolean; mode: string; dnsmasq_mode: string; apply_on_start: boolean
     listen: string; ipv6: boolean
     nameservers: string[]; fallback: string[]; doh: string[]; fake_ip_filter: string[]
+    strategy: string
   }
   network: { mode: string; firewall_backend: string; bypass_lan: boolean; bypass_china: boolean; apply_on_start: boolean; ipv6: boolean }
 }) => request<{ config_file: string; content: string }>('POST', '/setup/final-config-preview', payload)

@@ -1,12 +1,32 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
+
+// withGeosite creates a temporary geosite.dat placeholder and sets
+// cfg.Core.GeositePath to it. It returns a cleanup function.
+func withGeosite(t *testing.T, cfg *config.MetaclashConfig) func() {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "geosite-*.dat")
+	if err != nil {
+		t.Fatalf("create temp geosite: %v", err)
+	}
+	_ = f.Close()
+	cfg.Core.GeositePath = f.Name()
+	return func() { os.Remove(f.Name()) }
+}
+
+// withoutGeosite sets cfg.Core.GeositePath to a path that does not exist.
+func withoutGeosite(cfg *config.MetaclashConfig) {
+	cfg.Core.GeositePath = filepath.Join(os.TempDir(), "nonexistent-geosite-XXXXX.dat")
+}
 
 func defaultTestCfg() *config.MetaclashConfig {
 	cfg := config.Default()
@@ -57,6 +77,175 @@ func TestGenerate_DNSConfig(t *testing.T) {
 	}
 	if _, ok := dns["fake-ip-range"]; !ok {
 		t.Error("fake-ip-range missing")
+	}
+}
+
+// ── DNS strategy tests ────────────────────────────────────────────────────────
+
+func dnsSection(t *testing.T, cfg *config.MetaclashConfig) map[string]interface{} {
+	t.Helper()
+	result, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	dns, ok := result["dns"].(map[string]interface{})
+	if !ok {
+		t.Fatal("dns section missing or wrong type")
+	}
+	return dns
+}
+
+func nameserverPolicy(dns map[string]interface{}) map[string]interface{} {
+	p, _ := dns["nameserver-policy"].(map[string]interface{})
+	return p
+}
+
+func TestDNSStrategy_Legacy_NoPolicy(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategyLegacy
+	withoutGeosite(cfg)
+
+	dns := dnsSection(t, cfg)
+	if _, ok := dns["nameserver-policy"]; ok {
+		t.Error("legacy strategy must not produce nameserver-policy")
+	}
+}
+
+func TestDNSStrategy_EmptyString_TreatedAsLegacy(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = "" // blank → legacy behaviour
+	withoutGeosite(cfg)
+
+	dns := dnsSection(t, cfg)
+	if _, ok := dns["nameserver-policy"]; ok {
+		t.Error("empty strategy must not produce nameserver-policy")
+	}
+}
+
+func TestDNSStrategy_Split_WithGeosite(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategysplit
+	cleanup := withGeosite(t, cfg)
+	defer cleanup()
+
+	dns := dnsSection(t, cfg)
+
+	policy := nameserverPolicy(dns)
+	if policy == nil {
+		t.Fatal("split strategy with geosite must produce nameserver-policy")
+	}
+	if _, ok := policy["geosite:cn"]; !ok {
+		t.Error("nameserver-policy missing geosite:cn")
+	}
+	if _, ok := policy["geosite:geolocation-!cn"]; !ok {
+		t.Error("nameserver-policy missing geosite:geolocation-!cn")
+	}
+
+	// split must NOT replace nameserver with CN DoH
+	ns, _ := dns["nameserver"].([]string)
+	for _, s := range ns {
+		if strings.HasPrefix(s, "https://dns.alidns") || strings.HasPrefix(s, "https://doh.pub") {
+			t.Errorf("split strategy must keep ISP nameserver, got CN DoH: %s", s)
+		}
+	}
+}
+
+func TestDNSStrategy_Split_WithoutGeosite_Degrades(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategysplit
+	withoutGeosite(cfg)
+
+	dns := dnsSection(t, cfg)
+	if _, ok := dns["nameserver-policy"]; ok {
+		t.Error("split without geosite.dat must degrade to legacy (no nameserver-policy)")
+	}
+}
+
+func TestDNSStrategy_Privacy_WithGeosite(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategyPrivacy
+	cleanup := withGeosite(t, cfg)
+	defer cleanup()
+
+	dns := dnsSection(t, cfg)
+
+	policy := nameserverPolicy(dns)
+	if policy == nil {
+		t.Fatal("privacy strategy with geosite must produce nameserver-policy")
+	}
+
+	// CN side must use DoH, not plain IPs
+	cnDNS, _ := policy["geosite:cn"].([]interface{})
+	for _, v := range cnDNS {
+		s, _ := v.(string)
+		if s != "" && !strings.HasPrefix(s, "https://") {
+			t.Errorf("privacy CN DNS must be DoH, got: %s", s)
+		}
+	}
+
+	// nameserver must be replaced with CN DoH
+	ns, _ := dns["nameserver"].([]string)
+	if len(ns) == 0 {
+		t.Fatal("nameserver must not be empty after privacy strategy")
+	}
+	for _, s := range ns {
+		if !strings.HasPrefix(s, "https://") {
+			t.Errorf("privacy strategy must replace nameserver with DoH, got: %s", s)
+		}
+	}
+}
+
+func TestDNSStrategy_Privacy_WithoutGeosite_Degrades(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategyPrivacy
+	withoutGeosite(cfg)
+
+	dns := dnsSection(t, cfg)
+	if _, ok := dns["nameserver-policy"]; ok {
+		t.Error("privacy without geosite.dat must degrade to legacy (no nameserver-policy)")
+	}
+	// nameserver must remain ISP-based (not replaced with CN DoH)
+	ns, _ := dns["nameserver"].([]string)
+	for _, s := range ns {
+		if strings.HasPrefix(s, "https://dns.alidns") || strings.HasPrefix(s, "https://doh.pub") {
+			t.Errorf("degrade path must not replace nameserver with CN DoH, got: %s", s)
+		}
+	}
+}
+
+func TestDNSStrategy_Split_FallbackFilter_ExtraIPCIDR(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategysplit
+	cleanup := withGeosite(t, cfg)
+	defer cleanup()
+
+	dns := dnsSection(t, cfg)
+	ff, ok := dns["fallback-filter"].(map[string]interface{})
+	if !ok {
+		t.Fatal("fallback-filter missing")
+	}
+	cidrs, _ := ff["ipcidr"].([]string)
+	found240, found0 := false, false
+	for _, c := range cidrs {
+		if c == "240.0.0.0/4" {
+			found240 = true
+		}
+		if c == "0.0.0.0/8" {
+			found0 = true
+		}
+	}
+	if !found240 {
+		t.Error("fallback-filter ipcidr must include 240.0.0.0/4")
+	}
+	if !found0 {
+		t.Error("fallback-filter ipcidr must include 0.0.0.0/8")
+	}
+}
+
+func TestDNSStrategy_DefaultIsSplit(t *testing.T) {
+	cfg := config.Default()
+	if cfg.DNS.Strategy != config.DNSStrategysplit {
+		t.Errorf("Default() strategy must be %q, got %q", config.DNSStrategysplit, cfg.DNS.Strategy)
 	}
 }
 
