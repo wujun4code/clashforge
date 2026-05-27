@@ -21,8 +21,9 @@ import {
   selectProxy,
   testLatency,
   probeDomain,
+  getDNSLeakTest,
 } from '../api/client'
-import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote } from '../api/client'
+import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote, DnsLeakTestResult } from '../api/client'
 import type {
   OverviewAccessCheck,
   OverviewCoreData,
@@ -716,6 +717,134 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
 }
 
 
+// ── DNS Leak Detection Panel ────────────────────────────────────────────────
+
+function DnsLeakPanel({ result, loading, onRun }: {
+  result: DnsLeakTestResult | null
+  loading: boolean
+  onRun: () => void
+}) {
+  return (
+    <div className="glass-card overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3.5 border-b border-white/8 bg-white/[0.02]">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-white">🛡️ DNS 泄露检测</p>
+            {result && !loading && (
+              <Pill
+                tone={result.error ? 'danger' : result.has_leak ? 'warning' : 'success'}
+                label={result.error ? '检测失败' : result.has_leak ? '⚠ 疑似泄露' : '✓ 未发现泄露'}
+              />
+            )}
+            {loading && <Loader2 size={12} className="animate-spin text-muted" />}
+          </div>
+          <p className="text-xs text-muted mt-0.5">
+            路由器向 bash.ws 发起 DNS 探针，检测 DNS 查询是否通过代理隧道
+          </p>
+        </div>
+        <button
+          onClick={onRun}
+          disabled={loading}
+          className="btn-primary flex items-center gap-1.5 text-xs px-3 py-1.5 shrink-0"
+        >
+          {loading && <Loader2 size={11} className="animate-spin" />}
+          {loading ? '检测中…' : result ? '重新检测' : '开始检测'}
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="px-4 py-4 space-y-4">
+        {loading && !result ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-sm text-muted">
+            <Loader2 size={22} className="animate-spin text-brand/50" />
+            <span>正在检测 DNS 出口，约需 15–20 秒…</span>
+            <span className="text-xs text-muted/60">路由器正在向 bash.ws 发起 10 个 DNS 探针请求</span>
+          </div>
+        ) : !result ? (
+          <div className="py-8 text-center space-y-1">
+            <p className="text-sm text-muted">点击"开始检测"查看路由器正在使用的 DNS 解析器</p>
+            <p className="text-xs text-muted/50">
+              检测原理：向唯一子域名发起请求，迫使 DNS 解析，bash.ws 记录解析器 IP
+            </p>
+          </div>
+        ) : result.error ? (
+          <div className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs text-danger leading-relaxed">
+            {result.error}
+          </div>
+        ) : (
+          <>
+            {/* Result table */}
+            {result.entries.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border border-white/8 text-[11px]">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-white/8 bg-white/[0.02]">
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 w-8">#</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">IP 地址</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">地理位置</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">服务提供商</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">类型</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.entries.map((entry, i) => {
+                      const isDNS = entry.type === 'dns'
+                      const flag = entry.country_code && entry.country_code.length === 2
+                        ? String.fromCodePoint(...[...entry.country_code.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65))
+                        : '🌐'
+                      return (
+                        <tr
+                          key={i}
+                          className={`border-b border-white/5 last:border-0 ${isDNS && result.has_leak ? 'bg-warning/5' : ''}`}
+                        >
+                          <td className="px-3 py-2 text-muted/50">{isDNS ? String(i + 1) : '—'}</td>
+                          <td className="px-3 py-2 font-mono">
+                            <div className="flex items-center gap-1.5">
+                              {isDNS && (
+                                <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${result.has_leak ? 'bg-warning' : 'bg-success'}`} />
+                              )}
+                              <span className={isDNS ? 'text-slate-200' : 'text-slate-400'}>{entry.ip}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-muted">{flag} {entry.country_name || '—'}</td>
+                          <td className="px-3 py-2 text-muted">{entry.isp || '—'}</td>
+                          <td className="px-3 py-2">
+                            {isDNS
+                              ? <span className="rounded-full border border-brand/25 bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">DNS 解析器</span>
+                              : <span className="rounded-full border border-success/25 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">出口 IP</span>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Summary banner */}
+            {result.summary && (
+              <div className={`rounded-lg border px-3 py-2 text-[11px] leading-relaxed ${
+                result.has_leak
+                  ? 'border-warning/25 bg-warning/10 text-warning'
+                  : 'border-white/10 bg-white/[0.02] text-muted'
+              }`}>
+                {result.has_leak ? '⚠️ ' : 'ℹ️ '}{result.summary}
+              </div>
+            )}
+
+            {result.tested_at && (
+              <p className="text-[10px] text-muted/40">
+                检测时间：{new Date(result.tested_at).toLocaleString('zh-CN')}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const SKIP_VERSION_KEY = 'cf_skip_version'
 
 function ResourceDrawer({
@@ -864,7 +993,11 @@ export function Dashboard() {
 
   // resource drawer + probe tab + last-switched-proxy tracking
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
-  const [probeTab, setProbeTab] = useState<'router' | 'browser' | 'domain'>('router')
+  const [probeTab, setProbeTab] = useState<'router' | 'browser' | 'domain' | 'dns-leak'>('router')
+
+  // DNS leak detection state
+  const [dnsLeakResult, setDnsLeakResult] = useState<DnsLeakTestResult | null>(null)
+  const [dnsLeakLoading, setDnsLeakLoading] = useState(false)
   const [lastSwitchedProxy, setLastSwitchedProxy] = useState<{ group: string; proxy: string } | null>(null)
 
   // domain probe state (tab 3)
@@ -992,6 +1125,23 @@ export function Dashboard() {
     ])
     setDomainResult({ domain: clean, router: routerRes, browser: browserRes })
     setDomainLoading(false)
+  }
+
+  const handleDNSLeakRun = async () => {
+    setDnsLeakLoading(true)
+    try {
+      const result = await getDNSLeakTest().catch((e: unknown) => ({
+        test_id: '',
+        entries: [],
+        has_leak: false,
+        summary: '',
+        tested_at: new Date().toISOString(),
+        error: e instanceof Error ? e.message : '请求失败',
+      }) as DnsLeakTestResult)
+      setDnsLeakResult(result)
+    } finally {
+      setDnsLeakLoading(false)
+    }
   }
 
   const handleTestLatency = async () => {
@@ -1161,10 +1311,31 @@ export function Dashboard() {
                     ? <span className={`h-1.5 w-1.5 rounded-full ${domainResult.router?.ok && domainResult.browser?.ok ? 'bg-success' : 'bg-warning'}`} />
                     : null}
               </button>
+
+              {/* DNS leak tab */}
+              <button
+                onClick={() => setProbeTab('dns-leak')}
+                className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
+                  probeTab === 'dns-leak' ? 'border-brand text-white' : 'border-transparent text-muted hover:text-slate-300'
+                }`}
+              >
+                DNS 泄露
+                {dnsLeakLoading
+                  ? <Loader2 size={10} className="animate-spin text-muted" />
+                  : dnsLeakResult
+                    ? <span className={`h-1.5 w-1.5 rounded-full ${dnsLeakResult.error ? 'bg-danger' : dnsLeakResult.has_leak ? 'bg-warning' : 'bg-success'}`} />
+                    : null}
+              </button>
             </div>
 
             <div className="pt-3">
-              {probeTab === 'domain' ? (
+              {probeTab === 'dns-leak' ? (
+                <DnsLeakPanel
+                  result={dnsLeakResult}
+                  loading={dnsLeakLoading}
+                  onRun={() => void handleDNSLeakRun()}
+                />
+              ) : probeTab === 'domain' ? (
                 <DomainProbePanel
                   domain={domainInput}
                   onDomainChange={setDomainInput}

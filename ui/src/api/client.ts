@@ -857,6 +857,26 @@ export const updateRuleSet = (id: string, rules: string[]) =>
 export const deleteRuleSet = (id: string) =>
   request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/rulesets/${encodeURIComponent(id)}`)
 
+// ---- DNS leak test ----
+export interface DnsLeakEntry {
+  ip: string
+  type: 'your_ip' | 'dns'
+  country_name: string
+  country_code?: string
+  isp: string
+}
+
+export interface DnsLeakTestResult {
+  test_id: string
+  entries: DnsLeakEntry[]
+  has_leak: boolean
+  summary: string
+  tested_at: string
+  error?: string
+}
+
+export const getDNSLeakTest = () => request<DnsLeakTestResult>('GET', '/health/dns-leak')
+
 // ---- geodata management ----
 export interface GeoDataFileStatus {
   name: string
