@@ -241,3 +241,34 @@ func allInFakeRanges(ips []string, fakeRanges []netip.Prefix) bool {
 	}
 	return true
 }
+
+// AnyInFakeIPRanges is the exported counterpart of allInFakeRanges that checks
+// whether ANY of the given IPs falls in Mihomo's known fake-ip ranges.
+// Unlike allInFakeRanges it returns true as soon as one IP matches.
+func AnyInFakeIPRanges(ips []string) bool {
+	ranges := parsePrefixes(KnownFakeIPRanges)
+	for _, ipStr := range ips {
+		addr, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			continue
+		}
+		for _, pfx := range ranges {
+			if pfx.Contains(addr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// QueryUDPDirect resolves hostname against a bare-IP (or IP:port) nameserver
+// using UDP and returns the A-record IPs.  Exported for use by the DNS-leak handler.
+func QueryUDPDirect(ctx context.Context, nameserver, hostname string) ([]string, error) {
+	return queryUDP(ctx, nameserver, hostname)
+}
+
+// QueryDoHDirect resolves hostname using a DoH URL and returns the A-record IPs.
+// Exported for use by the DNS-leak handler.
+func QueryDoHDirect(ctx context.Context, dohURL, hostname string) ([]string, error) {
+	return queryDoH(ctx, dohURL, hostname)
+}

@@ -858,17 +858,25 @@ export const deleteRuleSet = (id: string) =>
   request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/rulesets/${encodeURIComponent(id)}`)
 
 // ---- DNS leak test ----
-export interface DnsLeakEntry {
-  ip: string
-  type: 'your_ip' | 'dns'
-  country_name: string
-  country_code?: string
-  isp: string
+
+/** One DNS path probed (Mihomo DNS port, system DNS, upstream NS, DoH reference). */
+export interface DnsPathResult {
+  /** Human-readable label */
+  name: string
+  /** Address actually queried */
+  server: string
+  /** A-record IPs returned (absent on error) */
+  ips?: string[]
+  /** true when ANY returned IP is in Mihomo's fake-ip range (198.18/15 or 28/8) */
+  is_fake_ip: boolean
+  error?: string
 }
 
 export interface DnsLeakTestResult {
-  test_id: string
-  entries: DnsLeakEntry[]
+  test_domain: string
+  paths: DnsPathResult[]
+  /** Mihomo's DNS port returned fake-ip → it is actively intercepting DNS */
+  mihomo_intercepting: boolean
   has_leak: boolean
   summary: string
   tested_at: string

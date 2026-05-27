@@ -740,7 +740,10 @@ function DnsLeakPanel({ result, loading, onRun }: {
             {loading && <Loader2 size={12} className="animate-spin text-muted" />}
           </div>
           <p className="text-xs text-muted mt-0.5">
-            路由器向 bash.ws 发起 DNS 探针，检测 DNS 查询是否通过代理隧道
+            对比多条 DNS 路径，检测 DNS 查询是否通过 Mihomo 拦截
+            {result && !loading && (
+              <span className="ml-1 text-muted/50">· 测试域名：<code className="font-mono">{result.test_domain}</code></span>
+            )}
           </p>
         </div>
         <button
@@ -758,14 +761,17 @@ function DnsLeakPanel({ result, loading, onRun }: {
         {loading && !result ? (
           <div className="flex flex-col items-center gap-3 py-8 text-sm text-muted">
             <Loader2 size={22} className="animate-spin text-brand/50" />
-            <span>正在检测 DNS 出口，约需 15–20 秒…</span>
-            <span className="text-xs text-muted/60">路由器正在向 bash.ws 发起 10 个 DNS 探针请求</span>
+            <span>正在并发探测各 DNS 路径，约需 5–10 秒…</span>
+            <span className="text-xs text-muted/60">
+              Mihomo DNS 端口 · 系统 DNS · 上游 nameserver · Cloudflare DoH
+            </span>
           </div>
         ) : !result ? (
-          <div className="py-8 text-center space-y-1">
-            <p className="text-sm text-muted">点击"开始检测"查看路由器正在使用的 DNS 解析器</p>
-            <p className="text-xs text-muted/50">
-              检测原理：向唯一子域名发起请求，迫使 DNS 解析，bash.ws 记录解析器 IP
+          <div className="py-8 text-center space-y-1.5">
+            <p className="text-sm text-muted">点击"开始检测"对比各 DNS 路径</p>
+            <p className="text-xs text-muted/50 max-w-sm mx-auto">
+              检测原理：分别通过 Mihomo DNS 端口、系统 DNS、上游 nameserver、
+              Cloudflare DoH 解析同一域名，比较是否返回 Mihomo Fake-IP（198.18.x.x）
             </p>
           </div>
         ) : result.error ? (
@@ -774,45 +780,64 @@ function DnsLeakPanel({ result, loading, onRun }: {
           </div>
         ) : (
           <>
-            {/* Result table */}
-            {result.entries.length > 0 && (
+            {/* Path results table */}
+            {result.paths.length > 0 && (
               <div className="overflow-x-auto rounded-lg border border-white/8 text-[11px]">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-white/8 bg-white/[0.02]">
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 w-8">#</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">IP 地址</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">地理位置</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">服务提供商</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">类型</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">DNS 路径</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">服务器</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">解析结果</th>
+                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">状态</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {result.entries.map((entry, i) => {
-                      const isDNS = entry.type === 'dns'
-                      const flag = entry.country_code && entry.country_code.length === 2
-                        ? String.fromCodePoint(...[...entry.country_code.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65))
-                        : '🌐'
+                    {result.paths.map((p, i) => {
+                      const isRef = p.name.includes('参考')
+                      const isMihomo = p.name.startsWith('Mihomo')
+                      const rowBg = p.error
+                        ? 'bg-danger/5'
+                        : result.has_leak && !isMihomo && !isRef && !p.is_fake_ip
+                          ? 'bg-warning/5'
+                          : ''
                       return (
-                        <tr
-                          key={i}
-                          className={`border-b border-white/5 last:border-0 ${isDNS && result.has_leak ? 'bg-warning/5' : ''}`}
-                        >
-                          <td className="px-3 py-2 text-muted/50">{isDNS ? String(i + 1) : '—'}</td>
-                          <td className="px-3 py-2 font-mono">
-                            <div className="flex items-center gap-1.5">
-                              {isDNS && (
-                                <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${result.has_leak ? 'bg-warning' : 'bg-success'}`} />
-                              )}
-                              <span className={isDNS ? 'text-slate-200' : 'text-slate-400'}>{entry.ip}</span>
-                            </div>
+                        <tr key={i} className={`border-b border-white/5 last:border-0 ${rowBg}`}>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            <span className={`font-medium ${isMihomo ? 'text-brand' : isRef ? 'text-muted/60' : 'text-slate-300'}`}>
+                              {p.name}
+                            </span>
                           </td>
-                          <td className="px-3 py-2 text-muted">{flag} {entry.country_name || '—'}</td>
-                          <td className="px-3 py-2 text-muted">{entry.isp || '—'}</td>
-                          <td className="px-3 py-2">
-                            {isDNS
-                              ? <span className="rounded-full border border-brand/25 bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">DNS 解析器</span>
-                              : <span className="rounded-full border border-success/25 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">出口 IP</span>}
+                          <td className="px-3 py-2 font-mono text-muted/70 max-w-[180px] truncate">{p.server}</td>
+                          <td className="px-3 py-2 font-mono">
+                            {p.error ? (
+                              <span className="text-danger/70">{p.error.slice(0, 50)}</span>
+                            ) : p.is_fake_ip ? (
+                              <span className="text-brand/80">
+                                {(p.ips ?? []).slice(0, 2).join(', ')}
+                                {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300">
+                                {(p.ips ?? []).slice(0, 2).join(', ')}
+                                {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {p.error ? (
+                              <span className="rounded-full border border-danger/25 bg-danger/10 px-2 py-0.5 text-[10px] font-medium text-danger">失败</span>
+                            ) : p.is_fake_ip ? (
+                              <span className="rounded-full border border-brand/25 bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">Fake-IP ✓</span>
+                            ) : isRef ? (
+                              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-muted">真实 IP</span>
+                            ) : (
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                                result.has_leak
+                                  ? 'border-warning/25 bg-warning/10 text-warning'
+                                  : 'border-white/10 bg-white/[0.04] text-muted'
+                              }`}>真实 IP{result.has_leak ? ' ⚠' : ''}</span>
+                            )}
                           </td>
                         </tr>
                       )
@@ -824,12 +849,12 @@ function DnsLeakPanel({ result, loading, onRun }: {
 
             {/* Summary banner */}
             {result.summary && (
-              <div className={`rounded-lg border px-3 py-2 text-[11px] leading-relaxed ${
+              <div className={`rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${
                 result.has_leak
                   ? 'border-warning/25 bg-warning/10 text-warning'
                   : 'border-white/10 bg-white/[0.02] text-muted'
               }`}>
-                {result.has_leak ? '⚠️ ' : 'ℹ️ '}{result.summary}
+                {result.has_leak ? '⚠️  ' : 'ℹ️  '}{result.summary}
               </div>
             )}
 
@@ -1131,13 +1156,14 @@ export function Dashboard() {
     setDnsLeakLoading(true)
     try {
       const result = await getDNSLeakTest().catch((e: unknown) => ({
-        test_id: '',
-        entries: [],
+        test_domain: 'google.com',
+        paths: [],
+        mihomo_intercepting: false,
         has_leak: false,
         summary: '',
         tested_at: new Date().toISOString(),
         error: e instanceof Error ? e.message : '请求失败',
-      }) as DnsLeakTestResult)
+      } satisfies DnsLeakTestResult))
       setDnsLeakResult(result)
     } finally {
       setDnsLeakLoading(false)
