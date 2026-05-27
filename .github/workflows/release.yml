@@ -584,29 +584,48 @@ jobs:
 
             ---
 
-            ### 一键安装 / One-liner install
+            ### 💻 从电脑远程管理（推荐）
+
+            > 脚本在本机下载 IPK 再上传路由器，比让路由器直接访问 GitHub 更稳。
+
+            **Windows（PowerShell，一行下载）：**
+            ```powershell
+            irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
+            .\clashforgectl.ps1 -Router <路由器IP> compat     # 安装前检查
+            .\clashforgectl.ps1 -Router <路由器IP> upgrade    # 一键安装/升级
+            ```
+
+            **macOS / Linux（一行下载）：**
+            ```sh
+            curl -fsSL https://dl.wei1xuan.com/releases/latest/clashforgectl -o clashforgectl && chmod +x clashforgectl
+            ./clashforgectl --router <路由器IP> compat        # 安装前检查
+            ./clashforgectl --router <路由器IP> upgrade       # 一键安装/升级
+            ```
+
+            ---
+
+            ### 🖥️ 路由器本机安装
 
             SSH 进入路由器后执行，**自动检测 CPU 架构**，自动下载并安装最新版：
 
             ```sh
-            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | sh
+            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh
             ```
 
-            **🇨🇳 国内加速（GitHub 连接不稳定时使用）：**
+            **🇨🇳 GitHub 访问慢时：**
             ```sh
             wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | sh
             ```
-            > 安装脚本会自动尝试多个镜像加速源，无需额外设置。
             > 也可手动指定镜像：`sh clashforgectl.sh --mirror https://ghproxy.com`
 
             **安装本版本（${{ steps.ver.outputs.tag }}）：**
             ```sh
-            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | sh -s -- --version ${{ steps.ver.outputs.tag }}
+            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- --version ${{ steps.ver.outputs.tag }}
             ```
 
             **全新安装（清除旧版所有残留后重装）：**
             ```sh
-            wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | sh -s -- --purge
+            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- --purge
             ```
 
             > 💡 安装脚本地址固定，无需随版本更新
