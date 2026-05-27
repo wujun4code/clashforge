@@ -872,9 +872,32 @@ export interface DnsPathResult {
   error?: string
 }
 
+/**
+ * An actual DNS resolver observed from the internet side — the resolver IP that
+ * queried an authoritative DNS server for our test subdomain.  This is what
+ * services like ip.net.coffee show: the outside world's view of which DNS
+ * server is handling the user's queries.
+ */
+export interface ExternalResolver {
+  ip: string
+  country_name: string
+  country_code: string
+  isp: string
+  /** true when the resolver is in China — DNS queries are visible to Chinese entities */
+  is_leak: boolean
+}
+
 export interface DnsLeakTestResult {
   test_domain: string
+  /** Internal multi-path fake-ip comparison results */
   paths: DnsPathResult[]
+  /**
+   * External resolver IPs detected from the internet perspective.
+   * Populated from bash.ws probe or GeoIP-enriched nameserver list as fallback.
+   */
+  external_resolvers?: ExternalResolver[]
+  /** How external_resolvers was obtained: "bash.ws" | "geoip-nameservers" */
+  external_method?: string
   /** Mihomo's DNS port returned fake-ip → it is actively intercepting DNS */
   mihomo_intercepting: boolean
   has_leak: boolean

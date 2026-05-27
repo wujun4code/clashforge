@@ -23,7 +23,7 @@ import {
   probeDomain,
   getDNSLeakTest,
 } from '../api/client'
-import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote, DnsLeakTestResult } from '../api/client'
+import type { ClashforgeVersionData, DomainProbeResult, DNSSourceResult, DiagNote, DnsLeakTestResult, ExternalResolver } from '../api/client'
 import type {
   OverviewAccessCheck,
   OverviewCoreData,
@@ -719,11 +719,57 @@ function DomainProbePanel({ domain, onDomainChange, loading, result, onRun }: {
 
 // ── DNS Leak Detection Panel ────────────────────────────────────────────────
 
+function ResolverCard({ r }: { r: ExternalResolver }) {
+  const isDoh = r.ip.startsWith('https://')
+  return (
+    <div className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-[11px] ${
+      r.is_leak
+        ? 'border-warning/25 bg-warning/[0.06]'
+        : 'border-white/8 bg-white/[0.02]'
+    }`}>
+      {/* Flag / DoH icon */}
+      <span className="shrink-0 text-base leading-none" aria-hidden>
+        {isDoh ? '🔒' : countryFlag(r.country_code)}
+      </span>
+
+      {/* IP + ISP */}
+      <div className="min-w-0 flex-1">
+        <p className={`font-mono font-medium truncate ${r.is_leak ? 'text-warning' : 'text-slate-200'}`}>
+          {r.ip}
+        </p>
+        <p className="text-muted/70 truncate">
+          {r.isp || r.country_name || '—'}
+          {r.country_name && r.isp && r.country_name !== r.isp && (
+            <span className="ml-1 text-muted/40">· {r.country_name}</span>
+          )}
+        </p>
+      </div>
+
+      {/* Status tag */}
+      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+        isDoh
+          ? 'border-brand/25 bg-brand/10 text-brand'
+          : r.is_leak
+            ? 'border-warning/30 bg-warning/15 text-warning'
+            : 'border-success/25 bg-success/10 text-success'
+      }`}>
+        {isDoh ? '加密 DoH' : r.is_leak ? '泄露' : '正确'}
+      </span>
+    </div>
+  )
+}
+
 function DnsLeakPanel({ result, loading, onRun }: {
   result: DnsLeakTestResult | null
   loading: boolean
   onRun: () => void
 }) {
+  const [showPaths, setShowPaths] = useState(false)
+
+  const externalResolvers = result?.external_resolvers ?? []
+  const leakCount = externalResolvers.filter(r => r.is_leak).length
+  const hasExternal = externalResolvers.length > 0
+
   return (
     <div className="glass-card overflow-hidden">
       {/* Header */}
@@ -734,15 +780,18 @@ function DnsLeakPanel({ result, loading, onRun }: {
             {result && !loading && (
               <Pill
                 tone={result.error ? 'danger' : result.has_leak ? 'warning' : 'success'}
-                label={result.error ? '检测失败' : result.has_leak ? '⚠ 疑似泄露' : '✓ 未发现泄露'}
+                label={result.error ? '检测失败' : result.has_leak ? `⚠ 检测到泄露 (${leakCount})` : '✓ 未发现泄露'}
               />
             )}
             {loading && <Loader2 size={12} className="animate-spin text-muted" />}
           </div>
           <p className="text-xs text-muted mt-0.5">
-            对比多条 DNS 路径，检测 DNS 查询是否通过 Mihomo 拦截
-            {result && !loading && (
-              <span className="ml-1 text-muted/50">· 测试域名：<code className="font-mono">{result.test_domain}</code></span>
+            检测您的 DNS 查询由哪些服务器处理，判断是否存在隐私泄露风险
+            {result?.external_method === 'bash.ws' && !loading && (
+              <span className="ml-1 text-muted/40">· 数据来源：bash.ws 权威 DNS 探测</span>
+            )}
+            {result?.external_method === 'geoip-nameservers' && !loading && (
+              <span className="ml-1 text-muted/40">· 数据来源：已配置上游 DNS GeoIP</span>
             )}
           </p>
         </div>
@@ -761,17 +810,17 @@ function DnsLeakPanel({ result, loading, onRun }: {
         {loading && !result ? (
           <div className="flex flex-col items-center gap-3 py-8 text-sm text-muted">
             <Loader2 size={22} className="animate-spin text-brand/50" />
-            <span>正在并发探测各 DNS 路径，约需 5–10 秒…</span>
+            <span>正在探测 DNS 解析器，约需 15–20 秒…</span>
             <span className="text-xs text-muted/60">
-              Mihomo DNS 端口 · 系统 DNS · 上游 nameserver · Cloudflare DoH
+              外部权威 DNS 探测 · Mihomo 拦截检测 · GeoIP 解析
             </span>
           </div>
         ) : !result ? (
           <div className="py-8 text-center space-y-1.5">
-            <p className="text-sm text-muted">点击"开始检测"对比各 DNS 路径</p>
+            <p className="text-sm text-muted">点击"开始检测"查看您的 DNS 解析器</p>
             <p className="text-xs text-muted/50 max-w-sm mx-auto">
-              检测原理：分别通过 Mihomo DNS 端口、系统 DNS、上游 nameserver、
-              Cloudflare DoH 解析同一域名，比较是否返回 Mihomo Fake-IP（198.18.x.x）
+              检测原理：通过权威 DNS 探测，识别实际处理您 DNS 查询的服务器，
+              标注中国境内解析器（可能泄露浏览记录）和境外/代理解析器（✓ 正确）
             </p>
           </div>
         ) : result.error ? (
@@ -780,81 +829,112 @@ function DnsLeakPanel({ result, loading, onRun }: {
           </div>
         ) : (
           <>
-            {/* Path results table */}
-            {result.paths.length > 0 && (
-              <div className="overflow-x-auto rounded-lg border border-white/8 text-[11px]">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-white/8 bg-white/[0.02]">
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">DNS 路径</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">服务器</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70">解析结果</th>
-                      <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">状态</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.paths.map((p, i) => {
-                      const isRef = p.name.includes('参考')
-                      const isMihomo = p.name.startsWith('Mihomo')
-                      const rowBg = p.error
-                        ? 'bg-danger/5'
-                        : result.has_leak && !isMihomo && !isRef && !p.is_fake_ip
-                          ? 'bg-warning/5'
-                          : ''
-                      return (
-                        <tr key={i} className={`border-b border-white/5 last:border-0 ${rowBg}`}>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            <span className={`font-medium ${isMihomo ? 'text-brand' : isRef ? 'text-muted/60' : 'text-slate-300'}`}>
-                              {p.name}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 font-mono text-muted/70 max-w-[180px] truncate">{p.server}</td>
-                          <td className="px-3 py-2 font-mono">
-                            {p.error ? (
-                              <span className="text-danger/70">{p.error.slice(0, 50)}</span>
-                            ) : p.is_fake_ip ? (
-                              <span className="text-brand/80">
-                                {(p.ips ?? []).slice(0, 2).join(', ')}
-                                {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">
-                                {(p.ips ?? []).slice(0, 2).join(', ')}
-                                {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            {p.error ? (
-                              <span className="rounded-full border border-danger/25 bg-danger/10 px-2 py-0.5 text-[10px] font-medium text-danger">失败</span>
-                            ) : p.is_fake_ip ? (
-                              <span className="rounded-full border border-brand/25 bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">Fake-IP ✓</span>
-                            ) : isRef ? (
-                              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-muted">真实 IP</span>
-                            ) : (
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                                result.has_leak
-                                  ? 'border-warning/25 bg-warning/10 text-warning'
-                                  : 'border-white/10 bg-white/[0.04] text-muted'
-                              }`}>真实 IP{result.has_leak ? ' ⚠' : ''}</span>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
             {/* Summary banner */}
             {result.summary && (
               <div className={`rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${
                 result.has_leak
                   ? 'border-warning/25 bg-warning/10 text-warning'
-                  : 'border-white/10 bg-white/[0.02] text-muted'
+                  : 'border-success/20 bg-success/[0.06] text-success/90'
               }`}>
-                {result.has_leak ? '⚠️  ' : 'ℹ️  '}{result.summary}
+                {result.has_leak ? '⚠️  ' : '✅  '}{result.summary}
+              </div>
+            )}
+
+            {/* External resolver cards (ip.net.coffee style) */}
+            {hasExternal && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-medium text-muted/70 uppercase tracking-wider px-0.5">
+                  检测到的 DNS 解析器 · {externalResolvers.length} 个
+                  {leakCount > 0 && (
+                    <span className="ml-2 text-warning">（{leakCount} 个泄露）</span>
+                  )}
+                </p>
+                {externalResolvers.map((r, i) => (
+                  <ResolverCard key={i} r={r} />
+                ))}
+              </div>
+            )}
+
+            {/* Mihomo intercept status badge */}
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                result.mihomo_intercepting ? 'bg-brand' : 'bg-muted/30'
+              }`} />
+              <span className="text-muted">
+                Mihomo DNS 拦截：
+                <span className={result.mihomo_intercepting ? 'text-brand ml-1' : 'text-muted/60 ml-1'}>
+                  {result.mihomo_intercepting ? '✓ 已启用（Fake-IP 模式正常）' : '未检测到'}
+                </span>
+              </span>
+            </div>
+
+            {/* Collapsible internal path comparison */}
+            {result.paths.length > 0 && (
+              <div>
+                <button
+                  onClick={() => setShowPaths(v => !v)}
+                  className="text-[11px] text-muted/60 hover:text-muted flex items-center gap-1 transition-colors"
+                >
+                  <span className={`transition-transform ${showPaths ? 'rotate-90' : ''}`}>▶</span>
+                  {showPaths ? '收起' : '展开'} DNS 路径详情
+                </button>
+                {showPaths && (
+                  <div className="mt-2 overflow-x-auto rounded-lg border border-white/8 text-[11px]">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-white/8 bg-white/[0.02]">
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">DNS 路径</th>
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">服务器</th>
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70">解析结果</th>
+                          <th className="px-3 py-1.5 text-left font-medium text-muted/70 whitespace-nowrap">状态</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.paths.map((p, i) => {
+                          const isRef = p.name.includes('参考')
+                          const isMihomo = p.name.startsWith('Mihomo')
+                          const rowBg = p.error ? 'bg-danger/5' : ''
+                          return (
+                            <tr key={i} className={`border-b border-white/5 last:border-0 ${rowBg}`}>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <span className={`font-medium ${isMihomo ? 'text-brand' : isRef ? 'text-muted/60' : 'text-slate-300'}`}>
+                                  {p.name}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 font-mono text-muted/70 max-w-[180px] truncate">{p.server}</td>
+                              <td className="px-3 py-2 font-mono">
+                                {p.error ? (
+                                  <span className="text-danger/70">{p.error.slice(0, 50)}</span>
+                                ) : p.is_fake_ip ? (
+                                  <span className="text-brand/80">
+                                    {(p.ips ?? []).slice(0, 2).join(', ')}
+                                    {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300">
+                                    {(p.ips ?? []).slice(0, 2).join(', ')}
+                                    {(p.ips ?? []).length > 2 && <span className="text-muted"> +{(p.ips ?? []).length - 2}</span>}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {p.error ? (
+                                  <span className="rounded-full border border-danger/25 bg-danger/10 px-2 py-0.5 text-[10px] font-medium text-danger">失败</span>
+                                ) : p.is_fake_ip ? (
+                                  <span className="rounded-full border border-brand/25 bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">Fake-IP ✓</span>
+                                ) : isRef ? (
+                                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-muted">真实 IP</span>
+                                ) : (
+                                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-muted">真实 IP</span>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 
