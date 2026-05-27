@@ -494,10 +494,10 @@ jobs:
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
-  # Stage 4: Collect clashforgectl.sh (single upload, from checkout)
+  # Stage 4: Collect ctl scripts (bash, PS1, sh) from checkout
   # ────────────────────────────────────────────────────────────
   upload-installer:
-    name: Upload clashforgectl.sh
+    name: Upload ctl scripts
     runs-on: ubuntu-latest
     needs: build-ui
     steps:
@@ -505,7 +505,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: installer
-          path: scripts/clashforgectl.sh
+          path: |
+            scripts/clashforgectl.sh
+            scripts/clashforgectl.ps1
+            scripts/clashforgectl
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
@@ -565,7 +568,7 @@ jobs:
         run: |
           cd release-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -710,4 +713,6 @@ jobs:
             release-assets/*.ipk
             release-assets/*.apk
             release-assets/clashforgectl.sh
+            release-assets/clashforgectl.ps1
+            release-assets/clashforgectl
             release-assets/SHA256SUMS.txt
