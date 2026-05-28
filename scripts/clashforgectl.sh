@@ -176,33 +176,41 @@ _fetch_file() {
   fi
 }
 
-_resolve_tag_from_json() {
-  awk -F'"tag_name":"' 'NF>1{split($2,a,"\""); print a[1]; exit}'
+# Extract all tag_names from a releases JSON array, one per line, in order.
+_tags_from_json() {
+  awk -F'"tag_name":"' 'NF>1{for(i=2;i<=NF;i++){split($i,a,"\""); if(a[1]!="") print a[1]}}'
 }
 
-_resolve_latest_beta_tag_from_json() {
-  awk -F'"tag_name":"' '
-    NF>1{
-      for (i=2; i<=NF; i++) {
-        split($i, a, "\"")
-        t=a[1]
-        if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/) {
-          s=t
-          sub(/^v/, "", s)
-          sub(/-beta\./, ".", s)
-          n=split(s, p, ".")
-          key=sprintf("%09d.%09d.%09d.%09d", p[1], p[2], p[3], p[4])
-          if (key > best_key) {
-            best_key=key
-            best_tag=t
-          }
-        }
+# Return the first tag from a JSON releases list that has the given IPK asset name
+# in its assets array. Uses only portable awk + string matching on the raw JSON.
+_find_tag_with_ipk_asset() {
+  _ipk_asset="$1"
+  awk -v asset="$_ipk_asset" '
+    BEGIN { in_assets=0; cur_tag=""; found=0 }
+    /"tag_name":/ {
+      match($0, /"tag_name":"([^"]+)"/, m)
+      if (RSTART > 0) {
+        split(substr($0, RSTART), a, "\"")
+        cur_tag=a[4]
       }
     }
-    END{
-      if (best_tag != "") print best_tag
+    /"assets":/ { in_assets=1 }
+    in_assets && index($0, "\"name\":\"" asset "\"") > 0 {
+      print cur_tag
+      found=1
+      exit
     }
+    /^\]/ { in_assets=0 }
+    END { if (!found) exit 1 }
   '
+}
+
+# Check gzip magic bytes (1f 8b) — catches HTML error pages saved as .ipk
+_is_valid_gzip() {
+  _f="$1"
+  [ -f "$_f" ] || return 1
+  _magic=$(od -An -N2 -tx1 "$_f" 2>/dev/null | tr -d ' \n')
+  [ "$_magic" = "1f8b" ]
 }
 
 resolve_version() {
@@ -211,38 +219,49 @@ resolve_version() {
     return 0
   fi
 
-  log "Resolving latest release from GitHub API..."
+  # Arch must be known before we can check asset names.
+  # Detect it now if not already set by download_ipk.
+  [ -n "${IPK_ARCH:-}" ] || IPK_ARCH=$(detect_ipk_arch)
+
+  log "Resolving latest release with IPK for ${IPK_ARCH}..."
   _api_path="repos/${REPO}/releases?per_page=50"
   TAG=""
   _json=""
 
   if [ -n "$MIRROR" ]; then
     _json="$(_fetch_text "${MIRROR}/https://api.github.com/${_api_path}" || true)"
-    TAG=$(printf '%s' "$_json" | _resolve_latest_beta_tag_from_json)
-    [ -n "$TAG" ] || TAG=$(printf '%s' "$_json" | _resolve_tag_from_json)
   else
     _json="$(_fetch_text "https://api.github.com/${_api_path}" || true)"
-    TAG=$(printf '%s' "$_json" | _resolve_latest_beta_tag_from_json)
-    [ -n "$TAG" ] || TAG=$(printf '%s' "$_json" | _resolve_tag_from_json)
-    if [ -z "$TAG" ]; then
+    if [ -z "$_json" ]; then
       for _proxy in $GH_PROXIES; do
         _json="$(_fetch_text "${_proxy}/https://api.github.com/${_api_path}" || true)"
-        TAG=$(printf '%s' "$_json" | _resolve_latest_beta_tag_from_json)
-        [ -n "$TAG" ] || TAG=$(printf '%s' "$_json" | _resolve_tag_from_json)
-        if [ -n "$TAG" ]; then
-          log "Version resolved via mirror: $_proxy"
-          break
-        fi
+        [ -n "$_json" ] && { log "Releases fetched via mirror: $_proxy"; break; }
       done
     fi
   fi
 
-  [ -n "$TAG" ] || die "Could not resolve latest version. Use: clashforgectl upgrade --version v0.1.0-beta.1"
+  # Walk releases newest-first; pick the first one that has the IPK asset.
+  if [ -n "$_json" ]; then
+    _ipk_prefix="clashforge_"
+    _ipk_name="${_ipk_prefix}PLACEHOLDER_${IPK_ARCH}.ipk"
+    # Build target asset name for each candidate tag and check the JSON.
+    for _candidate in $(printf '%s' "$_json" | _tags_from_json); do
+      _pkgver="${_candidate#v}"
+      _asset_name="clashforge_${_pkgver}_${IPK_ARCH}.ipk"
+      if printf '%s' "$_json" | grep -qF "\"name\":\"${_asset_name}\""; then
+        TAG="$_candidate"
+        break
+      fi
+    done
+  fi
+
+  [ -n "$TAG" ] || die "Could not find a published release with an IPK for ${IPK_ARCH}. Use: clashforgectl upgrade --version <tag>"
 }
 
 download_ipk() {
-  resolve_version
+  # Detect arch before resolve_version so it can filter by asset name.
   IPK_ARCH=$(detect_ipk_arch)
+  resolve_version
   PKG_VER="${TAG#v}"
   IPK_NAME="clashforge_${PKG_VER}_${IPK_ARCH}.ipk"
   GH_URL="https://github.com/${REPO}/releases/download/${TAG}/${IPK_NAME}"
@@ -257,37 +276,39 @@ download_ipk() {
     log "Downloading from custom base URL: $BASE_URL"
     _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ] \
       || die "Download failed from base URL: $_url"
-    ok "Downloaded to $TMP_IPK"
-    return 0
-  fi
-
-  # Forced mirror
-  if [ -n "$MIRROR" ]; then
+  elif [ -n "$MIRROR" ]; then
+    # Forced mirror
     _url="${MIRROR}/${GH_URL}"
     log "Downloading via mirror: $MIRROR"
     _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ] \
       || die "Download failed from mirror: $MIRROR"
-    ok "Downloaded to $TMP_IPK"
-    return 0
-  fi
-
-  # Direct GitHub, then auto-fallback through proxies
-  if _fetch_file "$GH_URL" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
-    ok "Downloaded from GitHub"
-    return 0
-  fi
-  rm -f "$TMP_IPK"
-
-  for _proxy in $GH_PROXIES; do
-    log "Trying mirror: $_proxy"
-    if _fetch_file "${_proxy}/${GH_URL}" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
-      ok "Downloaded via $_proxy"
-      return 0
+  else
+    # Direct GitHub, then auto-fallback through proxies
+    if ! (_fetch_file "$GH_URL" "$TMP_IPK" && [ -s "$TMP_IPK" ]); then
+      rm -f "$TMP_IPK"
+      _dl_ok=0
+      for _proxy in $GH_PROXIES; do
+        log "Trying mirror: $_proxy"
+        if _fetch_file "${_proxy}/${GH_URL}" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+          ok "Downloaded via $_proxy"
+          _dl_ok=1
+          break
+        fi
+        rm -f "$TMP_IPK"
+      done
+      [ "$_dl_ok" -eq 1 ] \
+        || die "Download failed from all sources. Try: clashforgectl upgrade --mirror https://ghproxy.com"
     fi
-    rm -f "$TMP_IPK"
-  done
+  fi
 
-  die "Download failed from all sources. Try: clashforgectl upgrade --mirror https://ghproxy.com"
+  # Validate: some mirrors return HTTP 200 with an HTML error body.
+  # A valid IPK is a gzip archive (magic bytes 0x1f 0x8b).
+  if ! _is_valid_gzip "$TMP_IPK"; then
+    rm -f "$TMP_IPK"
+    die "Downloaded file is not a valid gzip archive (HTML error page from mirror?). URL: $GH_URL"
+  fi
+
+  ok "Downloaded to $TMP_IPK"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
