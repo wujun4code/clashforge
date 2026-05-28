@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,8 +48,58 @@ type namespaceListResponse struct {
 }
 
 type cloudflareNamespace struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID                  string `json:"id"`
+	Title               string `json:"title"`
+	SupportsURLEncoding bool   `json:"supports_url_encoding,omitempty"`
+}
+
+type workerScriptListResponse struct {
+	Success bool                    `json:"success"`
+	Result  []cloudflareWorkerEntry `json:"result"`
+	Errors  []cloudflareErrorItem   `json:"errors"`
+}
+
+type cloudflareResultInfo struct {
+	Count      int `json:"count"`
+	Page       int `json:"page"`
+	PerPage    int `json:"per_page"`
+	TotalCount int `json:"total_count"`
+	TotalPages int `json:"total_pages"`
+}
+
+type workerScriptSearchResponse struct {
+	Success    bool                        `json:"success"`
+	Result     []cloudflareWorkerSearchHit `json:"result"`
+	ResultInfo cloudflareResultInfo        `json:"result_info"`
+	Errors     []cloudflareErrorItem       `json:"errors"`
+}
+
+type cloudflareWorkerSearchHit struct {
+	ScriptName string `json:"script_name"`
+	CreatedOn  string `json:"created_on,omitempty"`
+	ModifiedOn string `json:"modified_on,omitempty"`
+}
+
+type workerScriptSettingsResponse struct {
+	Success bool                  `json:"success"`
+	Result  cloudflareWorkerSetup `json:"result"`
+	Errors  []cloudflareErrorItem `json:"errors"`
+}
+
+type cloudflareWorkerSetup struct {
+	Bindings []cloudflareWorkerBinding `json:"bindings"`
+}
+
+type cloudflareWorkerBinding struct {
+	Type        string `json:"type"`
+	Name        string `json:"name,omitempty"`
+	NamespaceID string `json:"namespace_id,omitempty"`
+}
+
+type cloudflareWorkerEntry struct {
+	ID         string `json:"id"`
+	CreatedOn  string `json:"created_on,omitempty"`
+	ModifiedOn string `json:"modified_on,omitempty"`
 }
 
 type workersSubdomainResponse struct {
@@ -175,6 +227,242 @@ func (c *CloudflareClient) CreateOrReuseNamespace(ctx context.Context, accountID
 		Reused:      false,
 		Title:       title,
 	}, nil
+}
+
+func (c *CloudflareClient) ListWorkerScripts(ctx context.Context, accountID string) ([]WorkerScriptInfo, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return nil, fmt.Errorf("account_id is required")
+	}
+	workerMap := make(map[string]WorkerScriptInfo, 128)
+
+	// Primary list endpoint.
+	path := fmt.Sprintf("/accounts/%s/workers/scripts", url.PathEscape(accountID))
+	body, status, err := c.doRequest(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, c.parseStatusError(status, body)
+	}
+
+	var resp workerScriptListResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse worker list response: %w", err)
+	}
+	if !resp.Success {
+		return nil, c.parseEnvelopeError(resp.Errors, "cloudflare list workers failed")
+	}
+	for _, item := range resp.Result {
+		name := strings.TrimSpace(item.ID)
+		if name == "" {
+			continue
+		}
+		workerMap[name] = WorkerScriptInfo{
+			Name:       name,
+			CreatedOn:  strings.TrimSpace(item.CreatedOn),
+			ModifiedOn: strings.TrimSpace(item.ModifiedOn),
+		}
+	}
+
+	// Search endpoint is paginated and can surface scripts missing from list in some accounts.
+	searchItems, err := c.listWorkerScriptsViaSearch(ctx, accountID)
+	if err == nil {
+		for _, hit := range searchItems {
+			name := strings.TrimSpace(hit.ScriptName)
+			if name == "" {
+				continue
+			}
+			info := workerMap[name]
+			info.Name = name
+			if info.CreatedOn == "" {
+				info.CreatedOn = strings.TrimSpace(hit.CreatedOn)
+			}
+			if info.ModifiedOn == "" {
+				info.ModifiedOn = strings.TrimSpace(hit.ModifiedOn)
+			}
+			workerMap[name] = info
+		}
+	}
+
+	items := make([]WorkerScriptInfo, 0, len(workerMap))
+	for _, item := range workerMap {
+		items = append(items, item)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Name < items[j].Name
+	})
+	if len(items) == 0 {
+		return items, nil
+	}
+
+	// Enrich with KV bindings; ignore individual failures so one bad script won't block all listings.
+	const bindingWorkers = 8
+	type bindingResult struct {
+		name string
+		ids  []string
+		err  error
+	}
+	jobs := make(chan string)
+	results := make(chan bindingResult, len(items))
+	var wg sync.WaitGroup
+	for i := 0; i < bindingWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for scriptName := range jobs {
+				ids, err := c.getWorkerKVNamespaceBindings(ctx, accountID, scriptName)
+				results <- bindingResult{name: scriptName, ids: ids, err: err}
+			}
+		}()
+	}
+	for _, item := range items {
+		jobs <- item.Name
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	bindingsByName := make(map[string][]string, len(items))
+	for res := range results {
+		// Fail-open: leave bindings empty if one worker settings call fails.
+		if res.err != nil {
+			continue
+		}
+		bindingsByName[res.name] = res.ids
+	}
+	for i := range items {
+		items[i].KVNamespaceIDs = bindingsByName[items[i].Name]
+	}
+	return items, nil
+}
+
+func (c *CloudflareClient) listWorkerScriptsViaSearch(ctx context.Context, accountID string) ([]cloudflareWorkerSearchHit, error) {
+	page := 1
+	items := make([]cloudflareWorkerSearchHit, 0, 128)
+	for {
+		path := fmt.Sprintf(
+			"/accounts/%s/workers/scripts-search?page=%d&per_page=100&order_by=modified_on",
+			url.PathEscape(accountID),
+			page,
+		)
+		body, status, err := c.doRequest(ctx, http.MethodGet, path, nil, "")
+		if err != nil {
+			return nil, err
+		}
+		if status < 200 || status >= 300 {
+			return nil, c.parseStatusError(status, body)
+		}
+
+		var resp workerScriptSearchResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("parse worker search response: %w", err)
+		}
+		if !resp.Success {
+			return nil, c.parseEnvelopeError(resp.Errors, "cloudflare search workers failed")
+		}
+		items = append(items, resp.Result...)
+		if resp.ResultInfo.TotalPages <= 0 || page >= resp.ResultInfo.TotalPages {
+			break
+		}
+		page++
+	}
+	return items, nil
+}
+
+func (c *CloudflareClient) getWorkerKVNamespaceBindings(ctx context.Context, accountID, scriptName string) ([]string, error) {
+	accountID = strings.TrimSpace(accountID)
+	scriptName = strings.TrimSpace(scriptName)
+	if accountID == "" || scriptName == "" {
+		return nil, fmt.Errorf("account_id and script_name are required")
+	}
+
+	path := fmt.Sprintf(
+		"/accounts/%s/workers/scripts/%s/settings",
+		url.PathEscape(accountID),
+		url.PathEscape(scriptName),
+	)
+	body, status, err := c.doRequest(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, nil
+	}
+	if status < 200 || status >= 300 {
+		return nil, c.parseStatusError(status, body)
+	}
+
+	var resp workerScriptSettingsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse worker settings response: %w", err)
+	}
+	if !resp.Success {
+		return nil, c.parseEnvelopeError(resp.Errors, "cloudflare worker settings failed")
+	}
+
+	seen := make(map[string]struct{}, len(resp.Result.Bindings))
+	out := make([]string, 0, 2)
+	for _, b := range resp.Result.Bindings {
+		if strings.TrimSpace(b.Type) != "kv_namespace" {
+			continue
+		}
+		nsID := strings.TrimSpace(b.NamespaceID)
+		if nsID == "" {
+			continue
+		}
+		if _, ok := seen[nsID]; ok {
+			continue
+		}
+		seen[nsID] = struct{}{}
+		out = append(out, nsID)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (c *CloudflareClient) ListKVNamespaces(ctx context.Context, accountID string) ([]KVNamespaceInfo, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return nil, fmt.Errorf("account_id is required")
+	}
+
+	page := 1
+	items := make([]KVNamespaceInfo, 0, 64)
+	for {
+		path := fmt.Sprintf("/accounts/%s/storage/kv/namespaces?page=%d&per_page=100", url.PathEscape(accountID), page)
+		body, status, err := c.doRequest(ctx, http.MethodGet, path, nil, "")
+		if err != nil {
+			return nil, err
+		}
+		if status < 200 || status >= 300 {
+			return nil, c.parseStatusError(status, body)
+		}
+
+		var list namespaceListResponse
+		if err := json.Unmarshal(body, &list); err != nil {
+			return nil, fmt.Errorf("parse namespace list: %w", err)
+		}
+		if !list.Success {
+			return nil, c.parseEnvelopeError(list.Errors, "cloudflare namespace list failed")
+		}
+		for _, ns := range list.Result {
+			items = append(items, KVNamespaceInfo{
+				ID:                  strings.TrimSpace(ns.ID),
+				Title:               strings.TrimSpace(ns.Title),
+				SupportsURLEncoding: ns.SupportsURLEncoding,
+			})
+		}
+		if list.ResultInfo.TotalPages <= 0 || page >= list.ResultInfo.TotalPages {
+			break
+		}
+		page++
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Title < items[j].Title
+	})
+	return items, nil
 }
 
 func (c *CloudflareClient) DeployWorkerScript(
@@ -813,6 +1101,36 @@ func (c *CloudflareClient) createDNSRecord(
 		return "", c.parseEnvelopeError(resp.Errors, "cloudflare create dns record failed")
 	}
 	return resp.Result.ID, nil
+}
+
+// WriteKVValue writes a value directly to a Cloudflare Workers KV namespace
+// via the Cloudflare REST API (api.cloudflare.com).
+//
+// This is preferred over UploadContentViaWorker when the Worker's HTTP endpoint
+// is not yet reachable (e.g. custom domain DNS still propagating, or workers.dev
+// blocked by the local network). api.cloudflare.com is accessible even in regions
+// where workers.dev is blocked.
+func (c *CloudflareClient) WriteKVValue(ctx context.Context, accountID, namespaceID, key, value string) error {
+	accountID = strings.TrimSpace(accountID)
+	namespaceID = strings.TrimSpace(namespaceID)
+	key = strings.TrimSpace(key)
+	if accountID == "" || namespaceID == "" || key == "" {
+		return fmt.Errorf("account_id, namespace_id and key are required")
+	}
+
+	path := fmt.Sprintf("/accounts/%s/storage/kv/namespaces/%s/values/%s",
+		url.PathEscape(accountID),
+		url.PathEscape(namespaceID),
+		url.PathEscape(key),
+	)
+	body, status, err := c.doRequest(ctx, http.MethodPut, path, strings.NewReader(value), "text/plain; charset=utf-8")
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return c.parseStatusError(status, body)
+	}
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

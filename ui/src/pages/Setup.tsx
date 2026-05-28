@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Navigate } from 'react-router-dom'
 import {
   Upload, FileText, Globe, CheckCircle2, AlertCircle,
   ChevronRight, Play, Loader2, Wifi, XCircle, ArrowRight,
-  Sparkles, RotateCw, Link2, PowerOff, ShieldOff, Database, Radio,
+  Sparkles, RotateCw, Link2, Database, Radio,
   Minus, Terminal, ShieldCheck, Network, ServerCog, Gauge, Eye, Plus, Trash2,
   Shield, Check, Info,
 } from 'lucide-react'
 import yaml from 'js-yaml'
 import {
-  updateOverrides, generateConfig, getMihomoConfig, getConfig, updateConfig,
+  updateOverrides, generateConfig, getConfig, updateConfig,
   stopCore, releaseOverviewTakeover,
   getOverviewCore, getOverviewProbes, getLogs,
   addSubscription, getSubscriptions, syncSubUpdate, enableService,
@@ -20,7 +20,6 @@ import {
 import type {
   OverviewAccessCheck,
   OverviewProbeData,
-  OverviewModule,
   LogEntry,
   SourceFile,
   Subscription,
@@ -827,46 +826,27 @@ export function Setup() {
 
   // ── init guard: check if core is already running ──
   const [initStatus, setInitStatus] = useState<InitStatus>('checking')
-  const [stopping, setStopping] = useState(false)
-  const [stopError, setStopError] = useState('')
-  const [runningModules, setRunningModules] = useState<OverviewModule[]>([])
 
   useEffect(() => {
     getOverviewCore().then(async data => {
       if (data.core.state === 'running') {
-        setRunningModules(data.modules ?? [])
         if (activateSub || activateFile) {
-          // Auto-stop when switching config via activate
-          setStopping(true)
+          // Auto-stop when navigating here to switch config
           try {
-            await stopCore().catch(() => null)   // idempotent: ignore "already stopped"
-            await releaseOverviewTakeover()      // always release DNS/nft
+            await stopCore().catch(() => null)
+            await releaseOverviewTakeover()
             setInitStatus('ready')
-          } catch (e) {
-            setStopError(e instanceof Error ? e.message : '停止失败')
-            setInitStatus('running')
-          } finally {
-            setStopping(false)
+          } catch {
+            setInitStatus('running') // redirects to /service
           }
         } else {
-          setInitStatus('running')
+          setInitStatus('running') // redirects to /service
         }
       } else {
         setInitStatus('ready')
       }
     }).catch(() => setInitStatus('ready'))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleStopAll = async () => {
-    setStopping(true); setStopError('')
-    try {
-      await stopCore().catch(() => null)   // idempotent: ignore "already stopped" / OOM crash
-      await releaseOverviewTakeover()      // always release DNS/nft regardless of core state
-      setInitStatus('ready')
-    } catch (e) {
-      setStopError(e instanceof Error ? e.message : '操作失败')
-    } finally { setStopping(false) }
-  }
 
   // ── step state ──
   const [step, setStep] = useState<Step>('import')
@@ -948,9 +928,6 @@ export function Setup() {
   const [launchDeviceSaving, setLaunchDeviceSaving] = useState(false)
   const [launchDeviceError, setLaunchDeviceError] = useState('')
   const [launchDeviceNotice, setLaunchDeviceNotice] = useState('')
-  const [runningConfigPreview, setRunningConfigPreview] = useState('')
-  const [runningConfigLoading, setRunningConfigLoading] = useState(false)
-  const [runningConfigError, setRunningConfigError] = useState('')
 
   // ── port check step (after launch, before connectivity check) ──
   const [portChecking, setPortChecking] = useState(false)
@@ -1208,20 +1185,6 @@ export function Setup() {
       setSubCacheModalLoading(false)
     }
   }, [browserSessionID])
-
-  const refreshRunningConfigPreview = useCallback(async () => {
-    setRunningConfigLoading(true)
-    setRunningConfigError('')
-    try {
-      const { content } = await getMihomoConfig()
-      setRunningConfigPreview(content)
-    } catch (e: unknown) {
-      setRunningConfigPreview('')
-      setRunningConfigError(e instanceof Error ? e.message : '读取运行配置失败')
-    } finally {
-      setRunningConfigLoading(false)
-    }
-  }, [])
 
   const loadLaunchDeviceGroups = useCallback(async () => {
     setLaunchDeviceLoading(true)
@@ -1605,11 +1568,6 @@ export function Setup() {
     return () => clearTimeout(timer)
   }, [step, buildLaunchPayload])
 
-  useEffect(() => {
-    if (initStatus !== 'running') return
-    void refreshRunningConfigPreview()
-  }, [initStatus, refreshRunningConfigPreview])
-
   // ── complete (save autostart + navigate) ──
   const handleComplete = useCallback(async () => {
     setSaving(true); setSaveError('')
@@ -1675,88 +1633,8 @@ export function Setup() {
     )
   }
 
-  // Guard: core is running — require stopping before re-running wizard
-  if (initStatus === 'running') {
-    const managed = runningModules.filter(m => m.managed_by_clashforge)
-    return (
-      <div className="min-h-full bg-gradient-to-b from-surface-0 to-surface-1 px-6 py-8">
-        <div className="mx-auto max-w-6xl space-y-6">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-brand/20 flex items-center justify-center">
-              <Sparkles size={18} className="text-brand" />
-            </div>
-            <div>
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.24em] text-muted">Proxy</p>
-                <h1 className="text-base font-bold text-white mt-1">代理服务</h1>
-              </div>
-              <p className="text-xs text-muted">重新配置前需要先停止当前服务</p>
-            </div>
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
-            <div className="glass-card px-5 py-5 space-y-4">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex h-2.5 w-2.5 rounded-full bg-success animate-pulse" />
-                <p className="text-sm font-semibold text-white">内核正在运行</p>
-              </div>
-              <p className="text-sm text-muted leading-6">
-                ClashForge 内核当前处于运行状态，并已接管以下系统服务。
-                要重新配置，请先停止内核并退出所有接管，然后再继续。
-              </p>
-
-              {managed.length > 0 && (
-                <div className="rounded-xl border border-white/8 bg-black/10 px-4 py-3 space-y-2">
-                  <p className="text-xs text-muted uppercase tracking-wider font-semibold">当前已接管</p>
-                  {managed.map(m => (
-                    <div key={m.id} className="flex items-center gap-2 text-xs">
-                      <ShieldOff size={12} className="text-warning" />
-                      <span className="text-slate-300">{m.title}</span>
-                      <span className="text-muted">— {m.current_owner}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {stopError && (
-                <div className="flex items-center gap-2 text-xs text-danger">
-                  <AlertCircle size={13} />{stopError}
-                </div>
-              )}
-
-              <button
-                className="w-full flex items-center justify-center gap-2.5 py-4 text-sm font-bold rounded-xl
-                         bg-danger/90 hover:bg-danger text-white border border-danger/60 hover:border-danger
-                         shadow-lg shadow-danger/30 transition-all active:scale-[0.98] disabled:opacity-60"
-                onClick={handleStopAll}
-                disabled={stopping}
-              >
-                {stopping
-                  ? <><Loader2 size={16} className="animate-spin" />停止中…</>
-                  : <><PowerOff size={16} />停止内核 + 退出所有接管</>}
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <LaunchConfigPreview
-                content={runningConfigPreview}
-                loading={runningConfigLoading}
-                error={runningConfigError}
-                onRefresh={() => { void refreshRunningConfigPreview() }}
-                title="正在运行配置预览"
-                description="展示当前完整的运行配置（mihomo-config.yaml）；高亮区域为 ClashForge 接管和统一设置项（含设备分组规则），行尾有具体说明。"
-                refreshLabel="刷新运行配置"
-              />
-              <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-muted leading-6">
-                蓝色高亮表示 DNS 接管字段，橙色高亮表示端口与 API 接管字段，紫色高亮表示 GeoData 接管字段，
-                绿色高亮表示设备分组接管字段（影子策略组、设备 RULE-SET、AND 规则与对应 provider）。这些字段会由 ClashForge 统一维护，避免运行时配置漂移。
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  // Guard: core is running — redirect to dedicated service status page
+  if (initStatus === 'running') return <Navigate to="/service" replace />
 
   const activeStep = STEP_DETAILS[step]
   const progress = ((STEPS.findIndex(s => s.id === step) + 1) / STEPS.length) * 100

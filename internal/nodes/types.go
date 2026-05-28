@@ -36,7 +36,10 @@ type Node struct {
 	CFAccountID string   `json:"cf_account_id"`
 	CFZoneID    string   `json:"cf_zone_id"`
 	Kind        NodeKind `json:"kind,omitempty"` // "" or "managed" treated as managed
-	// GOST proxy auth (auto-generated on deploy)
+	// Proxy protocol config
+	ProxyType     string `json:"proxy_type,omitempty"` // "http" | "socks5" | "trojan" | …; empty means "http"
+	ProxyPort     int    `json:"proxy_port,omitempty"` // proxy listen port (default 443)
+	// Proxy auth (auto-generated on deploy; empty for no-auth proxies)
 	ProxyUser     string `json:"proxy_user,omitempty"`
 	ProxyPassword string `json:"-"` // encrypted at rest
 	// Deployment state
@@ -62,6 +65,8 @@ type NodeListItem struct {
 	Port       int        `json:"port"`
 	Username   string     `json:"username"`
 	Domain     string     `json:"domain"`
+	ProxyType  string     `json:"proxy_type,omitempty"`
+	ProxyPort  int        `json:"proxy_port,omitempty"`
 	Kind       NodeKind   `json:"kind,omitempty"`
 	Status     Status     `json:"status"`
 	DeployedAt *time.Time `json:"deployed_at,omitempty"`

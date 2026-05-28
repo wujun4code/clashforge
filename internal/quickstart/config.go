@@ -17,18 +17,26 @@ const (
 const GostVersion = "3.0.0"
 
 // BuildGostConfig returns the content of /etc/gost/config.yaml.
-func BuildGostConfig() string {
+// Uses HTTP CONNECT+TLS with basic auth, knock protection, and probe resistance —
+// mirroring the security posture of the /nodes deployment pipeline.
+func BuildGostConfig(user, pass string) string {
 	return fmt.Sprintf(`services:
   - name: clashforge-node
     addr: ":443"
     handler:
-      type: socks5
+      type: http
+      auth:
+        username: "%s"
+        password: "%s"
+      metadata:
+        knock: "www.google.com"
+        probeResistance: "code:404"
     listener:
       type: tls
       tls:
         certFile: %s
         keyFile: %s
-`, GostCertPEM, GostKeyPEM)
+`, user, pass, GostCertPEM, GostKeyPEM)
 }
 
 // GostSystemdUnit returns the content of /etc/systemd/system/gost.service.

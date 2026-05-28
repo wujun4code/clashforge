@@ -160,6 +160,22 @@ type WorkerNamespaceResult struct {
 	Title       string `json:"title"`
 }
 
+// WorkerScriptInfo is a lightweight Cloudflare Worker listing entry.
+type WorkerScriptInfo struct {
+	Name       string `json:"name"`
+	CreatedOn  string `json:"created_on,omitempty"`
+	ModifiedOn string `json:"modified_on,omitempty"`
+	// KVNamespaceIDs lists KV namespace IDs bound by this Worker.
+	KVNamespaceIDs []string `json:"kv_namespace_ids,omitempty"`
+}
+
+// KVNamespaceInfo is a lightweight Cloudflare KV namespace listing entry.
+type KVNamespaceInfo struct {
+	ID                  string `json:"id"`
+	Title               string `json:"title"`
+	SupportsURLEncoding bool   `json:"supports_url_encoding,omitempty"`
+}
+
 type WorkerDeployScriptRequest struct {
 	Token       string `json:"token"`
 	AccountID   string `json:"account_id"`

@@ -25,6 +25,9 @@ type persistedNode struct {
 	CFToken       string     `json:"cf_token,omitempty"`
 	CFAccountID   string     `json:"cf_account_id"`
 	CFZoneID      string     `json:"cf_zone_id"`
+	Kind          NodeKind   `json:"kind,omitempty"`
+	ProxyType     string     `json:"proxy_type,omitempty"`
+	ProxyPort     int        `json:"proxy_port,omitempty"`
 	ProxyUser     string     `json:"proxy_user,omitempty"`
 	ProxyPassword string     `json:"proxy_password,omitempty"`
 	Status        Status     `json:"status"`
@@ -52,6 +55,9 @@ func toPersistedNode(n *Node) persistedNode {
 		CFToken:       n.CFToken,
 		CFAccountID:   n.CFAccountID,
 		CFZoneID:      n.CFZoneID,
+		Kind:          n.Kind,
+		ProxyType:     n.ProxyType,
+		ProxyPort:     n.ProxyPort,
 		ProxyUser:     n.ProxyUser,
 		ProxyPassword: n.ProxyPassword,
 		Status:        n.Status,
@@ -77,6 +83,9 @@ func fromPersistedNode(p persistedNode) *Node {
 		CFToken:       p.CFToken,
 		CFAccountID:   p.CFAccountID,
 		CFZoneID:      p.CFZoneID,
+		Kind:          p.Kind,
+		ProxyType:     p.ProxyType,
+		ProxyPort:     p.ProxyPort,
 		ProxyUser:     p.ProxyUser,
 		ProxyPassword: p.ProxyPassword,
 		Status:        p.Status,
@@ -207,6 +216,9 @@ func (s *Store) List() []NodeListItem {
 			Port:       n.Port,
 			Username:   n.Username,
 			Domain:     n.Domain,
+			ProxyType:  n.ProxyType,
+			ProxyPort:  n.ProxyPort,
+			Kind:       n.Kind,
 			Status:     n.Status,
 			DeployedAt: n.DeployedAt,
 			CertExpiry: n.CertExpiry,
@@ -231,6 +243,9 @@ func (s *Store) Get(id string) (*Node, bool) {
 func (s *Store) Create(n *Node) error {
 	s.mu.Lock()
 	n.ID = uuid.New().String()
+	if n.Kind == "" {
+		n.Kind = NodeKindManaged
+	}
 	n.Status = StatusPending
 	now := time.Now()
 	n.CreatedAt = now
@@ -261,6 +276,12 @@ func (s *Store) Update(id string, n *Node) error {
 	}
 	if n.CFToken == "" {
 		n.CFToken = existing.CFToken
+	}
+	if n.Kind == "" {
+		n.Kind = existing.Kind
+	}
+	if n.Kind == "" {
+		n.Kind = NodeKindManaged
 	}
 	s.nodes[id] = n
 	s.mu.Unlock()

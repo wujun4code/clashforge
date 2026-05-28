@@ -2,30 +2,79 @@ package quickstart
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
+	"github.com/wujun4code/clashforge/internal/dns"
+	"github.com/wujun4code/clashforge/internal/netfilter"
+	"github.com/wujun4code/clashforge/internal/runtimecfg"
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
+type activeSourceRecord struct {
+	Type    string `json:"type"`
+	SubID   string `json:"sub_id,omitempty"`
+	SubName string `json:"sub_name,omitempty"`
+}
+
 // autoConfigureClashForge applies QuickStart defaults to the ClashForge config,
 // regenerates the Mihomo YAML, and starts the core.
-func autoConfigureClashForge(ctx context.Context, deps Deps, out EventWriter) error {
+//
+// If baseYAML is non-empty, it is used as the base config via GenerateFromBase,
+// preserving subscription template sections (rules, rule-providers, groups).
+// If onlyNodes is non-nil, only those nodes are used as the input node set;
+// otherwise nodes are collected from all enabled subscriptions.
+func autoConfigureClashForge(
+	ctx context.Context,
+	deps Deps,
+	out EventWriter,
+	activeSubID string,
+	activeSubName string,
+	baseYAML string,
+	onlyNodes []subscription.ProxyNode,
+) error {
+	_ = baseYAML
+	_ = onlyNodes
+
 	emit(out, PhaseConfigure, "update_config", StatusRunning, "更新 ClashForge 配置...")
 
 	cfg := deps.Config
-	cfg.DNS.Strategy = config.DNSStrategysplit // 分流优先
-	cfg.Network.Mode = "tproxy"
-	cfg.Network.BypassChina = true
-	cfg.DNS.ApplyOnStart = true
-	cfg.Network.ApplyOnStart = true
+
+	// ── 代理核心 ─────────────────────────────────────────────────────────────
 	cfg.Core.AutoStartCore = true
+
+	// ── 透明代理 + 防火墙规则（auto-detected） ────────────────────────────────
+	cfg.Network.Mode = "tproxy"
+	cfg.Network.ApplyOnStart = true
+	cfg.Network.BypassChina = true
+	cfg.Network.BypassLAN = true
+	// FirewallBackend "auto" lets ClashForge pick nftables or iptables;
+	// only override if currently unset / explicitly disabled.
+	if cfg.Network.FirewallBackend == "" || cfg.Network.FirewallBackend == "none" {
+		cfg.Network.FirewallBackend = "auto"
+	}
+
+	// ── DNS 解析引擎 + DNS 入口（dnsmasq 上游转发）────────────────────────────
+	// These two flags together make both the "DNS 入口" and "DNS 解析引擎"
+	// tiles go green in the Setup page.
+	cfg.DNS.Enable = true
+	cfg.DNS.ApplyOnStart = true
+	cfg.DNS.Strategy = config.DNSStrategysplit // 分流优先（geosite 精准路由）
+	// Use dnsmasq upstream-forward mode: dnsmasq stays on :53 and forwards
+	// all queries to Mihomo, which handles geo-split resolution.
+	// Only override if currently unset or disabled.
+	if cfg.DNS.DnsmasqMode == "" || cfg.DNS.DnsmasqMode == "none" {
+		cfg.DNS.DnsmasqMode = "upstream"
+	}
 
 	// Save config to TOML
 	if err := config.Save(deps.ConfigPath, cfg); err != nil {
@@ -34,34 +83,47 @@ func autoConfigureClashForge(ctx context.Context, deps Deps, out EventWriter) er
 	}
 	emit(out, PhaseConfigure, "update_config", StatusOK, "配置已保存（DNS 分流策略，TProxy 模式）")
 
-	// Collect proxy nodes from all enabled imports
-	emit(out, PhaseConfigure, "gen_config", StatusRunning, "重新生成 Mihomo 配置...")
-	nodes := collectAllNodes(deps.SubManager)
+	if strings.TrimSpace(activeSubID) != "" {
+		if err := setActiveSubscriptionSource(cfg.Core.DataDir, activeSubID, activeSubName); err != nil {
+			emit(out, PhaseConfigure, "set_active_source", StatusWarning,
+				"写入活动订阅源失败，后续启动可能不走该订阅", err.Error())
+		} else {
+			emit(out, PhaseConfigure, "set_active_source", StatusOK,
+				fmt.Sprintf("已设置活动配置源为订阅：%s", activeSubName))
+		}
+	}
 
-	generated, err := config.Generate(cfg, nodes)
+	// Generate runtime config via the same source-selection pipeline used by /setup.
+	emit(out, PhaseConfigure, "gen_config", StatusRunning, "以订阅为基准应用运行参数并写入 Mihomo 配置...")
+	generated, err := runtimecfg.GenerateAndWrite(cfg, deps.SubManager)
 	if err != nil {
 		emit(out, PhaseConfigure, "gen_config", StatusError, "Mihomo 配置生成失败", err.Error())
 		return fmt.Errorf("generate mihomo config: %w", err)
 	}
-	generated = config.ApplyManagedRuntimeSettings(cfg, generated)
-
-	data, err := config.MarshalYAML(generated)
-	if err != nil {
-		emit(out, PhaseConfigure, "gen_config", StatusError, "Mihomo 配置序列化失败", err.Error())
-		return fmt.Errorf("marshal mihomo config: %w", err)
+	if !generated {
+		emit(out, PhaseConfigure, "gen_config", StatusWarning, "未生成配置（暂无可用订阅源）")
+	} else {
+		emit(out, PhaseConfigure, "gen_config", StatusOK, "Mihomo 配置已按 /setup 默认流程写入")
 	}
 
-	outPath := cfg.Core.RuntimeDir + "/mihomo-config.yaml"
-	if err := os.MkdirAll(cfg.Core.RuntimeDir, 0o755); err != nil {
-		emit(out, PhaseConfigure, "gen_config", StatusError, "创建运行时目录失败", err.Error())
-		return fmt.Errorf("mkdir runtime dir: %w", err)
+	// Refresh netfilter manager with updated config so it uses the new mode/backend,
+	// then apply transparent-proxy + firewall rules immediately.
+	if deps.Netfilter != nil {
+		dnsRedirect := cfg.DNS.Enable && cfg.DNS.ApplyOnStart &&
+			strings.ToLower(strings.TrimSpace(cfg.DNS.DnsmasqMode)) == "replace"
+		bypassFakeIP := !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart ||
+			strings.ToLower(strings.TrimSpace(cfg.DNS.Mode)) != "fake-ip"
+		*deps.Netfilter = *netfilter.NewManager(netfilter.Config{
+			Mode:              cfg.Network.Mode,
+			FirewallBackend:   cfg.Network.FirewallBackend,
+			TProxyPort:        cfg.Ports.TProxy,
+			DNSPort:           cfg.Ports.DNS,
+			EnableDNSRedirect: dnsRedirect,
+			BypassFakeIP:      bypassFakeIP,
+			BypassCIDR:        cfg.Network.BypassCIDR,
+			EnableIPv6:        cfg.Network.IPv6,
+		})
 	}
-	if err := os.WriteFile(outPath, data, 0o644); err != nil {
-		emit(out, PhaseConfigure, "gen_config", StatusError, "写入 Mihomo 配置失败", err.Error())
-		return fmt.Errorf("write mihomo config: %w", err)
-	}
-	emit(out, PhaseConfigure, "gen_config", StatusOK,
-		fmt.Sprintf("Mihomo 配置已写入（%d 个代理节点）", len(nodes)))
 
 	// Start core
 	emit(out, PhaseConfigure, "start_core", StatusRunning, "启动 Mihomo 内核...")
@@ -73,7 +135,49 @@ func autoConfigureClashForge(ctx context.Context, deps Deps, out EventWriter) er
 	}
 	emit(out, PhaseConfigure, "start_core", StatusOK, "Mihomo 内核已启动 ✓")
 
+	// Apply transparent-proxy firewall rules (透明代理 + 防火墙规则)
+	if deps.Netfilter != nil && cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
+		if err := deps.Netfilter.Apply(); err != nil {
+			emit(out, PhaseConfigure, "apply_netfilter", StatusWarning,
+				"透明代理规则应用失败（可在「代理服务」页手动接管）", err.Error())
+		} else {
+			emit(out, PhaseConfigure, "apply_netfilter", StatusOK, "透明代理规则已应用 ✓")
+		}
+	}
+
+	// Apply DNS dnsmasq coexistence (DNS 入口)
+	if cfg.DNS.Enable && cfg.DNS.ApplyOnStart {
+		dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
+		if dnsMode != dns.ModeNone {
+			if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
+				emit(out, PhaseConfigure, "apply_dns", StatusWarning,
+					"DNS 入口配置失败（可在「代理服务」页手动接管）", err.Error())
+			} else {
+				emit(out, PhaseConfigure, "apply_dns", StatusOK,
+					fmt.Sprintf("DNS 入口已应用（%s 模式）✓", dnsMode))
+			}
+		}
+	}
+
 	return nil
+}
+
+func setActiveSubscriptionSource(dataDir, subID, subName string) error {
+	dataDir = strings.TrimSpace(dataDir)
+	subID = strings.TrimSpace(subID)
+	if dataDir == "" || subID == "" {
+		return nil
+	}
+	record := activeSourceRecord{
+		Type:    "subscription",
+		SubID:   subID,
+		SubName: strings.TrimSpace(subName),
+	}
+	body, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataDir, "active_source.json"), body, 0o644)
 }
 
 // collectAllNodes gathers proxy nodes from all enabled subscriptions and imports.

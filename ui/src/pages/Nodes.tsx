@@ -53,6 +53,7 @@ import {
   CFGate,
   CFPermissionTable,
   type CFConfig,
+  CFConfigBanner,
   CFConfigModal,
   maskSecret,
   useCFConfig,
@@ -2778,6 +2779,8 @@ export function Nodes() {
       />
 
       <CFGate config={cfGlobal} loading={cfLoading} save={saveCFGlobal}>
+
+      <CFConfigBanner config={cfGlobal} loading={cfLoading} onConfigure={() => setShowCFModal(true)} />
 
       {error && (
         <div className="rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-400 flex items-center gap-2">

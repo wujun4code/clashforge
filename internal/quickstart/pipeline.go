@@ -6,6 +6,8 @@ import (
 
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
+	"github.com/wujun4code/clashforge/internal/netfilter"
+	"github.com/wujun4code/clashforge/internal/publish"
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"github.com/wujun4code/clashforge/internal/workernode"
 )
@@ -22,12 +24,14 @@ type Pipeline interface {
 
 // Deps holds the external services injected into pipelines.
 type Deps struct {
-	DataDir     string
-	ConfigPath  string
-	Config      *config.MetaclashConfig
-	Core        *core.CoreManager
-	SubManager  *subscription.Manager
-	WorkerStore *workernode.Store
+	DataDir      string
+	ConfigPath   string
+	Config       *config.MetaclashConfig
+	Core         *core.CoreManager
+	SubManager   *subscription.Manager
+	WorkerStore  *workernode.Store
+	PublishStore *publish.Store
+	Netfilter    *netfilter.Manager // used to apply transparent-proxy rules after core starts
 }
 
 // NewPipeline returns the pipeline for the requested deploy type.
