@@ -547,35 +547,35 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
         Ok "Router arch : $RouterMachine → $IpkArch"
 
         # ── 2. Resolve version ─────────────────────────────────────────────────
+        # When version is "latest", walk releases newest-first and pick the first
+        # one that actually contains the IPK asset for this architecture.
+        # This avoids installing a half-published release that has no IPK yet.
         $Tag = $Version
         if ($Tag -eq "latest") {
-            Log "── Step 2: Resolving latest release version..."
+            Log "── Step 2: Resolving latest release with IPK for $IpkArch..."
             try {
                 $Releases = Invoke-RestMethod `
                     -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50" `
                     -Headers @{ "Accept" = "application/vnd.github+json" } `
                     -TimeoutSec 15
-                $Tags = @($Releases | ForEach-Object { $_.tag_name } | Where-Object { $_ })
-                $BetaTags = @($Tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+-beta\.\d+$' })
-                if ($BetaTags.Count -gt 0) {
-                    $Tag = $BetaTags |
-                        Sort-Object {
-                            if ($_ -match '^v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') {
-                                [string]::Format('{0:D9}.{1:D9}.{2:D9}.{3:D9}',
-                                    [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
-                            } else {
-                                ''
-                            }
-                        } |
-                        Select-Object -Last 1
-                } else {
-                    $Tag = $Tags | Select-Object -First 1
+                # GitHub returns releases newest-first; walk until we find one
+                # that has clashforge_<ver>_<arch>.ipk as a published asset.
+                foreach ($rel in $Releases) {
+                    $tagCandidate = $rel.tag_name
+                    if (-not $tagCandidate) { continue }
+                    $pkgVerCandidate = $tagCandidate.TrimStart("v")
+                    $ipkAssetName    = "clashforge_${pkgVerCandidate}_${IpkArch}.ipk"
+                    $hasIpk = $rel.assets | Where-Object { $_.name -eq $ipkAssetName }
+                    if ($hasIpk) {
+                        $Tag = $tagCandidate
+                        break
+                    }
                 }
             } catch {
                 Die "Failed to resolve latest version from GitHub API: $_"
             }
         }
-        if (-not $Tag) { Die "Could not resolve release version." }
+        if (-not $Tag) { Die "Could not find a published release with an IPK for $IpkArch. Check https://github.com/wujun4code/clashforge/releases" }
         $PkgVer  = $Tag.TrimStart("v")
         $IpkName = "clashforge_${PkgVer}_${IpkArch}.ipk"
         Ok "Version     : $Tag"
@@ -642,6 +642,14 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
             Die "Failed to download IPK from all sources.`nTry: -Mirror https://ghproxy.com  or  -BaseUrl <your-cdn>"
         }
         $IpkBytes = (Get-Item $LocalIpk).Length
+        # Validate the file is a gzip archive (magic bytes 1f 8b).
+        # Some mirrors return an HTML error page with HTTP 200, which would
+        # silently produce a "Malformed package file" error on the router.
+        $magic = [System.IO.File]::ReadAllBytes($LocalIpk) | Select-Object -First 2
+        if ($magic.Count -lt 2 -or $magic[0] -ne 0x1f -or $magic[1] -ne 0x8b) {
+            Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+            Die "Downloaded file is not a valid gzip archive (got HTML error page?).`nSource: $GhUrl"
+        }
         Ok "Local IPK   : $LocalIpk ($IpkBytes bytes)"
         $CleanupLocalIpk = $true
     }
