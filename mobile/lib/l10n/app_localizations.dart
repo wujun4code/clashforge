@@ -153,6 +153,21 @@ abstract class AppLocalizations {
   String get tileAboutSubtitle;
   String get tileLanguageTitle;
   String get tileLanguageSubtitle;
+  String get tileDnsStrategyTitle;
+  String tileDnsStrategySub(String current);
+
+  // ── DNS strategy picker ────────────────────────────────────────────────────
+  String get dnsStrategySheetTitle;
+  String get dnsStrategySplitLabel;
+  String get dnsStrategySplitBadge;
+  String get dnsStrategySplitDesc;
+  String get dnsStrategyPrivacyLabel;
+  String get dnsStrategyPrivacyBadge;
+  String get dnsStrategyPrivacyDesc;
+  String get dnsStrategyLegacyLabel;
+  String get dnsStrategyLegacyBadge;
+  String get dnsStrategyLegacyDesc;
+  String get dnsStrategyReconnectHint;
 
   // ── Logs ───────────────────────────────────────────────────────────────────
   String get logsTitle;
@@ -371,6 +386,27 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get tileAboutSubtitle => 'App version, runtime status, memory';
   @override String get tileLanguageTitle => 'Language';
   @override String get tileLanguageSubtitle => 'App display language';
+  @override String get tileDnsStrategyTitle => 'DNS Strategy';
+  @override String tileDnsStrategySub(String current) => 'Current: $current';
+
+  @override String get dnsStrategySheetTitle => 'DNS Strategy';
+  @override String get dnsStrategySplitLabel => 'Split-Route';
+  @override String get dnsStrategySplitBadge => 'Recommended';
+  @override String get dnsStrategySplitDesc =>
+      'CN domains via ISP DNS (best CDN). International via Google/Cloudflare DoH. '
+      'ISP cannot see international queries. Requires GeoData.';
+  @override String get dnsStrategyPrivacyLabel => 'Full Encryption';
+  @override String get dnsStrategyPrivacyBadge => 'Max Privacy';
+  @override String get dnsStrategyPrivacyDesc =>
+      'All DNS via DoH. ISP sees zero DNS records. '
+      'Slight CDN penalty for domestic sites. Requires GeoData.';
+  @override String get dnsStrategyLegacyLabel => 'Legacy Mode';
+  @override String get dnsStrategyLegacyBadge => 'Compatible';
+  @override String get dnsStrategyLegacyDesc =>
+      'Preserves fallback-filter behaviour, no nameserver-policy. '
+      'For existing custom DNS configs or when GeoData is unavailable.';
+  @override String get dnsStrategyReconnectHint =>
+      'Reconnect to apply the new DNS strategy.';
 
   @override String get logsTitle => 'Logs';
   @override String get tooltipCopyAll => 'Copy all';
@@ -560,6 +596,26 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get tileAboutSubtitle => '应用版本、运行状态、内存用量';
   @override String get tileLanguageTitle => '语言';
   @override String get tileLanguageSubtitle => '应用显示语言';
+  @override String get tileDnsStrategyTitle => 'DNS 分流策略';
+  @override String tileDnsStrategySub(String current) => '当前：$current';
+
+  @override String get dnsStrategySheetTitle => 'DNS 分流策略';
+  @override String get dnsStrategySplitLabel => '分流优先';
+  @override String get dnsStrategySplitBadge => '推荐';
+  @override String get dnsStrategySplitDesc =>
+      '国内域名走 ISP DNS（最优 CDN），国际域名走 Google / Cloudflare DoH。'
+      'ISP 无法看到国际查询，DNS 泄露检测显示洁净。需要 GeoData。';
+  @override String get dnsStrategyPrivacyLabel => '全链路加密';
+  @override String get dnsStrategyPrivacyBadge => '隐私最大';
+  @override String get dnsStrategyPrivacyDesc =>
+      '所有 DNS 查询走 DoH。ISP 完全看不到任何 DNS 记录，DNS 泄露检测 100% 洁净。'
+      '国内 CDN 路由略有损耗。需要 GeoData。';
+  @override String get dnsStrategyLegacyLabel => '传统模式';
+  @override String get dnsStrategyLegacyBadge => '兼容';
+  @override String get dnsStrategyLegacyDesc =>
+      '保持原有 fallback-filter 行为，不生成 nameserver-policy。'
+      '适合已有自定义 DNS 配置、不需要分流的场景。';
+  @override String get dnsStrategyReconnectHint => '重新连接以应用新的 DNS 策略。';
 
   @override String get logsTitle => '日志';
   @override String get tooltipCopyAll => '全部复制';

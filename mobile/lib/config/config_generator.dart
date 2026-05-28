@@ -1,7 +1,32 @@
+import 'dart:io';
 import 'loyalsoldier_template.dart';
 import '../subscription/proxy_node.dart';
 
 class ConfigGenerator {
+  static const _cnPlainDns = ['223.5.5.5', '119.29.29.29'];
+  static const _cnDoh = [
+    'https://dns.alidns.com/dns-query',
+    'https://doh.pub/dns-query',
+  ];
+  static const _intlDoh = [
+    'https://1.1.1.1/dns-query',
+    'https://8.8.8.8/dns-query',
+  ];
+  static const _fakeIpFilter = [
+    '*.lan',
+    '*.local',
+    '*.localhost',
+    '*.localdomain',
+    '+.stun.*.*',
+    '+.stun.*.*.*',
+    'msftconnecttest.com',
+    '*.msftconnecttest.com',
+    'time.*.com',
+    'ntp.*.com',
+    '*.ntp.org.cn',
+    '*.pool.ntp.org',
+  ];
+
   /// Generate a complete Clash/mihomo config map ready for YAML serialisation.
   ///
   /// **Rule-selection logic** (per spec):
@@ -12,6 +37,8 @@ class ConfigGenerator {
   ///
   /// **DNS**: always uses the app's own DNS config regardless of what the
   /// subscription contained (imported DNS is intentionally ignored).
+  ///
+  /// [dnsStrategy]: 'split' (default) | 'privacy' | 'legacy'
   static Map<String, dynamic> generate({
     required List<ProxyNode> nodes,
     required String geodataPath,
@@ -20,6 +47,7 @@ class ConfigGenerator {
     List<String> customRules = const [],
     List<Map<String, dynamic>> customProxyGroups = const [],
     Map<String, Map<String, dynamic>> customRuleProviders = const {},
+    String dnsStrategy = 'split',
   }) {
     final out = <String, dynamic>{};
 
@@ -45,41 +73,7 @@ class ConfigGenerator {
     // bypassing GFW-polluted local resolvers. This eliminates the
     // DNS_PROBE_FINISHED_BAD_CONFIG failure Chrome gets in redir-host mode
     // when 223.5.5.5 or 8.8.8.8 return blocked/poisoned results.
-    out['dns'] = {
-      'enable': true,
-      'listen': '0.0.0.0:1053',
-      'respect-rules': false,
-      'enhanced-mode': 'fake-ip',
-      'fake-ip-range': '198.18.0.0/15',
-      'fake-ip-filter': [
-        '*.lan',
-        '*.local',
-        '*.localhost',
-        '*.localdomain',
-        '+.stun.*.*',
-        '+.stun.*.*.*',
-        'msftconnecttest.com',
-        '*.msftconnecttest.com',
-        'time.*.com',
-        'ntp.*.com',
-        '*.ntp.org.cn',
-        '*.pool.ntp.org',
-      ],
-      'nameserver': ['223.5.5.5', '8.8.8.8'],
-      'default-nameserver': ['223.5.5.5', '8.8.8.8'],
-      'proxy-server-nameserver': ['223.5.5.5', '8.8.8.8'],
-      'fallback': [
-        'https://1.1.1.1/dns-query',
-        'https://8.8.8.8/dns-query',
-        'https://doh.pub/dns-query',
-        'https://dns.alidns.com/dns-query',
-      ],
-      'fallback-filter': {
-        'geoip': true,
-        'geoip-code': 'CN',
-        'ipcidr': ['240.0.0.0/4'],
-      },
-    };
+    out['dns'] = _buildDns(geodataPath, dnsStrategy);
 
     // ── Proxies ──────────────────────────────────────────────────────────────
     final proxies = <Map<String, dynamic>>[];
@@ -140,6 +134,71 @@ class ConfigGenerator {
   }
 
   // ── helpers ─────────────────────────────────────────────────────────────────
+
+  /// Build the DNS config block based on [strategy].
+  ///
+  /// - split   : CN domains → plain ISP DNS (best CDN), international → DoH.
+  ///             nameserver-policy requires geosite.dat; auto-falls back to
+  ///             legacy if the file is missing.
+  /// - privacy : All queries → DoH. ISP sees zero DNS records.
+  ///             Also requires geosite.dat; falls back to legacy if missing.
+  /// - legacy  : Original fallback-filter behaviour; no nameserver-policy.
+  static Map<String, dynamic> _buildDns(String geodataPath, String strategy) {
+    final base = <String, dynamic>{
+      'enable': true,
+      'listen': '0.0.0.0:1053',
+      'respect-rules': false,
+      'enhanced-mode': 'fake-ip',
+      'fake-ip-range': '198.18.0.0/15',
+      'fake-ip-filter': _fakeIpFilter,
+      'default-nameserver': _cnPlainDns,
+      'proxy-server-nameserver': _cnPlainDns,
+    };
+
+    // geosite.dat is bundled as an app asset and extracted to filesDir on
+    // first VPN start; it is present in normal operation.
+    final geositePresent = File('$geodataPath/geosite.dat').existsSync();
+    final effective =
+        (strategy == 'split' || strategy == 'privacy') && !geositePresent
+            ? 'legacy'
+            : strategy;
+
+    if (effective == 'privacy') {
+      base['nameserver'] = _cnDoh;
+      base['nameserver-policy'] = {
+        'geosite:cn': _cnDoh,
+        'geosite:geolocation-!cn': _intlDoh,
+      };
+    } else if (effective == 'split') {
+      base['nameserver'] = _cnPlainDns;
+      base['nameserver-policy'] = {
+        'geosite:cn': _cnPlainDns,
+        'geosite:geolocation-!cn': _intlDoh,
+      };
+      base['fallback'] = _intlDoh;
+      base['fallback-filter'] = {
+        'geoip': true,
+        'geoip-code': 'CN',
+        'ipcidr': ['240.0.0.0/4'],
+      };
+    } else {
+      // legacy: original fallback-filter behaviour
+      base['nameserver'] = ['223.5.5.5', '8.8.8.8'];
+      base['fallback'] = [
+        'https://1.1.1.1/dns-query',
+        'https://8.8.8.8/dns-query',
+        'https://doh.pub/dns-query',
+        'https://dns.alidns.com/dns-query',
+      ];
+      base['fallback-filter'] = {
+        'geoip': true,
+        'geoip-code': 'CN',
+        'ipcidr': ['240.0.0.0/4'],
+      };
+    }
+
+    return base;
+  }
 
   /// Auto url-test group + 🚀 Proxy select group, preserving [selectedNodeName]
   /// at the top of the list.

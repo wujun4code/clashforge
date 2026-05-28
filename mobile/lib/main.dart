@@ -353,6 +353,8 @@ class _HomeScreenState extends State<HomeScreen> {
         ('Claude', l10n.siteClaudeDesc, _aiSiteUrls[1].$1, _aiSiteUrls[1].$2),
       ];
 
+  static const _kDnsStrategyKey = 'dns_strategy';
+
   int _tabIndex = 0;
   bool _isConnected = false;
   bool _isConnecting = false;
@@ -370,6 +372,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, String> _proxyNowMap = {};
   final List<Subscription> _subscriptions = [];
   String? _activeSubscriptionId;
+  String _dnsStrategy = 'split';
 
   @override
   void initState() {
@@ -382,6 +385,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadPersistedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedStrategy = prefs.getString(_kDnsStrategyKey);
+    if (savedStrategy != null &&
+        ['split', 'privacy', 'legacy'].contains(savedStrategy)) {
+      setState(() => _dnsStrategy = savedStrategy);
+    }
+
     final subs = await SubscriptionStore.loadSubscriptions();
     final activeId = await SubscriptionStore.loadActiveId();
     if (subs.isNotEmpty) {
@@ -403,6 +413,22 @@ class _HomeScreenState extends State<HomeScreen> {
     // Always ensure the builtin subscription is present, regardless of
     // whether other subscriptions exist. Skips silently if already imported.
     await _ensureBuiltinSub();
+  }
+
+  Future<void> _setDnsStrategy(String strategy) async {
+    if (_dnsStrategy == strategy) return;
+    setState(() => _dnsStrategy = strategy);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kDnsStrategyKey, strategy);
+    if (_isConnected && mounted) {
+      final l10n = AppLocalizations.of(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l10n.dnsStrategyReconnectHint),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   Future<void> _ensureBuiltinSub() async {
@@ -806,6 +832,7 @@ class _HomeScreenState extends State<HomeScreen> {
         customRules: activeSub.customRules,
         customProxyGroups: activeSub.customProxyGroups,
         customRuleProviders: activeSub.customRuleProviders,
+        dnsStrategy: _dnsStrategy,
       );
       final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
       logger.debug('vpn', 'Restart config write result: $writeResult');
@@ -1026,6 +1053,7 @@ class _HomeScreenState extends State<HomeScreen> {
           customRules: activeSub?.customRules ?? const [],
           customProxyGroups: activeSub?.customProxyGroups ?? const [],
           customRuleProviders: activeSub?.customRuleProviders ?? const {},
+          dnsStrategy: _dnsStrategy,
         );
         final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
         logger.debug('vpn', 'Config write result: $writeResult');
@@ -1667,6 +1695,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _SettingsTab(
         nodeCount: _nodes.length,
         onLocaleChanged: widget.onLocaleChanged,
+        dnsStrategy: _dnsStrategy,
+        onDnsStrategyChanged: _setDnsStrategy,
       ),
     ];
 
@@ -4343,9 +4373,13 @@ class _SettingsTab extends StatelessWidget {
   const _SettingsTab({
     required this.nodeCount,
     required this.onLocaleChanged,
+    required this.dnsStrategy,
+    required this.onDnsStrategyChanged,
   });
   final int nodeCount;
   final void Function(Locale) onLocaleChanged;
+  final String dnsStrategy;
+  final void Function(String) onDnsStrategyChanged;
 
   void _showLanguagePicker(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -4400,6 +4434,97 @@ class _SettingsTab extends StatelessWidget {
     );
   }
 
+  void _showDnsStrategyPicker(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: _kBorder, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                const Icon(Icons.dns_outlined, color: _kBrand, size: 20),
+                const SizedBox(width: 8),
+                Text(l10n.dnsStrategySheetTitle,
+                    style: const TextStyle(
+                        color: _kTextHi,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _DnsStrategyCard(
+              value: 'split',
+              selected: dnsStrategy == 'split',
+              label: l10n.dnsStrategySplitLabel,
+              badge: l10n.dnsStrategySplitBadge,
+              badgeColor: _kBrand,
+              description: l10n.dnsStrategySplitDesc,
+              onTap: () {
+                Navigator.pop(context);
+                onDnsStrategyChanged('split');
+              },
+            ),
+            const SizedBox(height: 10),
+            _DnsStrategyCard(
+              value: 'privacy',
+              selected: dnsStrategy == 'privacy',
+              label: l10n.dnsStrategyPrivacyLabel,
+              badge: l10n.dnsStrategyPrivacyBadge,
+              badgeColor: const Color(0xFF8B5CF6),
+              description: l10n.dnsStrategyPrivacyDesc,
+              onTap: () {
+                Navigator.pop(context);
+                onDnsStrategyChanged('privacy');
+              },
+            ),
+            const SizedBox(height: 10),
+            _DnsStrategyCard(
+              value: 'legacy',
+              selected: dnsStrategy == 'legacy',
+              label: l10n.dnsStrategyLegacyLabel,
+              badge: l10n.dnsStrategyLegacyBadge,
+              badgeColor: const Color(0xFF6B7280),
+              description: l10n.dnsStrategyLegacyDesc,
+              onTap: () {
+                Navigator.pop(context);
+                onDnsStrategyChanged('legacy');
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _strategyLabel(String strategy, AppLocalizations l10n) {
+    switch (strategy) {
+      case 'privacy':
+        return l10n.dnsStrategyPrivacyLabel;
+      case 'legacy':
+        return l10n.dnsStrategyLegacyLabel;
+      default:
+        return l10n.dnsStrategySplitLabel;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -4420,6 +4545,14 @@ class _SettingsTab extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(
               children: [
+                _SettingsTile(
+                  iconColor: _kBrand,
+                  icon: Icons.dns_outlined,
+                  title: l10n.tileDnsStrategyTitle,
+                  subtitle: l10n.tileDnsStrategySub(_strategyLabel(dnsStrategy, l10n)),
+                  onTap: () => _showDnsStrategyPicker(context),
+                ),
+                const SizedBox(height: 8),
                 _SettingsTile(
                   iconColor: const Color(0xFF22D3EE),
                   icon: Icons.terminal_outlined,
@@ -4452,7 +4585,7 @@ class _SettingsTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 _SettingsTile(
-                  iconColor: _kBrand,
+                  iconColor: const Color(0xFFBEBEBE),
                   icon: Icons.info_outline,
                   title: l10n.tileAboutTitle,
                   subtitle: l10n.tileAboutSubtitle,
@@ -4477,6 +4610,98 @@ class _SettingsTab extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DnsStrategyCard extends StatelessWidget {
+  const _DnsStrategyCard({
+    required this.value,
+    required this.selected,
+    required this.label,
+    required this.badge,
+    required this.badgeColor,
+    required this.description,
+    required this.onTap,
+  });
+
+  final String value;
+  final bool selected;
+  final String label;
+  final String badge;
+  final Color badgeColor;
+  final String description;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected ? _kBrand.withAlpha(16) : _kBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? _kBrand.withAlpha(160) : _kBorder,
+            width: selected ? 1.4 : 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: selected ? _kBrand : _kTextHi,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: badgeColor.withAlpha(40),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          badge,
+                          style: TextStyle(
+                            color: badgeColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    description,
+                    style: const TextStyle(
+                        color: _kTextMuted, fontSize: 12, height: 1.45),
+                  ),
+                ],
+              ),
+            ),
+            if (selected) ...[
+              const SizedBox(width: 10),
+              const Icon(Icons.check_circle, color: _kBrand, size: 18),
+            ],
+          ],
+        ),
       ),
     );
   }
