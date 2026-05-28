@@ -13,8 +13,8 @@ type ClashProxy struct {
 	Type           string `yaml:"type"`
 	Server         string `yaml:"server"`
 	Port           int    `yaml:"port"`
-	Username       string `yaml:"username"`
-	Password       string `yaml:"password"`
+	Username       string `yaml:"username,omitempty"`
+	Password       string `yaml:"password,omitempty"`
 	TLS            bool   `yaml:"tls,omitempty"`
 	SkipCertVerify bool   `yaml:"skip-cert-verify,omitempty"`
 }
@@ -24,9 +24,6 @@ func ExportClashProxy(node *Node) (string, error) {
 	if node == nil {
 		return "", fmt.Errorf("node is nil")
 	}
-	if strings.TrimSpace(node.ProxyUser) == "" || strings.TrimSpace(node.ProxyPassword) == "" {
-		return "", fmt.Errorf("节点代理账号或密码缺失，请先重新部署节点后再导出配置")
-	}
 	server := strings.TrimSpace(node.Domain)
 	if server == "" {
 		server = strings.TrimSpace(node.Host)
@@ -35,11 +32,20 @@ func ExportClashProxy(node *Node) (string, error) {
 		return "", fmt.Errorf("节点域名/主机为空，无法导出配置")
 	}
 
+	proxyType := strings.ToLower(strings.TrimSpace(node.ProxyType))
+	if proxyType == "" {
+		proxyType = "http"
+	}
+	proxyPort := node.ProxyPort
+	if proxyPort <= 0 {
+		proxyPort = 443
+	}
+
 	proxy := ClashProxy{
 		Name:     node.Name,
-		Type:     "http",
+		Type:     proxyType,
 		Server:   server,
-		Port:     443,
+		Port:     proxyPort,
 		Username: node.ProxyUser,
 		Password: node.ProxyPassword,
 		TLS:      true,

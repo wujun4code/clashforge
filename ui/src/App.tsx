@@ -11,6 +11,8 @@ import { Setup } from './pages/Setup'
 import { Settings } from './pages/Settings'
 import { Publish } from './pages/Publish'
 import { QuickStart } from './pages/QuickStart'
+import { ServiceStatus } from './pages/ServiceStatus'
+import { CloudflareResources } from './pages/CloudflareResources'
 
 export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -67,11 +69,13 @@ export default function App() {
                 <Route path="/device-rules" element={<PerDeviceRules />} />
                 <Route path="/nodes" element={<Nodes />} />
                 <Route path="/publish" element={<Publish />} />
+                <Route path="/cloudflare-resources" element={<CloudflareResources />} />
                 <Route path="/geodata" element={<Navigate to="/config?tab=geodata" replace />} />
                 <Route path="/activity" element={<ActivityLog />} />
                 <Route path="/setup" element={<Setup />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/quickstart" element={<QuickStart />} />
+                <Route path="/service" element={<ServiceStatus />} />
               </Routes>
             </div>
           </div>

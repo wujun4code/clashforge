@@ -94,6 +94,20 @@ func (c *SSHClient) RunOutput(cmd string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// RunPrivileged executes a command as root.
+// If current user is not root, it uses passwordless sudo (-n).
+func (c *SSHClient) RunPrivileged(cmd string) (string, error) {
+	script := fmt.Sprintf(`if [ "$(id -u)" -eq 0 ]; then
+  sh -lc %s
+elif command -v sudo >/dev/null 2>&1; then
+  sudo -n sh -lc %s
+else
+  echo "need root or passwordless sudo" >&2
+  exit 1
+fi`, shellQuote(cmd), shellQuote(cmd))
+	return c.Run(script)
+}
+
 // WriteFile uploads arbitrary content to a remote path via base64 encoding.
 // mode is an octal string like "0644"; defaults to "0644".
 func (c *SSHClient) WriteFile(remotePath, content string, mode string) error {
@@ -103,16 +117,23 @@ func (c *SSHClient) WriteFile(remotePath, content string, mode string) error {
 	encoded := base64.StdEncoding.EncodeToString([]byte(content))
 	// Write via printf to avoid shell quoting issues with arbitrary content.
 	cmd := fmt.Sprintf(
-		`printf '%%s' '%s' | base64 -d > %s && chmod %s %s`,
-		encoded, remotePath, mode, remotePath,
+		`printf '%%s' %s | base64 -d > %s && chmod %s %s`,
+		shellQuote(encoded), shellQuote(remotePath), shellQuote(mode), shellQuote(remotePath),
 	)
-	_, err := c.Run(cmd)
+	if _, err := c.Run(cmd); err == nil {
+		return nil
+	}
+	_, err := c.RunPrivileged(cmd)
 	return err
 }
 
 // MkdirP creates a directory (and parents) on the remote host.
 func (c *SSHClient) MkdirP(remotePath string) error {
-	_, err := c.Run("mkdir -p " + remotePath)
+	cmd := "mkdir -p -- " + shellQuote(remotePath)
+	if _, err := c.Run(cmd); err == nil {
+		return nil
+	}
+	_, err := c.RunPrivileged(cmd)
 	return err
 }
 
@@ -127,4 +148,8 @@ func parsePrivateKey(pemContent string) (ssh.Signer, error) {
 		return nil, fmt.Errorf("parse private key: %w", err)
 	}
 	return signer, nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }

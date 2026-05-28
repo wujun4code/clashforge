@@ -53,11 +53,11 @@ func DetectEnv(c *SSHClient) (*EnvInfo, error) {
 // All errors are swallowed — this is best-effort pre-cleanup.
 func CleanupGost(c *SSHClient) {
 	// Stop + disable gost.service if it exists (ignore errors — unit may not exist yet)
-	_, _ = c.Run("systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null; true")
+	_, _ = c.RunPrivileged("systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null; true")
 
 	// Force-kill whatever process is holding port 443.
 	// Try fuser first (procps), fall back to lsof (busybox/minimal images).
-	_, _ = c.Run(
+	_, _ = c.RunPrivileged(
 		`fuser -k 443/tcp 2>/dev/null; ` +
 			`PIDS=$(lsof -ti:443 2>/dev/null); ` +
 			`[ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null; true`,
@@ -67,7 +67,7 @@ func CleanupGost(c *SSHClient) {
 	_, _ = c.Run("sleep 1")
 
 	// Remove old binary so tar extraction below can overwrite cleanly
-	_, _ = c.Run("rm -f " + GostBin + " 2>/dev/null; true")
+	_, _ = c.RunPrivileged("rm -f " + GostBin + " 2>/dev/null; true")
 }
 
 // InstallGost downloads and installs gost on the VPS via SSH.
@@ -81,19 +81,61 @@ func InstallGost(c *SSHClient, info *EnvInfo) error {
 	version := GostVersion
 	tarName := fmt.Sprintf("gost_%s_linux_%s.tar.gz", version, arch)
 	dlURL := fmt.Sprintf("https://github.com/go-gost/gost/releases/download/v%s/%s", version, tarName)
+	mirrorURL := fmt.Sprintf("https://ghproxy.com/%s", dlURL)
 
-	// Download with curl; try ghproxy mirror on failure (GitHub may be blocked)
-	downloadCmd := fmt.Sprintf(
-		`curl -fsSL "%s" -o /tmp/gost.tar.gz 2>/dev/null || curl -fsSL "https://ghproxy.com/%s" -o /tmp/gost.tar.gz`,
-		dlURL, dlURL,
+	// Download with curl; try ghproxy mirror on failure (GitHub may be blocked).
+	// Keep this as two explicit attempts so the error message clearly shows
+	// which URL failed and why.
+	downloadPrimary := fmt.Sprintf(
+		`curl -fL --connect-timeout 15 --retry 2 --retry-delay 1 "%s" -o /tmp/gost.tar.gz`,
+		dlURL,
 	)
-	if _, err := c.Run(downloadCmd); err != nil {
-		return fmt.Errorf("download gost: %w", err)
+	if _, err := c.Run(downloadPrimary); err != nil {
+		downloadMirror := fmt.Sprintf(
+			`curl -fL --connect-timeout 15 --retry 2 --retry-delay 1 "%s" -o /tmp/gost.tar.gz`,
+			mirrorURL,
+		)
+		if _, err2 := c.Run(downloadMirror); err2 != nil {
+			return fmt.Errorf("download gost: primary failed (%v); mirror failed (%w)", err, err2)
+		}
 	}
 
-	// Extract gost binary
-	if _, err := c.Run(`tar -xzf /tmp/gost.tar.gz -C /tmp/ && mv /tmp/gost /usr/local/bin/gost && chmod +x /usr/local/bin/gost`); err != nil {
-		return fmt.Errorf("extract gost: %w", err)
+	// Validate archive format first. Some proxy mirrors may return an HTML page
+	// with HTTP 200, which would make tar extraction fail with a generic status 1.
+	if _, err := c.Run(`tar -tzf /tmp/gost.tar.gz >/dev/null`); err != nil {
+		return fmt.Errorf("invalid gost archive: %w", err)
+	}
+
+	// Extract and install. Do not assume the tarball always lays out as /tmp/gost;
+	// locate the binary dynamically to tolerate upstream packaging changes.
+	installCmd := `
+set -eu
+TMPDIR="$(mktemp -d /tmp/clashforge-gost.XXXXXX)"
+cleanup() {
+  rm -rf "$TMPDIR" /tmp/gost.tar.gz
+}
+trap cleanup EXIT INT TERM
+
+tar -xzf /tmp/gost.tar.gz -C "$TMPDIR"
+
+BIN_PATH="$(find "$TMPDIR" -type f -name gost | head -n 1)"
+if [ -z "$BIN_PATH" ]; then
+  echo "gost binary not found in archive" >&2
+  exit 1
+fi
+chmod +x "$BIN_PATH"
+
+if [ "$(id -u)" -eq 0 ]; then
+  install -m 755 "$BIN_PATH" /usr/local/bin/gost
+elif command -v sudo >/dev/null 2>&1; then
+  sudo install -m 755 "$BIN_PATH" /usr/local/bin/gost
+else
+  echo "need root or sudo to install /usr/local/bin/gost" >&2
+  exit 1
+fi
+`
+	if _, err := c.Run(installCmd); err != nil {
+		return fmt.Errorf("extract/install gost: %w", err)
 	}
 
 	// Create directories
@@ -107,10 +149,11 @@ func InstallGost(c *SSHClient, info *EnvInfo) error {
 	return nil
 }
 
-// WriteGostConfig uploads the gost config.yaml and systemd unit, then enables and starts the service.
-func WriteGostConfig(c *SSHClient) error {
+// WriteGostConfig uploads the gost config.yaml (with credentials) and systemd unit,
+// then enables and starts the service.
+func WriteGostConfig(c *SSHClient, user, pass string) error {
 	// Write config.yaml
-	if err := c.WriteFile(GostCfgPath, BuildGostConfig(), "0644"); err != nil {
+	if err := c.WriteFile(GostCfgPath, BuildGostConfig(user, pass), "0644"); err != nil {
 		return fmt.Errorf("write gost config: %w", err)
 	}
 
@@ -121,7 +164,7 @@ func WriteGostConfig(c *SSHClient) error {
 	}
 
 	// Enable + start
-	if _, err := c.Run("systemctl daemon-reload && systemctl enable gost && systemctl restart gost"); err != nil {
+	if _, err := c.RunPrivileged("systemctl daemon-reload && systemctl enable gost && systemctl restart gost"); err != nil {
 		return fmt.Errorf("start gost service: %w", err)
 	}
 	return nil
@@ -131,13 +174,13 @@ func WriteGostConfig(c *SSHClient) error {
 func AllowPort443(c *SSHClient, firewall string) error {
 	switch firewall {
 	case "ufw":
-		_, err := c.Run("ufw allow 443/tcp")
+		_, err := c.RunPrivileged("ufw allow 443/tcp")
 		return err
 	case "firewalld":
-		_, err := c.Run("firewall-cmd --permanent --add-port=443/tcp && firewall-cmd --reload")
+		_, err := c.RunPrivileged("firewall-cmd --permanent --add-port=443/tcp && firewall-cmd --reload")
 		return err
 	case "iptables":
-		_, err := c.Run("iptables -I INPUT -p tcp --dport 443 -j ACCEPT")
+		_, err := c.RunPrivileged("iptables -I INPUT -p tcp --dport 443 -j ACCEPT")
 		return err
 	default:
 		// No recognised firewall — assume open or unmanaged

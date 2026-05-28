@@ -439,36 +439,65 @@ func handleProbeNode(store *nodes.Store) http.HandlerFunc {
 
 		proxyHost := node.Host
 		if mode == "domain" {
-			proxyHost = node.Domain
+			if strings.TrimSpace(node.Domain) != "" {
+				proxyHost = node.Domain
+			} else {
+				proxyHost = node.Name // QuickStart nodes store FQDN in Name
+			}
 		}
 		if strings.TrimSpace(proxyHost) == "" {
 			Err(w, http.StatusBadRequest, "NODE_PROBE_INVALID", "缺少可用的代理地址")
 			return
 		}
-		if strings.TrimSpace(node.ProxyUser) == "" || strings.TrimSpace(node.ProxyPassword) == "" {
-			Err(w, http.StatusBadRequest, "NODE_PROBE_INVALID", "节点尚未生成代理账号密码，请先执行部署")
-			return
-		}
 
-		probeOptions := nodes.ProxyProbeOptions{ProxyScheme: "http"}
-		if node.Status == nodes.StatusDeployed {
-			probeOptions.ProxyScheme = "https"
-			// Deployed mode uses TLS listener. If probing via raw IP, cert SAN may not match,
-			// so we relax verification only for this diagnostic path.
-			if mode == "ip" {
-				probeOptions.InsecureSkipVerify = true
+		proxyPort := node.ProxyPort
+		if proxyPort <= 0 {
+			proxyPort = 443
+		}
+		proxyType := strings.ToLower(strings.TrimSpace(node.ProxyType))
+		if proxyType == "" {
+			// Legacy nodes without ProxyType: nodes with credentials use http auth,
+			// nodes without are assumed to be the old socks5 QuickStart deployment.
+			if strings.TrimSpace(node.ProxyUser) == "" {
+				proxyType = "socks5"
+			} else {
+				proxyType = "http"
 			}
 		}
 
-		results := nodes.TestHTTPProxyWithOptions(
-			proxyHost,
-			443,
-			node.ProxyUser,
-			node.ProxyPassword,
-			10*time.Second,
-			nodes.DefaultProbeTargets(),
-			probeOptions,
-		)
+		var results []nodes.ProbeResult
+		switch proxyType {
+		case "socks5":
+			results = nodes.TestSocks5TLSProxy(
+				proxyHost,
+				proxyPort,
+				10*time.Second,
+				nodes.DefaultProbeTargets(),
+				mode == "ip", // skip cert verify only when probing by IP
+			)
+		default: // "http", "https", and anything else using HTTP CONNECT
+			// Use HTTPS scheme when the proxy transport is TLS-wrapped:
+			// - QuickStart gost nodes (http type, no ProxyUser = no-auth HTTP CONNECT+TLS)
+			// - Explicitly https type
+			// - Nodes with StatusDeployed (legacy gost HTTP-auth path)
+			noAuth := strings.TrimSpace(node.ProxyUser) == ""
+			probeOptions := nodes.ProxyProbeOptions{ProxyScheme: "http"}
+			if proxyType == "https" || (proxyType == "http" && noAuth) || node.Status == nodes.StatusDeployed {
+				probeOptions.ProxyScheme = "https"
+				if mode == "ip" {
+					probeOptions.InsecureSkipVerify = true
+				}
+			}
+			results = nodes.TestHTTPProxyWithOptions(
+				proxyHost,
+				proxyPort,
+				node.ProxyUser,
+				node.ProxyPassword,
+				10*time.Second,
+				nodes.DefaultProbeTargets(),
+				probeOptions,
+			)
+		}
 		okCount := 0
 		for _, item := range results {
 			if item.OK {

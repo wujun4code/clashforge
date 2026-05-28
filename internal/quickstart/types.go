@@ -7,7 +7,7 @@ type DeployType string
 
 const (
 	DeployTypeCFWorkers DeployType = "cf_workers" // Cloudflare Workers, no VPS needed
-	DeployTypeVPS       DeployType = "vps"         // VPS + Cloudflare DNS + gost
+	DeployTypeVPS       DeployType = "vps"        // VPS + Cloudflare DNS + gost
 )
 
 // Phase labels each stage of a deployment for the SSE event stream.
@@ -21,11 +21,13 @@ const (
 	PhaseVerify     Phase = "verify"
 	// CF Workers path
 	PhaseWorkerDeploy Phase = "worker_deploy"
+	PhasePublish      Phase = "publish"
 	// VPS path
-	PhaseSSHTest    Phase = "ssh_test"
-	PhaseEnvDetect  Phase = "env_detect"
-	PhaseProvision  Phase = "provision"
-	PhaseCertDNS    Phase = "cert_dns"
+	PhaseExistingCheck Phase = "existing_check"
+	PhaseSSHTest       Phase = "ssh_test"
+	PhaseEnvDetect     Phase = "env_detect"
+	PhaseProvision     Phase = "provision"
+	PhaseCertDNS       Phase = "cert_dns"
 )
 
 // EventStatus mirrors the UI color scheme.
@@ -50,12 +52,21 @@ type Event struct {
 
 // DeployRequest is the unified POST /quickstart/deploy body.
 type DeployRequest struct {
-	DeployType    DeployType          `json:"deploy_type"`
-	NodeName      string              `json:"node_name"`   // display name saved in subscription
-	NodePrefix    string              `json:"node_prefix"` // subdomain prefix, e.g. "node1"
-	Cloudflare    CFCredentials       `json:"cloudflare"`
-	VPS           *VPSCredentials     `json:"vps,omitempty"`
-	WorkersDomain WorkersDomainConfig `json:"workers_domain,omitempty"`
+	DeployType  DeployType `json:"deploy_type"`
+	NodeName    string     `json:"node_name"`              // display name saved in subscription
+	NodePrefix  string     `json:"node_prefix"`            // subdomain prefix, e.g. "node1"
+	VPSNodeID   string     `json:"vps_node_id,omitempty"`  // optional existing managed node id
+	ForceImport bool       `json:"force_import,omitempty"` // skip gost install, go straight to subscription generation
+	// EnsureProxyAuth only reconfigures gost auth (username/password) and restarts service,
+	// then continues to subscription import. It avoids full reinstall/cert issuance.
+	EnsureProxyAuth bool            `json:"ensure_proxy_auth,omitempty"`
+	Cloudflare      CFCredentials   `json:"cloudflare"`
+	VPS             *VPSCredentials `json:"vps,omitempty"`
+	// Runtime-only: set by the pipeline after gost is deployed (full path) or
+	// pre-filled by the handler from the node store (force-import path).
+	// Never deserialised from the HTTP request body.
+	ProxyUser     string `json:"-"`
+	ProxyPassword string `json:"-"`
 }
 
 // CFCredentials carries Cloudflare API credentials.
@@ -69,18 +80,17 @@ type CFCredentials struct {
 // VPSCredentials carries SSH connection parameters.
 type VPSCredentials struct {
 	Host     string `json:"host"`
-	Port     int    `json:"port"`              // default 22
-	User     string `json:"user"`              // default "root"
-	AuthType string `json:"auth_type"`         // "password" | "key"
+	Port     int    `json:"port"`      // default 22
+	User     string `json:"user"`      // default "root"
+	AuthType string `json:"auth_type"` // "password" | "key"
 	Password string `json:"password,omitempty"`
 	PrivKey  string `json:"priv_key,omitempty"` // PEM content
 }
 
-// WorkersDomainConfig controls CF Workers path domain binding.
-type WorkersDomainConfig struct {
-	WorkerName   string `json:"worker_name"`   // CF Worker script name
-	CustomDomain string `json:"custom_domain"` // e.g. "node1.yourdomain.com"
-	ZoneID       string `json:"zone_id"`       // CF Zone ID for the custom domain
+// CheckNodeRequest is the POST /quickstart/check-node body.
+type CheckNodeRequest struct {
+	Domain string `json:"domain"`
+	VPSIP  string `json:"vps_ip"`
 }
 
 // ValidateCFRequest is the POST /quickstart/validate-cf body.
@@ -104,6 +114,7 @@ type CFZone struct {
 
 // ValidateVPSRequest is the POST /quickstart/validate-vps body.
 type ValidateVPSRequest struct {
+	NodeID   string `json:"node_id,omitempty"` // optional existing managed node id
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	User     string `json:"user"`
@@ -119,6 +130,7 @@ type ValidateVPSResult struct {
 	OS        string `json:"os,omitempty"`
 	OSVersion string `json:"os_version,omitempty"`
 	Arch      string `json:"arch,omitempty"`
+	NodeID    string `json:"node_id,omitempty"` // set when credentials were saved to the node store
 }
 
 // DeployState is persisted to disk so deploy history survives restarts.
@@ -147,10 +159,10 @@ type VerifyResult struct {
 
 // EnvInfo is the detected VPS environment.
 type EnvInfo struct {
-	OS        string // "ubuntu" | "debian" | "centos" | "alpine" | "unknown"
-	OSVersion string // "24.04"
-	Arch      string // "amd64" | "arm64"
-	Firewall  string // "ufw" | "firewalld" | "iptables" | "none"
-	Port443In bool   // true if 443 is already in use
+	OS         string // "ubuntu" | "debian" | "centos" | "alpine" | "unknown"
+	OSVersion  string // "24.04"
+	Arch       string // "amd64" | "arm64"
+	Firewall   string // "ufw" | "firewalld" | "iptables" | "none"
+	Port443In  bool   // true if 443 is already in use
 	HasSystemd bool
 }

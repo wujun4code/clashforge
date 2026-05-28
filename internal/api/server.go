@@ -167,6 +167,9 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/publish/upload", handlePublishUpload(deps))
 		api.Get("/publish/records", handleGetPublishRecords(deps))
 		api.Delete("/publish/records/{id}", handleDeletePublishRecord(deps))
+		// Cloudflare Worker/KV cleanup utility
+		api.Post("/publish/cf-resources/list", handleListCloudflareResources(deps))
+		api.Post("/publish/cf-resources/delete", handleDeleteCloudflareResources(deps))
 		// Rule provider hosting
 		api.Get("/publish/rulesets", handleListRuleSets(deps))
 		api.Post("/publish/rulesets", handleCreateRuleSet(deps))
@@ -185,7 +188,8 @@ func NewRouter(deps Dependencies) http.Handler {
 		}
 		// QuickStart v2
 		api.Post("/quickstart/validate-cf", handleQuickStartValidateCF())
-		api.Post("/quickstart/validate-vps", handleQuickStartValidateVPS())
+		api.Post("/quickstart/validate-vps", handleQuickStartValidateVPS(deps.NodeStore))
+		api.Post("/quickstart/check-node", handleQuickStartCheckNode())
 		api.Post("/quickstart/deploy", handleQuickStartDeploy(deps))
 		api.Get("/quickstart/deploys", handleQuickStartListDeploys(deps))
 		api.Get("/quickstart/deploys/{id}", handleQuickStartGetDeploy(deps))

@@ -526,6 +526,8 @@ export interface NodeListItem {
   port: number
   username: string
   domain: string
+  proxy_type?: string  // "socks5" | "http" | …; empty means "http"
+  proxy_port?: number  // proxy listen port; default 443
   /** "managed" (default / ClashForge-deployed) | "external" (manually deployed, SSH-only) */
   kind?: 'managed' | 'external'
   status: 'pending' | 'connected' | 'deploying' | 'deployed' | 'error'
@@ -597,6 +599,22 @@ export const deleteNode = (id: string) => request<{ ok: boolean }>('DELETE', `/n
 export const testNodeConnection = (id: string) => request<{ ok: boolean; message: string }>('POST', `/nodes/${encodeURIComponent(id)}/test`)
 export const probeNode = (id: string, mode: 'ip' | 'domain' = 'ip') =>
   request<{ mode: 'ip' | 'domain'; proxy_host: string; proxy_port: number; probe_results: NodeProbeResult[]; summary: { ok: number; total: number; success: boolean } }>('POST', `/nodes/${encodeURIComponent(id)}/probe`, { mode })
+export const getNodeProxyConfig = async (id: string): Promise<string> => {
+  const secret = localStorage.getItem('cf_secret') || ''
+  const res = await fetch(`${BASE}/nodes/${encodeURIComponent(id)}/proxy-config`, {
+    headers: secret ? { Authorization: `Bearer ${secret}` } : undefined,
+  })
+  if (!res.ok) {
+    const contentType = res.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      const body = await res.json()
+      throw new Error(body?.error?.message ?? '导出失败')
+    }
+    const text = await res.text()
+    throw new Error(text || '导出失败')
+  }
+  return res.text()
+}
 /** diagNode is consumed as an SSE stream — see streamSSE() in Nodes.tsx */
 export const DIAG_NODE_URL = (id: string) => `${BASE}/nodes/${encodeURIComponent(id)}/diag`
 /** fixNode is consumed as an SSE stream — same format as deploy */
@@ -859,6 +877,67 @@ export const getPublishRecords = () => request<{ records: PublishRecord[] }>('GE
 export const deletePublishRecord = (id: string) =>
   request<{ deleted: boolean; warning?: string }>('DELETE', `/publish/records/${encodeURIComponent(id)}`)
 
+export interface CloudflareManagedRef {
+  id: string
+  name: string
+}
+
+export interface CloudflareWorkerResource {
+  name: string
+  created_on?: string
+  modified_on?: string
+  kv_namespace_ids?: string[]
+  managed: boolean
+  managed_by?: CloudflareManagedRef[]
+}
+
+export interface CloudflareNamespaceResource {
+  id: string
+  title: string
+  supports_url_encoding?: boolean
+  bound_workers?: string[]
+  managed: boolean
+  managed_by?: CloudflareManagedRef[]
+}
+
+export interface CloudflareResourceSummary {
+  workers_total: number
+  workers_managed: number
+  namespaces_total: number
+  namespaces_managed: number
+  bindings_total?: number
+}
+
+export interface CloudflareDeleteResultItem {
+  kind: 'worker' | 'namespace'
+  id: string
+  deleted: boolean
+  error?: string
+}
+
+export const listCloudflareResources = (payload: { token?: string; account_id?: string }) =>
+  request<{
+    account_id: string
+    workers: CloudflareWorkerResource[]
+    namespaces: CloudflareNamespaceResource[]
+    summary: CloudflareResourceSummary
+  }>('POST', '/publish/cf-resources/list', payload)
+
+export const deleteCloudflareResources = (payload: {
+  token?: string
+  account_id?: string
+  worker_names?: string[]
+  namespace_ids?: string[]
+  purge_local_configs?: boolean
+  purge_local_rulesets?: boolean
+}) =>
+  request<{
+    account_id: string
+    results: CloudflareDeleteResultItem[]
+    summary: { total: number; deleted: number; failed: number }
+    warnings?: string[]
+  }>('POST', '/publish/cf-resources/delete', payload)
+
 // ---- rule set hosting ----
 export interface RuleSet {
   id: string
@@ -1033,10 +1112,11 @@ export interface QSValidateCFResult {
 }
 
 export interface QSValidateVPSRequest {
-  host: string
+  node_id?: string
+  host?: string
   port?: number
   user?: string
-  auth_type: 'password' | 'key'
+  auth_type?: 'password' | 'key'
   password?: string
   priv_key?: string
 }
@@ -1047,6 +1127,7 @@ export interface QSValidateVPSResult {
   os_version?: string
   arch?: string
   error?: string
+  node_id?: string  // set when credentials were auto-saved to the node store
 }
 
 export interface QSDeployState {
@@ -1066,6 +1147,9 @@ export interface QSDeployRequest {
   deploy_type: QSDeployType
   node_name?: string
   node_prefix?: string
+  vps_node_id?: string
+  force_import?: boolean
+  ensure_proxy_auth?: boolean
   cloudflare?: {
     token: string
     account_id: string
@@ -1079,11 +1163,6 @@ export interface QSDeployRequest {
     auth_type: 'password' | 'key'
     password?: string
     priv_key?: string
-  }
-  workers_domain?: {
-    worker_name: string
-    custom_domain: string
-    zone_id: string
   }
 }
 
@@ -1101,6 +1180,20 @@ export const quickStartValidateCF = (req: QSValidateCFRequest) =>
 
 export const quickStartValidateVPS = (req: QSValidateVPSRequest) =>
   request<QSValidateVPSResult>('POST', '/quickstart/validate-vps', req)
+
+export interface QSCheckNodeRequest {
+  domain: string
+  vps_ip?: string
+}
+
+export interface QSCheckNodeResult {
+  reusable: boolean
+  days_left: number
+  skip_reason?: string
+}
+
+export const quickStartCheckNode = (req: QSCheckNodeRequest) =>
+  request<QSCheckNodeResult>('POST', '/quickstart/check-node', req)
 
 export const getQuickStartDeploys = () =>
   request<{ deploys: QSDeployState[] }>('GET', '/quickstart/deploys')
