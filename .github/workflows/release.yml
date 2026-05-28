@@ -344,15 +344,14 @@ jobs:
         run: |
           RAW="${{ needs.build-ui.outputs.version }}"
           PKG_VERSION="${RAW#v}"
-          # APK/OpenWrt version field must be numeric dot-separated segments.
-          # Example: 0.1.0-beta.1 -> 0.1.0.1
-          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
-          [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
-          APK_VERSION="${APK_CORE_VERSION}-r1"
+          # apk mkpkg --info version: requires numeric dot-separated segments (Alpine format).
+          # We keep this only for the internal package metadata; filenames use PKG_VERSION.
+          # Example: 0.1.0-beta.13 -> 0.1.0.13
+          APK_INTERNAL_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
+          [ -n "$APK_INTERNAL_VERSION" ] || APK_INTERNAL_VERSION="0"
           echo "tag=$RAW" >> "$GITHUB_OUTPUT"
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
-          echo "apk_core_version=$APK_CORE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "apk_version=$APK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "apk_internal_version=$APK_INTERNAL_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download clashforge binary
         uses: actions/download-artifact@v4
@@ -381,8 +380,9 @@ jobs:
       - name: Build APK
         run: |
           ARCH="${{ matrix.pkg_arch }}"
-          APK_VERSION="${{ steps.version.outputs.apk_version }}"
-          APK_NAME="clashforge-${APK_VERSION}_${ARCH}.apk"
+          PKG_VERSION="${{ steps.version.outputs.pkg_version }}"
+          APK_INTERNAL_VERSION="${{ steps.version.outputs.apk_internal_version }}"
+          APK_NAME="clashforge_${PKG_VERSION}_${ARCH}.apk"
           MIHOMO_VER_CLEAN="${MIHOMO_VER:-unknown}"
 
           # Staging tree
@@ -459,14 +459,14 @@ jobs:
             -v "$PWD:/work" \
             -w /work \
             -e PKG_ARCH="$ARCH" \
-            -e APK_VERSION="$APK_VERSION" \
+            -e APK_INTERNAL_VERSION="$APK_INTERNAL_VERSION" \
             -e APK_NAME="$APK_NAME" \
             -e MIHOMO_VER_CLEAN="$MIHOMO_VER_CLEAN" \
             alpine:3.23 \
             sh -euc '
               apk mkpkg \
                 --info "name:clashforge" \
-                --info "version:${APK_VERSION}" \
+                --info "version:${APK_INTERNAL_VERSION}" \
                 --info "description:Mihomo (Clash.Meta) proxy manager for OpenWrt. Includes bundled mihomo ${MIHOMO_VER_CLEAN}. Web UI on port 7777." \
                 --info "arch:${PKG_ARCH}" \
                 --info "license:GPL-3.0" \
@@ -534,12 +534,8 @@ jobs:
             TAG="${{ github.ref_name }}"
           fi
           PKG_VERSION="${TAG#v}"
-          APK_CORE_VERSION="$(printf '%s' "$PKG_VERSION" | sed -E 's/[^0-9]+/./g; s/[.]{2,}/./g; s/^[.]//; s/[.]$//')"
-          [ -n "$APK_CORE_VERSION" ] || APK_CORE_VERSION="0"
-          APK_ASSET_VERSION="${APK_CORE_VERSION}-r1"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
-          echo "apk_asset_version=$APK_ASSET_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download IPK artifacts
         uses: actions/download-artifact@v4
@@ -680,20 +676,20 @@ jobs:
 
             #### x86_64
             ```sh
-            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.apk_asset_version }}_x86_64.apk
-            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.apk_asset_version }}_x86_64.apk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge_${{ steps.ver.outputs.pkg_version }}_x86_64.apk
+            apk add --allow-untrusted ./clashforge_${{ steps.ver.outputs.pkg_version }}_x86_64.apk
             ```
 
             #### aarch64_generic
             ```sh
-            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_generic.apk
-            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_generic.apk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_generic.apk
+            apk add --allow-untrusted ./clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_generic.apk
             ```
 
             #### aarch64_cortex-a53
             ```sh
-            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_cortex-a53.apk
-            apk add --allow-untrusted ./clashforge-${{ steps.ver.outputs.apk_asset_version }}_aarch64_cortex-a53.apk
+            wget https://github.com/wujun4code/clashforge/releases/download/${{ steps.ver.outputs.tag }}/clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_cortex-a53.apk
+            apk add --allow-untrusted ./clashforge_${{ steps.ver.outputs.pkg_version }}_aarch64_cortex-a53.apk
             ```
 
             ---
