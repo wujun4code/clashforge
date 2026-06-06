@@ -85,22 +85,25 @@ abstract class AppLocalizations {
 
   // ── Browser DNS check item names ───────────────────────────────────────────
   String get checkPrivateDns;
-  String get checkMihomoDns;
-  String get checkSystemDns;
   String get checkProxyChain;
 
   // ── Browser DNS check details ──────────────────────────────────────────────
   String get privateDnsOff;
   String privateDnsOnHostname(String specifier);
   String privateDnsOn(String mode);
-  String get mihomoDnsNoRecord;
-  String get systemDnsNoAddr;
   String proxyChainSuccess(int ms);
+
+  // ── Browser DNS per-domain probe ───────────────────────────────────────────
+  String get dnsGroupDomestic;
+  String get dnsGroupForeign;
+  String get dnsGroupAI;
+  String get dnsFakeIpActive;
+  String get dnsRealIp;
+  String get dnsFailed;
 
   // ── Browser DNS summaries ──────────────────────────────────────────────────
   String get summaryPrivateDnsOn;
-  String get summaryMihomoDnsFailed;
-  String get summarySystemDnsFailed;
+  String get summaryDnsFailed;
   String get summaryProxyChainFailed;
   String get summaryAllOk;
   String browserDnsFailed(String error);
@@ -311,26 +314,26 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get statusRisk => 'Risk';
 
   @override String get checkPrivateDns => 'System Private DNS';
-  @override String get checkMihomoDns => 'Mihomo DNS';
-  @override String get checkSystemDns => 'System DNS';
   @override String get checkProxyChain => 'Outbound Chain';
 
   @override String get privateDnsOff => 'Off';
   @override String privateDnsOnHostname(String specifier) => 'On (strict hostname: $specifier)';
   @override String privateDnsOn(String mode) => 'On ($mode)';
-  @override String get mihomoDnsNoRecord => 'No records returned (may prevent browser from resolving domains)';
-  @override String get systemDnsNoAddr => 'No addresses from lookup';
   @override String proxyChainSuccess(int ms) => 'Outbound check to gstatic succeeded (${ms}ms)';
+
+  @override String get dnsGroupDomestic => 'Domestic (expect real IP)';
+  @override String get dnsGroupForeign => 'International (expect fake-ip)';
+  @override String get dnsGroupAI => 'AI Services (expect fake-ip)';
+  @override String get dnsFakeIpActive => 'fake-ip';
+  @override String get dnsRealIp => 'real IP';
+  @override String get dnsFailed => 'no response';
 
   @override String get summaryPrivateDnsOn =>
       'Private DNS is enabled. Browsers may report DNS_PROBE_FINISHED_BAD_CONFIG. '
       'Disable Private DNS in system settings.';
-  @override String get summaryMihomoDnsFailed =>
-      'Mihomo DNS failed to resolve the target domain. '
-      'Check routing nodes, upstream DNS, and anti-poisoning settings.';
-  @override String get summarySystemDnsFailed =>
-      'System DNS resolution failed. '
-      'If the proxy side works, check system DNS / router DNS.';
+  @override String get summaryDnsFailed =>
+      'One or more domains returned an unexpected result. '
+      'Check that Mihomo is running and fake-ip mode is active.';
   @override String get summaryProxyChainFailed =>
       'Outbound route test failed. DNS may be OK but the exit node is unreachable.';
   @override String get summaryAllOk =>
@@ -524,24 +527,25 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get statusRisk => '风险';
 
   @override String get checkPrivateDns => '系统 Private DNS';
-  @override String get checkMihomoDns => 'Mihomo DNS 解析';
-  @override String get checkSystemDns => '系统 DNS 解析';
   @override String get checkProxyChain => '出口链路';
 
   @override String get privateDnsOff => '关闭';
   @override String privateDnsOnHostname(String specifier) => '开启（严格主机名：$specifier）';
   @override String privateDnsOn(String mode) => '开启（$mode）';
-  @override String get mihomoDnsNoRecord => '无返回记录（可能导致浏览器域名无法打开）';
-  @override String get systemDnsNoAddr => 'lookup 无可用地址';
   @override String proxyChainSuccess(int ms) => '经出口访问 gstatic 成功（${ms}ms）';
+
+  @override String get dnsGroupDomestic => '国内域名（应返回真实 IP）';
+  @override String get dnsGroupForeign => '国际域名（应命中 fake-ip）';
+  @override String get dnsGroupAI => 'AI 服务（应命中 fake-ip）';
+  @override String get dnsFakeIpActive => 'fake-ip 生效';
+  @override String get dnsRealIp => '真实解析';
+  @override String get dnsFailed => '无响应';
 
   @override String get summaryPrivateDnsOn =>
       '检测到 Private DNS 已开启。该状态下浏览器可能出现 DNS_PROBE_FINISHED_BAD_CONFIG，'
       '建议先关闭系统 Private DNS 再重试。';
-  @override String get summaryMihomoDnsFailed =>
-      'Mihomo DNS 当前未能解析目标域名，建议检查节点、上游 DNS 和 DNS 防污染设置。';
-  @override String get summarySystemDnsFailed =>
-      '系统 DNS 解析异常。若连通性页面"代理侧"正常，优先排查系统 DNS / 路由器 DNS。';
+  @override String get summaryDnsFailed =>
+      '部分域名返回了非预期结果，建议确认 Mihomo 正在运行且 fake-ip 模式已生效。';
   @override String get summaryProxyChainFailed =>
       '出口链路探测失败。DNS 可能正常，但出站线路不可达。';
   @override String get summaryAllOk =>

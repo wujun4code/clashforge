@@ -95,30 +95,132 @@ class _ConnectivitySnapshot {
   final List<_SiteCheckResult> aiResults;
 }
 
-class _BrowserDnsCheckResult {
-  const _BrowserDnsCheckResult({
-    required this.name,
-    required this.ok,
-    required this.detail,
-  });
+class _DnsDomainResult {
+  const _DnsDomainResult({required this.domain, required this.ips});
+  final String domain;
+  final List<String> ips;
+}
 
-  final String name;
-  final bool ok;
-  final String detail;
+class _DnsGroupResult {
+  const _DnsGroupResult({
+    required this.label,
+    required this.expectFakeIp,
+    required this.domains,
+  });
+  final String label;
+  final bool expectFakeIp;
+  final List<_DnsDomainResult> domains;
+
+  bool get ok => domains.every((d) {
+    if (d.ips.isEmpty) return false;
+    return expectFakeIp
+        ? d.ips.any(_isFakeIp)
+        : d.ips.any((ip) => !_isFakeIp(ip));
+  });
 }
 
 class _BrowserDnsSnapshot {
   const _BrowserDnsSnapshot({
     required this.checkedAt,
-    required this.checks,
+    required this.privateDnsOk,
+    required this.privateDnsDetail,
+    required this.dnsGroups,
+    required this.proxyChainOk,
+    required this.proxyChainDetail,
     required this.summary,
   });
 
   final DateTime checkedAt;
-  final List<_BrowserDnsCheckResult> checks;
+  final bool privateDnsOk;
+  final String privateDnsDetail;
+  final List<_DnsGroupResult> dnsGroups;
+  final bool proxyChainOk;
+  final String proxyChainDetail;
   final String summary;
 
-  bool get healthy => checks.isNotEmpty && checks.every((item) => item.ok);
+  bool get healthy =>
+      privateDnsOk && dnsGroups.every((g) => g.ok) && proxyChainOk;
+}
+
+// ─── DNS probe utilities ──────────────────────────────────────
+
+bool _isFakeIp(String ip) =>
+    ip.startsWith('198.18.') || ip.startsWith('198.19.');
+
+Uint8List _buildDnsQuery(int id, String domain) {
+  final buf = BytesBuilder();
+  buf.addByte((id >> 8) & 0xff);
+  buf.addByte(id & 0xff);
+  buf.addByte(0x01); buf.addByte(0x00); // flags: standard query, recursion desired
+  buf.addByte(0x00); buf.addByte(0x01); // QDCOUNT = 1
+  buf.addByte(0x00); buf.addByte(0x00); // ANCOUNT = 0
+  buf.addByte(0x00); buf.addByte(0x00); // NSCOUNT = 0
+  buf.addByte(0x00); buf.addByte(0x00); // ARCOUNT = 0
+  for (final label in domain.split('.')) {
+    buf.addByte(label.length);
+    buf.add(label.codeUnits);
+  }
+  buf.addByte(0x00);                    // end of QNAME
+  buf.addByte(0x00); buf.addByte(0x01); // QTYPE = A
+  buf.addByte(0x00); buf.addByte(0x01); // QCLASS = IN
+  return buf.toBytes();
+}
+
+List<String> _parseDnsARecords(Uint8List data, int expectedId) {
+  if (data.length < 12) return const [];
+  final id = (data[0] << 8) | data[1];
+  if (id != expectedId) return const [];
+  final ancount = (data[6] << 8) | data[7];
+  if (ancount == 0) return const [];
+
+  int pos = 12;
+  // skip QNAME in the question section
+  while (pos < data.length) {
+    final len = data[pos];
+    if (len == 0) { pos++; break; }
+    if ((len & 0xC0) == 0xC0) { pos += 2; break; } // compression pointer
+    pos += len + 1;
+  }
+  pos += 4; // QTYPE + QCLASS
+
+  final ips = <String>[];
+  for (int i = 0; i < ancount && pos + 10 < data.length; i++) {
+    if ((data[pos] & 0xC0) == 0xC0) {
+      pos += 2;
+    } else {
+      while (pos < data.length && data[pos] != 0) { pos += data[pos] + 1; }
+      pos++;
+    }
+    if (pos + 10 > data.length) break;
+    final type = (data[pos] << 8) | data[pos + 1];
+    final rdlength = (data[pos + 8] << 8) | data[pos + 9];
+    pos += 10;
+    if (type == 1 && rdlength == 4 && pos + 4 <= data.length) {
+      ips.add('${data[pos]}.${data[pos+1]}.${data[pos+2]}.${data[pos+3]}');
+    }
+    pos += rdlength;
+  }
+  return ips;
+}
+
+Future<List<String>> _queryDnsPort1053(String domain) async {
+  RawDatagramSocket? sock;
+  try {
+    sock = await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final id = DateTime.now().millisecondsSinceEpoch & 0xFFFF;
+    sock.send(_buildDnsQuery(id, domain), InternetAddress.loopbackIPv4, 1053);
+    final event = await sock.first.timeout(const Duration(seconds: 4));
+    if (event != RawSocketEvent.read) return const [];
+    final dg = sock.receive();
+    if (dg == null) return const [];
+    return _parseDnsARecords(dg.data, id);
+  } on TimeoutException {
+    return const [];
+  } catch (_) {
+    return const [];
+  } finally {
+    sock?.close();
+  }
 }
 
 // ─── Minimal YAML serialiser ──────────────────────────────────
@@ -1486,60 +1588,43 @@ class _HomeScreenState extends State<HomeScreen> {
     final l10n = AppLocalizations.of(context);
 
     try {
-      final checks = <_BrowserDnsCheckResult>[];
+      // 1. Private DNS check
       final info = await VpnManager.getSystemInfo();
-
       final modeRaw =
           (info['private_dns_mode'] ?? '').toString().trim().toLowerCase();
-      final specifier = (info['private_dns_specifier'] ?? '').toString().trim();
-      final privateDnsOn = modeRaw == 'hostname' || modeRaw == 'opportunistic';
-      checks.add(
-        _BrowserDnsCheckResult(
-          name: l10n.checkPrivateDns,
-          ok: !privateDnsOn,
-          detail: privateDnsOn
-              ? (modeRaw == 'hostname' && specifier.isNotEmpty
-                  ? l10n.privateDnsOnHostname(specifier)
-                  : l10n.privateDnsOn(modeRaw))
-              : l10n.privateDnsOff,
-        ),
-      );
+      final specifier =
+          (info['private_dns_specifier'] ?? '').toString().trim();
+      final privateDnsOn =
+          modeRaw == 'hostname' || modeRaw == 'opportunistic';
+      final privateDnsDetail = privateDnsOn
+          ? (modeRaw == 'hostname' && specifier.isNotEmpty
+              ? l10n.privateDnsOnHostname(specifier)
+              : l10n.privateDnsOn(modeRaw))
+          : l10n.privateDnsOff;
 
-      final mihomoAnswers = await _queryMihomoDnsA('www.google.com');
-      checks.add(
-        _BrowserDnsCheckResult(
-          name: l10n.checkMihomoDns,
-          ok: mihomoAnswers.isNotEmpty,
-          detail: mihomoAnswers.isNotEmpty
-              ? 'www.google.com -> ${mihomoAnswers.take(3).join(', ')}'
-              : l10n.mihomoDnsNoRecord,
-        ),
-      );
-
-      bool systemDnsOk = false;
-      String systemDnsDetail = '';
-      try {
-        final addrs = await InternetAddress.lookup('www.google.com')
-            .timeout(const Duration(seconds: 6));
-        final ips = addrs
-            .map((item) => item.address.trim())
-            .where((item) => item.isNotEmpty)
-            .toSet()
-            .toList();
-        systemDnsOk = ips.isNotEmpty;
-        systemDnsDetail =
-            systemDnsOk ? ips.take(3).join(', ') : l10n.systemDnsNoAddr;
-      } catch (e) {
-        systemDnsDetail = e.toString();
+      // 2. Per-domain DNS probe via Mihomo port 1053 (fake-ip layer)
+      Future<_DnsGroupResult> probeGroup(
+        List<(String, String)> urls,
+        String label,
+        bool expectFakeIp,
+      ) async {
+        final domains = await Future.wait(
+          urls.map((e) async {
+            final ips = await _queryDnsPort1053(e.$2);
+            return _DnsDomainResult(domain: e.$2, ips: ips);
+          }),
+        );
+        return _DnsGroupResult(
+            label: label, expectFakeIp: expectFakeIp, domains: domains);
       }
-      checks.add(
-        _BrowserDnsCheckResult(
-          name: l10n.checkSystemDns,
-          ok: systemDnsOk,
-          detail: systemDnsDetail,
-        ),
-      );
 
+      final dnsGroups = await Future.wait([
+        probeGroup(_domesticSiteUrls, l10n.dnsGroupDomestic, false),
+        probeGroup(_foreignSiteUrls, l10n.dnsGroupForeign, true),
+        probeGroup(_aiSiteUrls, l10n.dnsGroupAI, true),
+      ]);
+
+      // 3. Proxy chain smoke test
       bool proxySmokeOk = false;
       String proxySmokeDetail = '';
       final proxyClient = HttpClient()
@@ -1565,20 +1650,27 @@ class _HomeScreenState extends State<HomeScreen> {
       } finally {
         proxyClient.close(force: true);
       }
-      checks.add(
-        _BrowserDnsCheckResult(
-          name: l10n.checkProxyChain,
-          ok: proxySmokeOk,
-          detail: proxySmokeDetail,
-        ),
-      );
 
-      final summary = _buildBrowserDnsSummary(checks, l10n);
+      final String summary;
+      if (privateDnsOn) {
+        summary = l10n.summaryPrivateDnsOn;
+      } else if (!dnsGroups.every((g) => g.ok)) {
+        summary = l10n.summaryDnsFailed;
+      } else if (!proxySmokeOk) {
+        summary = l10n.summaryProxyChainFailed;
+      } else {
+        summary = l10n.summaryAllOk;
+      }
+
       if (!mounted) return;
       setState(() {
         _browserDnsSnapshot = _BrowserDnsSnapshot(
           checkedAt: DateTime.now(),
-          checks: checks,
+          privateDnsOk: !privateDnsOn,
+          privateDnsDetail: privateDnsDetail,
+          dnsGroups: dnsGroups,
+          proxyChainOk: proxySmokeOk,
+          proxyChainDetail: proxySmokeDetail,
           summary: summary,
         );
       });
@@ -1588,22 +1680,8 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _browserDnsMessage =
           AppLocalizations.of(context).browserDnsFailed(e.toString()));
     } finally {
-      if (mounted) {
-        setState(() => _browserDnsLoading = false);
-      }
+      if (mounted) setState(() => _browserDnsLoading = false);
     }
-  }
-
-  String _buildBrowserDnsSummary(
-      List<_BrowserDnsCheckResult> checks, AppLocalizations l10n) {
-    bool failed(String name) =>
-        checks.any((item) => item.name == name && !item.ok);
-
-    if (failed(l10n.checkPrivateDns)) return l10n.summaryPrivateDnsOn;
-    if (failed(l10n.checkMihomoDns)) return l10n.summaryMihomoDnsFailed;
-    if (failed(l10n.checkSystemDns)) return l10n.summarySystemDnsFailed;
-    if (failed(l10n.checkProxyChain)) return l10n.summaryProxyChainFailed;
-    return l10n.summaryAllOk;
   }
 
   Future<List<String>> _queryMihomoDnsA(String host) async {
@@ -2569,6 +2647,104 @@ class _BrowserDnsPane extends StatelessWidget {
 
   final _BrowserDnsSnapshot snapshot;
 
+  Widget _dot(bool ok) => Container(
+        width: 6,
+        height: 6,
+        margin: const EdgeInsets.only(top: 3),
+        decoration: BoxDecoration(
+          color: ok ? _kConnected : _kError,
+          shape: BoxShape.circle,
+        ),
+      );
+
+  Widget _checkRow({required bool ok, required String label, required String detail}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _dot(ok),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(
+                    color: _kTextHi, fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 1),
+            Text(detail,
+                style: const TextStyle(color: _kTextMuted, fontSize: 11)),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _domainRow(
+      BuildContext context, _DnsDomainResult d, bool expectFakeIp, AppLocalizations l10n) {
+    final hasFakeIp = d.ips.any(_isFakeIp);
+    final hasRealIp = d.ips.any((ip) => !_isFakeIp(ip));
+
+    final bool ok;
+    final String ipText;
+    final String? tag;
+
+    if (d.ips.isEmpty) {
+      ok = false;
+      ipText = l10n.dnsFailed;
+      tag = null;
+    } else if (expectFakeIp) {
+      ok = hasFakeIp;
+      ipText = d.ips.first;
+      tag = hasFakeIp ? l10n.dnsFakeIpActive : null;
+    } else {
+      ok = hasRealIp;
+      ipText = d.ips.firstWhere((ip) => !_isFakeIp(ip), orElse: () => d.ips.first);
+      tag = hasRealIp ? l10n.dnsRealIp : null;
+    }
+
+    final tagColor = ok ? _kConnected : _kError;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        _dot(ok),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(d.domain,
+                      style: const TextStyle(
+                          color: _kTextHi,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500)),
+                  Text(ipText,
+                      style:
+                          const TextStyle(color: _kTextMuted, fontSize: 10)),
+                ],
+              ),
+            ),
+            if (tag != null)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: tagColor.withAlpha(20),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: tagColor.withAlpha(100)),
+                ),
+                child: Text(tag,
+                    style: TextStyle(
+                        color: tagColor,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600)),
+              ),
+          ]),
+        ),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -2585,86 +2761,81 @@ class _BrowserDnsPane extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  l10n.browserDnsPathLabel,
+          // ── Header ──────────────────────────────────────────
+          Row(children: [
+            Expanded(
+              child: Text(l10n.browserDnsPathLabel,
                   style: const TextStyle(
                       color: _kTextHi,
                       fontSize: 14,
-                      fontWeight: FontWeight.w600),
-                ),
+                      fontWeight: FontWeight.w600)),
+            ),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: tone.withAlpha(16),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: tone.withAlpha(120)),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: tone.withAlpha(16),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: tone.withAlpha(120)),
-                ),
-                child: Text(
-                  snapshot.healthy ? l10n.statusHealthy : l10n.statusRisk,
-                  style: TextStyle(
-                      color: tone, fontSize: 11, fontWeight: FontWeight.w600),
-                ),
+              child: Text(
+                snapshot.healthy ? l10n.statusHealthy : l10n.statusRisk,
+                style: TextStyle(
+                    color: tone, fontSize: 11, fontWeight: FontWeight.w600),
               ),
-            ],
+            ),
+          ]),
+          const SizedBox(height: 10),
+
+          // ── Private DNS ──────────────────────────────────────
+          _checkRow(
+            ok: snapshot.privateDnsOk,
+            label: l10n.checkPrivateDns,
+            detail: snapshot.privateDnsDetail,
           ),
-          const SizedBox(height: 8),
-          ...snapshot.checks.map((item) {
-            final okColor = item.ok ? _kConnected : _kError;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+          const SizedBox(height: 4),
+
+          // ── Per-domain DNS groups ────────────────────────────
+          ...snapshot.dnsGroups.map((group) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    margin: const EdgeInsets.only(top: 4),
-                    width: 8,
-                    height: 8,
-                    decoration:
-                        BoxDecoration(color: okColor, shape: BoxShape.circle),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 5),
+                    child: Text(group.label,
+                        style: const TextStyle(
+                            color: _kTextMuted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.3)),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.name,
-                          style: const TextStyle(
-                              color: _kTextHi,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          item.detail,
-                          style:
-                              const TextStyle(color: _kTextMuted, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ...group.domains.map(
+                      (d) => _domainRow(context, d, group.expectFakeIp, l10n)),
                 ],
-              ),
-            );
-          }),
-          const SizedBox(height: 4),
+              )),
+
+          const SizedBox(height: 6),
+
+          // ── Proxy chain ──────────────────────────────────────
+          _checkRow(
+            ok: snapshot.proxyChainOk,
+            label: l10n.checkProxyChain,
+            detail: snapshot.proxyChainDetail,
+          ),
+          const SizedBox(height: 6),
+
+          // ── Summary box ──────────────────────────────────────
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             decoration: BoxDecoration(
               color: tone.withAlpha(12),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: tone.withAlpha(80)),
             ),
-            child: Text(
-              snapshot.summary,
-              style:
-                  const TextStyle(color: _kTextHi, fontSize: 12, height: 1.4),
-            ),
+            child: Text(snapshot.summary,
+                style: const TextStyle(
+                    color: _kTextHi, fontSize: 12, height: 1.4)),
           ),
         ],
       ),
