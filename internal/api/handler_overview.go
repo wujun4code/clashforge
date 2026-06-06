@@ -1525,6 +1525,8 @@ func refreshNetfilterManager(deps Dependencies) {
 		BypassFakeIP:      shouldBypassFakeIP(deps.Config),
 		BypassCIDR:        deps.Config.Network.BypassCIDR,
 		EnableIPv6:        deps.Config.Network.IPv6,
+		DropQUIC:          deps.Config.Network.DropQUIC,
+		WANInterface:      deps.Config.Network.WANInterface,
 	})
 }
 

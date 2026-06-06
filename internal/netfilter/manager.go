@@ -29,7 +29,9 @@ type Config struct {
 	EnableDNSRedirect bool
 	BypassFakeIP      bool
 	BypassCIDR        []string
-	EnableIPv6        bool // intercept IPv6 traffic via tproxy as well
+	EnableIPv6        bool   // intercept IPv6 traffic via tproxy as well
+	DropQUIC          bool   // drop UDP 443 to force immediate TCP fallback
+	WANInterface      string // WAN-facing interface name (e.g. "pppoe-wan", "eth1")
 }
 
 // NewManager creates a Manager and detects the appropriate backend.
@@ -38,7 +40,7 @@ func NewManager(cfg Config) *Manager {
 	var applier Applier
 	switch kind {
 	case BackendNftables:
-		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR, EnableIPv6: cfg.EnableIPv6}
+		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR, EnableIPv6: cfg.EnableIPv6, DropQUIC: cfg.DropQUIC, WANInterface: cfg.WANInterface}
 	case BackendIptables:
 		applier = &IptablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect}
 	default:

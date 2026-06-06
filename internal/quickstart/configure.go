@@ -122,6 +122,8 @@ func autoConfigureClashForge(
 			BypassFakeIP:      bypassFakeIP,
 			BypassCIDR:        cfg.Network.BypassCIDR,
 			EnableIPv6:        cfg.Network.IPv6,
+			DropQUIC:          cfg.Network.DropQUIC,
+			WANInterface:      cfg.Network.WANInterface,
 		})
 	}
 
