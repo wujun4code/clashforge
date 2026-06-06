@@ -8,6 +8,11 @@ import (
 
 func renderNFTTemplate(t *testing.T, enableDNSRedirect, bypassFakeIP bool) string {
 	t.Helper()
+	return renderNFTTemplateOpts(t, enableDNSRedirect, bypassFakeIP, false, false)
+}
+
+func renderNFTTemplateOpts(t *testing.T, enableDNSRedirect, bypassFakeIP, enableIPv6, dropQUIC bool) string {
+	t.Helper()
 
 	bypassCIDR := []string{"1.1.1.0/24"}
 	vars := struct {
@@ -17,6 +22,7 @@ func renderNFTTemplate(t *testing.T, enableDNSRedirect, bypassFakeIP bool) strin
 		DNSPort            int
 		EnableDNSRedirect  bool
 		EnableIPv6         bool
+		DropQUIC           bool
 		BypassIPv4Elements string
 	}{
 		FWMark:             fwMark,
@@ -24,7 +30,8 @@ func renderNFTTemplate(t *testing.T, enableDNSRedirect, bypassFakeIP bool) strin
 		TProxyPort:         7895,
 		DNSPort:            7874,
 		EnableDNSRedirect:  enableDNSRedirect,
-		EnableIPv6:         false,
+		EnableIPv6:         enableIPv6,
+		DropQUIC:           dropQUIC,
 		BypassIPv4Elements: buildBypassIPv4Elements(bypassFakeIP, bypassCIDR),
 	}
 
@@ -107,17 +114,37 @@ func TestNFTTemplate_TproxyPreRoutingAllowsReRoutedLocalTraffic(t *testing.T) {
 	}
 }
 
-func TestNFTTemplate_QUICBypassesTPROXY(t *testing.T) {
-	rendered := renderNFTTemplate(t, false, false)
-	// QUIC (UDP 443) must use "return" (bypass tproxy), not "drop".
-	// Dropping causes a silent black-hole that forces clients to wait for the full
-	// QUIC timeout before falling back to TCP, causing visible UI lag in domestic
-	// apps (Douyin, WeChat, Bilibili) that heavily use QUIC/HTTP3.
+func TestNFTTemplate_QUICDropWhenDropQUICEnabled(t *testing.T) {
+	rendered := renderNFTTemplateOpts(t, false, false, false, true)
+	if !strings.Contains(rendered, "udp dport 443 drop") {
+		t.Fatalf("expected 'udp dport 443 drop' when DropQUIC=true")
+	}
+	if strings.Contains(rendered, "udp dport 443 return") {
+		t.Fatalf("did not expect 'udp dport 443 return' when DropQUIC=true")
+	}
+}
+
+func TestNFTTemplate_QUICReturnWhenDropQUICDisabled(t *testing.T) {
+	rendered := renderNFTTemplateOpts(t, false, false, false, false)
 	if strings.Contains(rendered, "udp dport 443 drop") {
-		t.Fatalf("QUIC must not be dropped: use 'return' to bypass tproxy instead")
+		t.Fatalf("did not expect 'udp dport 443 drop' when DropQUIC=false")
 	}
 	if !strings.Contains(rendered, "udp dport 443 return") {
-		t.Fatalf("expected 'udp dport 443 return' in tproxy_prerouting to bypass QUIC")
+		t.Fatalf("expected 'udp dport 443 return' when DropQUIC=false")
+	}
+}
+
+func TestNFTTemplate_IPv6ForwardBlockWhenIPv6Disabled(t *testing.T) {
+	rendered := renderNFTTemplateOpts(t, false, false, false, false)
+	if !strings.Contains(rendered, "chain ipv6_forward_block") {
+		t.Fatalf("expected ipv6_forward_block chain when EnableIPv6=false")
+	}
+}
+
+func TestNFTTemplate_NoIPv6ForwardBlockWhenIPv6Enabled(t *testing.T) {
+	rendered := renderNFTTemplateOpts(t, false, false, true, false)
+	if strings.Contains(rendered, "chain ipv6_forward_block") {
+		t.Fatalf("did not expect ipv6_forward_block chain when EnableIPv6=true")
 	}
 }
 

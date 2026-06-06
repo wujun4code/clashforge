@@ -33,6 +33,8 @@ type NftablesBackend struct {
 	BypassFakeIP      bool
 	BypassCIDR        []string
 	EnableIPv6        bool
+	DropQUIC          bool
+	WANInterface      string
 }
 
 var nftTableTemplate = template.Must(template.New("nft").Parse(`
@@ -89,13 +91,17 @@ table inet metaclash {
         # (those packets carry {{ .FWMarkOutput }} and must be tproxied, not skipped).
         fib saddr type local meta mark != {{ .FWMarkOutput }} return
         ip daddr @bypass_ipv4 return
-        # Let QUIC (HTTP/3, UDP 443) bypass tproxy entirely.
-        # HTTP proxy nodes cannot tunnel UDP, so forcing QUIC through tproxy causes
-        # a silent black-hole: the client waits for a QUIC timeout (500ms-2s) before
-        # falling back to TCP. Returning here lets QUIC go direct — domestic apps
-        # (Douyin, WeChat, Bilibili) get full QUIC speed; GFW-blocked domains get
-        # rejected by GFW quickly and the app falls back to TCP through the proxy.
-        udp dport 443 return
+        # QUIC (HTTP/3, UDP 443) handling.
+        # drop:   forces browsers to immediately fall back to TCP, which HTTP proxy
+        #         nodes can tunnel. Correct for all HTTP-proxy setups. Domestic apps
+        #         lose QUIC speed but still work via TCP.
+        # return: bypasses tproxy entirely (legacy). Only safe if proxy nodes support
+        #         UDP. With HTTP proxies, GFW-blocked domains (e.g. OpenAI) may not
+        #         be rejected fast enough, so the browser sends the real Chinese IP
+        #         before falling back to TCP — causing geo-detection failures.
+{{ if .DropQUIC }}        udp dport 443 drop
+{{ else }}        udp dport 443 return
+{{ end -}}
         meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:{{ .TProxyPort }} meta mark set {{ .FWMark }}
 {{ if .EnableIPv6 }}
         ip6 daddr @bypass_ipv6 return
@@ -103,6 +109,16 @@ table inet metaclash {
 {{ end }}
     }
 
+{{ if not .EnableIPv6 }}
+    # IPv6 proxy is disabled. Drop forwarded IPv6 to global addresses so LAN
+    # clients cannot reach IPv6-capable external sites with their real (Chinese)
+    # IPv6 address, bypassing the proxy entirely.
+    # ULA (fc00::/7) and link-local (fe80::/10) are preserved for LAN services.
+    chain ipv6_forward_block {
+        type filter hook forward priority filter; policy accept;
+        meta nfproto ipv6 ip6 daddr != { ::1/128, fc00::/7, fe80::/10, ff00::/8 } drop
+    }
+{{ end }}
     # Intercept traffic originating from the router itself (curl, wget, opkg, etc.).
     # Router-originated packets skip PREROUTING entirely, so without this chain they
     # would attempt direct connections to mihomo fake-IPs (198.18.0.x) which do not
@@ -127,6 +143,7 @@ func (n *NftablesBackend) Apply() error {
 		DNSPort            int
 		EnableDNSRedirect  bool
 		EnableIPv6         bool
+		DropQUIC           bool
 		BypassIPv4Elements string
 	}{
 		FWMark:             fwMark,
@@ -135,6 +152,7 @@ func (n *NftablesBackend) Apply() error {
 		DNSPort:            n.DNSPort,
 		EnableDNSRedirect:  n.EnableDNSRedirect,
 		EnableIPv6:         n.EnableIPv6,
+		DropQUIC:           n.DropQUIC,
 		BypassIPv4Elements: buildBypassIPv4Elements(n.BypassFakeIP, n.BypassCIDR),
 	}
 

@@ -53,6 +53,11 @@ type NetworkConfig struct {
 	// WANInterface at startup because the configured value did not exist on
 	// this system. Not persisted to TOML; used only for UI indication.
 	WANInterfaceAutoDetected bool `toml:"-" json:"wan_interface_auto_detected"`
+	// DropQUIC controls whether QUIC (UDP 443) is dropped at the nftables level,
+	// forcing browsers to immediately fall back to TCP (which HTTP proxy nodes
+	// can tunnel). Set to true when using HTTP proxy nodes that cannot tunnel UDP.
+	// When false, QUIC bypasses tproxy entirely (legacy behaviour).
+	DropQUIC bool `toml:"drop_quic" json:"drop_quic"`
 }
 
 // DNSStrategy controls how Mihomo's nameserver-policy is generated.
@@ -124,7 +129,7 @@ func Default() *MetaclashConfig {
 			MaxRestarts: 3,
 		},
 		Ports:    PortsConfig{HTTP: 17890, SOCKS: 17891, Mixed: 17893, Redir: 17892, TProxy: 17895, DNS: 17874, MihomoAPI: 19090, UI: 7777},
-		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}, WANInterface: "eth1"},
+		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}, WANInterface: "eth1", DropQUIC: true},
 		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"223.5.5.5", "119.29.29.29"}, Fallback: []string{"tls://8.8.4.4", "tls://1.1.1.1", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, DoH: []string{}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org"}, DnsmasqMode: "none", ApplyOnStart: true, Strategy: DNSStrategysplit},
 		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"},
 		Security: SecurityConfig{APISecret: "", AllowLAN: true},
