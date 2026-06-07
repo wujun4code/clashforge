@@ -134,17 +134,50 @@ class _SemVersion implements Comparable<_SemVersion> {
   }
 }
 
-Future<UpdateInfo?> fetchLatestRelease() async {
+const _githubReleasesUrl =
+    'https://api.github.com/repos/wujun4code/clashforge/releases';
+const _githubLatestReleaseUrl =
+    'https://api.github.com/repos/wujun4code/clashforge/releases/latest';
+
+Future<UpdateInfo?> fetchLatestRelease({http.Client? client}) async {
+  final httpClient = client ?? http.Client();
   try {
-    final resp = await http.get(
-      Uri.parse(
-          'https://api.github.com/repos/wujun4code/clashforge/releases/latest'),
-      headers: {'Accept': 'application/vnd.github+json'},
-    ).timeout(const Duration(seconds: 15));
-    if (resp.statusCode != 200) return null;
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    return UpdateInfo.fromJson(data);
+    return await _fetchLatestFromReleaseList(httpClient) ??
+        await _fetchLatestFromLatestEndpoint(httpClient);
   } catch (_) {
     return null;
+  } finally {
+    if (client == null) {
+      httpClient.close();
+    }
   }
+}
+
+Future<UpdateInfo?> _fetchLatestFromReleaseList(http.Client client) async {
+  final resp = await client.get(
+    Uri.parse('$_githubReleasesUrl?per_page=10'),
+    headers: {'Accept': 'application/vnd.github+json'},
+  ).timeout(const Duration(seconds: 15));
+  if (resp.statusCode != 200) return null;
+
+  final data = jsonDecode(resp.body);
+  if (data is! List) return null;
+  for (final item in data) {
+    if (item is! Map<String, dynamic>) continue;
+    if (item['draft'] == true) continue;
+    final tag = item['tag_name'] as String?;
+    if (tag == null || tag.trim().isEmpty) continue;
+    return UpdateInfo.fromJson(item);
+  }
+  return null;
+}
+
+Future<UpdateInfo?> _fetchLatestFromLatestEndpoint(http.Client client) async {
+  final resp = await client.get(
+    Uri.parse(_githubLatestReleaseUrl),
+    headers: {'Accept': 'application/vnd.github+json'},
+  ).timeout(const Duration(seconds: 15));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  return UpdateInfo.fromJson(data);
 }
