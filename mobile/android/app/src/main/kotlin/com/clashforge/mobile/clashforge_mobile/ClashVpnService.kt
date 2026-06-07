@@ -299,6 +299,7 @@ sniffer:
         dnsPatched = upsertDnsScalar(dnsPatched, "enhanced-mode", "fake-ip")
         dnsPatched = upsertDnsScalar(dnsPatched, "fake-ip-range", "198.18.0.0/15")
         dnsPatched = upsertDnsList(dnsPatched, "fake-ip-filter", listOf(
+            "geosite:cn",
             "*.lan", "*.local", "*.localhost", "*.localdomain",
             "+.stun.*.*", "+.stun.*.*.*",
             "msftconnecttest.com", "*.msftconnecttest.com",

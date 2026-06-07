@@ -424,7 +424,7 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
   static const _aiSiteUrls = [
     ('https://chat.openai.com', 'chat.openai.com'),
-    ('https://claude.ai', 'claude.ai'),
+    ('https://gemini.google.com', 'gemini.google.com'),
   ];
 
   List<(String, String, String, String)> _domesticSites(
@@ -460,7 +460,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ];
   List<(String, String, String, String)> _aiSites(AppLocalizations l10n) => [
         ('OpenAI', l10n.siteOpenAIDesc, _aiSiteUrls[0].$1, _aiSiteUrls[0].$2),
-        ('Claude', l10n.siteClaudeDesc, _aiSiteUrls[1].$1, _aiSiteUrls[1].$2),
+        ('Gemini', l10n.siteGeminiDesc, _aiSiteUrls[1].$1, _aiSiteUrls[1].$2),
       ];
 
   static const _kDnsStrategyKey = 'dns_strategy';
