@@ -26,10 +26,11 @@ jobs:
         run: |
           BASE=${{ github.event.pull_request.base.sha }}
           HEAD=${{ github.event.pull_request.head.sha }}
-          # Only trigger on actual mobile source changes — NOT on workflow-file-only
-          # edits.  Including workflow files in the trigger caused the E2E to run
-          # on every CI tweak, even when no Dart/Android code changed.
-          if git diff --name-only "$BASE" "$HEAD" | grep -q '^mobile/'; then
+          # Only trigger on actual mobile/test source changes — NOT on
+          # workflow-file-only edits. Including workflow files in the trigger
+          # caused the E2E to run on every CI tweak, even when no app or test
+          # code changed.
+          if git diff --name-only "$BASE" "$HEAD" | grep -Eq '^(mobile/|tests/android/)'; then
             echo "mobile=true" >> $GITHUB_OUTPUT
           else
             echo "mobile=false" >> $GITHUB_OUTPUT
@@ -239,6 +240,24 @@ jobs:
             https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
           ls -lh mobile/assets/geodata/
 
+      - name: Build adb-shell TUN probe
+        if: needs.changes.outputs.mobile == 'true'
+        run: |
+          NDK_ROOT="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$NDK_ROOT" ]; then
+            NDK_ROOT="$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -1 || true)"
+          fi
+          CC="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang"
+          if [ ! -x "$CC" ]; then
+            echo "Android NDK clang not found: $CC"
+            exit 1
+          fi
+          GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$CC" \
+            go build -trimpath -ldflags="-s -w" \
+              -o tests/android/tun_ip_probe_android_amd64 \
+              ./tests/android/tun_ip_probe.go
+          ls -lh tests/android/tun_ip_probe_android_amd64
+
       # Install and start Tor — provides a SOCKS5 proxy on 127.0.0.1:9050 that exits
       # through a Tor relay (different IP than the CI host).  ClashVpnService detects
       # the open port via adb-reverse and rewrites mihomo's config to use it, so the
@@ -276,12 +295,4 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           script: |
-            set -e
-            adb root 2>/dev/null || true
-            adb wait-for-device
-            adb shell setenforce 0 2>/dev/null || true
-            adb shell chmod o+r /data/system/packages.xml 2>/dev/null || true
-            adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-debug.apk"
-            adb reverse tcp:9050 tcp:9050
-            adb logcat -c 2>/dev/null || true
-            (adb logcat -v time > /tmp/logcat.txt 2>&1) & LOGCAT_PID=$!; (while true; do adb shell chmod o+r /data/system/packages.xml 2>/dev/null; sleep 1; done) & CHMOD_PID=$!; (while true; do if adb shell uiautomator dump /sdcard/d.xml >/dev/null 2>&1 && adb pull /sdcard/d.xml /tmp/vd.xml >/dev/null 2>&1 && grep -q vpndialogs /tmp/vd.xml 2>/dev/null; then python3 -c "import xml.etree.ElementTree as ET,re; [print((int(m.group(1))+int(m.group(3)))//2,(int(m.group(2))+int(m.group(4)))//2) for n in ET.parse('/tmp/vd.xml').iter() if n.get('text') in ('OK','Allow','ALLOW') for m in [re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.get('bounds',''))] if m]" 2>/dev/null | head -1 | xargs -r adb shell input tap >/dev/null 2>&1; fi; sleep 1; done) & BGPID=$!; cd "${GITHUB_WORKSPACE}/mobile" && timeout 900 flutter test integration_test/app_e2e_test.dart --device-id emulator-5554 "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" --reporter=expanded --timeout=540s; TEST_RC=$?; kill $BGPID 2>/dev/null; kill $CHMOD_PID 2>/dev/null; kill $LOGCAT_PID 2>/dev/null; sleep 2; echo "=== MihomoCore + ClashVpn + E2E Probe logcat ==="; grep -E "MihomoCore|ClashVpn|E2E|TUN|gvisor|mihomo|PR-01|PR-02|PASS|FAIL|WARN|CONNECTIVITY|proxy|flutter|CF_IMPORT" /tmp/logcat.txt 2>/dev/null | tail -300 || true; exit $TEST_RC
+            bash "${GITHUB_WORKSPACE}/tests/android/run_emulator_e2e.sh"
