@@ -125,6 +125,7 @@ void main() {
         );
         final dns = config['dns'] as Map<String, dynamic>;
         expect(dns['nameserver'], equals(['223.5.5.5', '119.29.29.29']));
+        expect((dns['fake-ip-filter'] as List), contains('geosite:cn'));
         expect(dns.containsKey('nameserver-policy'), isTrue);
         final policy = dns['nameserver-policy'] as Map<String, dynamic>;
         expect(policy['geosite:cn'], equals(['223.5.5.5', '119.29.29.29']));

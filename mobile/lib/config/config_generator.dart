@@ -162,6 +162,9 @@ class ConfigGenerator {
         (strategy == 'split' || strategy == 'privacy') && !geositePresent
             ? 'legacy'
             : strategy;
+    if (geositePresent) {
+      base['fake-ip-filter'] = ['geosite:cn', ..._fakeIpFilter];
+    }
 
     if (effective == 'privacy') {
       base['nameserver'] = _cnDoh;

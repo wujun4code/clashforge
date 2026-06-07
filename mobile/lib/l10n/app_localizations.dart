@@ -225,7 +225,7 @@ abstract class AppLocalizations {
   String get siteGitHubDesc;
   String get siteGoogleDesc;
   String get siteOpenAIDesc;
-  String get siteClaudeDesc;
+  String get siteGeminiDesc;
 
   // ── Language names ─────────────────────────────────────────────────────────
   String get langEnglish;
@@ -461,7 +461,7 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get siteGitHubDesc => 'Verify routed access to international dev sites';
   @override String get siteGoogleDesc => 'Verify Google search is reachable via passage';
   @override String get siteOpenAIDesc => 'Verify ChatGPT is reachable via passage';
-  @override String get siteClaudeDesc => 'Verify Claude AI is reachable via passage';
+  @override String get siteGeminiDesc => 'Verify Gemini is reachable via passage';
 
   @override String get langEnglish => 'English';
   @override String get langChinese => '中文';
@@ -670,7 +670,7 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get siteGitHubDesc => '验证国际开发站点的访问效果';
   @override String get siteGoogleDesc => '验证 Google 搜索是否可正常访问';
   @override String get siteOpenAIDesc => '验证 ChatGPT 是否可正常访问';
-  @override String get siteClaudeDesc => '验证 Claude AI 是否可正常访问';
+  @override String get siteGeminiDesc => '验证 Gemini 是否可正常访问';
 
   @override String get langEnglish => 'English';
   @override String get langChinese => '中文';
