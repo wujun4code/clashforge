@@ -208,12 +208,20 @@ Future<List<String>> _queryDnsPort1053(String domain) async {
   try {
     sock = await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
     final id = DateTime.now().millisecondsSinceEpoch & 0xFFFF;
+    final completer = Completer<List<String>>();
+    late final StreamSubscription<RawSocketEvent> sub;
+    sub = sock.listen((event) {
+      if (event != RawSocketEvent.read || completer.isCompleted) return;
+      final dg = sock?.receive();
+      if (dg == null) return;
+      completer.complete(_parseDnsARecords(dg.data, id));
+    });
     sock.send(_buildDnsQuery(id, domain), InternetAddress.loopbackIPv4, 1053);
-    final event = await sock.first.timeout(const Duration(seconds: 4));
-    if (event != RawSocketEvent.read) return const [];
-    final dg = sock.receive();
-    if (dg == null) return const [];
-    return _parseDnsARecords(dg.data, id);
+    try {
+      return await completer.future.timeout(const Duration(seconds: 4));
+    } finally {
+      await sub.cancel();
+    }
   } on TimeoutException {
     return const [];
   } catch (_) {
