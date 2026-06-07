@@ -11,14 +11,17 @@
 // CI: a background adb loop (uiautomator dump + tap) auto-dismisses the VPN consent dialog.
 
 import 'dart:convert';
-import 'dart:io' show HttpClient;
+import 'dart:io' show File, HttpClient;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:clashforge_mobile/config/vpn_manager.dart';
 import 'package:clashforge_mobile/main.dart';
 
 const _subUrl = String.fromEnvironment('SUBSCRIPTION_URL');
+const _requireExternalTunProbe =
+    bool.fromEnvironment('E2E_REQUIRE_EXTERNAL_TUN_PROBE');
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -45,6 +48,7 @@ void main() {
       expect(baselineIp, isNotEmpty,
           reason: 'Emulator must have network access before VPN');
       _log('Round 1 baseline: $baselineIp');
+      await _resetExternalTunProbeResultIfNeeded();
 
       // ── Step 1: Import subscription ─────────────────────────────────
       _log('Navigating to Subscriptions tab');
@@ -330,6 +334,8 @@ void main() {
             '[E2E] PR-02 FAIL: google.com not reachable via VPN proxy (HTTP $googleCode) — proxy node may be down or routing is broken',
       );
 
+      await _waitForExternalTunProbeIfRequired(baselineIp);
+
       // ── Step 5: Disconnect VPN ──────────────────────────────────────
       _log('Navigating back to Home');
       await tester.tap(find.byIcon(Icons.arrow_back));
@@ -606,4 +612,53 @@ Future<Map<String, int>> _probeConnectivity(Map<String, String> targets) async {
     results[name] = code;
   }
   return results;
+}
+
+Future<File> _externalTunProbeResultFile() async {
+  final filesDir = await VpnManager.getFilesDir();
+  return File('$filesDir/e2e_tun_probe_result.json');
+}
+
+Future<void> _resetExternalTunProbeResultIfNeeded() async {
+  if (!_requireExternalTunProbe) return;
+  try {
+    final file = await _externalTunProbeResultFile();
+    if (await file.exists()) {
+      await file.delete();
+    }
+  } catch (e) {
+    _log('[WARN] Could not reset external TUN probe result: $e');
+  }
+}
+
+Future<void> _waitForExternalTunProbeIfRequired(String flutterBaselineIp) async {
+  if (!_requireExternalTunProbe) return;
+
+  _log(
+      '[E2E_READY_FOR_EXTERNAL_TUN_PROBE] VPN is connected; run adb-shell TUN probe now');
+  final file = await _externalTunProbeResultFile();
+  final deadline = DateTime.now().add(const Duration(seconds: 120));
+  while (!await file.exists()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('[E2E] External TUN probe result was not written within 120s');
+    }
+    await Future<void>.delayed(const Duration(seconds: 1));
+  }
+
+  final body = await file.readAsString();
+  final data = jsonDecode(body) as Map<String, dynamic>;
+  final ok = data['ok'] == true;
+  final shellBaselineIp = (data['baseline_ip'] ?? '').toString();
+  final shellVpnIp = (data['vpn_ip'] ?? '').toString();
+  final detail = (data['detail'] ?? '').toString();
+
+  _log(
+      '[E2E] External TUN probe result: baseline=$shellBaselineIp vpn=$shellVpnIp ok=$ok detail=$detail');
+  expect(shellBaselineIp, isNotEmpty,
+      reason: '[E2E] External TUN probe must record shell baseline IP');
+  expect(shellVpnIp, isNotEmpty,
+      reason: '[E2E] External TUN probe must record shell VPN IP');
+  expect(ok, isTrue,
+      reason:
+          '[E2E] External adb-shell traffic did not route through VPN/TUN. Flutter baseline=$flutterBaselineIp shell baseline=$shellBaselineIp shell vpn=$shellVpnIp detail=$detail');
 }
