@@ -520,30 +520,6 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 	// the user may have imported so our proxy handler can always reach it unauthenticated.
 	delete(merged, "secret")
 
-	// Prevent sniffer override-destination from breaking CDN node affinity.
-	// When a client holds a real IP selected by its own HTTP-DNS (e.g. WeChat),
-	// override-destination: true causes Mihomo to re-resolve the SNI domain and
-	// pick a different CDN node, invalidating upload tokens bound to the original
-	// node.  Mihomo's own default is false; enforce it here so user overrides
-	// cannot accidentally set it to true on TLS/QUIC sniffers.
-	if sniffer, ok := merged["sniffer"].(map[string]interface{}); ok {
-		sniffer["override-destination"] = false
-		// Allow HTTP sniffers to still override, since plain-HTTP transparent
-		// proxy requires Host-header rewriting to work correctly.
-		if sniff, ok2 := sniffer["sniff"].(map[string]interface{}); ok2 {
-			for proto, v := range sniff {
-				upper := strings.ToUpper(proto)
-				if upper == "HTTP" {
-					continue
-				}
-				if pm, ok3 := v.(map[string]interface{}); ok3 {
-					pm["override-destination"] = false
-				}
-			}
-		}
-		merged["sniffer"] = sniffer
-	}
-
 	if !cfg.DNS.Enable {
 		delete(merged, "dns")
 		return merged

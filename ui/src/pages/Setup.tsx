@@ -122,7 +122,7 @@ const DNS_FIELD_LABELS: Record<string, string> = {
   'listen':                  'ClashForge 接管：DNS 监听地址（0.0.0.0:端口）',
   'enhanced-mode':           '解析模式：fake-ip 防止 DNS 泄漏',
   'fake-ip-range':           'ClashForge 固定：Mihomo 虚构 IP 段',
-  'fake-ip-filter':          '不使用 fake-ip 的域名（NTP / LAN / local 等）',
+  'fake-ip-filter':          'fake-ip 白名单：列表内域名返回真实 IP。包含 geosite:cn，确保国内 App（微信/淘宝等）QUIC 上传能正常直连',
   'fake-ip-filter-mode':     'blacklist = 仅 filter 内的域名走真实 IP',
   'default-nameserver':      '纯 IP，引导 DoH/DoT 初始解析（Mihomo 要求必须为 IP）',
   'nameserver':              '主解析：dhcp://eth1 跟随 ISP 分配的 DNS',
@@ -2026,6 +2026,38 @@ export function Setup() {
                 </div>
               </div>
             </div>
+
+            {/* ── fake-ip 说明卡（仅 fake-ip 模式下展示） ── */}
+            {dns.mode === 'fake-ip' && (
+              <div className="glass-card px-5 py-4 space-y-3 border-brand/20 bg-brand/[0.03]">
+                <h3 className="text-xs font-semibold text-brand uppercase tracking-wider flex items-center gap-2">
+                  <Info size={13} />fake-ip 模式 — ClashForge 为你生成了哪些配置，以及为什么
+                </h3>
+                <div className="space-y-2.5 text-[11px] text-muted/90 leading-relaxed">
+                  <p>
+                    <span className="text-slate-200 font-medium">工作原理：</span>
+                    Mihomo 对任何 DNS 查询立即返回虚构 IP（198.18.x.x），无需等待真实解析。流量发往虚构 IP 后被 tproxy 拦截，
+                    再由规则决定走代理还是直连；代理侧用远端 DNS 解析真实域名，完全绕开 GFW 污染。
+                  </p>
+                  <p>
+                    <span className="text-slate-200 font-medium">国内 App 的 QUIC 问题：</span>
+                    微信视频上传、淘宝等国内 App 会尝试 QUIC（UDP 443）。nftables 规则让 QUIC 绕过 tproxy 直接发出——
+                    若目标是虚构 IP，数据包进入公网后无处可达，触发重试风暴，表现为「发送中断」。
+                  </p>
+                  <p>
+                    <span className="text-slate-200 font-medium">ClashForge 的解决方案：</span>
+                    我们在 <code className="bg-white/10 px-1 rounded text-slate-300">fake-ip-filter</code> 中加入{' '}
+                    <code className="bg-white/10 px-1 rounded text-slate-300">geosite:cn</code>，
+                    让所有国内域名（微信、淘宝、百度…）的 DNS 查询返回真实 IP。
+                    QUIC 上传流量的目标变为真实 CDN IP，绕过 tproxy 后可正常直连，上传不再中断。
+                  </p>
+                  <p className="text-muted/70">
+                    以上配置已体现在下方 YAML 预览的{' '}
+                    <code className="bg-white/10 px-1 rounded">fake-ip-filter</code> 字段中，与第四步最终写入文件的内容完全一致。
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* ── DNS 分流策略选择器 ── */}
             <div className="glass-card px-5 py-4 space-y-3">

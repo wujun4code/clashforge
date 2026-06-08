@@ -25,33 +25,6 @@ class ConfigGenerator {
     'ntp.*.com',
     '*.ntp.org.cn',
     '*.pool.ntp.org',
-    // Tencent / WeChat — video upload uses real-IP CDN nodes selected by
-    // WeChat's own HTTP-DNS; fake-ip would route QUIC to an unreachable fake
-    // address and trigger upload retry storms.
-    '+.qq.com',
-    '+.qpic.cn',
-    '+.qlogo.cn',
-    '+.myqcloud.com',
-    '+.qcloud.com',
-    '+.tencent.com',
-    '+.wechat.com',
-    '+.weixin.com',
-    '+.tencentcs.com',
-    '+.gtimg.com',
-    '+.weiyun.com',
-    // Alibaba / Alipay
-    '+.taobao.com',
-    '+.tmall.com',
-    '+.alipay.com',
-    '+.aliyun.com',
-    '+.alibaba.com',
-    '+.alicdn.com',
-    // Baidu / ByteDance
-    '+.baidu.com',
-    '+.bdstatic.com',
-    '+.bytedance.com',
-    '+.douyin.com',
-    '+.ixigua.com',
   ];
 
   /// Generate a complete Clash/mihomo config map ready for YAML serialisation.
