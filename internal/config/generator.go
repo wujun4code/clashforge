@@ -132,9 +132,26 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 // geositeExists reports whether the geosite.dat file at path exists and is
 // readable.  nameserver-policy requires geosite data; if the file is missing
 // we silently fall back to "legacy" behaviour.
+//
+// The IPK bundles "GeoSite.dat" (mixed case) while config.toml stores the path
+// as "geosite.dat" (lowercase).  On Linux the two differ; fall back to a
+// case-insensitive scan of the parent directory so both spellings match.
 func geositeExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	dir := filepath.Dir(path)
+	want := strings.ToLower(filepath.Base(path))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if strings.ToLower(e.Name()) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // buildNameserverPolicy returns the Mihomo nameserver-policy map for "split"
