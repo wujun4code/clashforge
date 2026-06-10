@@ -3349,8 +3349,9 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 
   static const _httpChannel = MethodChannel('com.clashforge.mobile/http');
 
-  // Uses Android native networking stack (Cronet first, HttpURLConnection fallback)
-  // to improve compatibility with subscription endpoints.
+  // Uses the platform networking stack (Android: Cronet for a Chrome JA3
+  // fingerprint; iOS: URLSession for a Safari fingerprint) to improve
+  // compatibility with subscription endpoints that reject non-browser TLS.
   Future<(int, String)> _fetchUrlNative(String url) async {
     final result = await _httpChannel.invokeMapMethod<String, dynamic>(
         'fetchUrl', {'url': url, 'timeoutMs': 15000});
@@ -3364,7 +3365,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
   }
 
   Future<(int, String)> _fetchUrlWithFallback(String url) async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return _fetchUrlDart(url);
     }
     try {
