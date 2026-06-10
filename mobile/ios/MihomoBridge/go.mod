@@ -7,6 +7,12 @@ require (
 	golang.org/x/mobile v0.0.0-20260602190626-68735029466e
 )
 
+// The upstream cgo path (darwin && arm64 && cgo) uses IOKit symbols the iOS
+// SDK marks unavailable, breaking gomobile bind; GOOS=ios satisfies the
+// darwin build tag.  The stub returns "not Apple Silicon" so gopsutil takes
+// its generic sysctl path.
+replace github.com/shoenig/go-m1cpu => ./stubs/m1cpu
+
 require (
 	github.com/3andne/restls-client-go v0.1.6 // indirect
 	github.com/RyuaNerin/go-krypto v1.2.4 // indirect
