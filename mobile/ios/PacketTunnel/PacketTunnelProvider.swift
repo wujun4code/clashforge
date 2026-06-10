@@ -60,18 +60,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             self.logger.info("vpn", "Tunnel established", fields: ["fd": Int(tunFd)])
 
-            do {
-                try MihomobridgePatchConfigWithTun(configPath, Int(tunFd))
-                self.logger.info("vpn", "Patched config.yaml with TUN fd",
-                                 fields: ["file-descriptor": Int(tunFd), "stack": "system"])
-                try MihomobridgeStart(home, configPath, self.coreLogAdapter)
-                self.logger.info("mihomo", "Core started in-process")
-                completionHandler(nil)
-            } catch {
-                self.logger.error("mihomo", "Core start failed",
-                                  fields: ["error": error.localizedDescription])
-                completionHandler(error)
+            // gomobile exposes package-level funcs as C functions with an
+            // NSError out-parameter — Swift does not import those as
+            // throwing (only ObjC methods get that treatment).
+            var patchError: NSError?
+            MihomobridgePatchConfigWithTun(configPath, Int(tunFd), &patchError)
+            if let patchError = patchError {
+                self.logger.error("vpn", "Config patch failed",
+                                  fields: ["error": patchError.localizedDescription])
+                completionHandler(patchError)
+                return
             }
+            self.logger.info("vpn", "Patched config.yaml with TUN fd",
+                             fields: ["file-descriptor": Int(tunFd), "stack": "system"])
+
+            var startError: NSError?
+            MihomobridgeStart(home, configPath, self.coreLogAdapter, &startError)
+            if let startError = startError {
+                self.logger.error("mihomo", "Core start failed",
+                                  fields: ["error": startError.localizedDescription])
+                completionHandler(startError)
+                return
+            }
+            self.logger.info("mihomo", "Core started in-process")
+            completionHandler(nil)
         }
     }
 
