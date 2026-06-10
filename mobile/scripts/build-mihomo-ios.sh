@@ -11,7 +11,7 @@ BRIDGE_DIR="$MOBILE_DIR/ios/MihomoBridge"
 OUT_DIR="$MOBILE_DIR/ios/Frameworks"
 OUT="$OUT_DIR/Mihomobridge.xcframework"
 
-GOMOBILE_VERSION="$(go list -m -f '{{.Version}}' -C "$BRIDGE_DIR" golang.org/x/mobile)"
+GOMOBILE_VERSION="$(go list -C "$BRIDGE_DIR" -m -f '{{.Version}}' golang.org/x/mobile)"
 echo "==> Installing gomobile/gobind ${GOMOBILE_VERSION} (pinned by MihomoBridge/go.mod)"
 go install "golang.org/x/mobile/cmd/gomobile@${GOMOBILE_VERSION}"
 go install "golang.org/x/mobile/cmd/gobind@${GOMOBILE_VERSION}"
