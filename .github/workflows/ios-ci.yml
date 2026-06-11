@@ -88,6 +88,17 @@ jobs:
         if: needs.changes.outputs.mobile == 'true'
         run: bash mobile/scripts/build-mihomo-ios.sh
 
+      - name: Download geodata assets
+        if: needs.changes.outputs.mobile == 'true'
+        working-directory: mobile
+        run: |
+          mkdir -p assets/geodata
+          curl -fSL -o assets/geodata/country.mmdb \
+            https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb
+          curl -fSL -o assets/geodata/geosite.dat \
+            https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
+          ls -lh assets/geodata/
+
       - name: Flutter analyze
         if: needs.changes.outputs.mobile == 'true'
         working-directory: mobile
