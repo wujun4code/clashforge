@@ -98,31 +98,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// sing-tun wants a real descriptor.  Apple creates the utun inside this
     /// process, so scan our fd table for the utun control socket — the
     /// technique WireGuardKit and sing-box use.
+    ///
+    /// Probing uses getsockopt(UTUN_OPT_IFNAME): the kern_control structs
+    /// (ctl_info / sockaddr_ctl) and the function-like CTLIOCGINFO macro
+    /// never get imported into Swift, but these two option constants are
+    /// plain integers from <sys/sys_domain.h> / <net/if_utun.h>.
     private func tunnelFileDescriptor() -> Int32? {
-        var ctlInfo = ctl_info()
-        withUnsafeMutablePointer(to: &ctlInfo.ctl_name) {
-            $0.withMemoryRebound(to: CChar.self,
-                                 capacity: MemoryLayout.size(ofValue: $0.pointee)) {
-                _ = strcpy($0, "com.apple.net.utun_control")
-            }
-        }
+        let sysprotoControl: Int32 = 2 // SYSPROTO_CONTROL
+        let utunOptIfname: Int32 = 2   // UTUN_OPT_IFNAME
         for fd: Int32 in 0...1024 {
-            var addr = sockaddr_ctl()
-            var len = socklen_t(MemoryLayout.size(ofValue: addr))
-            let ret = withUnsafeMutablePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    getpeername(fd, $0, &len)
-                }
-            }
-            if ret != 0 || addr.sc_family != AF_SYSTEM {
-                continue
-            }
-            if ctlInfo.ctl_id == 0 {
-                if ioctl(fd, CTLIOCGINFO, &ctlInfo) != 0 {
-                    continue
-                }
-            }
-            if addr.sc_id == ctlInfo.ctl_id {
+            var ifname = [CChar](repeating: 0, count: 32)
+            var len = socklen_t(ifname.count)
+            let ret = getsockopt(fd, sysprotoControl, utunOptIfname, &ifname, &len)
+            if ret == 0, String(cString: ifname).hasPrefix("utun") {
                 return fd
             }
         }
