@@ -1023,6 +1023,33 @@ export interface DnsLeakTestResult {
 
 export const getDNSLeakTest = () => request<DnsLeakTestResult>('GET', '/health/dns-leak')
 
+// ---- self-update ----
+export interface SelfUpdateResult {
+  run_at: string
+  success: boolean
+  old_version: string
+  new_version?: string
+  error?: string
+  skipped: boolean
+  skip_reason?: string
+}
+
+export interface SelfUpdateConfig {
+  auto_self_update: boolean
+  self_update_time: string
+  self_update_channel: string
+  is_running: boolean
+  last_run: SelfUpdateResult | null
+}
+
+export const getSelfUpdateConfig = () => request<SelfUpdateConfig>('GET', '/update/self')
+export const updateSelfUpdateConfig = (payload: {
+  auto_self_update?: boolean
+  self_update_time?: string
+  self_update_channel?: string
+}) => request<{ updated: boolean }>('PUT', '/update/self', payload)
+export const triggerSelfUpdate = () => request<{ started: boolean }>('POST', '/update/self/trigger')
+
 /**
  * Fetches bash.ws resolver results for a browser-initiated DNS probe.
  * The browser makes the actual DNS probe requests (fetch to unique subdomains),

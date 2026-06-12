@@ -25,6 +25,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/publish"
 	"github.com/wujun4code/clashforge/internal/quickstart"
 	"github.com/wujun4code/clashforge/internal/scheduler"
+	"github.com/wujun4code/clashforge/internal/selfupdate"
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"github.com/wujun4code/clashforge/internal/workernode"
 )
@@ -208,8 +209,11 @@ func main() {
 	// GeoData manager
 	geoManager := geodata.New(cfg)
 
+	// Self-updater
+	selfUpdater := selfupdate.New(cfg, buildVersion)
+
 	// Scheduler
-	sched := scheduler.New(cfg, subManager, geoManager)
+	sched := scheduler.New(cfg, subManager, geoManager, selfUpdater)
 	sched.Start()
 
 	deps := api.Dependencies{
@@ -228,6 +232,7 @@ func main() {
 		WorkerNodeStore: workerNodeStore,
 		GeoDataManager:  geoManager,
 		QuickStartStore: quickStartStore,
+		SelfUpdater:     selfUpdater,
 	}
 	// HTTP server
 	router := api.NewRouter(deps)

@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
-import { getConfig, updateConfig, resetClashForge, getClashforgeVersion } from '../api/client'
-import type { ClashforgeVersionData } from '../api/client'
-import { Save, Loader2, RotateCcw, ShieldAlert, RefreshCw, Download, Radio } from 'lucide-react'
+import {
+  getConfig, updateConfig, resetClashForge, getClashforgeVersion,
+  getSelfUpdateConfig, updateSelfUpdateConfig, triggerSelfUpdate,
+} from '../api/client'
+import type { ClashforgeVersionData, SelfUpdateConfig } from '../api/client'
+import { Save, Loader2, RotateCcw, ShieldAlert, RefreshCw, Download, Radio, Zap } from 'lucide-react'
 import { InlineNotice, ModalShell, PageHeader, SectionCard } from '../components/ui'
 
 const CHANNEL_KEY = 'cf_update_channel'
@@ -82,8 +85,46 @@ export function Settings() {
     }
   }
 
+  // ── Auto self-update ───────────────────────────────────────────────────────
+  const [selfUpdate, setSelfUpdate] = useState<SelfUpdateConfig | null>(null)
+  const [selfUpdateSaving, setSelfUpdateSaving] = useState(false)
+  const [selfUpdateSaved, setSelfUpdateSaved] = useState(false)
+  const [selfUpdateSaveErr, setSelfUpdateSaveErr] = useState('')
+  const [triggering, setTriggering] = useState(false)
+  const [triggerResult, setTriggerResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const loadSelfUpdate = () => getSelfUpdateConfig().then(setSelfUpdate).catch(() => null)
+
+  const saveSelfUpdate = async () => {
+    if (!selfUpdate) return
+    setSelfUpdateSaving(true); setSelfUpdateSaveErr(''); setSelfUpdateSaved(false)
+    try {
+      await updateSelfUpdateConfig({
+        auto_self_update: selfUpdate.auto_self_update,
+        self_update_time: selfUpdate.self_update_time,
+        self_update_channel: selfUpdate.self_update_channel,
+      })
+      setSelfUpdateSaved(true)
+      setTimeout(() => setSelfUpdateSaved(false), 2000)
+    } catch (e: unknown) {
+      setSelfUpdateSaveErr(String(e))
+    } finally { setSelfUpdateSaving(false) }
+  }
+
+  const doTrigger = async () => {
+    setTriggering(true); setTriggerResult(null)
+    try {
+      await triggerSelfUpdate()
+      setTriggerResult({ ok: true, message: '自动更新已在后台启动，稍后服务将平滑重启。' })
+      setTimeout(loadSelfUpdate, 3000)
+    } catch (e: unknown) {
+      setTriggerResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
+    } finally { setTriggering(false) }
+  }
+
   useEffect(() => {
     getConfig().then(setCfg).catch(() => null)
+    loadSelfUpdate()
   }, [])
 
   const set = (path: string[], value: unknown) => {
@@ -239,6 +280,142 @@ export function Settings() {
             </div>
           </div>
         </div>
+      </SectionCard>
+
+      {/* ── Auto self-update ── */}
+      <SectionCard
+        title="自动更新"
+        description="ClashForge 将在设定时间通过已有的 mihomo 代理自动检测并安装最新版本，更新前后配置完全保留。"
+        actions={
+          <button
+            className="btn-primary flex items-center gap-2"
+            onClick={saveSelfUpdate}
+            disabled={selfUpdateSaving || !selfUpdate}
+          >
+            <Save size={14} /> {selfUpdateSaving ? '保存中…' : '保存'}
+          </button>
+        }
+      >
+        {selfUpdateSaveErr && (
+          <InlineNotice tone="danger" title="保存失败">{selfUpdateSaveErr}</InlineNotice>
+        )}
+        {selfUpdateSaved && (
+          <InlineNotice tone="success" title="已保存">自动更新配置已更新。</InlineNotice>
+        )}
+        {triggerResult && (
+          <InlineNotice tone={triggerResult.ok ? 'success' : 'danger'} title={triggerResult.ok ? '已触发' : '触发失败'}>
+            {triggerResult.message}
+          </InlineNotice>
+        )}
+
+        {selfUpdate ? (
+          <div className="space-y-4">
+            {/* Enable toggle */}
+            <Field label="启用自动更新" hint="启用后将在设定时间自动检测并安装最新版本">
+              <div className="flex gap-2">
+                {([true, false] as const).map(v => (
+                  <button
+                    key={String(v)}
+                    onClick={() => setSelfUpdate(s => s ? { ...s, auto_self_update: v } : s)}
+                    className={[
+                      'rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors',
+                      selfUpdate.auto_self_update === v
+                        ? 'border-brand bg-brand/10 text-brand'
+                        : 'border-white/10 bg-surface-2 text-slate-400 hover:border-white/20 hover:text-white',
+                    ].join(' ')}
+                  >
+                    {v ? '启用' : '禁用'}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {/* Update time */}
+            <Field label="更新时间" hint="每日自动触发时刻，格式 HH:MM（本地时间），默认 02:00">
+              <input
+                type="time"
+                className="bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors"
+                value={selfUpdate.self_update_time}
+                onChange={e => setSelfUpdate(s => s ? { ...s, self_update_time: e.target.value } : s)}
+                disabled={!selfUpdate.auto_self_update}
+              />
+            </Field>
+
+            {/* Channel */}
+            <Field label="更新频道" hint="正式版仅含稳定发布；体验版包含 beta/alpha 预发布">
+              <div className="flex gap-2">
+                {(['stable', 'preview'] as const).map(ch => (
+                  <button
+                    key={ch}
+                    onClick={() => setSelfUpdate(s => s ? { ...s, self_update_channel: ch } : s)}
+                    className={[
+                      'flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors',
+                      selfUpdate.self_update_channel === ch
+                        ? 'border-brand bg-brand/10 text-brand'
+                        : 'border-white/10 bg-surface-2 text-slate-400 hover:border-white/20 hover:text-white',
+                    ].join(' ')}
+                    disabled={!selfUpdate.auto_self_update}
+                  >
+                    <Radio size={11} />
+                    {ch === 'stable' ? '正式版' : '体验版'}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {/* Manual trigger */}
+            <Field label="立即更新" hint="跳过定时器，立即在后台执行一次更新检查与安装">
+              <div className="flex items-center gap-3">
+                <button
+                  className="btn-primary flex items-center gap-2"
+                  onClick={doTrigger}
+                  disabled={triggering || selfUpdate.is_running}
+                >
+                  {(triggering || selfUpdate.is_running)
+                    ? <><Loader2 size={13} className="animate-spin" />更新中…</>
+                    : <><Zap size={13} />立即检查并更新</>}
+                </button>
+                {selfUpdate.is_running && (
+                  <span className="text-xs text-slate-400">后台更新任务正在进行中</span>
+                )}
+              </div>
+            </Field>
+
+            {/* Last run status */}
+            {selfUpdate.last_run && (
+              <Field label="上次运行">
+                <div className="rounded-xl border border-white/10 bg-surface-2 px-4 py-3 text-sm space-y-1">
+                  <div className="flex flex-wrap gap-3 items-center">
+                    <span className="text-slate-400 text-xs">
+                      {new Date(selfUpdate.last_run.run_at).toLocaleString()}
+                    </span>
+                    {selfUpdate.last_run.success && (
+                      <span className="rounded-md bg-green-500/10 px-2 py-0.5 text-xs font-semibold text-green-400">更新成功</span>
+                    )}
+                    {selfUpdate.last_run.skipped && (
+                      <span className="rounded-md bg-white/5 px-2 py-0.5 text-xs text-slate-500">
+                        {selfUpdate.last_run.skip_reason ?? '已是最新版本'}
+                      </span>
+                    )}
+                    {!selfUpdate.last_run.success && !selfUpdate.last_run.skipped && (
+                      <span className="rounded-md bg-red-500/10 px-2 py-0.5 text-xs font-semibold text-red-400">失败</span>
+                    )}
+                  </div>
+                  {selfUpdate.last_run.new_version && (
+                    <p className="text-xs text-slate-400">
+                      {selfUpdate.last_run.old_version} → <span className="text-green-400 font-mono">{selfUpdate.last_run.new_version}</span>
+                    </p>
+                  )}
+                  {selfUpdate.last_run.error && (
+                    <p className="text-xs text-red-400 font-mono break-all">{selfUpdate.last_run.error}</p>
+                  )}
+                </div>
+              </Field>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">加载中…</p>
+        )}
       </SectionCard>
 
       <SectionCard

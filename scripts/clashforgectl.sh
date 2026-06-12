@@ -39,6 +39,7 @@ VERBOSE=0
 DRY_RUN=0
 SUBCOMMAND=""
 KILL_OPENCLASH=0
+PROXY_URL=""
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 log()  { printf "[clashforge] %s\n"      "$*" >&2; }
@@ -114,6 +115,7 @@ while [ $# -gt 0 ]; do
     --stdout)      DIAG_STDOUT=1; shift ;;
     --redact)      DIAG_REDACT=1; shift ;;
     --kill)        KILL_OPENCLASH=1; shift ;;
+    --proxy-url)   [ -n "${2:-}" ] || die "--proxy-url requires a value"; PROXY_URL="$2"; shift 2 ;;
     --yes|-y)      YES=1; shift ;;
     --verbose|-v)  VERBOSE=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
@@ -159,18 +161,38 @@ GH_PROXIES="https://ghproxy.com https://mirror.ghproxy.com https://ghfast.top ht
 _fetch_text() {
   _url="$1"
   if command -v wget >/dev/null 2>&1; then
-    wget --timeout=10 -qO- --user-agent="clashforgectl/1.0" "$_url" 2>/dev/null
+    if [ -n "$PROXY_URL" ]; then
+      http_proxy="$PROXY_URL" https_proxy="$PROXY_URL" \
+        wget --timeout=10 -qO- --user-agent="clashforgectl/1.0" "$_url" 2>/dev/null
+    else
+      wget --timeout=10 -qO- --user-agent="clashforgectl/1.0" "$_url" 2>/dev/null
+    fi
   elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 10 --max-time 15 -A "clashforgectl/1.0" "$_url" 2>/dev/null
+    if [ -n "$PROXY_URL" ]; then
+      curl -fsSL --connect-timeout 10 --max-time 15 \
+        --proxy "$PROXY_URL" -A "clashforgectl/1.0" "$_url" 2>/dev/null
+    else
+      curl -fsSL --connect-timeout 10 --max-time 15 -A "clashforgectl/1.0" "$_url" 2>/dev/null
+    fi
   fi
 }
 
 _fetch_file() {
   _url="$1"; _dest="$2"
   if command -v wget >/dev/null 2>&1; then
-    wget --timeout=30 -qO "$_dest" --user-agent="clashforgectl/1.0" "$_url" 2>/dev/null
+    if [ -n "$PROXY_URL" ]; then
+      http_proxy="$PROXY_URL" https_proxy="$PROXY_URL" \
+        wget --timeout=30 -qO "$_dest" --user-agent="clashforgectl/1.0" "$_url" 2>/dev/null
+    else
+      wget --timeout=30 -qO "$_dest" --user-agent="clashforgectl/1.0" "$_url" 2>/dev/null
+    fi
   elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 15 --max-time 300 -A "clashforgectl/1.0" -o "$_dest" "$_url" 2>/dev/null
+    if [ -n "$PROXY_URL" ]; then
+      curl -fsSL --connect-timeout 15 --max-time 300 \
+        --proxy "$PROXY_URL" -A "clashforgectl/1.0" -o "$_dest" "$_url" 2>/dev/null
+    else
+      curl -fsSL --connect-timeout 15 --max-time 300 -A "clashforgectl/1.0" -o "$_dest" "$_url" 2>/dev/null
+    fi
   else
     return 1
   fi

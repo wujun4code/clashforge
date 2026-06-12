@@ -17,6 +17,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
 	"github.com/wujun4code/clashforge/internal/quickstart"
+	"github.com/wujun4code/clashforge/internal/selfupdate"
 	"github.com/wujun4code/clashforge/internal/subscription"
 	"github.com/wujun4code/clashforge/internal/workernode"
 )
@@ -41,6 +42,7 @@ type Dependencies struct {
 	WorkerNodeStore *workernode.Store
 	GeoDataManager  *geodata.Manager
 	QuickStartStore *quickstart.Store
+	SelfUpdater     *selfupdate.Updater
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -183,6 +185,10 @@ func NewRouter(deps Dependencies) http.Handler {
 			api.Post("/geodata/update", handleTriggerGeoDataUpdate(deps))
 			api.Get("/geodata/logs", handleGetGeoDataLogs(deps))
 		}
+		// Self-update
+		api.Get("/update/self", handleGetSelfUpdateConfig(deps))
+		api.Put("/update/self", handleUpdateSelfUpdateConfig(deps))
+		api.Post("/update/self/trigger", handleTriggerSelfUpdate(deps))
 		if deps.SSEBroker != nil {
 			api.Get("/events", deps.SSEBroker.Handler())
 		}
