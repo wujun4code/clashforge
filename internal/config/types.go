@@ -105,6 +105,13 @@ type UpdateConfig struct {
 	// Empty or "DIRECT" means download without proxy. Any other value routes downloads
 	// through mihomo's HTTP proxy port using its current active routing.
 	GeoDataProxyServer string `toml:"geodata_proxy_server" json:"geodata_proxy_server"`
+
+	// Self-update: automatically upgrade the clashforge package at a scheduled time.
+	// AutoSelfUpdate enables the feature. SelfUpdateTime is "HH:MM" in local time
+	// (default "02:00"). SelfUpdateChannel is "stable" or "preview" (default "stable").
+	AutoSelfUpdate    bool   `toml:"auto_self_update" json:"auto_self_update"`
+	SelfUpdateTime   string `toml:"self_update_time" json:"self_update_time"`
+	SelfUpdateChannel string `toml:"self_update_channel" json:"self_update_channel"`
 }
 
 type SecurityConfig struct {
@@ -131,7 +138,7 @@ func Default() *MetaclashConfig {
 		Ports:    PortsConfig{HTTP: 17890, SOCKS: 17891, Mixed: 17893, Redir: 17892, TProxy: 17895, DNS: 17874, MihomoAPI: 19090, UI: 7777},
 		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}, WANInterface: "eth1", DropQUIC: true},
 		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"223.5.5.5", "119.29.29.29"}, Fallback: []string{"tls://8.8.4.4", "tls://1.1.1.1", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, DoH: []string{}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org", "+.qq.com", "+.qpic.cn", "+.qlogo.cn", "+.myqcloud.com", "+.qcloud.com", "+.tencent.com", "+.wechat.com", "+.weixin.com", "+.tencentcs.com", "+.gtimg.com", "+.weiyun.com", "+.taobao.com", "+.tmall.com", "+.alipay.com", "+.aliyun.com", "+.alibaba.com", "+.alicdn.com", "+.baidu.com", "+.bdstatic.com", "+.bytedance.com", "+.douyin.com", "+.ixigua.com"}, DnsmasqMode: "none", ApplyOnStart: true, Strategy: DNSStrategysplit},
-		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"},
+		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat", AutoSelfUpdate: false, SelfUpdateTime: "02:00", SelfUpdateChannel: "stable"},
 		Security: SecurityConfig{APISecret: "", AllowLAN: true},
 		Log:      LogConfig{Level: "info", File: "", MaxSizeMB: 10},
 	}
