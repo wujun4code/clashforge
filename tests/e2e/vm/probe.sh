@@ -117,8 +117,9 @@ case "$PHASE" in
             # api.ipify.org is an international site — if the proxy node can't reach
             # international destinations (CI environment constraint), the IP check fails
             # even though the proxy itself is working correctly.
-            # Downgrade to WARN when the mixed port is confirmed listening (proxy is up).
-            if [ "$MIXED_LISTENING" = "true" ]; then
+            # Check the mixed port directly here (MIXED_LISTENING is set later in the
+            # diagnostic section, so we can't rely on it at this point in the script).
+            if curl --connect-timeout 1 --max-time 2 -o /dev/null "http://127.0.0.1:${MIXED_PORT}" 2>/dev/null; then
                 record WARN PR-01 "出口 IP（代理运行期）" \
                     "curl api.ipify.org（via 混合端口）" \
                     "出口 IP = 代理节点 IP ≠ 直连 IP" \
