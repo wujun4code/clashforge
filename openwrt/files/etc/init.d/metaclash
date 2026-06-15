@@ -62,6 +62,16 @@ start_service() {
     [ -f /etc/metaclash/overrides.yaml ] || \
         touch /etc/metaclash/overrides.yaml 2>/dev/null || true
 
+    # TUN mode requires /dev/net/tun. Ensure the device node exists and the
+    # kernel module is loaded before mihomo tries to open it.
+    _net_mode=$(grep -oE 'mode\s*=\s*"[^"]*"' "$CONFIG" 2>/dev/null | head -1 | grep -oE '"[^"]*"' | tr -d '"' || true)
+    if [ "$_net_mode" = "tun" ]; then
+        modprobe tun 2>/dev/null || true
+        mkdir -p /dev/net
+        [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true
+        log "TUN mode: /dev/net/tun ready"
+    fi
+
     local mihomo_bin
     mihomo_bin=$(find_mihomo)
     if [ -z "$mihomo_bin" ]; then

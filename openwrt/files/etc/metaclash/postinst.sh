@@ -86,6 +86,13 @@ for _gf in country.mmdb GeoIP.dat GeoSite.dat; do
   fi
 done
 
+# Ensure /dev/net/tun exists so TUN mode works on first boot after install.
+# The init.d script repeats this check at every start, but postinst runs
+# before the very first start so we need it here too.
+modprobe tun 2>/dev/null || true
+mkdir -p /dev/net
+[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true
+
 /etc/init.d/clashforge enable 2>/dev/null || true
 /etc/init.d/clashforge start 2>/dev/null || true
 

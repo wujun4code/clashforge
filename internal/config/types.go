@@ -38,7 +38,26 @@ type PortsConfig struct {
 	UI        int `toml:"ui" json:"ui"`
 }
 
+// TUNConfig holds settings for mihomo's TUN virtual-NIC mode.
+// Only active when NetworkConfig.Mode == "tun".
+type TUNConfig struct {
+	// Stack selects the TCP/IP stack: "system" | "gvisor" | "mixed" (default).
+	// "mixed" uses gvisor for UDP and system for TCP — best compatibility on OpenWrt.
+	Stack string `toml:"stack" json:"stack"`
+	// DNSHijack is the list of DNS endpoints mihomo intercepts when TUN is active.
+	// "any:53" intercepts all DNS traffic regardless of destination.
+	DNSHijack []string `toml:"dns_hijack" json:"dns_hijack"`
+	// AutoRoute lets mihomo install default routes pointing traffic into the TUN device.
+	AutoRoute bool `toml:"auto_route" json:"auto_route"`
+	// AutoDetectInterface lets mihomo pick the default WAN interface automatically.
+	AutoDetectInterface bool `toml:"auto_detect_interface" json:"auto_detect_interface"`
+	// Device is the TUN interface name (e.g. "Meta"). Leave empty for mihomo's default.
+	Device string `toml:"device" json:"device"`
+}
+
 type NetworkConfig struct {
+	// Mode controls how ClashForge intercepts traffic.
+	// Valid values: "tproxy" | "redir" | "tun" | "none"
 	Mode            string   `toml:"mode" json:"mode"`
 	FirewallBackend string   `toml:"firewall_backend" json:"firewall_backend"`
 	ApplyOnStart    bool     `toml:"apply_on_start" json:"apply_on_start"`
@@ -58,6 +77,8 @@ type NetworkConfig struct {
 	// can tunnel). Set to true when using HTTP proxy nodes that cannot tunnel UDP.
 	// When false, QUIC bypasses tproxy entirely (legacy behaviour).
 	DropQUIC bool `toml:"drop_quic" json:"drop_quic"`
+	// TUN holds TUN-mode specific settings. Only used when Mode == "tun".
+	TUN TUNConfig `toml:"tun" json:"tun"`
 }
 
 // DNSStrategy controls how Mihomo's nameserver-policy is generated.
@@ -136,7 +157,17 @@ func Default() *MetaclashConfig {
 			MaxRestarts: 3,
 		},
 		Ports:    PortsConfig{HTTP: 17890, SOCKS: 17891, Mixed: 17893, Redir: 17892, TProxy: 17895, DNS: 17874, MihomoAPI: 19090, UI: 7777},
-		Network:  NetworkConfig{Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true, BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{}, WANInterface: "eth1", DropQUIC: true},
+		Network: NetworkConfig{
+			Mode: "tproxy", FirewallBackend: "auto", ApplyOnStart: true,
+			BypassLAN: true, BypassChina: true, IPv6: false, BypassCIDR: []string{},
+			WANInterface: "eth1", DropQUIC: true,
+			TUN: TUNConfig{
+				Stack:               "mixed",
+				DNSHijack:           []string{"any:53"},
+				AutoRoute:           true,
+				AutoDetectInterface: true,
+			},
+		},
 		DNS:      DNSConfig{Enable: true, Mode: "fake-ip", Nameservers: []string{"223.5.5.5", "119.29.29.29"}, Fallback: []string{"tls://8.8.4.4", "tls://1.1.1.1", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, DoH: []string{}, FakeIPFilter: []string{"+.lan", "+.local", "time.*.com", "ntp.*.com", "+.ntp.org", "+.qq.com", "+.qpic.cn", "+.qlogo.cn", "+.myqcloud.com", "+.qcloud.com", "+.tencent.com", "+.wechat.com", "+.weixin.com", "+.tencentcs.com", "+.gtimg.com", "+.weiyun.com", "+.taobao.com", "+.tmall.com", "+.alipay.com", "+.aliyun.com", "+.alibaba.com", "+.alicdn.com", "+.baidu.com", "+.bdstatic.com", "+.bytedance.com", "+.douyin.com", "+.ixigua.com"}, DnsmasqMode: "none", ApplyOnStart: true, Strategy: DNSStrategysplit},
 		Update:   UpdateConfig{AutoSubscription: true, SubscriptionInterval: "6h", AutoGeoIP: true, GeoIPInterval: "168h", AutoGeosite: true, GeositeInterval: "168h", GeoIPURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb", GeositeURL: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat", AutoSelfUpdate: false, SelfUpdateTime: "02:00", SelfUpdateChannel: "stable"},
 		Security: SecurityConfig{APISecret: "", AllowLAN: true},

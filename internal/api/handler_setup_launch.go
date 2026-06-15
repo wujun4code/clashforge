@@ -497,7 +497,15 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 
 		// ── Step 6: transparent proxy takeover ────────────────────────────────
 
-		if req.Network.Mode != "none" && req.Network.ApplyOnStart && deps.Netfilter != nil {
+		switch {
+		case req.Network.Mode == "tun":
+			// TUN mode: mihomo manages routing via the TUN virtual NIC + auto-route.
+			// nftables/iptables rules must NOT be applied — they would conflict with
+			// mihomo's own route table entries and break traffic flow.
+			emitStep("proxy-takeover", "ok",
+				"TUN 模式已启用 ✓ — mihomo 通过 TUN 虚拟网卡接管流量，无需 nftables 规则",
+				"tun.stack="+req.Network.Mode+" | auto-route=true")
+		case req.Network.Mode != "none" && req.Network.ApplyOnStart && deps.Netfilter != nil:
 			emitStep("proxy-takeover", "running",
 				fmt.Sprintf("正在应用透明代理规则 (%s / %s)…", req.Network.Mode, req.Network.FirewallBackend), "")
 			refreshNetfilterManager(deps)
@@ -508,7 +516,7 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 			}
 			emitStep("proxy-takeover", "ok",
 				fmt.Sprintf("透明代理已接管 ✓ — %s 模式 / %s 后端", req.Network.Mode, deps.Netfilter.BackendName()), "")
-		} else {
+		default:
 			reason := "mode=none"
 			if !req.Network.ApplyOnStart {
 				reason = "apply_on_start=false"
