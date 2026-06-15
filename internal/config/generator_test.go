@@ -519,3 +519,148 @@ rules:
 		t.Error("domain-type provider rule should NOT have no-resolve appended")
 	}
 }
+
+// ── TUN mode tests ────────────────────────────────────────────────────────────
+
+func TestGenerate_TUNMode_EmitsTUNBlock(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.Network.TUN = config.TUNConfig{
+		Stack:               "mixed",
+		DNSHijack:           []string{"any:53"},
+		AutoRoute:           true,
+		AutoDetectInterface: true,
+	}
+
+	result, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	tunRaw, ok := result["tun"]
+	if !ok {
+		t.Fatal("expected 'tun' key in generated config when mode=tun")
+	}
+	tun, ok := tunRaw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tun to be map[string]interface{}, got %T", tunRaw)
+	}
+	if tun["enable"] != true {
+		t.Errorf("tun.enable: expected true, got %v", tun["enable"])
+	}
+	if tun["stack"] != "mixed" {
+		t.Errorf("tun.stack: expected mixed, got %v", tun["stack"])
+	}
+	if tun["auto-route"] != true {
+		t.Errorf("tun.auto-route: expected true, got %v", tun["auto-route"])
+	}
+	if tun["auto-detect-interface"] != true {
+		t.Errorf("tun.auto-detect-interface: expected true, got %v", tun["auto-detect-interface"])
+	}
+	hijack, _ := tun["dns-hijack"].([]string)
+	if len(hijack) == 0 || hijack[0] != "any:53" {
+		t.Errorf("tun.dns-hijack: expected [any:53], got %v", tun["dns-hijack"])
+	}
+}
+
+func TestGenerate_NonTUNMode_NoTUNBlock(t *testing.T) {
+	for _, mode := range []string{"tproxy", "redir", "none"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			cfg := defaultTestCfg()
+			cfg.Network.Mode = mode
+			result, err := config.Generate(cfg, nil)
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			if _, ok := result["tun"]; ok {
+				t.Errorf("mode=%s: unexpected 'tun' key in generated config", mode)
+			}
+		})
+	}
+}
+
+func TestApplyManagedRuntimeSettings_TUNMode_InjectsTUN(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.Network.TUN = config.TUNConfig{
+		Stack:               "gvisor",
+		DNSHijack:           []string{"any:53"},
+		AutoRoute:           true,
+		AutoDetectInterface: true,
+	}
+
+	merged := map[string]interface{}{"mode": "rule"}
+	result := config.ApplyManagedRuntimeSettings(cfg, merged)
+
+	tunRaw, ok := result["tun"]
+	if !ok {
+		t.Fatal("ApplyManagedRuntimeSettings: expected 'tun' key when mode=tun")
+	}
+	tun, ok := tunRaw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tun map, got %T", tunRaw)
+	}
+	if tun["stack"] != "gvisor" {
+		t.Errorf("expected stack=gvisor, got %v", tun["stack"])
+	}
+}
+
+func TestApplyManagedRuntimeSettings_NonTUN_StripsTUN(t *testing.T) {
+	// Even if overrides injected a tun block, non-TUN modes must strip it.
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tproxy"
+
+	merged := map[string]interface{}{
+		"mode": "rule",
+		"tun":  map[string]interface{}{"enable": true, "stack": "mixed"},
+	}
+	result := config.ApplyManagedRuntimeSettings(cfg, merged)
+	if _, ok := result["tun"]; ok {
+		t.Error("ApplyManagedRuntimeSettings: 'tun' key must be removed for non-TUN mode")
+	}
+}
+
+func TestApplyManagedRuntimeSettings_TUNMode_DeviceField(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.Network.TUN = config.TUNConfig{
+		Stack:               "mixed",
+		DNSHijack:           []string{"any:53"},
+		AutoRoute:           true,
+		AutoDetectInterface: true,
+		Device:              "Meta",
+	}
+
+	result := config.ApplyManagedRuntimeSettings(cfg, map[string]interface{}{})
+	tun, _ := result["tun"].(map[string]interface{})
+	if tun == nil {
+		t.Fatal("expected tun block")
+	}
+	if tun["device"] != "Meta" {
+		t.Errorf("expected device=Meta, got %v", tun["device"])
+	}
+}
+
+func TestGenerate_TUNMode_NoDeviceField_WhenEmpty(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.Network.TUN = config.TUNConfig{
+		Stack:               "mixed",
+		DNSHijack:           []string{"any:53"},
+		AutoRoute:           true,
+		AutoDetectInterface: true,
+		Device:              "", // empty → omit
+	}
+
+	result, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	tun, _ := result["tun"].(map[string]interface{})
+	if tun == nil {
+		t.Fatal("expected tun block")
+	}
+	if _, exists := tun["device"]; exists {
+		t.Error("expected 'device' key to be omitted when Device is empty")
+	}
+}

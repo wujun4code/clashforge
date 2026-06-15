@@ -49,6 +49,12 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 		out["dns"] = buildDNSMap(cfg)
 	}
 
+	// TUN mode: emit tun block so mihomo creates the virtual NIC.
+	// nftables/iptables rules are NOT applied in this mode (see netfilter/manager.go).
+	if cfg.Network.Mode == "tun" {
+		out["tun"] = buildTUNMap(cfg)
+	}
+
 	// Proxies
 	var proxies []map[string]interface{}
 	var proxyNames []string
@@ -510,6 +516,30 @@ func normalizeMihomoLogLevel(level string) string {
 	}
 }
 
+// buildTUNMap constructs the Mihomo tun config map from ClashForge TUN settings.
+func buildTUNMap(cfg *MetaclashConfig) map[string]interface{} {
+	t := cfg.Network.TUN
+	stack := t.Stack
+	if stack == "" {
+		stack = "mixed"
+	}
+	hijack := t.DNSHijack
+	if len(hijack) == 0 {
+		hijack = []string{"any:53"}
+	}
+	m := map[string]interface{}{
+		"enable":                true,
+		"stack":                 stack,
+		"dns-hijack":            hijack,
+		"auto-route":            t.AutoRoute,
+		"auto-detect-interface": t.AutoDetectInterface,
+	}
+	if t.Device != "" {
+		m["device"] = t.Device
+	}
+	return m
+}
+
 // ApplyManagedRuntimeSettings rewrites runtime-owned fields after overrides merge.
 // This keeps legacy overrides from stealing managed ports or re-enabling DNS with stale values.
 func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interface{}) map[string]interface{} {
@@ -559,6 +589,14 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 			}
 		}
 		merged["sniffer"] = sniffer
+	}
+
+	// TUN mode: enforce the tun block; strip it in all other modes so that a
+	// leftover overrides.yaml entry cannot accidentally enable TUN alongside tproxy.
+	if cfg.Network.Mode == "tun" {
+		merged["tun"] = buildTUNMap(cfg)
+	} else {
+		delete(merged, "tun")
 	}
 
 	if !cfg.DNS.Enable {

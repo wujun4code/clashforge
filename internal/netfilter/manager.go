@@ -49,10 +49,12 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{backend: applier, kind: kind, cfg: cfg}
 }
 
-// Apply applies firewall rules if mode != "none".
+// Apply applies firewall rules for tproxy/redir modes.
+// TUN mode is handled entirely by mihomo (TUN device + auto-route); no
+// iptables/nftables rules are needed and adding them would conflict with TUN routing.
 func (m *Manager) Apply() error {
-	if m.cfg.Mode == "none" {
-		log.Info().Msg("netfilter: mode=none, skipping rule setup")
+	if m.cfg.Mode == "none" || m.cfg.Mode == "tun" {
+		log.Info().Str("mode", m.cfg.Mode).Msg("netfilter: skipping rule setup")
 		return nil
 	}
 	log.Info().Str("backend", m.kind.String()).Str("mode", m.cfg.Mode).Msg("applying netfilter rules")
