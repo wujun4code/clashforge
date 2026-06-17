@@ -373,6 +373,16 @@ jobs:
             exit 1
           fi
 
+          # 安装完备性检测前：确保 mihomo 和 nftables 处于干净基线状态。
+          # 若前一个 scenario 的 config 保留了 auto_start_core=true，postinst 会自动
+          # 启动 mihomo；install-verify 期望它不在运行（未做 setup）。
+          # 通过 setup/stop API 停止 mihomo 并清除 nftables，让 install-verify 看到
+          # 和首次安装一致的干净状态。
+          _ssh "curl -sf -X POST http://127.0.0.1:7777/api/v1/setup/stop \
+              -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1 || true"
+          _ssh "nft delete table inet metaclash 2>/dev/null || true"
+          _ssh "sleep 2"
+
           # 完备性检测
           _ssh "cat > /tmp/e2e-install-verify.sh && chmod +x /tmp/e2e-install-verify.sh" \
             < tests/e2e/vm/install-verify.sh
