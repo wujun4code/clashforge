@@ -27,22 +27,24 @@ var uiDist embed.FS
 
 // Dependencies holds all injected services.
 type Dependencies struct {
-	Version         string
-	StartedAt       time.Time
-	ConfigPath      string
-	Config          *config.MetaclashConfig
-	Core            *core.CoreManager
-	SubManager      *subscription.Manager
-	Netfilter       *netfilter.Manager
-	SSEBroker       *SSEBroker
-	LogBuffer       *LogBuffer
-	NodeStore       *nodes.Store
-	NodeKeyPair     *nodes.KeyPair
-	PublishStore    *publish.Store
-	WorkerNodeStore *workernode.Store
-	GeoDataManager  *geodata.Manager
-	QuickStartStore *quickstart.Store
-	SelfUpdater     *selfupdate.Updater
+	Version          string
+	StartedAt        time.Time
+	ConfigPath       string
+	Config           *config.MetaclashConfig
+	Core             *core.CoreManager
+	SubManager       *subscription.Manager
+	Netfilter        *netfilter.Manager
+	SSEBroker        *SSEBroker
+	LogBuffer        *LogBuffer
+	RequestLogBuffer *RequestLogBuffer
+	LogFilePath      string // path to persistent log file; empty if not configured
+	NodeStore        *nodes.Store
+	NodeKeyPair      *nodes.KeyPair
+	PublishStore     *publish.Store
+	WorkerNodeStore  *workernode.Store
+	GeoDataManager   *geodata.Manager
+	QuickStartStore  *quickstart.Store
+	SelfUpdater      *selfupdate.Updater
 }
 
 // NewRouter builds the HTTP router with all routes registered.
@@ -50,7 +52,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RealIP)
 	r.Use(recoverMiddleware)
-	r.Use(loggerMiddleware)
+	r.Use(loggerMiddleware(deps.RequestLogBuffer))
 	r.Use(corsMiddleware)
 
 	r.Route("/api/v1", func(api chi.Router) {
@@ -65,6 +67,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Get("/health/check", handleHealthCheck(deps))
 		api.Post("/health/probe-domain", handleProbeDomain(deps))
 		api.Get("/health/proxy-diag", handleProxyDiag(deps))
+		api.Get("/health/net-debug", handleNetDebug(deps))
 		api.Get("/health/dns-leak", handleDNSLeakTest(deps))
 		api.Get("/health/dns-leak/browser-results", handleDNSLeakBrowserResults(deps))
 		api.Get("/cf-config", handleGetCFConfig(deps))
@@ -95,6 +98,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/service/enable", handleServiceEnable(deps))
 		api.Get("/system/conflicts", handleDetectConflicts(deps))
 		api.Post("/system/stop-service", handleStopService(deps))
+		api.Post("/core/apply", handleCoreApply(deps))
 		api.Post("/setup/launch", handleSetupLaunch(deps))
 		api.Post("/setup/final-config-preview", handleSetupFinalConfigPreview(deps))
 		api.Get("/setup/port-check", handleSetupPortCheck(deps))
@@ -118,6 +122,8 @@ func NewRouter(deps Dependencies) http.Handler {
 		api.Post("/logs/pause", handlePauseLogs(deps))
 		api.Post("/logs/resume", handleResumeLogs(deps))
 		api.Get("/logs/status", handleLogsStatus(deps))
+		api.Get("/service-log", handleGetServiceLog(deps))
+		api.Delete("/service-log", handleClearServiceLog(deps))
 		// Proxy pass-through to mihomo API
 		api.Get("/proxies", proxyToMihomo(deps, "/proxies"))
 		api.Put("/proxies/{group}/select", proxyMihomoWithParam(deps, "/proxies/", "", "group"))

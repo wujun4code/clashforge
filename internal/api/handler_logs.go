@@ -7,18 +7,18 @@ import (
 
 func handleGetLogs(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		limit := 200
+		limit := 500
 		if s := r.URL.Query().Get("limit"); s != "" {
-			if v, err := strconv.Atoi(s); err == nil && v > 0 && v <= 1000 {
+			if v, err := strconv.Atoi(s); err == nil && v > 0 && v <= 2000 {
 				limit = v
 			}
 		}
-		var logs []LogEntry
-		if deps.LogBuffer != nil {
-			logs = deps.LogBuffer.Recent(limit)
+		var logs []RequestLogEntry
+		if deps.RequestLogBuffer != nil {
+			logs = deps.RequestLogBuffer.Recent(limit)
 		}
 		if logs == nil {
-			logs = []LogEntry{}
+			logs = []RequestLogEntry{}
 		}
 		JSON(w, http.StatusOK, map[string]any{"logs": logs})
 	}
@@ -26,8 +26,8 @@ func handleGetLogs(deps Dependencies) http.HandlerFunc {
 
 func handleClearLogs(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.LogBuffer != nil {
-			deps.LogBuffer.Clear()
+		if deps.RequestLogBuffer != nil {
+			deps.RequestLogBuffer.Clear()
 		}
 		JSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
@@ -35,8 +35,8 @@ func handleClearLogs(deps Dependencies) http.HandlerFunc {
 
 func handlePauseLogs(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.LogBuffer != nil {
-			deps.LogBuffer.Pause()
+		if deps.RequestLogBuffer != nil {
+			deps.RequestLogBuffer.Pause()
 		}
 		JSON(w, http.StatusOK, map[string]any{"ok": true, "paused": true})
 	}
@@ -44,8 +44,8 @@ func handlePauseLogs(deps Dependencies) http.HandlerFunc {
 
 func handleResumeLogs(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.LogBuffer != nil {
-			deps.LogBuffer.Resume()
+		if deps.RequestLogBuffer != nil {
+			deps.RequestLogBuffer.Resume()
 		}
 		JSON(w, http.StatusOK, map[string]any{"ok": true, "paused": false})
 	}
@@ -54,8 +54,8 @@ func handleResumeLogs(deps Dependencies) http.HandlerFunc {
 func handleLogsStatus(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		paused := false
-		if deps.LogBuffer != nil {
-			paused = deps.LogBuffer.Paused()
+		if deps.RequestLogBuffer != nil {
+			paused = deps.RequestLogBuffer.Paused()
 		}
 		JSON(w, http.StatusOK, map[string]any{"paused": paused})
 	}

@@ -498,13 +498,25 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		// ── Step 6: transparent proxy takeover ────────────────────────────────
 
 		switch {
-		case req.Network.Mode == "tun":
-			// TUN mode: mihomo manages routing via the TUN virtual NIC + auto-route.
-			// nftables/iptables rules must NOT be applied — they would conflict with
-			// mihomo's own route table entries and break traffic flow.
+		case req.Network.Mode == "tun" && req.Network.ApplyOnStart && deps.Netfilter != nil:
+			// TUN mode still needs two post-start fixups that mihomo's own auto-route
+			// does NOT handle for a router (forwarding) setup:
+			//   1. EnsureTunForwardAccept: insert oifname "Meta" accept into fw4's
+			//      forward_lan chain — without it nftables rejects (TCP RST) all LAN
+			//      client packets routed to the Meta TUN device.
+			//   2. EnsureTunRouteRule: add ip rules 9020/9021 so forwarded LAN traffic
+			//      falls into mihomo's table 2022 (default → Meta) rather than leaking
+			//      via the kernel's bare default route to the upstream gateway.
+			emitStep("proxy-takeover", "running",
+				"正在为 TUN 模式补充 LAN 转发规则 (fw4 forward_lan 放行 Meta + ip rule 9020/9021)…", "")
+			refreshNetfilterManager(deps)
+			_ = deps.Netfilter.Apply() // always returns nil for TUN; sub-steps log.Warn on failure
 			emitStep("proxy-takeover", "ok",
-				"TUN 模式已启用 ✓ — mihomo 通过 TUN 虚拟网卡接管流量，无需 nftables 规则",
-				"tun.stack="+req.Network.Mode+" | auto-route=true")
+				"TUN 模式已接管 ✓ — fw4 forward_lan 放行 Meta 设备 | ip rule 9020/9021 补全 LAN 转发路由",
+				"auto-route=true")
+		case req.Network.Mode == "tun":
+			emitStep("proxy-takeover", "ok",
+				"TUN 模式已启用（apply_on_start=false 或 netfilter 未初始化，跳过路由补充）", "")
 		case req.Network.Mode != "none" && req.Network.ApplyOnStart && deps.Netfilter != nil:
 			emitStep("proxy-takeover", "running",
 				fmt.Sprintf("正在应用透明代理规则 (%s / %s)…", req.Network.Mode, req.Network.FirewallBackend), "")

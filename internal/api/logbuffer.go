@@ -165,3 +165,75 @@ func NewZerologHook(buf *LogBuffer) ZerologHook { return ZerologHook{buf: buf} }
 func (h ZerologHook) Run(_ *zerolog.Event, _ zerolog.Level, _ string) {}
 
 var timeNowUnix = func() int64 { return time.Now().Unix() }
+
+// ── HTTP request log buffer ───────────────────────────────────────────────────
+
+// RequestLogEntry captures a single HTTP request handled by the API server.
+type RequestLogEntry struct {
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	Status     int    `json:"status"`
+	LatencyMs  int64  `json:"latency_ms"`
+	RemoteAddr string `json:"remote_addr"`
+	Ts         int64  `json:"ts"`
+}
+
+// RequestLogBuffer is a fixed-size ring buffer for HTTP request logs.
+// It is completely separate from LogBuffer (zerolog service events).
+type RequestLogBuffer struct {
+	mu     sync.Mutex
+	buf    []RequestLogEntry
+	cap_   int
+	head   int
+	size   int
+	paused bool
+}
+
+func NewRequestLogBuffer(capacity int) *RequestLogBuffer {
+	return &RequestLogBuffer{buf: make([]RequestLogEntry, capacity), cap_: capacity}
+}
+
+func (b *RequestLogBuffer) Add(e RequestLogEntry) {
+	b.mu.Lock()
+	if !b.paused {
+		b.buf[b.head] = e
+		b.head = (b.head + 1) % b.cap_
+		if b.size < b.cap_ {
+			b.size++
+		}
+	}
+	b.mu.Unlock()
+}
+
+func (b *RequestLogBuffer) Clear() {
+	b.mu.Lock()
+	b.head = 0
+	b.size = 0
+	b.mu.Unlock()
+}
+
+func (b *RequestLogBuffer) Pause()  { b.mu.Lock(); b.paused = true; b.mu.Unlock() }
+func (b *RequestLogBuffer) Resume() { b.mu.Lock(); b.paused = false; b.mu.Unlock() }
+func (b *RequestLogBuffer) Paused() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.paused
+}
+
+// Recent returns up to n request entries, oldest first (chronological order).
+func (b *RequestLogBuffer) Recent(n int) []RequestLogEntry {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n <= 0 || b.size == 0 {
+		return nil
+	}
+	if n > b.size {
+		n = b.size
+	}
+	out := make([]RequestLogEntry, n)
+	start := (b.head - n + b.cap_) % b.cap_
+	for i := 0; i < n; i++ {
+		out[i] = b.buf[(start+i)%b.cap_]
+	}
+	return out
+}

@@ -8,6 +8,8 @@ import {
 } from '../api/client'
 import type { OverviewModule } from '../api/client'
 
+// ─── main page ───────────────────────────────────────────────────────────────
+
 export function ServiceStatus() {
   const navigate = useNavigate()
   const [modules, setModules] = useState<OverviewModule[]>([])
@@ -158,6 +160,7 @@ export function ServiceStatus() {
           </div>
 
         </div>
+
       </div>
     </div>
   )

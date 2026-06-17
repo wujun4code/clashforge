@@ -1527,6 +1527,7 @@ func refreshNetfilterManager(deps Dependencies) {
 		EnableIPv6:        deps.Config.Network.IPv6,
 		DropQUIC:          deps.Config.Network.DropQUIC,
 		WANInterface:      deps.Config.Network.WANInterface,
+		TunDevice:         deps.Config.Network.TUN.Device,
 	})
 }
 

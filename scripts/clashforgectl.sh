@@ -41,6 +41,10 @@ SUBCOMMAND=""
 KILL_OPENCLASH=0
 PROXY_URL=""
 
+# netdiag defaults
+NETDIAG_API="http://127.0.0.1:7777/api/v1"
+NETDIAG_DIR="/tmp/clashforge-diag"
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 log()  { printf "[clashforge] %s\n"      "$*" >&2; }
 ok()   { printf "[clashforge] OK  %s\n"  "$*" >&2; }
@@ -66,6 +70,7 @@ Subcommands:
   openclash [--kill]         Scan for OpenClash processes/services; optionally kill them
   compat                     Pre-install compatibility check
   flush-dns                  Flush dnsmasq DNS cache (and Mihomo fake-ip cache if core is running)
+  netdiag                    Full local network diagnostic suite (run directly on the router)
 
 Common options:
   --yes, -y                  Skip confirmation prompts
@@ -1564,6 +1569,429 @@ cmd_flush_dns() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NETDIAG — local network diagnostic suite (runs directly on the router, talks
+# to the local ClashForge API at 127.0.0.1; no SSH/SCP needed). This is the
+# router-side counterpart to the Windows-side `netdiag` action in
+# clashforgectl.ps1 — that one probes the router from the client's vantage
+# point over the LAN; this one diagnoses from the router's own local vantage
+# point. No jq/real JSON parser is available on BusyBox ash, so all field
+# extraction below is crude grep/awk/sed, matching this file's existing style
+# (see _check_ip()/_tags_from_json() above).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# _jstr <json> <key>    -> string value of "key":"value"
+_jstr()   { printf '%s' "$1" | grep -o "\"$2\":\"[^\"]*\"" | head -1 | cut -d'"' -f4; }
+# _jraw <json> <key>    -> raw (bool/number) value of "key":value
+_jraw()   { printf '%s' "$1" | grep -o "\"$2\":[A-Za-z0-9_.+-]*" | head -1 | cut -d: -f2; }
+# _jafter <json> <marker> -> substring of <json> after the first occurrence of <marker>
+_jafter() { printf '%s' "$1" | sed "s/.*$2//"; }
+
+_nd_get() {
+  _path="$1"; _timeout="${2:-8}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -sS --max-time "$_timeout" -A "clashforgectl-netdiag/1.0" "${NETDIAG_API}${_path}" 2>/dev/null || true
+  else
+    wget -qO- -T "$_timeout" -U "clashforgectl-netdiag/1.0" "${NETDIAG_API}${_path}" 2>/dev/null || true
+  fi
+}
+
+_nd_post() {
+  _path="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -sS --max-time 20 -X POST -A "clashforgectl-netdiag/1.0" "${NETDIAG_API}${_path}" 2>/dev/null || true
+  else
+    wget -qO- -T 20 --method=POST -U "clashforgectl-netdiag/1.0" "${NETDIAG_API}${_path}" 2>/dev/null || true
+  fi
+}
+
+_nd_delete() {
+  _path="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -sS --max-time 15 -X DELETE -A "clashforgectl-netdiag/1.0" "${NETDIAG_API}${_path}" 2>/dev/null || true
+  else
+    wget -qO- -T 15 --method=DELETE -U "clashforgectl-netdiag/1.0" "${NETDIAG_API}${_path}" 2>/dev/null || true
+  fi
+}
+
+# _nd_show_status -> prints clashforge/mihomo/dns/tproxy state from /health/check
+# Returns 0 if mihomo is ok, 1 otherwise.
+_nd_show_status() {
+  _hc_json="$(_nd_get /health/check)"
+  if [ -z "$_hc_json" ]; then
+    warn "无法连接本机 ClashForge API (${NETDIAG_API})"
+    return 1
+  fi
+  _cf_block="$(_jafter "$_hc_json" '"clashforge":')"
+  _cf_state="$(_jstr "$_cf_block" state)"
+  _cf_ok="$(_jraw "$_cf_block" ok)"
+  _mh_block="$(_jafter "$_hc_json" '"mihomo":')"
+  _mh_state="$(_jstr "$_mh_block" state)"
+  _mh_ok="$(_jraw "$_mh_block" ok)"
+  _dns_block="$(_jafter "$_hc_json" '"dns":')"
+  _dns_active="$(_jraw "$_dns_block" active)"
+  _tp_block="$(_jafter "$_hc_json" '"transparent_proxy":')"
+  _tp_active="$(_jraw "$_tp_block" active)"
+
+  printf "  ClashForge : state=%s ok=%s\n" "${_cf_state:-?}" "${_cf_ok:-?}"
+  printf "  mihomo     : state=%s ok=%s\n" "${_mh_state:-?}" "${_mh_ok:-?}"
+  printf "  dns        : active=%s\n"      "${_dns_active:-?}"
+  printf "  tproxy     : active=%s\n"      "${_tp_active:-?}"
+
+  [ "$_mh_ok" = "true" ] && return 0
+  return 1
+}
+
+_nd_start_mihomo() {
+  log "POST /core/start"
+  _nd_post /core/start >/dev/null
+  log "等待 mihomo 就绪 (最多 40s)..."
+  _i=0
+  while [ "$_i" -lt 20 ]; do
+    sleep 2
+    _hc="$(_nd_get /health/check)"
+    _mh_block="$(_jafter "$_hc" '"mihomo":')"
+    _mh_ok="$(_jraw "$_mh_block" ok)"
+    if [ "$_mh_ok" = "true" ]; then
+      ok "mihomo 已就绪"
+      return 0
+    fi
+    _i=$((_i + 1))
+  done
+  warn "40s 超时，mihomo 未就绪"
+  return 1
+}
+
+# _nd_config_snapshot <save_dir> -> prints + saves config/active-source/subscriptions/mihomo-yaml
+_nd_config_snapshot() {
+  _save_dir="$1"
+
+  _cfg_json="$(_nd_get /config)"
+  [ -n "$_cfg_json" ] && printf '%s' "$_cfg_json" > "${_save_dir}/cf_config.json"
+
+  _net_block="$(_jafter "$_cfg_json" '"network":')"
+  _mode="$(_jstr "$_net_block" mode)"
+  _tun_block="$(_jafter "$_net_block" '"tun":')"
+  _tun_stack="$(_jstr "$_tun_block" stack)"
+  _tun_auto_route="$(_jraw "$_tun_block" auto_route)"
+
+  _dns_block="$(_jafter "$_cfg_json" '"dns":')"
+  _dns_mode="$(_jstr "$_dns_block" mode)"
+  _dns_strategy="$(_jstr "$_dns_block" strategy)"
+
+  _ports_block="$(_jafter "$_cfg_json" '"ports":')"
+  _p_http="$(_jraw "$_ports_block" http)"
+  _p_socks="$(_jraw "$_ports_block" socks)"
+  _p_mixed="$(_jraw "$_ports_block" mixed)"
+  _p_tproxy="$(_jraw "$_ports_block" tproxy)"
+  _p_dns="$(_jraw "$_ports_block" dns)"
+  _p_api="$(_jraw "$_ports_block" mihomo_api)"
+
+  _core_block="$(_jafter "$_cfg_json" '"core":')"
+  _auto_start_core="$(_jraw "$_core_block" auto_start_core)"
+
+  printf "  网络模式 : %s" "${_mode:-?}"
+  [ "$_mode" = "tun" ] && printf "  stack=%s auto_route=%s" "${_tun_stack:-?}" "${_tun_auto_route:-?}"
+  printf "\n"
+  printf "  DNS 模式 : %s  策略=%s  端口=%s\n" "${_dns_mode:-?}" "${_dns_strategy:-?}" "${_p_dns:-?}"
+  printf "  端  口   : http=%s socks=%s mixed=%s tproxy=%s mihomo_api=%s\n" \
+    "${_p_http:-?}" "${_p_socks:-?}" "${_p_mixed:-?}" "${_p_tproxy:-?}" "${_p_api:-?}"
+  printf "  auto_start_core=%s\n" "${_auto_start_core:-?}"
+
+  _as_json="$(_nd_get /config/active-source)"
+  [ -n "$_as_json" ] && printf '%s' "$_as_json" > "${_save_dir}/active_source.json"
+  _as_type="$(_jstr "$_as_json" type)"
+  if [ -n "$_as_type" ]; then
+    if [ "$_as_type" = "subscription" ]; then
+      printf "  活跃来源 : 订阅: %s (id=%s)\n" "$(_jstr "$_as_json" sub_name)" "$(_jstr "$_as_json" sub_id)"
+    else
+      printf "  活跃来源 : 文件: %s\n" "$(_jstr "$_as_json" filename)"
+    fi
+  else
+    printf "  活跃来源 : (未配置)\n"
+  fi
+
+  _subs_json="$(_nd_get /subscriptions)"
+  [ -n "$_subs_json" ] && printf '%s' "$_subs_json" > "${_save_dir}/subscriptions.json"
+  _subs_count=$(printf '%s' "$_subs_json" | grep -o '"id":' | wc -l)
+  printf "  订阅数量 : %s\n" "$_subs_count"
+
+  _mc_json="$(_nd_get /config/mihomo)"
+  _mc_content="$(printf '%s' "$_mc_json" | sed -n 's/.*"content":"\(.*\)"}$/\1/p')"
+  if [ -n "$_mc_content" ]; then
+    printf '%s' "$_mc_content" | sed 's/\\n/\n/g; s/\\"/"/g' > "${_save_dir}/mihomo_config.yaml"
+    _yaml_lines=$(wc -l < "${_save_dir}/mihomo_config.yaml" 2>/dev/null || echo 0)
+    printf "  mihomo YAML: %s 行  (已保存 mihomo_config.yaml)\n" "$_yaml_lines"
+  else
+    printf "  mihomo YAML: (未生成或为空)\n"
+  fi
+}
+
+# _nd_prescan_logs -> warns about + optionally clears pre-existing log buffers
+# before the diagnostic run starts, so they don't pollute attribution.
+_nd_prescan_logs() {
+  step "路由器现存日志扫描（诊断开始前）"
+  _svc="$(_nd_get "/service-log?lines=5000")"
+  _req="$(_nd_get "/logs?limit=5000")"
+  _svc_cnt=$(printf '%s' "$_svc" | grep -o '"time"' | wc -l)
+  _req_cnt=$(printf '%s' "$_req" | grep -o '"ts":' | wc -l)
+  log "当前服务日志条目(近似): $_svc_cnt"
+  log "当前请求日志条目: $_req_cnt"
+
+  if [ "$_svc_cnt" = "0" ] && [ "$_req_cnt" = "0" ]; then
+    ok "无历史日志，无需清理"
+    return 0
+  fi
+
+  if [ "$YES" = "1" ]; then
+    _do_clear=1
+  else
+    printf "[clashforge] 检测到历史日志，可能干扰本轮诊断归因。清理后再开始？[y/N] "
+    read -r _reply
+    case "$_reply" in y|Y|yes|YES) _do_clear=1 ;; *) _do_clear=0 ;; esac
+  fi
+
+  if [ "$_do_clear" = "1" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      warn "dry-run: 将清理 service-log 与 logs"
+    else
+      _nd_delete /service-log >/dev/null
+      _nd_delete /logs >/dev/null
+      ok "已清理"
+    fi
+  else
+    log "保留现有日志，继续..."
+  fi
+}
+
+# _nd_probe_suite <save_dir> -> ping/dns/http/egress-ip/health/overview-probes
+_nd_probe_suite() {
+  _save_dir="$1"
+
+  step "Ping"
+  for _t in 8.8.8.8 114.114.114.114; do
+    if ping -c 1 -W 2 "$_t" >/dev/null 2>&1; then
+      printf "  %-16s : OK\n" "$_t"
+    else
+      printf "  %-16s : FAIL\n" "$_t"
+    fi
+  done
+
+  step "DNS 解析"
+  for _d in google.com github.com openai.com taobao.com music.163.com baidu.com; do
+    _ip="$(nslookup "$_d" 2>/dev/null | awk '/^Address/{a=$NF} END{print a}' | grep -v ':')"
+    if [ -n "$_ip" ]; then
+      case "$_ip" in
+        198.18.*|198.19.*) printf "  %-16s : %s [fake-ip]\n" "$_d" "$_ip" ;;
+        *)                 printf "  %-16s : %s\n" "$_d" "$_ip" ;;
+      esac
+    else
+      printf "  %-16s : FAIL\n" "$_d"
+    fi
+  done
+
+  step "访问检查"
+  _nd_check_url() {
+    _label="$1"; _url="$2"
+    if command -v curl >/dev/null 2>&1; then
+      _code="$(curl -sSL --max-time 12 -A "clashforgectl-netdiag/1.0" -o /dev/null -w "%{http_code}" "$_url" 2>/dev/null)"
+    else
+      _code="$(wget -qO/dev/null -T 12 --server-response "$_url" 2>&1 | awk '/HTTP\//{c=$2} END{print c}')"
+    fi
+    [ -z "$_code" ] && _code="000"
+    if printf '%s' "$_code" | grep -qE '^[23][0-9][0-9]$'; then
+      printf "  %-20s : OK   HTTP %s\n" "$_label" "$_code"
+    else
+      printf "  %-20s : FAIL HTTP %s\n" "$_label" "$_code"
+    fi
+  }
+  _nd_check_url "taobao.com"        "https://www.taobao.com"
+  _nd_check_url "music.163.com"     "https://music.163.com"
+  _nd_check_url "github.com"        "https://github.com"
+  _nd_check_url "google.com"        "https://www.google.com"
+  _nd_check_url "chat.openai.com"   "https://chat.openai.com"
+  _nd_check_url "gemini.google.com" "https://gemini.google.com"
+
+  step "出口 IP"
+  _nd_check_ip() {
+    _label="$1"; _url="$2"; _kip="$3"; _kloc="$4"
+    if command -v curl >/dev/null 2>&1; then
+      _body="$(curl -sSL --max-time 8 -A "clashforgectl-netdiag/1.0" "$_url" 2>/dev/null)"
+    else
+      _body="$(wget -qO- -T 8 -U "clashforgectl-netdiag/1.0" "$_url" 2>/dev/null)"
+    fi
+    if [ -z "$_body" ]; then
+      printf "  %-10s : FAIL\n" "$_label"
+      return
+    fi
+    _ip="$(_jstr "$_body" "$_kip")"
+    _loc=""
+    [ -n "$_kloc" ] && _loc="$(_jstr "$_body" "$_kloc")"
+    if [ -n "$_ip" ]; then
+      printf "  %-10s : %s  %s\n" "$_label" "$_ip" "$_loc"
+    else
+      printf "  %-10s : FAIL (无法解析)\n" "$_label"
+    fi
+  }
+  _nd_check_ip "IP.SB"  "https://api.ip.sb/geoip"                            "ip"    "country"
+  _nd_check_ip "ipify"  "https://api.ipify.org?format=json"                  "ip"    ""
+  _nd_check_ip "ip-api" "http://ip-api.com/json?fields=query,isp,country"    "query" "country"
+
+  step "路由器健康检查"
+  _nd_show_status
+
+  step "路由器侧探测 (/overview/probes)"
+  _op_json="$(_nd_get /overview/probes 15)"
+  if [ -n "$_op_json" ]; then
+    printf '%s' "$_op_json" > "${_save_dir}/overview_probes.json"
+    _op_ok=$(printf '%s' "$_op_json" | grep -o '"ok":true' | wc -l)
+    _op_fail=$(printf '%s' "$_op_json" | grep -o '"ok":false' | wc -l)
+    printf "  ip_checks + access_checks: ok=%s fail=%s  (已保存 overview_probes.json)\n" "$_op_ok" "$_op_fail"
+  else
+    warn "/overview/probes 请求失败"
+  fi
+}
+
+# _nd_manage_reports <base_dir> <current_run_dir> -> prune oldest run_* dirs past 5MB
+_nd_manage_reports() {
+  _base="$1"; _current="$2"
+  [ -d "$_base" ] || return 0
+
+  _total_kb=$(du -sk "$_base" 2>/dev/null | awk '{print $1}')
+  [ -z "$_total_kb" ] && _total_kb=0
+  log "本地诊断报告总大小: ${_total_kb} KB"
+
+  _threshold_kb=5120
+  if [ "$_total_kb" -le "$_threshold_kb" ]; then
+    ok "未超过 5MB 阈值，无需清理"
+    return 0
+  fi
+
+  warn "总大小超过 5MB 阈值"
+  _dirs="$(ls -1 "$_base" 2>/dev/null | grep '^run_' | sort)"
+
+  if [ "$YES" = "1" ] || [ "$DRY_RUN" = "1" ]; then
+    _do_clean=1
+  else
+    printf "[clashforge] 是否删除最早的报告直至总量低于 5MB？（本次运行不会被删除）[y/N] "
+    read -r _reply
+    case "$_reply" in y|Y|yes|YES) _do_clean=1 ;; *) _do_clean=0 ;; esac
+  fi
+  if [ "$_do_clean" != "1" ]; then
+    log "保留所有记录"
+    return 0
+  fi
+
+  for _d in $_dirs; do
+    [ "$_total_kb" -le "$_threshold_kb" ] && break
+    [ "${_base}/${_d}" = "$_current" ] && continue
+    if [ "$DRY_RUN" = "1" ]; then
+      warn "dry-run: 将删除 ${_base}/${_d}"
+      continue
+    fi
+    _sz=$(du -sk "${_base}/${_d}" 2>/dev/null | awk '{print $1}')
+    rm -rf "${_base}/${_d}"
+    _total_kb=$((_total_kb - ${_sz:-0}))
+    ok "已删除 ${_d}"
+  done
+}
+
+cmd_netdiag() {
+  set +e   # this is a best-effort diagnostic suite: individual probe/API
+           # failures must not abort the whole run (see _do_diag for the
+           # same convention used by cmd_diag)
+
+  _nd_ts="$(date +%Y%m%d_%H%M%S)"
+  _nd_dir="${NETDIAG_DIR}/run_${_nd_ts}"
+  mkdir -p "$_nd_dir"
+
+  printf "\n"
+  printf "════════════════════════════════════════════════════════\n"
+  printf "  ClashForge 网络诊断 (本机/路由器侧)\n"
+  printf "  报告目录: %s\n" "$_nd_dir"
+  printf "════════════════════════════════════════════════════════\n"
+
+  _nd_prescan_logs
+
+  step "路由器当前状态"
+  if _nd_show_status; then
+    _mh_running=0
+  else
+    _mh_running=1
+  fi
+
+  _started_mihomo=0
+  if [ "$_mh_running" != "0" ]; then
+    warn "mihomo 当前未运行"
+    if [ "$YES" = "1" ]; then
+      _start_choice=1
+    else
+      printf "[clashforge] [1] 启动 mihomo 后诊断  [2] 跳过启动直接诊断  选择 [1/2]: "
+      read -r _start_choice
+    fi
+    if [ "$_start_choice" = "1" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        warn "dry-run: 将启动 mihomo"
+      else
+        if _nd_start_mihomo; then
+          _started_mihomo=1
+        fi
+      fi
+    else
+      log "跳过启动，继续诊断..."
+    fi
+  fi
+
+  step "配置快照"
+  _nd_config_snapshot "$_nd_dir"
+
+  _nd_probe_suite "$_nd_dir"
+
+  step "本轮诊断文件"
+  for _f in cf_config.json active_source.json subscriptions.json mihomo_config.yaml overview_probes.json; do
+    if [ -f "${_nd_dir}/${_f}" ]; then
+      _sz=$(du -k "${_nd_dir}/${_f}" 2>/dev/null | awk '{print $1}')
+      printf "  [x] %-22s %s KB\n" "$_f" "${_sz:-0}"
+    else
+      printf "  [ ] %-22s (未生成)\n" "$_f"
+    fi
+  done
+
+  if [ "$_started_mihomo" = "1" ]; then
+    if [ "$YES" = "1" ]; then
+      _restore_choice=1
+    else
+      printf "[clashforge] 本次启动了 mihomo。[1] 还原(停止) [2] 保持运行  选择 [1/2]: "
+      read -r _restore_choice
+    fi
+    if [ "$_restore_choice" = "1" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        warn "dry-run: 将停止 mihomo"
+      else
+        _nd_post /core/stop >/dev/null
+        ok "mihomo 已停止"
+      fi
+    else
+      log "mihomo 保持运行"
+    fi
+  fi
+
+  step "清理路由器日志缓冲（本地副本已保存）"
+  if [ "$DRY_RUN" = "1" ]; then
+    warn "dry-run: 将清理 service-log 与 logs"
+  else
+    _nd_delete /service-log >/dev/null
+    _nd_delete /logs >/dev/null
+    ok "已清理"
+  fi
+
+  step "本地诊断报告管理"
+  _nd_manage_reports "$NETDIAG_DIR" "$_nd_dir"
+
+  printf "\n"
+  ok "诊断完成，报告目录: $_nd_dir"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN DISPATCHER
 # ══════════════════════════════════════════════════════════════════════════════
 case "$SUBCOMMAND" in
@@ -1577,6 +2005,7 @@ case "$SUBCOMMAND" in
   openclash)      cmd_openclash ;;
   compat)         cmd_compat    ;;
   flush-dns)      cmd_flush_dns ;;
+  netdiag)        cmd_netdiag   ;;
   help|--help|-h) usage; exit 0 ;;
   *) die "Unknown subcommand: '$SUBCOMMAND'  (run clashforgectl --help for usage)" ;;
 esac

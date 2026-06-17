@@ -5,7 +5,7 @@ import {
 } from '../api/client'
 import type { ClashforgeVersionData, SelfUpdateConfig } from '../api/client'
 import { Save, Loader2, RotateCcw, ShieldAlert, RefreshCw, Download, Radio, Zap } from 'lucide-react'
-import { InlineNotice, ModalShell, PageHeader, SectionCard } from '../components/ui'
+import { InlineNotice, ModalShell, PageHeader, SectionCard, SelectInput } from '../components/ui'
 
 const CHANNEL_KEY = 'cf_update_channel'
 
@@ -31,17 +31,6 @@ function TextInput({ value, onChange }: { value: string; onChange: (v: string) =
   )
 }
 
-function SelectInput({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
-  return (
-    <select
-      className="theme-select w-full bg-surface-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-brand transition-colors appearance-none"
-      value={value}
-      onChange={e => onChange(e.target.value)}
-    >
-      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
-  )
-}
 
 export function Settings() {
   const [cfg, setCfg] = useState<Record<string, unknown> | null>(null)

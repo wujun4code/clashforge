@@ -276,7 +276,23 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 		"nameserver":    nameserverList,
 	}
 
-	if cfg.DNS.Mode == "fake-ip" {
+	// TUN mode's auto-route relies on mihomo intercepting every client-originated
+	// TCP SYN at the IP layer and deciding locally whether to take it over. Under
+	// fake-ip that decision is free (destination IP is in mihomo's own pool, so it
+	// is unconditionally mihomo's). Under redir-host, mihomo must reverse-map the
+	// real destination IP back to a domain via its DNS-hijack cache — which only
+	// covers router-self-originated connections reliably; forwarded LAN-client
+	// connections to real IPs were observed stuck in SYN_SENT/UNREPLIED with no
+	// mihomo dispatch at all. So TUN mode always forces fake-ip here, regardless
+	// of cfg.DNS.Mode — network mode is the source of truth, DNS mode follows it.
+	effectiveDNSMode := cfg.DNS.Mode
+	if cfg.Network.Mode == "tun" && effectiveDNSMode != "fake-ip" {
+		log.Warn().Str("configured_dns_mode", cfg.DNS.Mode).
+			Msg("config: ⚠️ TUN 模式与 redir-host DNS 模式不兼容（LAN 客户端 TCP 转发会卡在握手阶段），已自动改用 fake-ip")
+		effectiveDNSMode = "fake-ip"
+	}
+
+	if effectiveDNSMode == "fake-ip" {
 		dnsMap["enhanced-mode"] = "fake-ip"
 		dnsMap["fake-ip-range"] = "198.18.0.1/16"
 		dnsMap["fake-ip-filter-mode"] = "blacklist"

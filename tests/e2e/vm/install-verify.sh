@@ -76,20 +76,69 @@ else
     record FAIL IV-04 "Web UI 可访问" "GET / → HTTP 200" "HTTP $UI_CODE（服务未启动或端口未开）"
 fi
 
-# IV-05 mihomo 进程不应在运行
+# IV-05 mihomo 进程状态与 config.toml 中的 auto_start_core 一致
+# 若 --keep-config 保留了 auto_start_core=true，clashforge 在 postinst 启动后
+# 会自动拉起 mihomo，这是预期行为；若为 false/未设置则不应启动。
 MIHOMO_PID=$(pgrep -f "mihomo-clashforge" 2>/dev/null || echo "")
-if [ -z "$MIHOMO_PID" ]; then
-    record PASS IV-05 "mihomo 进程未运行" "pgrep mihomo-clashforge → 无进程（未做任何启动）" "mihomo 未运行 ✓"
+_CORE_SECTION=$(awk '/^\[core\]/{f=1;next} /^\[/{f=0} f{print}' \
+    /etc/metaclash/config.toml 2>/dev/null)
+AUTO_START_CORE=$(echo "$_CORE_SECTION" | grep -c 'auto_start_core.*true' || true)
+if [ "$AUTO_START_CORE" -gt 0 ]; then
+    # auto_start_core=true: mihomo 应已自动启动
+    if [ -n "$MIHOMO_PID" ]; then
+        record PASS IV-05 "mihomo 自动启动（auto_start_core=true）" \
+            "config.toml 中 auto_start_core=true → mihomo 应自动启动" \
+            "PID=$MIHOMO_PID ✓"
+    else
+        record FAIL IV-05 "mihomo 自动启动（auto_start_core=true）" \
+            "config.toml 中 auto_start_core=true → mihomo 应自动启动" \
+            "mihomo 未运行（意外）"
+    fi
 else
-    record FAIL IV-05 "mihomo 进程未运行" "安装后未执行 setup，mihomo 不应自动启动" "mihomo 正在运行 PID=$MIHOMO_PID（意外）"
+    # auto_start_core=false/未设置: 未执行 setup，mihomo 不应自动启动
+    if [ -z "$MIHOMO_PID" ]; then
+        record PASS IV-05 "mihomo 进程未运行（auto_start_core=false）" \
+            "pgrep mihomo-clashforge → 无进程" "mihomo 未运行 ✓"
+    else
+        record FAIL IV-05 "mihomo 进程未运行（auto_start_core=false）" \
+            "auto_start_core=false → mihomo 不应自动启动" \
+            "mihomo 正在运行 PID=$MIHOMO_PID（意外）"
+    fi
 fi
 
-# IV-06 nftables 中不应存在 metaclash 表
+# IV-06 nftables metaclash 表存在状态与 config 一致
+# auto_start_core=true 且 network.apply_on_start=true 且 mode != "none" 时，
+# postinst 启动后会应用 nftables 规则，metaclash 表出现是预期行为。
+# 使用 awk 提取 [network] 段，避免 [dns] 段同名字段干扰。
 NFT_TABLES=$(nft list tables 2>/dev/null | tr '\n' ' ')
+_NET_SECTION=$(awk '/^\[network\]/{f=1;next} /^\[/{f=0} f{print}' \
+    /etc/metaclash/config.toml 2>/dev/null)
+NET_APPLY=$(echo "$_NET_SECTION" | grep -c 'apply_on_start.*true' || true)
+NET_MODE=$(echo "$_NET_SECTION" | awk -F'"' '/^mode =/{print $2; exit}')
+echo "[IV-06 debug] AUTO_START_CORE=$AUTO_START_CORE NET_APPLY=$NET_APPLY NET_MODE=$NET_MODE NFT_TABLES=$NFT_TABLES"
+NFT_EXPECTED=0
+[ "$AUTO_START_CORE" -gt 0 ] && [ "$NET_APPLY" -gt 0 ] \
+    && [ "$NET_MODE" != "none" ] && [ "$NET_MODE" != "" ] && NFT_EXPECTED=1
 if echo "$NFT_TABLES" | grep -qE "metaclash|clashforge"; then
-    record FAIL IV-06 "nftables 无接管规则" "安装后未执行 setup，不应有 metaclash 表" "发现意外 nft 表: $NFT_TABLES"
+    if [ "$NFT_EXPECTED" -gt 0 ]; then
+        record PASS IV-06 "nftables metaclash 表（apply_on_start=true）" \
+            "config 要求自动接管 → metaclash 表应存在" \
+            "metaclash 表已创建 ✓"
+    else
+        record FAIL IV-06 "nftables 无接管规则" \
+            "auto_start_core/apply_on_start 未启用 → 不应有 metaclash 表" \
+            "发现意外 nft 表: $NFT_TABLES"
+    fi
 else
-    record PASS IV-06 "nftables 无接管规则" "nft list tables 中无 metaclash/clashforge 表" "无接管表 ✓（当前: ${NFT_TABLES:-(空)}）"
+    if [ "$NFT_EXPECTED" -gt 0 ]; then
+        record FAIL IV-06 "nftables metaclash 表（apply_on_start=true）" \
+            "config 要求自动接管 → metaclash 表应存在" \
+            "metaclash 表未创建（意外）"
+    else
+        record PASS IV-06 "nftables 无接管规则（auto_start_core=false）" \
+            "nft list tables 中无 metaclash/clashforge 表" \
+            "无接管表 ✓（当前: ${NFT_TABLES:-(空)}）"
+    fi
 fi
 
 # IV-07 dnsmasq.d 中不应有 clashforge 相关配置

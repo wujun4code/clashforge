@@ -18,5 +18,5 @@ case_05_uninstall_keep_config() {
   vm_copy_to "$SCRIPT_SH" "/tmp/clashforgectl.sh" || return 1
   vm_copy_to "$E2E_IPK_PATH" "/tmp/e2e-reinstall.ipk" || return 1
   run_remote_sh "reinstall after uninstall" "upgrade --local-ipk /tmp/e2e-reinstall.ipk --yes" || return 1
-  assert_vm_ok "API status reachable after reinstall" "wget -q -O - --timeout=10 http://127.0.0.1:7777/api/v1/status >/dev/null" || return 1
+  assert_api_ready "API status reachable after reinstall" || return 1
 }

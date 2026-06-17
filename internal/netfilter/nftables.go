@@ -5,11 +5,69 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"regexp"
 	"strings"
 	"text/template"
 
 	"github.com/rs/zerolog/log"
 )
+
+// tunForwardComment marks the forward-accept rule ClashForge inserts into the
+// live fw4 ruleset for TUN mode, so it can find and remove its own rule later
+// without touching anything fw4 itself manages.
+const tunForwardComment = "clashforge: allow forwarding into TUN device"
+
+var nftHandleRe = regexp.MustCompile(`# handle (\d+)`)
+
+// EnsureTunForwardAccept inserts a forward-accept rule for the TUN device into
+// the live "inet fw4" ruleset. mihomo's TUN auto-route correctly diverts
+// LAN-client traffic into the TUN device at the IP routing layer (ip rule/ip
+// route), but stock OpenWrt fw4 only allowlists known zone devices (lan/wan)
+// in its forward chain — without this rule, that traffic is silently
+// dropped/rejected by fw4's handle_reject fallback before mihomo's TUN reader
+// ever sees it. This is a live edit to fw4's own table (not a separate
+// ClashForge-owned table) because nftables verdicts from a different table at
+// the same hook do not override fw4's own drop policy; it does not persist
+// across an OpenWrt firewall reload (`fw4 reload`/`service firewall restart`),
+// since fw4 regenerates from /etc/config/firewall — Apply() re-adds it on
+// every (re)start so this is re-asserted whenever ClashForge re-applies rules.
+func EnsureTunForwardAccept(device string) error {
+	if device == "" {
+		device = "Meta"
+	}
+	out, _ := exec.Command("nft", "list", "chain", "inet", "fw4", "forward_lan").CombinedOutput()
+	if strings.Contains(string(out), `oifname "`+device+`"`) {
+		return nil
+	}
+	cmd := exec.Command("nft", "insert", "rule", "inet", "fw4", "forward_lan",
+		"oifname", device, "counter", "accept", "comment", `"`+tunForwardComment+`"`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("nft insert tun forward rule: %w: %s", err, string(out))
+	}
+	log.Info().Str("device", device).Msg("netfilter: 已在 fw4 forward_lan 中放行 TUN 设备转发流量 ✓")
+	return nil
+}
+
+// RemoveTunForwardAccept deletes the rule added by EnsureTunForwardAccept.
+// Best-effort: if fw4 already reloaded and dropped it, this is a no-op.
+func RemoveTunForwardAccept(device string) error {
+	out, err := exec.Command("nft", "-a", "list", "chain", "inet", "fw4", "forward_lan").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, tunForwardComment) {
+			continue
+		}
+		m := nftHandleRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		_ = exec.Command("nft", "delete", "rule", "inet", "fw4", "forward_lan", "handle", m[1]).Run()
+	}
+	return nil
+}
 
 const fwMark = "0x1a3"
 const routeTable = "100"

@@ -27,6 +27,9 @@
 #   ./scripts/clashforgectl --router 192.168.1.1 diag --fetch --local-path ./cf-diag.txt --redact
 #   ./scripts/clashforgectl --router 192.168.1.1 openclash
 #   ./scripts/clashforgectl --router 192.168.1.1 openclash --kill
+#   ./scripts/clashforgectl --router 192.168.20.1 netdiag
+#   ./scripts/clashforgectl --router 192.168.20.1 netdiag --monitor
+#   ./scripts/clashforgectl --router 192.168.20.1 netdiag --api-port 7777 --log-dir ./diag-logs
 #
 # Requirements:
 #   - ssh and scp must be available (standard OpenSSH)
@@ -69,6 +72,671 @@ download_with_fallback() {
         warn "$name download failed: $url"
     done
     return 1
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NETDIAG — client-side network diagnostics.
+#
+# This is the POSIX counterpart to scripts/diagnose-net.ps1 and the netdiag
+# action in clashforgectl.ps1. It runs from the client machine, talks directly
+# to the ClashForge HTTP API on the router, and saves a paired diagnostic run
+# under --log-dir.
+# ══════════════════════════════════════════════════════════════════════════════
+
+ND_RUN_DIR=""
+ND_LOG_FILE=""
+
+nd_ts() { date '+%H:%M:%S'; }
+
+nd_write() {
+    local msg="$1"
+    local line="[$(nd_ts)] $msg"
+    printf '%s\n' "$line"
+    [ -n "${ND_LOG_FILE:-}" ] && printf '%s\n' "$line" >> "$ND_LOG_FILE"
+}
+
+nd_section() {
+    nd_write "── $1 ─────────────────────────────────────────────────────────"
+}
+
+nd_have_http_client() {
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1
+}
+
+nd_http_body() {
+    local url="$1" timeout="${2:-8}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -L -sS --max-time "$timeout" "$url" 2>/dev/null || true
+    else
+        wget -qO- -T "$timeout" "$url" 2>/dev/null || true
+    fi
+}
+
+nd_http_status() {
+    local url="$1" timeout="${2:-8}"
+    local out code total ms start end
+    if command -v curl >/dev/null 2>&1; then
+        out="$(curl -L -sS --max-time "$timeout" -o /dev/null -w '%{http_code} %{time_total}' "$url" 2>/dev/null || true)"
+        code="${out%% *}"
+        total="${out#* }"
+        if [ -n "$total" ] && [ "$total" != "$out" ]; then
+            ms="$(awk -v t="$total" 'BEGIN { printf "%d", t * 1000 }' 2>/dev/null || printf '0')"
+        else
+            ms="0"
+        fi
+    else
+        start="$(date +%s)"
+        code="$(wget -qO /dev/null -T "$timeout" --server-response "$url" 2>&1 | awk '/HTTP\//{c=$2} END{print c}')"
+        end="$(date +%s)"
+        ms="$(( (end - start) * 1000 ))"
+    fi
+    [ -n "$code" ] || code="000"
+    printf '%s %s\n' "$code" "$ms"
+}
+
+nd_status_ok() {
+    case "$1" in
+        2*|3*|4*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+nd_api_get() {
+    nd_http_body "http://${ROUTER}:${NETDIAG_API_PORT}$1" "${2:-8}"
+}
+
+nd_api_post() {
+    local path="$1"
+    local body="${2:-}"
+    if command -v curl >/dev/null 2>&1; then
+        if [ -n "$body" ]; then
+            curl -sS --max-time 20 -X POST \
+                -H 'Content-Type: application/json' \
+                -d "$body" \
+                "http://${ROUTER}:${NETDIAG_API_PORT}${path}" 2>/dev/null || true
+        else
+            curl -sS --max-time 20 -X POST "http://${ROUTER}:${NETDIAG_API_PORT}${path}" 2>/dev/null || true
+        fi
+    else
+        if [ -n "$body" ]; then
+            wget -qO- -T 20 --method=POST \
+                --header='Content-Type: application/json' \
+                --body-data="$body" \
+                "http://${ROUTER}:${NETDIAG_API_PORT}${path}" 2>/dev/null || true
+        else
+            wget -qO- -T 20 --method=POST "http://${ROUTER}:${NETDIAG_API_PORT}${path}" 2>/dev/null || true
+        fi
+    fi
+}
+
+nd_api_delete() {
+    local path="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -sS --max-time 15 -X DELETE "http://${ROUTER}:${NETDIAG_API_PORT}${path}" 2>/dev/null || true
+    else
+        wget -qO- -T 15 --method=DELETE "http://${ROUTER}:${NETDIAG_API_PORT}${path}" 2>/dev/null || true
+    fi
+}
+
+nd_jq() {
+    local json="$1" filter="$2"
+    command -v jq >/dev/null 2>&1 || return 0
+    printf '%s' "$json" | jq -r "$filter // empty" 2>/dev/null || true
+}
+
+nd_json_str() {
+    local json="$1" key="$2"
+    local val
+    val="$(nd_jq "$json" ".. | objects | .$key? | strings" | head -1 || true)"
+    if [ -n "$val" ]; then
+        printf '%s\n' "$val"
+    else
+        printf '%s' "$json" | tr '\n' ' ' | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
+    fi
+}
+
+nd_ping() {
+    local target="$1"
+    if [ "$(uname -s 2>/dev/null || printf unknown)" = "Darwin" ]; then
+        ping -c 1 -W 2000 "$target" >/dev/null 2>&1
+    else
+        ping -c 1 -W 2 "$target" >/dev/null 2>&1
+    fi
+}
+
+nd_dns_resolve() {
+    local domain="$1" server="${2:-}" ip=""
+    if command -v dig >/dev/null 2>&1; then
+        if [ -n "$server" ]; then
+            ip="$(dig +time=2 +tries=1 +short @"$server" "$domain" A 2>/dev/null | grep -E '^[0-9.]+$' | head -1 || true)"
+        else
+            ip="$(dig +time=2 +tries=1 +short "$domain" A 2>/dev/null | grep -E '^[0-9.]+$' | head -1 || true)"
+        fi
+    elif command -v nslookup >/dev/null 2>&1; then
+        if [ -n "$server" ]; then
+            ip="$(nslookup "$domain" "$server" 2>/dev/null | awk '/^Address: /{a=$2} END{print a}' | grep -E '^[0-9.]+$' | head -1 || true)"
+        else
+            ip="$(nslookup "$domain" 2>/dev/null | awk '/^Address: /{a=$2} END{print a}' | grep -E '^[0-9.]+$' | head -1 || true)"
+        fi
+    elif command -v host >/dev/null 2>&1; then
+        ip="$(host "$domain" 2>/dev/null | awk '/has address/{print $4; exit}' || true)"
+    elif command -v getent >/dev/null 2>&1; then
+        ip="$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1; exit}' || true)"
+    fi
+    printf '%s\n' "$ip"
+}
+
+nd_extract_provider_ip() {
+    local body="$1"
+    local ip
+    ip="$(nd_json_str "$body" remote_addr)"
+    [ -n "$ip" ] || ip="$(nd_json_str "$body" ip)"
+    [ -n "$ip" ] || ip="$(nd_json_str "$body" query)"
+    printf '%s\n' "$ip"
+}
+
+nd_extract_provider_loc() {
+    local body="$1"
+    local loc city region country org isp addr
+    addr="$(nd_json_str "$body" addr)"
+    [ -n "$addr" ] && { printf '%s\n' "$addr"; return; }
+    city="$(nd_json_str "$body" city)"
+    region="$(nd_json_str "$body" region)"
+    country="$(nd_json_str "$body" country_name)"
+    [ -n "$country" ] || country="$(nd_json_str "$body" country)"
+    org="$(nd_json_str "$body" org)"
+    isp="$(nd_json_str "$body" isp)"
+    loc="$(printf '%s %s %s %s %s' "$city" "$region" "$country" "$isp" "$org" | awk '{$1=$1; print}')"
+    printf '%s\n' "$loc"
+}
+
+nd_fetch_ip_provider() {
+    local name="$1" url="$2" gbk="${3:-0}" tmp body ip loc
+    tmp="$(mktemp "${TMPDIR:-/tmp}/clashforge-ip.XXXXXX")" || return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl -L -sS --max-time 8 -o "$tmp" "$url" 2>/dev/null || true
+    else
+        wget -qO "$tmp" -T 8 "$url" 2>/dev/null || true
+    fi
+    if [ "$gbk" -eq 1 ] && command -v iconv >/dev/null 2>&1; then
+        body="$(iconv -f GB18030 -t UTF-8 "$tmp" 2>/dev/null || cat "$tmp")"
+    else
+        body="$(cat "$tmp" 2>/dev/null || true)"
+    fi
+    rm -f "$tmp"
+    ip="$(nd_extract_provider_ip "$body")"
+    loc="$(nd_extract_provider_loc "$body")"
+    if [ -n "$ip" ]; then
+        printf '%s\t%s\t%s\n' "$name" "$ip" "${loc:-}"
+        return 0
+    fi
+    printf '%s\t-\t请求失败或无法解析\n' "$name"
+    return 1
+}
+
+nd_clear_router_logs() {
+    nd_api_delete /api/v1/service-log >/dev/null
+    nd_api_delete /api/v1/logs >/dev/null
+}
+
+nd_prescan_router_logs() {
+    local svc req svc_count req_count reply
+    nd_section "路由器现存日志扫描"
+    svc="$(nd_api_get '/api/v1/service-log?lines=5000' 15)"
+    req="$(nd_api_get '/api/v1/logs?limit=5000' 15)"
+    svc_count="$(printf '%s' "$svc" | awk '{ n += gsub(/"time"/, "&") } END { print n + 0 }')"
+    req_count="$(printf '%s' "$req" | awk '{ n += gsub(/"ts"/, "&") } END { print n + 0 }')"
+    nd_write "当前服务日志条目(近似): ${svc_count:-0}"
+    nd_write "当前请求日志条目: ${req_count:-0}"
+    if [ "${svc_count:-0}" = "0" ] && [ "${req_count:-0}" = "0" ]; then
+        nd_write "无历史日志，无需清理"
+        return 0
+    fi
+    if [ "$YES" -eq 1 ]; then
+        reply="y"
+    else
+        printf '[clashforgectl] 检测到历史日志，可能干扰本轮诊断归因。清理后再开始？[y/N] '
+        read -r reply
+    fi
+    case "$reply" in
+        y|Y|yes|YES) nd_clear_router_logs; nd_write "已清理路由器日志缓冲" ;;
+        *) nd_write "保留现有日志，继续..." ;;
+    esac
+}
+
+nd_mihomo_ok_from_health() {
+    local hc="$1" ok
+    ok="$(nd_jq "$hc" '.data.process.mihomo.ok // .data.mihomo.ok // .process.mihomo.ok // false' | head -1 || true)"
+    if [ "$ok" = "true" ]; then
+        return 0
+    fi
+    printf '%s' "$hc" | tr '\n' ' ' | grep -q '"mihomo".*"ok"[[:space:]]*:[[:space:]]*true'
+}
+
+nd_show_router_status() {
+    local hc="$1" snap="${2:-}" cf_state cf_ok cf_uptime mh_state mh_ok dns_active dns_mode tp_active tp_mode net_mode dns_cfg sub_label
+    cf_state="$(nd_jq "$hc" '.data.process.clashforge.state // .data.clashforge.state // .process.clashforge.state // "?"' | head -1)"
+    cf_ok="$(nd_jq "$hc" '.data.process.clashforge.ok // .data.clashforge.ok // .process.clashforge.ok // "?"' | head -1)"
+    cf_uptime="$(nd_jq "$hc" '.data.process.clashforge.uptime // .data.clashforge.uptime // .process.clashforge.uptime // "?"' | head -1)"
+    mh_state="$(nd_jq "$hc" '.data.process.mihomo.state // .data.mihomo.state // .process.mihomo.state // "?"' | head -1)"
+    mh_ok="$(nd_jq "$hc" '.data.process.mihomo.ok // .data.mihomo.ok // .process.mihomo.ok // "?"' | head -1)"
+    dns_active="$(nd_jq "$hc" '.data.dns.active // .dns.active // "?"' | head -1)"
+    dns_mode="$(nd_jq "$hc" '.data.dns.dnsmasq_mode // .dns.dnsmasq_mode // "?"' | head -1)"
+    tp_active="$(nd_jq "$hc" '.data.transparent_proxy.active // .transparent_proxy.active // "?"' | head -1)"
+    tp_mode="$(nd_jq "$hc" '.data.transparent_proxy.mode // .transparent_proxy.mode // "?"' | head -1)"
+    nd_write "  ClashForge : state=${cf_state:-?}  ok=${cf_ok:-?}  uptime=${cf_uptime:-?}s"
+    nd_write "  mihomo     : state=${mh_state:-?}  ok=${mh_ok:-?}"
+    nd_write "  dns        : active=${dns_active:-?}  mode=${dns_mode:-?}"
+    nd_write "  tproxy     : active=${tp_active:-?}  mode=${tp_mode:-?}"
+    if [ -n "$snap" ]; then
+        net_mode="$(nd_jq "$snap" '.data.network.mode // .network.mode // "?"' | head -1)"
+        dns_cfg="$(nd_jq "$snap" '.data.dns.mode // .dns.mode // "?"' | head -1)"
+        sub_label="$(nd_jq "$snap" '.data.active_source.sub_name // .active_source.sub_name // .data.active_source.filename // .active_source.filename // empty' | head -1)"
+        nd_write "  配置       : 网络=${net_mode:-?}  DNS=${dns_cfg:-?}  来源=${sub_label:-(未配置)}"
+    fi
+    nd_mihomo_ok_from_health "$hc"
+}
+
+nd_config_snapshot() {
+    local cfg as subs mc yaml_file yaml line_count mode dns_mode dns_strategy active_type sub_name sub_id filename subs_count
+    nd_section "配置快照"
+    cfg="$(nd_api_get /api/v1/config 15)"
+    as="$(nd_api_get /api/v1/config/active-source 15)"
+    subs="$(nd_api_get /api/v1/subscriptions 15)"
+    mc="$(nd_api_get /api/v1/config/mihomo 20)"
+    [ -n "$cfg" ] && { if command -v jq >/dev/null 2>&1; then printf '%s' "$cfg" | jq '.data // .' > "$ND_RUN_DIR/cf_config.json" 2>/dev/null || printf '%s\n' "$cfg" > "$ND_RUN_DIR/cf_config.json"; else printf '%s\n' "$cfg" > "$ND_RUN_DIR/cf_config.json"; fi; }
+    [ -n "$as" ] && { if command -v jq >/dev/null 2>&1; then printf '%s' "$as" | jq '.data // .' > "$ND_RUN_DIR/active_source.json" 2>/dev/null || printf '%s\n' "$as" > "$ND_RUN_DIR/active_source.json"; else printf '%s\n' "$as" > "$ND_RUN_DIR/active_source.json"; fi; }
+    [ -n "$subs" ] && { if command -v jq >/dev/null 2>&1; then printf '%s' "$subs" | jq '.data // .' > "$ND_RUN_DIR/subscriptions.json" 2>/dev/null || printf '%s\n' "$subs" > "$ND_RUN_DIR/subscriptions.json"; else printf '%s\n' "$subs" > "$ND_RUN_DIR/subscriptions.json"; fi; }
+
+    yaml_file="$ND_RUN_DIR/mihomo_config.yaml"
+    if command -v jq >/dev/null 2>&1; then
+        yaml="$(printf '%s' "$mc" | jq -r '.data.content // .content // empty' 2>/dev/null || true)"
+    else
+        yaml="$(printf '%s' "$mc" | sed -n 's/.*"content"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | sed 's/\\n/\
+/g; s/\\"/"/g' || true)"
+    fi
+    [ -n "$yaml" ] && printf '%s\n' "$yaml" > "$yaml_file"
+
+    mode="$(nd_jq "$cfg" '.data.network.mode // .network.mode // "?"' | head -1)"
+    dns_mode="$(nd_jq "$cfg" '.data.dns.mode // .dns.mode // "?"' | head -1)"
+    dns_strategy="$(nd_jq "$cfg" '.data.dns.strategy // .dns.strategy // "legacy"' | head -1)"
+    active_type="$(nd_jq "$as" '.data.active_source.type // .active_source.type // "?"' | head -1)"
+    sub_name="$(nd_jq "$as" '.data.active_source.sub_name // .active_source.sub_name // empty' | head -1)"
+    sub_id="$(nd_jq "$as" '.data.active_source.sub_id // .active_source.sub_id // empty' | head -1)"
+    filename="$(nd_jq "$as" '.data.active_source.filename // .active_source.filename // empty' | head -1)"
+    subs_count="$(nd_jq "$subs" '(.data.subscriptions // .subscriptions // []) | length' | head -1)"
+    line_count=0
+    [ -f "$yaml_file" ] && line_count="$(wc -l < "$yaml_file" | tr -d ' ')"
+    nd_write "  网络模式 : ${mode:-?}"
+    nd_write "  DNS 模式 : ${dns_mode:-?}  策略=${dns_strategy:-?}"
+    if [ "$active_type" = "subscription" ]; then
+        nd_write "  活跃来源 : 订阅: ${sub_name:-?} (id=${sub_id:-?})"
+    elif [ -n "$filename" ]; then
+        nd_write "  活跃来源 : 文件: $filename"
+    else
+        nd_write "  活跃来源 : (未配置)"
+    fi
+    nd_write "  订阅数量 : ${subs_count:-?}"
+    nd_write "  mihomo YAML: ${line_count} 行"
+}
+
+nd_start_mihomo() {
+    local i hc start_resp applied warnings
+    nd_section "启动 mihomo"
+    nd_write "  -> POST /api/v1/core/start"
+    start_resp="$(nd_api_post /api/v1/core/start)"
+    applied="$(nd_jq "$start_resp" '.data.takeover_applied // .takeover_applied // [] | join(", ")' | head -1)"
+    warnings="$(nd_jq "$start_resp" '.data.takeover_warnings // .takeover_warnings // [] | join("; ")' | head -1)"
+    [ -n "$applied" ] && nd_write "  自动接管: $applied"
+    [ -n "$warnings" ] && nd_write "  接管警告: $warnings"
+    nd_write "  等待 mihomo 就绪 (最多 40s)..."
+    for i in $(seq 1 20); do
+        sleep 2
+        hc="$(nd_api_get /api/v1/health/check 8)"
+        if nd_mihomo_ok_from_health "$hc"; then
+            nd_write "  mihomo 已就绪"
+            nd_ensure_transparent_takeover "core/start 后检查"
+            return 0
+        fi
+        nd_write "  ...等待中 ($((i * 2))s)"
+    done
+    nd_write "  40s 超时，mihomo 未就绪"
+    return 1
+}
+
+nd_ensure_transparent_takeover() {
+    local reason="${1:-}" cfg hc mode apply tp_active nft_active net_block tp_block nft_block body resp msg
+    cfg="$(nd_api_get /api/v1/config 10)"
+    hc="$(nd_api_get /api/v1/health/check 10)"
+    [ -n "$cfg" ] && [ -n "$hc" ] || return 0
+
+    mode="$(nd_jq "$cfg" '.data.network.mode // .network.mode // "none"' | head -1)"
+    apply="$(nd_jq "$cfg" '.data.network.apply_on_start // .network.apply_on_start // false' | head -1)"
+    tp_active="$(nd_jq "$hc" '.data.transparent_proxy.active // .transparent_proxy.active // false' | head -1)"
+    nft_active="$(nd_jq "$hc" '.data.nft.active // .nft.active // false' | head -1)"
+    if [ -z "$mode" ] || [ -z "$apply" ]; then
+        net_block="$(printf '%s' "$cfg" | tr '\n' ' ' | sed 's/.*"network"[[:space:]]*:[[:space:]]*{//; s/}[[:space:]]*,[[:space:]]*"dns".*//')"
+        [ -n "$mode" ] || mode="$(printf '%s' "$net_block" | sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        if [ -z "$apply" ]; then
+            printf '%s' "$net_block" | grep -q '"apply_on_start"[[:space:]]*:[[:space:]]*true' && apply="true" || apply="false"
+        fi
+    fi
+    if [ -z "$tp_active" ]; then
+        tp_block="$(printf '%s' "$hc" | tr '\n' ' ' | sed 's/.*"transparent_proxy"[[:space:]]*:[[:space:]]*{//; s/}[[:space:]]*,[[:space:]]*"nft".*//')"
+        printf '%s' "$tp_block" | grep -q '"active"[[:space:]]*:[[:space:]]*true' && tp_active="true" || tp_active="false"
+    fi
+    if [ -z "$nft_active" ]; then
+        nft_block="$(printf '%s' "$hc" | tr '\n' ' ' | sed 's/.*"nft"[[:space:]]*:[[:space:]]*{//; s/}[[:space:]]*,[[:space:]]*"ports".*//')"
+        printf '%s' "$nft_block" | grep -q '"active"[[:space:]]*:[[:space:]]*true' && nft_active="true" || nft_active="false"
+    fi
+    [ "$apply" = "true" ] || return 0
+    [ -n "$mode" ] && [ "$mode" != "none" ] || return 0
+    if [ "$tp_active" = "true" ] && [ "$nft_active" = "true" ]; then
+        return 0
+    fi
+
+    if [ -n "$reason" ]; then
+        nd_write "  -> 按配置补齐透明代理/防火墙接管 ($reason): mode=$mode"
+    else
+        nd_write "  -> 按配置补齐透明代理/防火墙接管: mode=$mode"
+    fi
+    body="{\"module\":\"transparent_proxy\",\"mode\":\"$mode\",\"stop_services\":[]}"
+    resp="$(nd_api_post /api/v1/overview/takeover "$body")"
+    msg="$(nd_jq "$resp" '.data.message // .message // empty' | head -1)"
+    if [ -n "$resp" ]; then
+        nd_write "  透明代理/防火墙已接管: ${msg:-ok}"
+    else
+        nd_write "  自动补齐透明代理/防火墙接管失败，请在「代理服务」页手动接管"
+    fi
+}
+
+nd_probe_suite() {
+    local start_ts target domain ip fake code ms row name group url gbk result hc op ok_count fail_count svc req f sz
+    start_ts="$(date +%s)"
+    nd_config_snapshot
+
+    nd_section "1. Ping"
+    for target in "$ROUTER" 8.8.8.8 114.114.114.114; do
+        if nd_ping "$target"; then
+            nd_write "  $(printf '%-16s' "$target") : OK"
+        else
+            nd_write "  $(printf '%-16s' "$target") : FAIL"
+        fi
+    done
+
+    nd_section "2. DNS 解析"
+    for row in \
+        "google.com|国外-GFW" \
+        "github.com|国外-GFW" \
+        "openai.com|国外-GFW" \
+        "taobao.com|国内直连" \
+        "music.163.com|国内直连" \
+        "baidu.com|国内直连"; do
+        domain="${row%%|*}"
+        group="${row#*|}"
+        ip="$(nd_dns_resolve "$domain")"
+        fake=""
+        case "$ip" in 198.18.*|198.19.*) fake=" [fake-ip]" ;; esac
+        if [ -n "$ip" ]; then
+            nd_write "  $(printf '%-18s' "$domain") ${group}  $ip$fake"
+        else
+            nd_write "  $(printf '%-18s' "$domain") ${group}  FAIL"
+        fi
+    done
+    for domain in google.com github.com; do
+        ip="$(nd_dns_resolve "$domain" 8.8.8.8)"
+        nd_write "  $(printf '%-18s' "$domain (8.8.8.8)") 直连外部  ${ip:-FAIL}"
+    done
+
+    nd_section "3. 访问检查"
+    result="$(nd_http_status 'http://connectivitycheck.gstatic.com/generate_204' 5)"
+    code="${result%% *}"; ms="${result#* }"
+    if nd_status_ok "$code"; then
+        nd_write "  connectivitycheck/204  OK    ${ms}ms"
+    else
+        nd_write "  connectivitycheck/204  FAIL  HTTP ${code}  ${ms}ms"
+    fi
+    for row in \
+        "淘宝|国内|https://www.taobao.com" \
+        "网易云音乐|国内|https://music.163.com" \
+        "GitHub|国外|https://github.com" \
+        "Google|国外|https://www.google.com" \
+        "OpenAI|AI|https://chat.openai.com" \
+        "Gemini|AI|https://gemini.google.com"; do
+        name="${row%%|*}"
+        row="${row#*|}"
+        group="${row%%|*}"
+        url="${row#*|}"
+        result="$(nd_http_status "$url" 8)"
+        code="${result%% *}"; ms="${result#* }"
+        if nd_status_ok "$code"; then
+            nd_write "  [$group] $(printf '%-12s' "$name") OK    HTTP ${code}  ${ms}ms  $url"
+        else
+            nd_write "  [$group] $(printf '%-12s' "$name") FAIL  HTTP ${code}  ${ms}ms  $url"
+        fi
+    done
+
+    nd_section "4. 出口 IP"
+    for row in \
+        "太平洋|国内|https://whois.pconline.com.cn/ipJson.jsp?json=true|1" \
+        "UpaiYun|国内|https://pubstatic.b0.upaiyun.com/?_upnode|0" \
+        "IP.SB|国外|https://api.ip.sb/geoip|0" \
+        "IPInfo|国外|https://ipinfo.io/json|0"; do
+        name="${row%%|*}"
+        row="${row#*|}"
+        group="${row%%|*}"
+        row="${row#*|}"
+        url="${row%%|*}"
+        gbk="${row#*|}"
+        result="$(nd_fetch_ip_provider "$name" "$url" "$gbk" || true)"
+        nd_write "  [$group] ${result//$'\t'/  }"
+    done
+
+    nd_section "5. 路由器健康检查"
+    hc="$(nd_api_get /api/v1/health/check 10)"
+    [ -n "$hc" ] && printf '%s\n' "$hc" > "$ND_RUN_DIR/health_check.json"
+    if [ -n "$hc" ]; then
+        nd_show_router_status "$hc" "$(cat "$ND_RUN_DIR/cf_config.json" 2>/dev/null || true)" || true
+    else
+        nd_write "  /health/check 请求失败"
+    fi
+
+    nd_section "6. 路由器侧探测 (/overview/probes)"
+    op="$(nd_api_get /api/v1/overview/probes 20)"
+    if [ -n "$op" ]; then
+        if command -v jq >/dev/null 2>&1; then
+            printf '%s' "$op" | jq '.data // .' > "$ND_RUN_DIR/overview_probes.json" 2>/dev/null || printf '%s\n' "$op" > "$ND_RUN_DIR/overview_probes.json"
+            ok_count="$(printf '%s' "$op" | jq '[.data.ip_checks[]?, .data.access_checks[]?] | map(select(.ok == true)) | length' 2>/dev/null || printf '0')"
+            fail_count="$(printf '%s' "$op" | jq '[.data.ip_checks[]?, .data.access_checks[]?] | map(select(.ok == false)) | length' 2>/dev/null || printf '0')"
+            nd_write "  路由器侧探测: ok=${ok_count:-0} fail=${fail_count:-0}"
+        else
+            printf '%s\n' "$op" > "$ND_RUN_DIR/overview_probes.json"
+            ok_count="$(printf '%s' "$op" | awk '{ n += gsub(/"ok"[[:space:]]*:[[:space:]]*true/, "&") } END { print n + 0 }')"
+            fail_count="$(printf '%s' "$op" | awk '{ n += gsub(/"ok"[[:space:]]*:[[:space:]]*false/, "&") } END { print n + 0 }')"
+            nd_write "  路由器侧探测: ok=${ok_count:-0} fail=${fail_count:-0}"
+        fi
+    else
+        nd_write "  /overview/probes 请求失败"
+    fi
+
+    svc="$(nd_api_get '/api/v1/service-log?lines=5000' 15)"
+    req="$(nd_api_get '/api/v1/logs?limit=2000' 15)"
+    [ -n "$svc" ] && printf '%s\n' "$svc" > "$ND_RUN_DIR/router_svc.log"
+    [ -n "$req" ] && printf '%s\n' "$req" > "$ND_RUN_DIR/router_req.log"
+
+    nd_section "本轮配对日志"
+    for f in client.log router_svc.log router_req.log cf_config.json active_source.json subscriptions.json mihomo_config.yaml overview_probes.json health_check.json; do
+        if [ -f "$ND_RUN_DIR/$f" ]; then
+            sz="$(du -k "$ND_RUN_DIR/$f" 2>/dev/null | awk '{print $1}')"
+            nd_write "  [x] $(printf '%-22s' "$f") ${sz:-0} KB"
+        else
+            nd_write "  [ ] $(printf '%-22s' "$f") (未生成)"
+        fi
+    done
+    nd_write "探测完成，耗时 $(( $(date +%s) - start_ts ))s"
+}
+
+nd_manage_logs() {
+    local total_kb threshold_kb reply d sz
+    [ -d "$NETDIAG_LOG_DIR" ] || return 0
+    total_kb="$(du -sk "$NETDIAG_LOG_DIR" 2>/dev/null | awk '{print $1}')"
+    total_kb="${total_kb:-0}"
+    threshold_kb=5120
+    nd_section "本地诊断报告管理"
+    nd_write "本地诊断报告总大小: ${total_kb} KB"
+    [ "$total_kb" -le "$threshold_kb" ] && { nd_write "未超过 5MB 阈值，无需清理"; return 0; }
+    if [ "$YES" -eq 1 ]; then
+        reply="y"
+    else
+        printf '[clashforgectl] 是否删除最早的 run_* 报告直至低于 5MB？[y/N] '
+        read -r reply
+    fi
+    case "$reply" in
+        y|Y|yes|YES) ;;
+        *) nd_write "保留所有记录"; return 0 ;;
+    esac
+    while [ "$total_kb" -gt "$threshold_kb" ]; do
+        d="$(find "$NETDIAG_LOG_DIR" -maxdepth 1 -type d -name 'run_*' | sort | head -1)"
+        [ -n "$d" ] || break
+        [ "$d" = "$ND_RUN_DIR" ] && break
+        sz="$(du -sk "$d" 2>/dev/null | awk '{print $1}')"
+        rm -rf "$d"
+        total_kb="$(( total_kb - ${sz:-0} ))"
+        nd_write "已删除 $(basename "$d")"
+    done
+}
+
+nd_monitor_loop() {
+    local mon_log start elapsed ping_router ping_wan dns_ip http code ms internet was_lost=0 loss_start=0 loss_count=0 now dur fake
+    mon_log="$ND_RUN_DIR/monitor.log"
+    ND_LOG_FILE="$mon_log"
+    nd_write ""
+    nd_write "进入持续监控模式（Ctrl+C 停止）"
+    start="$(date +%s)"
+    while true; do
+        now="$(date +%s)"
+        elapsed="$((now - start))"
+        nd_ping "$ROUTER" && ping_router="OK" || ping_router="FAIL"
+        nd_ping 8.8.8.8 && ping_wan="OK" || ping_wan="FAIL"
+        dns_ip="$(nd_dns_resolve google.com)"
+        result="$(nd_http_status 'http://connectivitycheck.gstatic.com/generate_204' 4)"
+        code="${result%% *}"; ms="${result#* }"
+        if [ "$ping_wan" = "OK" ] && nd_status_ok "$code"; then internet=1; else internet=0; fi
+        if [ "$internet" -eq 0 ] && [ "$was_lost" -eq 0 ]; then
+            loss_start="$now"; was_lost=1; loss_count="$((loss_count + 1))"
+            nd_write "[#${loss_count}] 断网 +${elapsed}s"
+        elif [ "$internet" -eq 1 ] && [ "$was_lost" -eq 1 ]; then
+            dur="$((now - loss_start))"; was_lost=0
+            nd_write "[#${loss_count}] 恢复 断了 ${dur}s，总 +${elapsed}s"
+        fi
+        fake=""
+        case "$dns_ip" in 198.18.*|198.19.*) fake="(fake-ip)" ;; esac
+        nd_write "+${elapsed}s  rtr=${ping_router}  wan=${ping_wan}  dns=$([ -n "$dns_ip" ] && printf OK || printf FAIL)${fake}  http=$([ "$internet" -eq 1 ] && printf OK || printf FAIL)  ${ms}ms"
+        sleep 2
+    done
+}
+
+cmd_netdiag_client() {
+    local stamp hc pre_cfg mihomo_before reply started=0
+    nd_have_http_client || die "netdiag requires curl or wget."
+    command -v ping >/dev/null 2>&1 || die "netdiag requires ping."
+
+    stamp="$(date +%Y%m%d_%H%M%S)"
+    ND_RUN_DIR="${NETDIAG_LOG_DIR%/}/run_${stamp}"
+    mkdir -p "$ND_RUN_DIR"
+    ND_LOG_FILE="$ND_RUN_DIR/client.log"
+
+    printf '\n'
+    nd_write "╔══════════════════════════════════════════════════════════════════════╗"
+    nd_write "║      ClashForge 网络诊断脚本 (macOS/Linux 客户端)                  ║"
+    nd_write "║      Router : ${ROUTER}:${NETDIAG_API_PORT}"
+    nd_write "║      LogDir : ${ND_RUN_DIR}"
+    nd_write "╚══════════════════════════════════════════════════════════════════════╝"
+    nd_write ""
+
+    nd_write "正在连接路由器 ${ROUTER}:${NETDIAG_API_PORT}..."
+    if ! nd_ping "$ROUTER"; then
+        nd_write "无法 Ping 通路由器 $ROUTER，请检查网络连接后重试"
+        exit 1
+    fi
+    nd_write "路由器 $ROUTER 可达"
+
+    nd_prescan_router_logs
+
+    nd_section "路由器当前状态"
+    hc="$(nd_api_get /api/v1/health/check 10)"
+    pre_cfg="$(nd_api_get /api/v1/config 10)"
+    if [ -n "$hc" ]; then
+        if nd_show_router_status "$hc" "$pre_cfg"; then
+            mihomo_before=1
+        else
+            mihomo_before=0
+        fi
+    else
+        nd_write "/health/check 请求失败"
+        mihomo_before=0
+    fi
+    if [ "$mihomo_before" -eq 1 ]; then
+        nd_ensure_transparent_takeover "当前核心已运行"
+    fi
+
+    if [ "$mihomo_before" -eq 0 ]; then
+        nd_write ""
+        nd_write "mihomo 当前未运行。"
+        if [ "$YES" -eq 1 ]; then
+            reply="1"
+        else
+            printf '[clashforgectl] [1] 启动 mihomo 后诊断  [2] 不启动直接诊断  选择 [1/2]: '
+            read -r reply
+        fi
+        if [ "$reply" = "1" ]; then
+            if nd_start_mihomo; then
+                started=1
+                sleep 3
+            else
+                nd_write "mihomo 启动失败，继续执行诊断..."
+            fi
+        else
+            nd_write "跳过启动，继续执行诊断..."
+        fi
+    fi
+
+    nd_probe_suite
+
+    if [ "$started" -eq 1 ]; then
+        nd_write ""
+        nd_write "诊断完成。脚本本次启动了 mihomo。"
+        if [ "$YES" -eq 1 ]; then
+            reply="1"
+        else
+            printf '[clashforgectl] [1] 还原(停止 mihomo)  [2] 保持运行  选择 [1/2]: '
+            read -r reply
+        fi
+        if [ "$reply" = "1" ]; then
+            nd_write "-> POST /api/v1/core/stop"
+            nd_api_post /api/v1/core/stop >/dev/null
+            nd_write "mihomo 已停止"
+        else
+            nd_write "mihomo 保持运行"
+        fi
+    fi
+
+    nd_section "路由器日志清理"
+    if [ -f "$ND_RUN_DIR/router_svc.log" ] && [ -f "$ND_RUN_DIR/router_req.log" ]; then
+        nd_write "已确认路由器服务/请求日志副本已落盘本地，清理路由器侧日志缓冲..."
+        nd_clear_router_logs
+        nd_write "已清理"
+    else
+        nd_write "未能确认本地副本完整，跳过本次清理"
+    fi
+
+    nd_manage_logs
+    nd_write ""
+    nd_write "完整日志目录: $ND_RUN_DIR"
+
+    if [ "$NETDIAG_MONITOR" -eq 1 ]; then
+        nd_monitor_loop
+    fi
 }
 
 sync_geodata_to_router() {
@@ -200,13 +868,8 @@ if [ ! -f "$SH_SCRIPT" ]; then
 fi
 
 if [ ! -f "$SH_SCRIPT" ]; then
-    die "clashforgectl.sh not found. Expected: $SCRIPT_DIR/clashforgectl.sh"
+    SH_SCRIPT=""
 fi
-
-# ── validate tools ────────────────────────────────────────────────────────────
-for tool in ssh scp; do
-    command -v "$tool" >/dev/null 2>&1 || die "$tool not found. Install OpenSSH (e.g. 'brew install openssh' or 'apt install openssh-client')."
-done
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 ACTION=""
@@ -236,6 +899,10 @@ REDACT=0
 
 KILL_OPENCLASH=0
 
+NETDIAG_API_PORT=7777
+NETDIAG_LOG_DIR="./diag-logs"
+NETDIAG_MONITOR=0
+
 YES=0
 DRY_RUN=0
 
@@ -243,7 +910,7 @@ DRY_RUN=0
 # First positional arg that is not a flag is the ACTION.
 while [ $# -gt 0 ]; do
     case "$1" in
-        status|stop|reset|upgrade|deploy|check|compat|uninstall|diag|openclash|flush-dns|help)
+        status|stop|reset|upgrade|deploy|check|compat|uninstall|diag|openclash|flush-dns|netdiag|help)
             ACTION="$1"; shift ;;
         --router)     ROUTER="$2";      shift 2 ;;
         --router=*)   ROUTER="${1#*=}"; shift ;;
@@ -283,6 +950,12 @@ while [ $# -gt 0 ]; do
         --redact)     REDACT=1;         shift ;;
         # openclash options
         --kill)       KILL_OPENCLASH=1; shift ;;
+        # netdiag options
+        --api-port)   NETDIAG_API_PORT="$2"; shift 2 ;;
+        --api-port=*) NETDIAG_API_PORT="${1#*=}"; shift ;;
+        --log-dir)    NETDIAG_LOG_DIR="$2"; shift 2 ;;
+        --log-dir=*)  NETDIAG_LOG_DIR="${1#*=}"; shift ;;
+        --monitor)    NETDIAG_MONITOR=1; shift ;;
         # common options
         --yes|-y)     YES=1;            shift ;;
         --dry-run)    DRY_RUN=1;        shift ;;
@@ -312,6 +985,7 @@ SUBCOMMANDS
     diag        Collect a full diagnostic report
     openclash   Scan OpenClash processes/services; optionally kill them
     flush-dns   Flush dnsmasq DNS cache (and Mihomo fake-ip cache if core is running)
+    netdiag     Run client-side network diagnostics via the ClashForge HTTP API
     help        Show this help
 
 CONNECTION OPTIONS
@@ -351,6 +1025,11 @@ DIAG OPTIONS
 OPENCLASH OPTIONS
     --kill               Stop OpenClash service and kill detected OpenClash processes
 
+NETDIAG OPTIONS
+    --api-port <port>    ClashForge API port (default: 7777)
+    --log-dir <path>     Local directory for diagnostic runs (default: ./diag-logs)
+    --monitor            Continue monitoring after the one-shot probe suite
+
 COMMON OPTIONS
     --yes                Skip confirmation prompts
     --dry-run            Print planned actions without making changes
@@ -374,6 +1053,8 @@ EXAMPLES
     ./scripts/clashforgectl --router 192.168.1.1 openclash
     ./scripts/clashforgectl --router 192.168.1.1 openclash --kill
     ./scripts/clashforgectl --router 192.168.1.1 flush-dns
+    ./scripts/clashforgectl --router 192.168.20.1 netdiag
+    ./scripts/clashforgectl --router 192.168.20.1 netdiag --monitor
 EOF
 }
 
@@ -385,6 +1066,18 @@ fi
 # ── validate required args ────────────────────────────────────────────────────
 [ -z "$ACTION" ] && { show_help; echo; die "--router and a subcommand are required."; }
 [ -z "$ROUTER" ] && die "--router is required."
+
+if [ "$ACTION" = "netdiag" ]; then
+    cmd_netdiag_client
+    exit 0
+fi
+
+[ -n "$SH_SCRIPT" ] || die "clashforgectl.sh not found. Expected: $SCRIPT_DIR/clashforgectl.sh"
+
+# ── validate tools ────────────────────────────────────────────────────────────
+for tool in ssh scp; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool not found. Install OpenSSH (e.g. 'brew install openssh' or 'apt install openssh-client')."
+done
 
 # ── build SSH/SCP base arg arrays ─────────────────────────────────────────────
 TARGET="${SSH_USER}@${ROUTER}"

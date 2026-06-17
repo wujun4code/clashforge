@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +35,7 @@ func deployRequest(t *testing.T, store *nodes.Store, nodeID, mode string) *httpt
 
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", nodeID)
-	req = req.WithContext(chi.NewContext(req.Context(), rctx))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	rr := httptest.NewRecorder()
 	// handleDeployNode requires both store and kp; pass nil kp — validation fires before SSH
