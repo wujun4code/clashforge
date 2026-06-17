@@ -70,7 +70,9 @@ func TestLoadOrGenerateKeyPair_MigratesLegacyDataDirKey(t *testing.T) {
 	}
 }
 
-func TestLoadOrGenerateKeyPair_InvalidExistingKeyReturnsError(t *testing.T) {
+func TestLoadOrGenerateKeyPair_InvalidExistingKeyRegeneratesKey(t *testing.T) {
+	// A corrupt key file (e.g. truncated write, empty backup restored by postinst) should
+	// be silently removed and a fresh key pair generated in its place.
 	dataDir := t.TempDir()
 
 	privPath := filepath.Join(dataDir, keyFilename)
@@ -78,16 +80,21 @@ func TestLoadOrGenerateKeyPair_InvalidExistingKeyReturnsError(t *testing.T) {
 		t.Fatalf("write invalid key failed: %v", err)
 	}
 
-	if _, err := LoadOrGenerateKeyPair(dataDir); err == nil {
-		t.Fatalf("expected parse error for invalid key, got nil")
+	kp, err := LoadOrGenerateKeyPair(dataDir)
+	if err != nil {
+		t.Fatalf("expected silent regeneration, got error: %v", err)
+	}
+	if kp.PublicKeyString() == "" {
+		t.Fatal("expected valid regenerated key pair")
 	}
 
+	// The corrupt file must have been replaced with a valid PEM key.
 	after, err := os.ReadFile(privPath)
 	if err != nil {
-		t.Fatalf("read invalid key after failed load: %v", err)
+		t.Fatalf("key file missing after regeneration: %v", err)
 	}
-	if string(after) != "not-a-valid-private-key" {
-		t.Fatalf("invalid key should not be overwritten on parse error")
+	if string(after) == "not-a-valid-private-key" {
+		t.Fatal("corrupt key was not replaced during regeneration")
 	}
 }
 

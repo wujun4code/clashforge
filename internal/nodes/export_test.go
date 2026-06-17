@@ -5,13 +5,17 @@ import (
 	"testing"
 )
 
-func TestExportClashProxy_MissingCredentials(t *testing.T) {
-	_, err := ExportClashProxy(&Node{
+func TestExportClashProxy_EmptyCredentials_Succeeds(t *testing.T) {
+	// Credentials are optional — ExportClashProxy only requires a non-empty server address.
+	out, err := ExportClashProxy(&Node{
 		Name:   "n1",
 		Domain: "edge.example.com",
 	})
-	if err == nil {
-		t.Fatal("expected error when proxy credentials are missing")
+	if err != nil {
+		t.Fatalf("ExportClashProxy() unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "server: edge.example.com") {
+		t.Fatalf("expected server in output, got:\n%s", out)
 	}
 }
 
