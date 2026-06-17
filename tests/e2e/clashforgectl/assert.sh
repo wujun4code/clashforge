@@ -59,6 +59,28 @@ assert_vm_file_nonempty() {
   assert_vm_ok "$_name" "[ -s '$_path' ]"
 }
 
+# assert_api_ready: retry wget against the clashforge API for up to 15 s.
+# Needed after upgrade/reinstall because the Go binary needs ~0.5-2 s to
+# start listening after postinst fires /etc/init.d/clashforge start.
+assert_api_ready() {
+  _name="$1"
+  _out=$(vm_ssh 'i=0
+while [ $i -lt 15 ]; do
+  wget -q -O - --timeout=3 http://127.0.0.1:7777/api/v1/status >/dev/null 2>&1 && exit 0
+  i=$(($i+1))
+  sleep 1
+done
+exit 1' 2>&1)
+  _code=$?
+  if [ "$_code" -eq 0 ]; then
+    pass "$_name"
+  else
+    fail "$_name"
+    printf '%s\n' "$_out" >&2
+  fi
+  return "$_code"
+}
+
 summary_and_exit() {
   log "SUMMARY: pass=$PASS_COUNT fail=$FAIL_COUNT"
   if [ "$FAIL_COUNT" -gt 0 ]; then
