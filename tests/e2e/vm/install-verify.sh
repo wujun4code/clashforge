@@ -114,8 +114,7 @@ NFT_TABLES=$(nft list tables 2>/dev/null | tr '\n' ' ')
 _NET_SECTION=$(awk '/^\[network\]/{f=1;next} /^\[/{f=0} f{print}' \
     /etc/metaclash/config.toml 2>/dev/null)
 NET_APPLY=$(echo "$_NET_SECTION" | grep -c 'apply_on_start.*true' || true)
-NET_MODE=$(echo "$_NET_SECTION" | grep '^mode' | head -1 \
-    | sed 's/mode[[:space:]]*=[[:space:]]*"\?\([a-z_]*\)"\?.*/\1/')
+NET_MODE=$(echo "$_NET_SECTION" | awk -F'"' '/^mode =/{print $2; exit}')
 echo "[IV-06 debug] AUTO_START_CORE=$AUTO_START_CORE NET_APPLY=$NET_APPLY NET_MODE=$NET_MODE NFT_TABLES=$NFT_TABLES"
 NFT_EXPECTED=0
 [ "$AUTO_START_CORE" -gt 0 ] && [ "$NET_APPLY" -gt 0 ] \
