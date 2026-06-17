@@ -80,8 +80,9 @@ fi
 # 若 --keep-config 保留了 auto_start_core=true，clashforge 在 postinst 启动后
 # 会自动拉起 mihomo，这是预期行为；若为 false/未设置则不应启动。
 MIHOMO_PID=$(pgrep -f "mihomo-clashforge" 2>/dev/null || echo "")
-AUTO_START_CORE=$(grep -m1 'auto_start_core' /etc/metaclash/config.toml 2>/dev/null \
-    | grep -c 'true' || echo "0")
+_CORE_SECTION=$(awk '/^\[core\]/{f=1;next} /^\[/{f=0} f{print}' \
+    /etc/metaclash/config.toml 2>/dev/null)
+AUTO_START_CORE=$(echo "$_CORE_SECTION" | grep -c 'auto_start_core.*true' || true)
 if [ "$AUTO_START_CORE" -gt 0 ]; then
     # auto_start_core=true: mihomo 应已自动启动
     if [ -n "$MIHOMO_PID" ]; then
@@ -108,11 +109,14 @@ fi
 # IV-06 nftables metaclash 表存在状态与 config 一致
 # auto_start_core=true 且 network.apply_on_start=true 且 mode != "none" 时，
 # postinst 启动后会应用 nftables 规则，metaclash 表出现是预期行为。
+# 使用 awk 提取 [network] 段，避免 [dns] 段同名字段干扰。
 NFT_TABLES=$(nft list tables 2>/dev/null | tr '\n' ' ')
-NET_APPLY=$(grep -m1 'apply_on_start' /etc/metaclash/config.toml 2>/dev/null \
-    | grep -c 'true' || echo "0")
-NET_MODE=$(grep -m1 '^mode' /etc/metaclash/config.toml 2>/dev/null \
-    | sed 's/.*=\s*"\?\([a-z]*\)"\?.*/\1/')
+_NET_SECTION=$(awk '/^\[network\]/{f=1;next} /^\[/{f=0} f{print}' \
+    /etc/metaclash/config.toml 2>/dev/null)
+NET_APPLY=$(echo "$_NET_SECTION" | grep -c 'apply_on_start.*true' || true)
+NET_MODE=$(echo "$_NET_SECTION" | grep '^mode' | head -1 \
+    | sed 's/mode[[:space:]]*=[[:space:]]*"\?\([a-z_]*\)"\?.*/\1/')
+echo "[IV-06 debug] AUTO_START_CORE=$AUTO_START_CORE NET_APPLY=$NET_APPLY NET_MODE=$NET_MODE NFT_TABLES=$NFT_TABLES"
 NFT_EXPECTED=0
 [ "$AUTO_START_CORE" -gt 0 ] && [ "$NET_APPLY" -gt 0 ] \
     && [ "$NET_MODE" != "none" ] && [ "$NET_MODE" != "" ] && NFT_EXPECTED=1
