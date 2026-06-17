@@ -3,12 +3,16 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/wujun4code/clashforge/internal/core"
+	"github.com/wujun4code/clashforge/internal/dns"
 )
 
 func handleCoreStart(deps Dependencies) http.HandlerFunc {
@@ -33,7 +37,16 @@ func handleCoreStart(deps Dependencies) http.HandlerFunc {
 		deps.Config.Core.AutoStartCore = true
 		_ = saveRuntimeConfig(deps)
 
-		JSON(w, http.StatusOK, map[string]int{"pid": deps.Core.Status().PID})
+		applied, warnings := applyConfiguredStartupTakeover(deps)
+
+		resp := map[string]any{"pid": deps.Core.Status().PID}
+		if len(applied) > 0 {
+			resp["takeover_applied"] = applied
+		}
+		if len(warnings) > 0 {
+			resp["takeover_warnings"] = warnings
+		}
+		JSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -71,8 +84,65 @@ func handleCoreRestart(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusInternalServerError, "CORE_RESTART_FAILED", err.Error())
 			return
 		}
-		JSON(w, http.StatusOK, map[string]int{"pid": deps.Core.Status().PID})
+		applied, warnings := applyConfiguredStartupTakeover(deps)
+
+		resp := map[string]any{"pid": deps.Core.Status().PID}
+		if len(applied) > 0 {
+			resp["takeover_applied"] = applied
+		}
+		if len(warnings) > 0 {
+			resp["takeover_warnings"] = warnings
+		}
+		JSON(w, http.StatusOK, resp)
 	}
+}
+
+func applyConfiguredStartupTakeover(deps Dependencies) ([]string, []string) {
+	applied := []string{}
+	warnings := []string{}
+
+	if deps.Config == nil {
+		return applied, warnings
+	}
+
+	if deps.Config.DNS.Enable && deps.Config.DNS.ApplyOnStart {
+		mode := dns.DnsmasqMode(deps.Config.DNS.DnsmasqMode)
+		if mode != dns.ModeNone {
+			log.Info().
+				Str("mode", string(mode)).
+				Int("mihomo_dns_port", deps.Config.Ports.DNS).
+				Msg("core/start: applying configured DNS takeover")
+			if err := dns.Setup(mode, deps.Config.Ports.DNS); err != nil {
+				msg := fmt.Sprintf("DNS 入口接管失败: %v", err)
+				log.Warn().Err(err).Str("mode", string(mode)).Msg("core/start: DNS takeover failed")
+				warnings = append(warnings, msg)
+			} else {
+				applied = append(applied, "dns_entry")
+			}
+		}
+	}
+
+	if deps.Config.Network.ApplyOnStart && deps.Config.Network.Mode != "none" {
+		log.Info().
+			Str("mode", deps.Config.Network.Mode).
+			Str("backend", deps.Config.Network.FirewallBackend).
+			Msg("core/start: applying configured transparent-proxy takeover")
+
+		refreshNetfilterManager(deps)
+		if deps.Netfilter == nil {
+			msg := "透明代理接管失败: netfilter manager is not initialized"
+			log.Warn().Msg("core/start: netfilter manager missing")
+			warnings = append(warnings, msg)
+		} else if err := deps.Netfilter.Apply(); err != nil {
+			msg := fmt.Sprintf("透明代理 / 防火墙规则接管失败: %v", err)
+			log.Warn().Err(err).Msg("core/start: transparent-proxy takeover failed")
+			warnings = append(warnings, msg)
+		} else if deps.Config.Network.Mode != "tun" {
+			applied = append(applied, "transparent_proxy", "nft_firewall")
+		}
+	}
+
+	return applied, warnings
 }
 
 func handleCoreReload(deps Dependencies) http.HandlerFunc {

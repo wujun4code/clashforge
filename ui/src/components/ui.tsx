@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, ChevronDown } from 'lucide-react'
 
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ')
@@ -176,6 +176,75 @@ export function SegmentedTabs<T extends string>({
           </button>
         )
       })}
+    </div>
+  )
+}
+
+export function SelectInput({
+  value,
+  onChange,
+  options,
+  className,
+}: {
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const selected = options.find(o => o.value === value)
+
+  useEffect(() => {
+    if (!open) return
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [open])
+
+  return (
+    <div ref={ref} className={cn('relative', className)}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="glass-input min-h-11 w-full flex items-center justify-between gap-2 px-3 cursor-pointer text-sm text-left"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="truncate">{selected?.label ?? value}</span>
+        <ChevronDown
+          size={14}
+          className={cn(
+            'flex-shrink-0 text-muted transition-transform duration-150',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-50 mt-1 w-full overflow-hidden rounded-xl border border-white/10 bg-[rgb(var(--surface-2))] shadow-glass-lg"
+        >
+          {options.map(o => (
+            <li
+              key={o.value}
+              role="option"
+              aria-selected={o.value === value}
+              onClick={() => { onChange(o.value); setOpen(false) }}
+              className={cn(
+                'px-3 py-2 text-sm cursor-pointer select-none transition-colors',
+                o.value === value
+                  ? 'bg-brand/15 text-brand-light font-medium'
+                  : 'text-white/80 hover:bg-white/[0.06]',
+              )}
+            >
+              {o.label}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

@@ -45,6 +45,7 @@ func main() {
 	}
 
 	logBuf := api.NewLogBuffer(500)
+	reqLogBuf := api.NewRequestLogBuffer(500)
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
 	log.Logger = zerolog.New(zerolog.MultiLevelWriter(consoleWriter, logBuf)).With().Timestamp().Logger()
@@ -52,6 +53,19 @@ func main() {
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		log.Fatal().Err(err).Msg("load config")
+	}
+
+	// Wire persistent file logging now that we have the config.
+	// The file stays open for the process lifetime; O_APPEND guarantees
+	// correct behaviour even if the file is externally truncated.
+	logFilePath := cfg.Log.File
+	if logFilePath != "" {
+		if f, ferr := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr != nil {
+			log.Warn().Err(ferr).Str("file", logFilePath).Msg("cannot open log file; logging to stdout only")
+			logFilePath = ""
+		} else {
+			log.Logger = zerolog.New(zerolog.MultiLevelWriter(consoleWriter, logBuf, f)).With().Timestamp().Logger()
+		}
 	}
 
 	// Auto-correct WAN interface: if the stored value doesn't exist on this
@@ -117,6 +131,7 @@ func main() {
 		EnableDNSRedirect: shouldRedirectDNSOnStartup(cfg, dnsMode),
 		BypassFakeIP:      shouldBypassFakeIPOnStartup(cfg),
 		BypassCIDR:        cfg.Network.BypassCIDR,
+		TunDevice:         cfg.Network.TUN.Device,
 	})
 
 	// Crash watchdog: when mihomo exits unexpectedly (e.g. OOM kill), immediately
@@ -176,7 +191,7 @@ func main() {
 		log.Info().Str("dnsmasq_mode", cfg.DNS.DnsmasqMode).Msg("dns takeover disabled on startup")
 	}
 
-	logStartupHealth(*cfgPath, cfg, coreManager, nfManager, dnsManaged, coreStarted, dnsMode)
+	logStartupHealth(*cfgPath, cfg, coreManager, nfManager, dnsManaged, coreStarted, dnsMode, subManager)
 
 	// SSE broker
 	sseBroker := api.NewSSEBroker()
@@ -225,7 +240,9 @@ func main() {
 		SubManager:      subManager,
 		Netfilter:       nfManager,
 		SSEBroker:       sseBroker,
-		LogBuffer:       logBuf,
+		LogBuffer:        logBuf,
+		RequestLogBuffer: reqLogBuf,
+		LogFilePath:      logFilePath,
 		NodeStore:       nodeStore,
 		NodeKeyPair:     nodeKeyPair,
 		PublishStore:    publishStore,
@@ -309,6 +326,7 @@ func logStartupHealth(
 	nfManager *netfilter.Manager,
 	dnsManaged, coreStarted bool,
 	dnsMode dns.DnsmasqMode,
+	subManager *subscription.Manager,
 ) {
 	const side = "system"
 
@@ -397,13 +415,64 @@ func logStartupHealth(
 		Int("ui", cfg.Ports.UI).
 		Msg("startup_health")
 
+	// Phase 7: DNS engine config details (key for post-mortem debugging)
+	dohCount := len(cfg.DNS.DoH)
+	dnsDetailEv := log.Info().Str("side", side).Str("phase", "dns_config").
+		Str("mode", cfg.DNS.Mode).
+		Str("strategy", cfg.DNS.Strategy).
+		Str("dnsmasq_mode", cfg.DNS.DnsmasqMode).
+		Int("nameserver_count", len(cfg.DNS.Nameservers)).
+		Strs("nameservers", cfg.DNS.Nameservers).
+		Int("doh_count", dohCount).
+		Bool("ipv6", cfg.DNS.IPv6)
+	if dohCount > 0 {
+		dnsDetailEv = dnsDetailEv.Strs("doh", cfg.DNS.DoH)
+	}
+	dnsDetailEv.Msg("startup_health")
+	if dohCount == 0 {
+		log.Warn().Str("side", side).Str("phase", "dns_config").
+			Str("warning", "DoH 未配置 — DNS 查询不加密，gfwlist 域名解析可能不准确").
+			Msg("startup_health")
+	}
+
+	// Phase 8: network/firewall config details
+	log.Info().Str("side", side).Str("phase", "network_config").
+		Str("mode", cfg.Network.Mode).
+		Str("wan_interface", cfg.Network.WANInterface).
+		Bool("wan_auto_detected", cfg.Network.WANInterfaceAutoDetected).
+		Bool("drop_quic", cfg.Network.DropQUIC).
+		Bool("bypass_china", cfg.Network.BypassChina).
+		Bool("bypass_lan", cfg.Network.BypassLAN).
+		Bool("ipv6", cfg.Network.IPv6).
+		Str("firewall_backend", cfg.Network.FirewallBackend).
+		Msg("startup_health")
+
+	// Phase 9: subscriptions
+	if subManager != nil {
+		subs := subManager.GetAll()
+		enabled := 0
+		for _, s := range subs {
+			if s.Enabled {
+				enabled++
+			}
+		}
+		subEv := log.Info().Str("side", side).Str("phase", "subscriptions").
+			Int("total", len(subs)).Int("enabled", enabled)
+		if len(subs) == 0 {
+			subEv = subEv.Str("warning", "无订阅 — 将使用空节点列表生成 Mihomo 配置")
+		}
+		subEv.Msg("startup_health")
+	}
+
 	// Summary
 	log.Info().Str("side", side).
 		Bool("core_running", coreStarted).
+		Bool("auto_start_core", cfg.Core.AutoStartCore).
 		Bool("transparent_proxy", coreStarted && cfg.Network.ApplyOnStart &&
 			cfg.Network.Mode != "none" && nfManager.IsApplied()).
 		Bool("dns_redirect", dnsManaged).
 		Bool("dns_engine", coreStarted && cfg.DNS.Enable).
+		Str("log_file", cfg.Log.File).
 		Msg("startup_summary")
 }
 

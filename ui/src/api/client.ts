@@ -292,6 +292,15 @@ export interface Connection {
 
 export interface LogEntry { level: string; msg: string; ts: number; fields?: Record<string, unknown> }
 
+export interface RequestLogEntry {
+  method: string
+  path: string
+  status: number
+  latency_ms: number
+  remote_addr: string
+  ts: number
+}
+
 export interface DeviceRouteDevice {
   ip: string
   prefix: number
@@ -415,11 +424,23 @@ export const updateDeviceGroups = (device_groups: DeviceRouteGroup[], source_key
 export const previewDeviceGroupsConfig = (device_groups: DeviceRouteGroup[], source_key?: string) =>
   request<DeviceGroupsPreviewResponse>('POST', '/config/device-groups/preview', source_key ? { device_groups, source_key } : { device_groups })
 export const getNetworkClients = () => request<{clients: NetworkClient[]}>('GET', '/network/clients')
-export const getLogs          = (level = 'info', limit = 200) => request<{logs: LogEntry[]}>('GET', `/logs?level=${level}&limit=${limit}`)
+export const getLogs          = (limit = 500) => request<{logs: RequestLogEntry[]}>('GET', `/logs?limit=${limit}`)
 export const clearLogs        = () => request<{ok: boolean}>('DELETE', '/logs')
 export const pauseLogs        = () => request<{ok: boolean; paused: boolean}>('POST', '/logs/pause')
 export const resumeLogs       = () => request<{ok: boolean; paused: boolean}>('POST', '/logs/resume')
 export const getLogsStatus    = () => request<{paused: boolean}>('GET', '/logs/status')
+
+// ---- persistent service log (disk file) ----
+export interface ServiceLogData {
+  lines: string[]
+  file: string
+  size_bytes: number
+  warning?: string
+}
+export const getServiceLog   = (lines?: number) =>
+  request<ServiceLogData>('GET', `/service-log${lines ? `?lines=${lines}` : ''}`)
+export const clearServiceLog = () => request<{ok: boolean; warning?: string}>('DELETE', '/service-log')
+
 export const enableService    = () => request<{enabled: boolean}>('POST', '/service/enable')
 export const stopService      = (target: 'openclash' | 'clashforge-full') => request<{ok: boolean; target: string; output: string}>('POST', '/system/stop-service', { target })
 export interface ConflictService { name: string; label: string; running: boolean; pids?: number[] }
@@ -469,6 +490,65 @@ export interface SetupDNSProbeResponse {
 }
 export const setupDNSProbe = (nameservers?: string[]) =>
   request<SetupDNSProbeResponse>('POST', '/setup/dns-probe', { nameservers: nameservers ?? [] })
+
+// ---- core apply (unified start endpoint) ----
+export interface CoreApplySource {
+  /** "yaml" | "sub_id" | "filename" | "current" (default when omitted) */
+  type?: string
+  yaml?: string      // type=yaml: raw Clash/Mihomo YAML content
+  sub_id?: string    // type=sub_id
+  sub_name?: string  // type=sub_id: display name
+  filename?: string  // type=filename
+  sync?: boolean     // type=sub_id: sync from URL before applying
+}
+
+export interface CoreApplyDNS {
+  enable?: boolean
+  mode?: string          // "fake-ip" | "redir-host"
+  strategy?: string      // "split" | "privacy" | "legacy"
+  dnsmasq_mode?: string  // "upstream" | "replace" | "none"
+  listen?: string        // e.g. "0.0.0.0:17874"
+  ipv6?: boolean
+  apply_on_start?: boolean
+  nameservers?: string[]
+  fallback?: string[]
+  doh?: string[]
+  fake_ip_filter?: string[]
+}
+
+export interface CoreApplyNetwork {
+  mode?: string             // "tproxy" | "tun" | "redir" | "none"
+  firewall_backend?: string // "auto" | "nftables" | "iptables" | "none"
+  bypass_lan?: boolean
+  bypass_china?: boolean
+  apply_on_start?: boolean
+  ipv6?: boolean
+  wan_interface?: string    // "auto" or explicit interface name
+  drop_quic?: boolean
+}
+
+export interface CoreApplyRequest {
+  source?: CoreApplySource
+  dns?: CoreApplyDNS
+  network?: CoreApplyNetwork
+}
+
+/**
+ * POST /api/v1/core/apply — idempotent "apply all settings and start" endpoint.
+ * Returns a raw Response so the caller can read the SSE stream directly
+ * (same streaming format as /api/v1/setup/launch).
+ */
+export function coreApplyFetch(payload: CoreApplyRequest): Promise<Response> {
+  const secret = localStorage.getItem('cf_secret') || ''
+  return fetch(`${BASE}/core/apply`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  })
+}
 
 // ---- rule providers ----
 export interface RuleProvider {

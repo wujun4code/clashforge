@@ -372,9 +372,11 @@ func defaultSpawnUpgrade(ipkPath string) error {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		return fmt.Errorf("write upgrade script: %w", err)
 	}
-	// nohup ensures the child survives when this process exits.
+	// Use a subshell to detach from the parent process group so the upgrade
+	// script survives when clashforge is killed by its own stop command.
+	// nohup is not available on OpenWrt BusyBox.
 	return exec.Command("sh", "-c",
-		fmt.Sprintf("nohup sh %s >>/tmp/clashforge-autoupgrade.log 2>&1 &", scriptPath)).Run()
+		fmt.Sprintf("(sh %s >>/tmp/clashforge-autoupgrade.log 2>&1) &", scriptPath)).Run()
 }
 
 // ── architecture detection ─────────────────────────────────────────────────

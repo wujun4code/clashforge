@@ -124,6 +124,7 @@ func autoConfigureClashForge(
 			EnableIPv6:        cfg.Network.IPv6,
 			DropQUIC:          cfg.Network.DropQUIC,
 			WANInterface:      cfg.Network.WANInterface,
+			TunDevice:         cfg.Network.TUN.Device,
 		})
 	}
 

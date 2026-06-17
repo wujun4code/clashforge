@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getLogs } from '../api/client'
+import { getServiceLog } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { Trash2, RefreshCw } from 'lucide-react'
 
@@ -22,9 +22,14 @@ export function Logs() {
 
   // Polling fallback (catches logs even when core is not running)
   const fetchLogs = () => {
-    getLogs('info', 200).then(data => {
-      if (!data?.logs?.length) return
-      setLines(data.logs.map(l => ({ id: idRef.current++, level: l.level ?? '', msg: l.msg ?? '', ts: l.ts ?? 0 })))
+    getServiceLog(200).then(data => {
+      if (!data?.lines?.length) return
+      setLines(data.lines.map(line => {
+        try {
+          const obj = JSON.parse(line) as Record<string, unknown>
+          return { id: idRef.current++, level: String(obj.level ?? ''), msg: String(obj.message ?? obj.msg ?? line), ts: Number(obj.time ?? 0) }
+        } catch { return { id: idRef.current++, level: '', msg: line, ts: 0 } }
+      }))
     }).catch(() => null)
   }
 
