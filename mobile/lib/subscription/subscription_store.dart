@@ -22,7 +22,21 @@ class Subscription {
   /// referenced by [customRules] (e.g. RULE-SET,chatGPT,...).
   final Map<String, Map<String, dynamic>> customRuleProviders;
 
-  const Subscription({
+  /// True for the app's built-in free-node subscription.
+  /// UI must not reveal server/port/protocol for built-in nodes.
+  final bool isBuiltIn;
+
+  /// True for subscriptions automatically imported from CLASHFORGE_BUNDLED_SUBS
+  /// at build time. [importedAt] is set to the build timestamp, not the runtime
+  /// import time.
+  final bool isBundled;
+
+  /// When this subscription was imported. For bundled subscriptions this is the
+  /// build time (injected via CLASHFORGE_BUILD_TIME at compile time).
+  /// For existing subscriptions without a stored timestamp, derived from [id].
+  final DateTime importedAt;
+
+  Subscription({
     required this.id,
     required this.nickname,
     required this.url,
@@ -31,11 +45,9 @@ class Subscription {
     this.customProxyGroups = const [],
     this.customRuleProviders = const {},
     this.isBuiltIn = false,
-  });
-
-  /// True for the app's built-in free-node subscription.
-  /// UI must not reveal server/port/protocol for built-in nodes.
-  final bool isBuiltIn;
+    this.isBundled = false,
+    DateTime? importedAt,
+  }) : importedAt = importedAt ?? DateTime.now();
 
   bool get hasCustomRules => customRules.isNotEmpty;
 
@@ -45,32 +57,53 @@ class Subscription {
         'url': url,
         'nodes': nodes.map((n) => n.toJson()).toList(),
         if (customRules.isNotEmpty) 'custom_rules': customRules,
-        if (customProxyGroups.isNotEmpty) 'custom_proxy_groups': customProxyGroups,
-        if (customRuleProviders.isNotEmpty) 'custom_rule_providers': customRuleProviders,
+        if (customProxyGroups.isNotEmpty)
+          'custom_proxy_groups': customProxyGroups,
+        if (customRuleProviders.isNotEmpty)
+          'custom_rule_providers': customRuleProviders,
         if (isBuiltIn) 'is_built_in': true,
+        if (isBundled) 'is_bundled': true,
+        'imported_at': importedAt.millisecondsSinceEpoch,
       };
 
-  factory Subscription.fromJson(Map<String, dynamic> json) => Subscription(
-        id: json['id'] as String,
-        nickname: json['nickname'] as String,
-        url: json['url'] as String? ?? '',
-        nodes: (json['nodes'] as List)
-            .map((n) => ProxyNode.fromJson(n as Map<String, dynamic>))
-            .toList(),
-        customRules: (json['custom_rules'] as List?)
-                ?.map((e) => e as String)
-                .toList() ??
-            const [],
-        customProxyGroups: (json['custom_proxy_groups'] as List?)
-                ?.map((e) => Map<String, dynamic>.from(e as Map))
-                .toList() ??
-            const [],
-        customRuleProviders: (json['custom_rule_providers'] as Map?)?.map(
-                (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
-              ) ??
-            const {},
-        isBuiltIn: json['is_built_in'] as bool? ?? false,
-      );
+  factory Subscription.fromJson(Map<String, dynamic> json) {
+    final id = json['id'] as String;
+    return Subscription(
+      id: id,
+      nickname: json['nickname'] as String,
+      url: json['url'] as String? ?? '',
+      nodes: (json['nodes'] as List)
+          .map((n) => ProxyNode.fromJson(n as Map<String, dynamic>))
+          .toList(),
+      customRules: (json['custom_rules'] as List?)
+              ?.map((e) => e as String)
+              .toList() ??
+          const [],
+      customProxyGroups: (json['custom_proxy_groups'] as List?)
+              ?.map((e) => Map<String, dynamic>.from(e as Map))
+              .toList() ??
+          const [],
+      customRuleProviders: (json['custom_rule_providers'] as Map?)?.map(
+            (k, v) =>
+                MapEntry(k as String, Map<String, dynamic>.from(v as Map)),
+          ) ??
+          const {},
+      isBuiltIn: json['is_built_in'] as bool? ?? false,
+      isBundled: json['is_bundled'] as bool? ?? false,
+      // Backward compat: if imported_at absent, derive from id (epoch ms string)
+      importedAt: json['imported_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(json['imported_at'] as int)
+          : _importedAtFromId(id),
+    );
+  }
+
+  static DateTime _importedAtFromId(String id) {
+    try {
+      return DateTime.fromMillisecondsSinceEpoch(int.parse(id));
+    } catch (_) {
+      return DateTime.now();
+    }
+  }
 }
 
 class SubscriptionStore {
@@ -79,6 +112,11 @@ class SubscriptionStore {
   static const _kNickname = 'cf_sub_nickname_v1';
   static const _kSubs     = 'cf_subscriptions_v2';
   static const _kActiveId = 'cf_active_sub_id_v1';
+
+  /// URLs that were ever auto-imported (builtin or bundled).
+  /// Once a URL is in this set, auto-import won't re-import it even if the user
+  /// deletes the subscription — respecting the user's decision to remove it.
+  static const _kEverImportedUrls = 'cf_auto_imported_urls_v1';
 
   // ── Multi-subscription APIs ──────────────────────────────────
 
@@ -127,6 +165,22 @@ class SubscriptionStore {
   static Future<String?> loadActiveId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_kActiveId);
+  }
+
+  // ── Ever-imported URL tracking ────────────────────────────────
+  // Used to prevent auto-import from re-adding subs the user explicitly deleted.
+
+  static Future<Set<String>> loadEverImportedUrls() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_kEverImportedUrls) ?? []).toSet();
+  }
+
+  static Future<void> markUrlAutoImported(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = (prefs.getStringList(_kEverImportedUrls) ?? []).toSet();
+    if (current.add(url)) {
+      await prefs.setStringList(_kEverImportedUrls, current.toList());
+    }
   }
 
   // ── Legacy single-sub APIs (kept for migration reads) ────────

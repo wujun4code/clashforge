@@ -162,5 +162,17 @@ void main() {
         tmp.deleteSync();
       }
     });
+
+    test('DNS mode: redir-host — enhanced-mode is redir-host, no fake-ip keys', () {
+      final config = ConfigGenerator.generate(
+        nodes: _twoNodes(),
+        geodataPath: '/nonexistent',
+        dnsMode: 'redir-host',
+      );
+      final dns = config['dns'] as Map<String, dynamic>;
+      expect(dns['enhanced-mode'], equals('redir-host'));
+      expect(dns.containsKey('fake-ip-range'), isFalse);
+      expect(dns.containsKey('fake-ip-filter'), isFalse);
+    });
   });
 }

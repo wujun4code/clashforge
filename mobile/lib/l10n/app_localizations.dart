@@ -96,7 +96,9 @@ abstract class AppLocalizations {
   // ── Browser DNS per-domain probe ───────────────────────────────────────────
   String get dnsGroupDomestic;
   String get dnsGroupForeign;
+  String get dnsGroupForeignRealIp;
   String get dnsGroupAI;
+  String get dnsGroupAIRealIp;
   String get dnsFakeIpActive;
   String get dnsRealIp;
   String get dnsFailed;
@@ -145,6 +147,8 @@ abstract class AppLocalizations {
   String get deleteSubTitle;
   String deleteSubContent(String name);
   String get btnDelete;
+  String importedAtLabel(String date);
+  String bundledAtLabel(String date);
 
   // ── Settings ───────────────────────────────────────────────────────────────
   String get settingsTitle;
@@ -158,6 +162,21 @@ abstract class AppLocalizations {
   String get tileLanguageSubtitle;
   String get tileDnsStrategyTitle;
   String tileDnsStrategySub(String current);
+
+  // ── DNS mode (enhanced-mode) picker ───────────────────────────────────────
+  String get tileDnsModeTitle;
+  String tileDnsModeSub(String current);
+  String get dnsModeSheetTitle;
+  String get dnsModeFakeIpLabel;
+  String get dnsModeFakeIpBadge;
+  String get dnsModeFakeIpDesc;
+  String get dnsModeRedirHostLabel;
+  String get dnsModeRedirHostBadge;
+  String get dnsModeRedirHostDesc;
+  String get dnsModeReconnectHint;
+  String get dnsModeApplying;
+  String get dnsModeApplied;
+  String get dnsModeImportPromptTitle;
 
   // ── DNS strategy picker ────────────────────────────────────────────────────
   String get dnsStrategySheetTitle;
@@ -323,7 +342,9 @@ class _AppLocalizationsEn extends AppLocalizations {
 
   @override String get dnsGroupDomestic => 'Domestic (expect real IP)';
   @override String get dnsGroupForeign => 'International (expect fake-ip)';
+  @override String get dnsGroupForeignRealIp => 'International (expect real IP)';
   @override String get dnsGroupAI => 'AI Services (expect fake-ip)';
+  @override String get dnsGroupAIRealIp => 'AI Services (expect real IP)';
   @override String get dnsFakeIpActive => 'fake-ip';
   @override String get dnsRealIp => 'real IP';
   @override String get dnsFailed => 'no response';
@@ -379,6 +400,8 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get deleteSubTitle => 'Delete Subscription';
   @override String deleteSubContent(String name) => 'Delete "$name"?\nThis cannot be undone.';
   @override String get btnDelete => 'Delete';
+  @override String importedAtLabel(String date) => 'Imported $date';
+  @override String bundledAtLabel(String date) => 'Built $date';
 
   @override String get settingsTitle => 'Settings';
   @override String get tileLogsTitle => 'Logs';
@@ -389,6 +412,24 @@ class _AppLocalizationsEn extends AppLocalizations {
   @override String get tileAboutSubtitle => 'App version, runtime status, memory';
   @override String get tileLanguageTitle => 'Language';
   @override String get tileLanguageSubtitle => 'App display language';
+  @override String get tileDnsModeTitle => 'DNS Interception Mode';
+  @override String tileDnsModeSub(String current) => 'Current: $current';
+  @override String get dnsModeSheetTitle => 'DNS Interception Mode';
+  @override String get dnsModeFakeIpLabel => 'Fake-IP';
+  @override String get dnsModeFakeIpBadge => 'Recommended';
+  @override String get dnsModeFakeIpDesc =>
+      'Returns synthetic 198.18.x.x IPs immediately. No DNS cache races. '
+      'Best for TUN mode — prevents GFW-poisoned real IPs from reaching apps.';
+  @override String get dnsModeRedirHostLabel => 'Redir-Host';
+  @override String get dnsModeRedirHostBadge => 'Compatible';
+  @override String get dnsModeRedirHostDesc =>
+      'Returns real upstream IPs. Better for NTP, STUN, and games. '
+      'Works on single-device TUN because Mihomo intercepts all DNS queries.';
+  @override String get dnsModeReconnectHint => 'Reconnect to apply the new DNS mode.';
+  @override String get dnsModeApplying => 'Switching DNS mode, restarting VPN…';
+  @override String get dnsModeApplied => 'DNS mode updated — VPN restarted';
+  @override String get dnsModeImportPromptTitle => 'DNS Interception Mode';
+
   @override String get tileDnsStrategyTitle => 'DNS Strategy';
   @override String tileDnsStrategySub(String current) => 'Current: $current';
 
@@ -536,7 +577,9 @@ class _AppLocalizationsZh extends AppLocalizations {
 
   @override String get dnsGroupDomestic => '国内域名（应返回真实 IP）';
   @override String get dnsGroupForeign => '国际域名（应命中 fake-ip）';
+  @override String get dnsGroupForeignRealIp => '国际域名（应返回真实 IP）';
   @override String get dnsGroupAI => 'AI 服务（应命中 fake-ip）';
+  @override String get dnsGroupAIRealIp => 'AI 服务（应返回真实 IP）';
   @override String get dnsFakeIpActive => 'fake-ip 生效';
   @override String get dnsRealIp => '真实解析';
   @override String get dnsFailed => '无响应';
@@ -590,6 +633,8 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get deleteSubTitle => '删除订阅';
   @override String deleteSubContent(String name) => '确认删除 "$name"？\n该操作不可撤销。';
   @override String get btnDelete => '删除';
+  @override String importedAtLabel(String date) => '导入于 $date';
+  @override String bundledAtLabel(String date) => '打包于 $date';
 
   @override String get settingsTitle => '设置';
   @override String get tileLogsTitle => '日志';
@@ -600,6 +645,24 @@ class _AppLocalizationsZh extends AppLocalizations {
   @override String get tileAboutSubtitle => '应用版本、运行状态、内存用量';
   @override String get tileLanguageTitle => '语言';
   @override String get tileLanguageSubtitle => '应用显示语言';
+  @override String get tileDnsModeTitle => 'DNS 拦截模式';
+  @override String tileDnsModeSub(String current) => '当前：$current';
+  @override String get dnsModeSheetTitle => 'DNS 拦截模式';
+  @override String get dnsModeFakeIpLabel => 'Fake-IP';
+  @override String get dnsModeFakeIpBadge => '推荐';
+  @override String get dnsModeFakeIpDesc =>
+      '立即返回 198.18.x.x 虚假 IP，无 DNS 缓存竞态。'
+      'TUN 模式最佳选择 — 防止 GFW 毒化真实 IP 到达应用。';
+  @override String get dnsModeRedirHostLabel => 'Redir-Host';
+  @override String get dnsModeRedirHostBadge => '兼容';
+  @override String get dnsModeRedirHostDesc =>
+      '返回真实上游 IP，NTP、STUN、游戏兼容性更好。'
+      '单机 TUN 可用 — Mihomo 拦截全部 DNS 查询，映射链不会断。';
+  @override String get dnsModeReconnectHint => '重新连接以应用新的 DNS 拦截模式。';
+  @override String get dnsModeApplying => '正在切换 DNS 模式，重启服务中…';
+  @override String get dnsModeApplied => 'DNS 模式已切换，服务重启完成';
+  @override String get dnsModeImportPromptTitle => 'DNS 拦截模式';
+
   @override String get tileDnsStrategyTitle => 'DNS 分流策略';
   @override String tileDnsStrategySub(String current) => '当前：$current';
 

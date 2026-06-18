@@ -240,6 +240,31 @@ jobs:
             https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat
           ls -lh mobile/assets/geodata/
 
+      - name: Build cfgen JNI library (x86_64, for emulator)
+        if: needs.changes.outputs.mobile == 'true'
+        run: |
+          NDK_ROOT="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$NDK_ROOT" ]; then
+            NDK_ROOT="$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -1 || true)"
+          fi
+          CC="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+          if [ ! -x "$CC" ]; then
+            echo "ERROR: NDK clang not found at $CC"
+            exit 1
+          fi
+          DEST="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/x86_64/libcfgen.so"
+          mkdir -p "$(dirname "$DEST")"
+          # cfgen is a separate Go module; must cd into it before go build
+          cd "${GITHUB_WORKSPACE}/mobile/cfgen"
+          GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$CC" \
+            go build \
+              -buildmode=c-shared \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o "$DEST" \
+              ./cmd/android/
+          echo "libcfgen.so (x86_64): $(du -h "$DEST" | cut -f1)"
+
       - name: Build adb-shell TUN probe
         if: needs.changes.outputs.mobile == 'true'
         run: |

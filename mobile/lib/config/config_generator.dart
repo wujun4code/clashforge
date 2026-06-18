@@ -66,6 +66,7 @@ class ConfigGenerator {
   /// subscription contained (imported DNS is intentionally ignored).
   ///
   /// [dnsStrategy]: 'split' (default) | 'privacy' | 'legacy'
+  /// [dnsMode]: 'fake-ip' (default) | 'redir-host'
   static Map<String, dynamic> generate({
     required List<ProxyNode> nodes,
     required String geodataPath,
@@ -75,6 +76,7 @@ class ConfigGenerator {
     List<Map<String, dynamic>> customProxyGroups = const [],
     Map<String, Map<String, dynamic>> customRuleProviders = const {},
     String dnsStrategy = 'split',
+    String dnsMode = 'fake-ip',
   }) {
     final out = <String, dynamic>{};
 
@@ -93,14 +95,7 @@ class ConfigGenerator {
     out['geodata-path'] = geodataPath;
 
     // ── DNS (always app-managed, never from subscription) ────────────────────
-    // fake-ip mode: mihomo returns a synthetic 198.18.x.x IP immediately for
-    // any query, stores the domain→fakeIP mapping, and resolves the real IP
-    // only when establishing the upstream connection. For proxied domains
-    // (github.com, youtube.com, …) the proxy does remote DNS — completely
-    // bypassing GFW-polluted local resolvers. This eliminates the
-    // DNS_PROBE_FINISHED_BAD_CONFIG failure Chrome gets in redir-host mode
-    // when 223.5.5.5 or 8.8.8.8 return blocked/poisoned results.
-    out['dns'] = _buildDns(geodataPath, dnsStrategy);
+    out['dns'] = _buildDns(geodataPath, dnsStrategy, dnsMode);
 
     // ── Proxies ──────────────────────────────────────────────────────────────
     final proxies = <Map<String, dynamic>>[];
@@ -162,22 +157,26 @@ class ConfigGenerator {
 
   // ── helpers ─────────────────────────────────────────────────────────────────
 
-  /// Build the DNS config block based on [strategy].
+  /// Build the DNS config block based on [strategy] and [mode].
   ///
+  /// strategy:
   /// - split   : CN domains → plain ISP DNS (best CDN), international → DoH.
   ///             nameserver-policy requires geosite.dat; auto-falls back to
   ///             legacy if the file is missing.
   /// - privacy : All queries → DoH. ISP sees zero DNS records.
   ///             Also requires geosite.dat; falls back to legacy if missing.
   /// - legacy  : Original fallback-filter behaviour; no nameserver-policy.
-  static Map<String, dynamic> _buildDns(String geodataPath, String strategy) {
+  ///
+  /// mode: 'fake-ip' | 'redir-host'
+  static Map<String, dynamic> _buildDns(String geodataPath, String strategy, String mode) {
+    final isFakeIp = mode != 'redir-host';
     final base = <String, dynamic>{
       'enable': true,
       'listen': '0.0.0.0:1053',
       'respect-rules': false,
-      'enhanced-mode': 'fake-ip',
-      'fake-ip-range': '198.18.0.0/15',
-      'fake-ip-filter': _fakeIpFilter,
+      'enhanced-mode': isFakeIp ? 'fake-ip' : 'redir-host',
+      if (isFakeIp) 'fake-ip-range': '198.18.0.0/15',
+      if (isFakeIp) 'fake-ip-filter': _fakeIpFilter,
       'default-nameserver': _cnPlainDns,
       'proxy-server-nameserver': _cnPlainDns,
     };
@@ -189,7 +188,7 @@ class ConfigGenerator {
         (strategy == 'split' || strategy == 'privacy') && !geositePresent
             ? 'legacy'
             : strategy;
-    if (geositePresent) {
+    if (isFakeIp && geositePresent) {
       base['fake-ip-filter'] = ['geosite:cn', ..._fakeIpFilter];
     }
 

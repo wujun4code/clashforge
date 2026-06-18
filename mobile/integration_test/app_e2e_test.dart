@@ -154,6 +154,22 @@ void main() {
       }
       _log('Subscription imported successfully');
 
+      // Dismiss DNS-mode selection modal if it appeared after import.
+      // _showDnsModeAfterImport() schedules showModalBottomSheet via
+      // addPostFrameCallback, so it fires on the NEXT pump after the import
+      // result is detected. Two pumps: one to fire the callback, one to let
+      // the slide-in animation reach a tappable state.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      final dnsCardFinder = find.byKey(const Key('dns_mode_card_fake_ip'));
+      if (dnsCardFinder.evaluate().isNotEmpty) {
+        _log('Dismissing DNS mode modal (selecting Fake-IP)');
+        await tester.tap(dnsCardFinder);
+        await tester.pumpAndSettle();
+      } else {
+        _log('DNS mode modal not detected — continuing');
+      }
+
       // ── Step 2: Verify nodes in Proxies tab ─────────────────────────
       _log('Checking Proxies tab');
       await tester.tap(find.text('Routes'));
