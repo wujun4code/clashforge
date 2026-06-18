@@ -254,13 +254,15 @@ jobs:
           fi
           DEST="${GITHUB_WORKSPACE}/mobile/android/app/src/main/jniLibs/x86_64/libcfgen.so"
           mkdir -p "$(dirname "$DEST")"
+          # cfgen is a separate Go module; must cd into it before go build
+          cd "${GITHUB_WORKSPACE}/mobile/cfgen"
           GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$CC" \
             go build \
               -buildmode=c-shared \
               -trimpath \
               -ldflags="-s -w" \
               -o "$DEST" \
-              ./mobile/cfgen/cmd/android/
+              ./cmd/android/
           echo "libcfgen.so (x86_64): $(du -h "$DEST" | cut -f1)"
 
       - name: Build adb-shell TUN probe
