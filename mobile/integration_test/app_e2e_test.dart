@@ -154,6 +154,16 @@ void main() {
       }
       _log('Subscription imported successfully');
 
+      // Dismiss DNS-mode selection modal if it appeared after import.
+      // _showDnsModeAfterImport() opens a showModalBottomSheet that blocks
+      // all nav-bar taps until dismissed; select Fake-IP (default) to close it.
+      final dnsCardFinder = find.byKey(const Key('dns_mode_card_fake_ip'));
+      if (dnsCardFinder.evaluate().isNotEmpty) {
+        _log('Dismissing DNS mode modal (selecting Fake-IP)');
+        await tester.tap(dnsCardFinder);
+        await tester.pumpAndSettle();
+      }
+
       // ── Step 2: Verify nodes in Proxies tab ─────────────────────────
       _log('Checking Proxies tab');
       await tester.tap(find.text('Routes'));

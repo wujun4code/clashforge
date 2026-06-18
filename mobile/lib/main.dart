@@ -613,6 +613,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ]),
                 const SizedBox(height: 16),
                 _DnsModeCard(
+                  key: const Key('dns_mode_card_fake_ip'),
                   value: 'fake-ip',
                   selected: _dnsMode == 'fake-ip',
                   label: l10n.dnsModeFakeIpLabel,
@@ -5218,6 +5219,7 @@ class _DnsStrategyCard extends StatelessWidget {
 // Extracted as a separate class so _DnsStrategyCard can remain unchanged.
 class _DnsModeCard extends StatelessWidget {
   const _DnsModeCard({
+    super.key,
     required this.value,
     required this.selected,
     required this.label,
