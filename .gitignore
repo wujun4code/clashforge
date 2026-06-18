@@ -7,6 +7,8 @@ mobile/android/app/src/main/jniLibs/
 
 # Local build secrets — contains subscription URLs and encryption keys
 .env.dev.mobile
+# Local bundled-subscriptions config (copy from mobile/.bundled_subs.json.example)
+mobile/.bundled_subs.json
 
 # Private test data - NEVER commit these
 testdata/sample-clash-config.yaml
