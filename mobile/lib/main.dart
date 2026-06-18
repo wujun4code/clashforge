@@ -15,6 +15,7 @@ import 'subscription/proxy_node.dart';
 import 'config/vpn_manager.dart';
 import 'config/config_generator.dart';
 import 'config/free_node_config.dart';
+import 'config/bundled_subscriptions_config.dart';
 import 'logger/app_logger.dart';
 import 'logger/log_entry.dart';
 import 'update_checker.dart';
@@ -464,6 +465,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ];
 
   static const _kDnsStrategyKey = 'dns_strategy';
+  static const _kDnsModeKey = 'dns_mode';
 
   int _tabIndex = 0;
   bool _isConnected = false;
@@ -483,6 +485,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<Subscription> _subscriptions = [];
   String? _activeSubscriptionId;
   String _dnsStrategy = 'split';
+  String _dnsMode = 'fake-ip';
 
   @override
   void initState() {
@@ -500,6 +503,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (savedStrategy != null &&
         ['split', 'privacy', 'legacy'].contains(savedStrategy)) {
       setState(() => _dnsStrategy = savedStrategy);
+    }
+    final savedMode = prefs.getString(_kDnsModeKey);
+    if (savedMode != null && ['fake-ip', 'redir-host'].contains(savedMode)) {
+      setState(() => _dnsMode = savedMode);
     }
 
     final subs = await SubscriptionStore.loadSubscriptions();
@@ -523,6 +530,8 @@ class _HomeScreenState extends State<HomeScreen> {
     // Always ensure the builtin subscription is present, regardless of
     // whether other subscriptions exist. Skips silently if already imported.
     await _ensureBuiltinSub();
+    // Auto-import any subscriptions bundled at build time.
+    await _ensurePreSeededSubs();
   }
 
   Future<void> _setDnsStrategy(String strategy) async {
@@ -541,16 +550,105 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _setDnsMode(String mode) async {
+    if (_dnsMode == mode) return;
+    setState(() => _dnsMode = mode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kDnsModeKey, mode);
+
+    if (!_isConnected || !mounted) return;
+
+    // VPN is running — restart immediately so the new DNS mode takes effect.
+    final l10n = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(l10n.dnsModeApplying),
+        duration: const Duration(seconds: 10),
+      ));
+
+    final result = await _restartVpnAfterSubscriptionChange();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(result.success ? l10n.dnsModeApplied : result.message),
+        duration: const Duration(seconds: 3),
+      ));
+  }
+
+  void _showDnsModeAfterImport() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: const Color(0xFF1C1C2E),
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => StatefulBuilder(
+          builder: (ctx, setModalState) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36, height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D2D44),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Row(children: [
+                  const Icon(Icons.tune_outlined, color: Color(0xFF8B5CF6), size: 20),
+                  const SizedBox(width: 8),
+                  Text(l10n.dnsModeImportPromptTitle,
+                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                ]),
+                const SizedBox(height: 16),
+                _DnsModeCard(
+                  value: 'fake-ip',
+                  selected: _dnsMode == 'fake-ip',
+                  label: l10n.dnsModeFakeIpLabel,
+                  badge: l10n.dnsModeFakeIpBadge,
+                  badgeColor: const Color(0xFF8B5CF6),
+                  description: l10n.dnsModeFakeIpDesc,
+                  onTap: () { Navigator.pop(ctx); _setDnsMode('fake-ip'); },
+                ),
+                const SizedBox(height: 10),
+                _DnsModeCard(
+                  value: 'redir-host',
+                  selected: _dnsMode == 'redir-host',
+                  label: l10n.dnsModeRedirHostLabel,
+                  badge: l10n.dnsModeRedirHostBadge,
+                  badgeColor: const Color(0xFF22D3EE),
+                  description: l10n.dnsModeRedirHostDesc,
+                  onTap: () { Navigator.pop(ctx); _setDnsMode('redir-host'); },
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
   Future<void> _ensureBuiltinSub() async {
     final url = FreeNodeConfig.subscriptionUrl;
     if (url == null) return;
 
-    // Migration: users upgrading from pre-rc75 have the Free subscription saved
-    // without isBuiltIn=true, so the UI still shows server/port/protocol.
-    // Retroactively set the flag and persist without re-fetching.
     final existingIdx = _subscriptions.indexWhere((s) => s.url == url);
     if (existingIdx >= 0) {
       final existing = _subscriptions[existingIdx];
+      // Migration: users upgrading from pre-rc75 have the Free subscription saved
+      // without isBuiltIn=true, so the UI still shows server/port/protocol.
+      // Retroactively set the flag and persist without re-fetching.
       if (!existing.isBuiltIn) {
         final fixed = Subscription(
           id: existing.id,
@@ -561,14 +659,22 @@ class _HomeScreenState extends State<HomeScreen> {
           customProxyGroups: existing.customProxyGroups,
           customRuleProviders: existing.customRuleProviders,
           isBuiltIn: true,
+          isBundled: existing.isBundled,
+          importedAt: existing.importedAt,
         );
         setState(() => _subscriptions[existingIdx] = fixed);
         await SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
         AppLogger.instance
             .info('app', 'Retroactively marked built-in subscription');
       }
+      await SubscriptionStore.markUrlAutoImported(url);
       return;
     }
+
+    // Sub is absent. If it was ever auto-imported the user chose to delete it —
+    // respect that decision and don't re-import.
+    final everImported = await SubscriptionStore.loadEverImportedUrls();
+    if (everImported.contains(url)) return;
 
     AppLogger.instance.info('app', 'Importing built-in subscription');
     try {
@@ -580,12 +686,116 @@ class _HomeScreenState extends State<HomeScreen> {
       final parsed = SubscriptionParser.parse(content);
       if (parsed.proxies.isEmpty) return;
       _onNodesImported(parsed, url: url, nickname: 'Free', isBuiltIn: true);
+      await SubscriptionStore.markUrlAutoImported(url);
       AppLogger.instance.info('app', 'Built-in subscription imported',
           fields: {'nodes': parsed.proxies.length});
     } catch (e) {
       AppLogger.instance.warn('app', 'Built-in subscription import failed',
           fields: {'error': e.toString()});
     }
+  }
+
+  /// Auto-import subscriptions bundled at build time via CLASHFORGE_BUNDLED_SUBS.
+  /// Skips URLs the user has already deleted (tracked via ever-imported set).
+  Future<void> _ensurePreSeededSubs() async {
+    final urls = BundledSubscriptionsConfig.urls;
+    if (urls.isEmpty) return;
+
+    final everImported = await SubscriptionStore.loadEverImportedUrls();
+
+    for (final url in urls) {
+      if (_subscriptions.any((s) => s.url == url)) {
+        await SubscriptionStore.markUrlAutoImported(url);
+        continue;
+      }
+      // User deleted this bundled sub — respect that.
+      if (everImported.contains(url)) continue;
+
+      AppLogger.instance
+          .info('app', 'Importing bundled subscription', fields: {'url': url});
+      try {
+        final response = await http
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 20));
+        if (response.statusCode != 200) {
+          AppLogger.instance.warn('app', 'Bundled sub fetch failed',
+              fields: {'url': url, 'status': response.statusCode});
+          continue;
+        }
+        final parsed = SubscriptionParser.parse(response.body);
+        if (parsed.proxies.isEmpty) {
+          AppLogger.instance.warn('app', 'Bundled sub has no proxies',
+              fields: {'url': url});
+          continue;
+        }
+        _onNodesImported(parsed,
+            url: url,
+            nickname: _uniqueNicknameForUrl(url),
+            isBundled: true,
+            importedAt: BundledSubscriptionsConfig.buildTime,
+            silent: true);
+        await SubscriptionStore.markUrlAutoImported(url);
+        AppLogger.instance.info('app', 'Bundled subscription imported',
+            fields: {'url': url, 'nodes': parsed.proxies.length});
+      } catch (e) {
+        AppLogger.instance.warn('app', 'Bundled sub import failed',
+            fields: {'url': url, 'error': e.toString()});
+      }
+    }
+  }
+
+  String _uniqueNicknameForUrl(String url) =>
+      nicknameForUrl(url, _subscriptions.map((s) => s.nickname).toSet());
+
+  /// Derives a human-readable, globally-unique nickname from a subscription URL.
+  ///
+  /// [existing] — the set of nicknames already in use; used to add a counter
+  /// suffix when two subscriptions resolve to the same base name.
+  ///
+  /// Steps:
+  ///   1. Strip noise subdomain prefixes (www/sub/api/cdn/node/speed/clash/proxy).
+  ///   2. Append a meaningful last path segment when one exists (skips generic
+  ///      words, file extensions, UUIDs, and long tokens).
+  ///   3. Disambiguate against [existing] with " (2)", " (3)", …
+  static String nicknameForUrl(String url, Set<String> existing) {
+    String base;
+    try {
+      final uri = Uri.parse(url);
+
+      // 1. Clean hostname: drop common noise prefixes.
+      final host = uri.host.replaceFirst(
+          RegExp(r'^(www|sub|api|cdn|node|speed|clash|proxy)\.',
+              caseSensitive: false),
+          '');
+
+      // 2. Extract a meaningful last path segment.
+      const skipSegments = {
+        'sub', 'subscribe', 'subscription', 'clash', 'api', 'v1', 'v2', 'v3',
+        'client', 'config', 'download', 'get', 'fetch', 'link', 'node',
+      };
+      final segments = uri.pathSegments
+          .map((s) => s.replaceFirst(RegExp(r'\.\w{1,5}$'), '')) // strip ext
+          .where((s) =>
+              s.length >= 2 &&
+              s.length <= 20 &&
+              !skipSegments.contains(s.toLowerCase()) &&
+              !RegExp(r'^[a-f0-9\-]{16,}$').hasMatch(s)) // skip UUID/token
+          .toList();
+      final hint = segments.isNotEmpty ? segments.last : null;
+
+      base = hint != null ? '$host · $hint' : host;
+      if (base.isEmpty) base = 'Subscription';
+    } catch (_) {
+      base = 'Subscription';
+    }
+
+    // 3. Ensure uniqueness.
+    if (!existing.contains(base)) return base;
+    for (int i = 2; i <= 99; i++) {
+      final candidate = '$base ($i)';
+      if (!existing.contains(candidate)) return candidate;
+    }
+    return base;
   }
 
   // Try AES-256-GCM decryption (nonce=12, tag=16) with the hex-decoded key.
@@ -783,7 +993,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onNodesImported(ParsedSubscription parsed,
-      {String url = '', String nickname = '', bool isBuiltIn = false}) {
+      {String url = '',
+      String nickname = '',
+      bool isBuiltIn = false,
+      bool isBundled = false,
+      DateTime? importedAt,
+      bool silent = false}) {
     final id = '${DateTime.now().millisecondsSinceEpoch}';
     final sub = Subscription(
       id: id,
@@ -794,6 +1009,8 @@ class _HomeScreenState extends State<HomeScreen> {
       customProxyGroups: parsed.proxyGroups,
       customRuleProviders: parsed.ruleProviders,
       isBuiltIn: isBuiltIn,
+      isBundled: isBundled,
+      importedAt: importedAt,
     );
 
     final previousSelected = _selectedNode?.name;
@@ -819,6 +1036,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     SubscriptionStore.saveSubscriptions(List.of(_subscriptions));
     SubscriptionStore.saveActiveId(id);
+
+    // Show DNS mode selection sheet for user-imported subscriptions.
+    // Builtin and silently-imported (bundled) subscriptions skip this prompt.
+    if (!isBuiltIn && !silent) _showDnsModeAfterImport();
   }
 
   void _activateSubscription(Subscription sub) {
@@ -1033,6 +1254,8 @@ class _HomeScreenState extends State<HomeScreen> {
       customProxyGroups: target.customProxyGroups,
       customRuleProviders: target.customRuleProviders,
       isBuiltIn: target.isBuiltIn,
+      isBundled: target.isBundled,
+      importedAt: target.importedAt,
     );
 
     final previousSelectedName = _selectedNode?.name;
@@ -1164,6 +1387,7 @@ class _HomeScreenState extends State<HomeScreen> {
           customProxyGroups: activeSub?.customProxyGroups ?? const [],
           customRuleProviders: activeSub?.customRuleProviders ?? const {},
           dnsStrategy: _dnsStrategy,
+          dnsMode: _dnsMode,
         );
         final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
         logger.debug('vpn', 'Config write result: $writeResult');
@@ -1626,10 +1850,21 @@ class _HomeScreenState extends State<HomeScreen> {
             label: label, expectFakeIp: expectFakeIp, domains: domains);
       }
 
+      // In redir-host mode mihomo returns real upstream IPs for all domains,
+      // so a real (non-fake) IP is the correct result for every group.
+      final isFakeIpMode = _dnsMode == 'fake-ip';
       final dnsGroups = await Future.wait([
         probeGroup(_domesticSiteUrls, l10n.dnsGroupDomestic, false),
-        probeGroup(_foreignSiteUrls, l10n.dnsGroupForeign, true),
-        probeGroup(_aiSiteUrls, l10n.dnsGroupAI, true),
+        probeGroup(
+          _foreignSiteUrls,
+          isFakeIpMode ? l10n.dnsGroupForeign : l10n.dnsGroupForeignRealIp,
+          isFakeIpMode,
+        ),
+        probeGroup(
+          _aiSiteUrls,
+          isFakeIpMode ? l10n.dnsGroupAI : l10n.dnsGroupAIRealIp,
+          isFakeIpMode,
+        ),
       ]);
 
       // 3. Proxy chain smoke test
@@ -1783,6 +2018,8 @@ class _HomeScreenState extends State<HomeScreen> {
         onLocaleChanged: widget.onLocaleChanged,
         dnsStrategy: _dnsStrategy,
         onDnsStrategyChanged: _setDnsStrategy,
+        dnsMode: _dnsMode,
+        onDnsModeChanged: _setDnsMode,
       ),
     ];
 
@@ -3418,7 +3655,11 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         logger.warn('subscription', 'No nodes parsed');
       }
 
-      final defaultName = await SubscriptionStore.generateDefaultNickname();
+      final existingNames =
+          widget.subscriptions.map((s) => s.nickname).toSet();
+      final defaultName = input.startsWith('http')
+          ? _HomeScreenState.nicknameForUrl(input, existingNames)
+          : await SubscriptionStore.generateDefaultNickname();
       if (!mounted) return;
       final nickname = await _showNicknameDialog(defaultName);
       if (!mounted) return;
@@ -3642,6 +3883,14 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
     }
   }
 
+  static String _fmtDate(DateTime dt) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[dt.month - 1]} ${dt.day}';
+  }
+
   Future<void> _confirmDelete(Subscription sub) async {
     final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
@@ -3743,7 +3992,17 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                     Builder(builder: (ctx) {
                       final l10n = AppLocalizations.of(ctx);
                       return Text(
-                        '${l10n.nodesCountSub(sub.nodes.length)}${sub.isBuiltIn ? '' : _domainLabel(sub.url)}',
+                        () {
+                          final nodes = l10n.nodesCountSub(sub.nodes.length);
+                          final domain = (sub.isBuiltIn || sub.isBundled)
+                              ? ''
+                              : _domainLabel(sub.url);
+                          final date = _fmtDate(sub.importedAt);
+                          final dateLabel = sub.isBundled
+                              ? l10n.bundledAtLabel(date)
+                              : l10n.importedAtLabel(date);
+                          return '$nodes$domain · $dateLabel';
+                        }(),
                         style:
                             const TextStyle(color: _kTextFaint, fontSize: 12),
                       );
@@ -4555,11 +4814,15 @@ class _SettingsTab extends StatelessWidget {
     required this.onLocaleChanged,
     required this.dnsStrategy,
     required this.onDnsStrategyChanged,
+    required this.dnsMode,
+    required this.onDnsModeChanged,
   });
   final int nodeCount;
   final void Function(Locale) onLocaleChanged;
   final String dnsStrategy;
   final void Function(String) onDnsStrategyChanged;
+  final String dnsMode;
+  final void Function(String) onDnsModeChanged;
 
   void _showLanguagePicker(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -4694,6 +4957,62 @@ class _SettingsTab extends StatelessWidget {
     );
   }
 
+  void _showDnsModePicker(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                    color: _kBorder, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(children: [
+              const Icon(Icons.tune_outlined, color: _kBrand, size: 20),
+              const SizedBox(width: 8),
+              Text(l10n.dnsModeSheetTitle,
+                  style: const TextStyle(
+                      color: _kTextHi, fontSize: 18, fontWeight: FontWeight.bold)),
+            ]),
+            const SizedBox(height: 16),
+            _DnsModeCard(
+              value: 'fake-ip',
+              selected: dnsMode == 'fake-ip',
+              label: l10n.dnsModeFakeIpLabel,
+              badge: l10n.dnsModeFakeIpBadge,
+              badgeColor: _kBrand,
+              description: l10n.dnsModeFakeIpDesc,
+              onTap: () { Navigator.pop(context); onDnsModeChanged('fake-ip'); },
+            ),
+            const SizedBox(height: 10),
+            _DnsModeCard(
+              value: 'redir-host',
+              selected: dnsMode == 'redir-host',
+              label: l10n.dnsModeRedirHostLabel,
+              badge: l10n.dnsModeRedirHostBadge,
+              badgeColor: const Color(0xFF22D3EE),
+              description: l10n.dnsModeRedirHostDesc,
+              onTap: () { Navigator.pop(context); onDnsModeChanged('redir-host'); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _strategyLabel(String strategy, AppLocalizations l10n) {
     switch (strategy) {
       case 'privacy':
@@ -4731,6 +5050,14 @@ class _SettingsTab extends StatelessWidget {
                   title: l10n.tileDnsStrategyTitle,
                   subtitle: l10n.tileDnsStrategySub(_strategyLabel(dnsStrategy, l10n)),
                   onTap: () => _showDnsStrategyPicker(context),
+                ),
+                const SizedBox(height: 8),
+                _SettingsTile(
+                  iconColor: const Color(0xFF8B5CF6),
+                  icon: Icons.tune_outlined,
+                  title: l10n.tileDnsModeTitle,
+                  subtitle: l10n.tileDnsModeSub(dnsMode),
+                  onTap: () => _showDnsModePicker(context),
                 ),
                 const SizedBox(height: 8),
                 _SettingsTile(
@@ -4873,6 +5200,89 @@ class _DnsStrategyCard extends StatelessWidget {
                     style: const TextStyle(
                         color: _kTextMuted, fontSize: 12, height: 1.45),
                   ),
+                ],
+              ),
+            ),
+            if (selected) ...[
+              const SizedBox(width: 10),
+              const Icon(Icons.check_circle, color: _kBrand, size: 18),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// _DnsModeCard reuses the exact same visual design as _DnsStrategyCard.
+// Extracted as a separate class so _DnsStrategyCard can remain unchanged.
+class _DnsModeCard extends StatelessWidget {
+  const _DnsModeCard({
+    required this.value,
+    required this.selected,
+    required this.label,
+    required this.badge,
+    required this.badgeColor,
+    required this.description,
+    required this.onTap,
+  });
+
+  final String value;
+  final bool selected;
+  final String label;
+  final String badge;
+  final Color badgeColor;
+  final String description;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected ? _kBrand.withAlpha(16) : _kBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? _kBrand.withAlpha(160) : _kBorder,
+            width: selected ? 1.4 : 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Text(label,
+                        style: TextStyle(
+                          color: selected ? _kBrand : _kTextHi,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        )),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withAlpha(40),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(badge,
+                          style: TextStyle(
+                            color: badgeColor, fontSize: 10, fontWeight: FontWeight.w700,
+                          )),
+                    ),
+                  ]),
+                  const SizedBox(height: 5),
+                  Text(description,
+                      style: const TextStyle(
+                          color: _kTextMuted, fontSize: 12, height: 1.45)),
                 ],
               ),
             ),
