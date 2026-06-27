@@ -67,6 +67,10 @@ class ConfigGenerator {
   ///
   /// [dnsStrategy]: 'split' (default) | 'privacy' | 'legacy'
   /// [dnsMode]: 'fake-ip' (default) | 'redir-host'
+  /// [templateId]: 'loyalsoldier_standard' (default) | 'lite' — selects the
+  ///   built-in rule-provider template when no [customRules] are provided.
+  ///   'lite' uses wujun4code/clash-rules-lite (~68k rules, ~60 MB RAM);
+  ///   'loyalsoldier_standard' uses the full Loyalsoldier set (~320k rules).
   static Map<String, dynamic> generate({
     required List<ProxyNode> nodes,
     required String geodataPath,
@@ -77,6 +81,7 @@ class ConfigGenerator {
     Map<String, Map<String, dynamic>> customRuleProviders = const {},
     String dnsStrategy = 'split',
     String dnsMode = 'fake-ip',
+    String templateId = 'loyalsoldier_standard',
   }) {
     final out = <String, dynamic>{};
 
@@ -143,13 +148,16 @@ class ConfigGenerator {
       }
       if (ruleProviders.isNotEmpty) out['rule-providers'] = ruleProviders;
     } else {
-      // Loyalsoldier mode: build standard groups, add rule-providers + template.
+      // Builtin template mode: build standard groups, add rule-providers + rules.
       out['proxy-groups'] = _defaultProxyGroups(proxyNames, selectedNodeName);
-      out['rule-providers'] = LoyalsoldierTemplate.ruleProviders();
-      out['rules'] = LoyalsoldierTemplate.rules(
-        proxyGroup: '🚀 Proxy',
-        bypassChina: bypassChina,
-      );
+      final useLite = templateId == 'lite' || templateId == 'clash_rules_lite';
+      out['rule-providers'] = useLite
+          ? LiteTemplate.ruleProviders()
+          : LoyalsoldierTemplate.ruleProviders();
+      out['rules'] = useLite
+          ? LiteTemplate.rules(proxyGroup: '🚀 Proxy', bypassChina: bypassChina)
+          : LoyalsoldierTemplate.rules(
+              proxyGroup: '🚀 Proxy', bypassChina: bypassChina);
     }
 
     return out;

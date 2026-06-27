@@ -83,7 +83,7 @@ func boolOr(b *bool, def bool) bool {
 const applyBaselineOverridesYAML = `log-level: info
 bind-address: "*"
 keep-alive-interval: 15
-keep-alive-idle: 600
+keep-alive-idle: 30
 ipv6: false
 tcp-concurrent: true
 unified-delay: true

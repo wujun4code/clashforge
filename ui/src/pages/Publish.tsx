@@ -1414,7 +1414,10 @@ function PublishWizardModal({
     setPreviewLoading(true)
     try {
       const data = await previewPublishConfig({
-        node_ids: selectedNodes,
+        // Step 1 is template selection — don't include node credentials in the
+        // preview at this stage. Pass empty node_ids so the backend returns only
+        // the template skeleton (rule-providers + rules, no proxies block).
+        node_ids: step === 1 ? [] : selectedNodes,
         template_mode: templateMode,
         template_id: templateMode === 'builtin' ? templateID : undefined,
         template_content: templateMode === 'custom' ? templateContent : undefined,
@@ -1426,7 +1429,7 @@ function PublishWizardModal({
     } finally {
       setPreviewLoading(false)
     }
-  }, [selectedNodes, templateMode, templateID, templateContent, selectedRuleSetIDs])
+  }, [step, selectedNodes, templateMode, templateID, templateContent, selectedRuleSetIDs])
 
   useEffect(() => {
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current)

@@ -115,6 +115,106 @@ rules:
   - MATCH,🐟 漏网之鱼
 `
 
+// liteTemplateYAML uses wujun4code/clash-rules-lite — a lean rule set optimised
+// for memory-constrained routers (≤1 GB RAM). Total rules ~68k vs ~320k in the
+// standard template, reducing mihomo baseline memory from ~280 MB to ~60 MB.
+// Rule files are rebuilt daily from upstream sources via GitHub Actions.
+const liteTemplateYAML = `mode: rule
+log-level: info
+allow-lan: true
+proxy-groups:
+  - name: "🚀 节点选择"
+    type: select
+    proxies:
+      - DIRECT
+  - name: "🎯 全球直连"
+    type: select
+    proxies:
+      - DIRECT
+      - "🚀 节点选择"
+  - name: "🐟 漏网之鱼"
+    type: select
+    proxies:
+      - "🚀 节点选择"
+      - "🎯 全球直连"
+rule-providers:
+  reject:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/reject.yaml
+    path: "./rule_provider/reject.yaml"
+    interval: 86400
+  icloud:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/icloud.yaml
+    path: "./rule_provider/icloud.yaml"
+    interval: 86400
+  apple:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/apple.yaml
+    path: "./rule_provider/apple.yaml"
+    interval: 86400
+  google:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/google.yaml
+    path: "./rule_provider/google.yaml"
+    interval: 86400
+  proxy:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/proxy.yaml
+    path: "./rule_provider/proxy.yaml"
+    interval: 86400
+  direct:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/direct.yaml
+    path: "./rule_provider/direct.yaml"
+    interval: 86400
+  private:
+    type: http
+    behavior: domain
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/private.yaml
+    path: "./rule_provider/private.yaml"
+    interval: 86400
+  telegramcidr:
+    type: http
+    behavior: ipcidr
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/telegramcidr.yaml
+    path: "./rule_provider/telegramcidr.yaml"
+    interval: 86400
+  cncidr:
+    type: http
+    behavior: ipcidr
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/cncidr.yaml
+    path: "./rule_provider/cncidr.yaml"
+    interval: 86400
+  lancidr:
+    type: http
+    behavior: ipcidr
+    url: https://github.com/wujun4code/clash-rules-lite/releases/latest/download/lancidr.yaml
+    path: "./rule_provider/lancidr.yaml"
+    interval: 86400
+rules:
+  - RULE-SET,reject,REJECT
+  - RULE-SET,private,🎯 全球直连
+  - RULE-SET,icloud,🎯 全球直连
+  - RULE-SET,apple,🎯 全球直连
+  - RULE-SET,lancidr,🎯 全球直连,no-resolve
+  - GEOIP,LAN,🎯 全球直连
+  - RULE-SET,google,🚀 节点选择
+  - RULE-SET,direct,🎯 全球直连
+  - RULE-SET,proxy,🚀 节点选择
+  - GEOSITE,CN,🎯 全球直连
+  - RULE-SET,telegramcidr,🚀 节点选择,no-resolve
+  - RULE-SET,cncidr,🎯 全球直连,no-resolve
+  - GEOIP,CN,🎯 全球直连
+  - MATCH,🐟 漏网之鱼
+`
+
 const minimalTemplateYAML = `mode: rule
 log-level: info
 proxy-groups:
@@ -135,6 +235,11 @@ func ListTemplatePresets() []TemplatePreset {
 			Description: "内置常用 rule-providers 与规则顺序，适合作为通用科学上网模板。",
 		},
 		{
+			ID:          "lite",
+			Name:        "精简规则（低内存路由器）",
+			Description: "规则条数从 32 万降至约 6.8 万，mihomo 内存基线从 ~280 MB 降至 ~60 MB，适合 ≤1 GB RAM 的路由器。",
+		},
+		{
 			ID:          "minimal",
 			Name:        "极简模板",
 			Description: "仅包含基础分流规则，便于快速验证节点与订阅链路。",
@@ -146,6 +251,8 @@ func TemplateByID(id string) (string, error) {
 	switch strings.TrimSpace(strings.ToLower(id)) {
 	case "", "loyalsoldier_standard", "loyalsoldier", "standard":
 		return loyalSoldierTemplateYAML, nil
+	case "lite", "lite_rules", "clash_rules_lite":
+		return liteTemplateYAML, nil
 	case "minimal":
 		return minimalTemplateYAML, nil
 	default:
