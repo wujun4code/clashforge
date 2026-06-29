@@ -1,0 +1,321 @@
+name: Build OpenWrt + ClashForge Hyper-V Image
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt version (e.g. 24.10.2, empty = latest stable)'
+        required: false
+        default: ''
+  release:
+    types: [published]
+
+jobs:
+  build-hyperv-image:
+    name: Build Hyper-V VHDX
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # Hoisted to job level so step `if:` can use env.R2_ACCOUNT_ID != ''
+      # (secrets context is unavailable in step-level if: expressions).
+      # R2_ACCOUNT_ID, R2_BUCKET, R2_PUBLIC_URL are non-sensitive → store as
+      # repository *variables* (Settings → Secrets and variables → Variables).
+      # R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY stay as secrets.
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. Build ClashForge UI ────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        run: |
+          cd ui && npm ci
+          VITE_APP_VERSION="hyperv-$(git rev-parse --short HEAD)" npm run build
+          mkdir -p ../internal/api/ui_dist
+          cp -r dist/* ../internal/api/ui_dist/
+
+      # ── 2. Build ClashForge binary ────────────────────────────────────────
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build ClashForge binary (amd64)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.buildVersion=hyperv-$(git rev-parse --short HEAD)" \
+            -o dist/clashforge-linux-amd64 \
+            ./cmd/clashforge
+          echo "binary: $(ls -lh dist/clashforge-linux-amd64)"
+
+      # ── 3. Download latest mihomo ─────────────────────────────────────────
+      - name: Download mihomo (amd64)
+        run: |
+          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+          echo "mihomo $MIHOMO_VER"
+          curl -fsSL -o /tmp/mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-compatible-${MIHOMO_VER}.gz"
+          gunzip /tmp/mihomo.gz
+          chmod +x /tmp/mihomo
+          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
+
+      # ── 4. Download GeoData ───────────────────────────────────────────────
+      - name: Download GeoData
+        run: |
+          mkdir -p /tmp/geodata
+          dl() {
+            local dest="$1"; shift
+            for url in "$@"; do
+              if curl -fsSL --max-time 120 -o "$dest" "$url" 2>/dev/null; then
+                echo "  ✓ $(basename $dest)  $(du -sh "$dest" | cut -f1)"
+                return 0
+              fi
+            done
+            echo "  ✗ $(basename $dest) — all mirrors failed" >&2
+            return 1
+          }
+          dl /tmp/geodata/country.mmdb \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"
+          dl /tmp/geodata/GeoIP.dat \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+          dl /tmp/geodata/GeoSite.dat \
+            "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat" \
+            "https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+
+      # ── 5. Resolve OpenWrt version + download image ───────────────────────
+      - name: Resolve OpenWrt version
+        id: openwrt
+        run: |
+          INPUT="${{ github.event.inputs.openwrt_version }}"
+          if [ -n "$INPUT" ]; then
+            VER="$INPUT"
+          else
+            RAW=$(curl -sfL -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/openwrt/openwrt/releases?per_page=20" \
+              | jq -r '[.[] | select(.prerelease == false)][0].tag_name')
+            VER="${RAW#v}"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "OpenWrt version: $VER"
+
+      - name: Download OpenWrt x86_64 ext4 image
+        run: |
+          VER="${{ steps.openwrt.outputs.version }}"
+          BASE="https://downloads.openwrt.org/releases/${VER}/targets/x86/64"
+
+          # Discover the exact filename from sha256sums (handles minor naming differences)
+          IMAGE_NAME=$(curl -sfL "${BASE}/sha256sums" \
+            | grep "ext4-combined\.img\.gz" | grep -v efi \
+            | head -1 | awk '{print $2}' | sed 's/^\*//')
+
+          if [ -z "$IMAGE_NAME" ]; then
+            echo "ERROR: could not determine image filename for OpenWrt $VER" >&2
+            exit 1
+          fi
+
+          echo "Downloading: $IMAGE_NAME"
+          curl -fsSL -o /tmp/openwrt.img.gz "${BASE}/${IMAGE_NAME}"
+          gunzip /tmp/openwrt.img.gz
+          echo "Raw image: $(du -sh /tmp/openwrt.img)"
+          echo "OPENWRT_VER=$VER" >> "$GITHUB_ENV"
+
+      # ── 6. Mount image, install ClashForge, configure network ─────────────
+      - name: Customize OpenWrt image
+        run: |
+          sudo apt-get install -y kpartx >/dev/null 2>&1
+
+          LOOP=$(sudo losetup -fP --show /tmp/openwrt.img)
+          echo "loop device: $LOOP"
+          sleep 1
+          lsblk "$LOOP"
+
+          sudo mkdir -p /mnt/openwrt
+          sudo mount "${LOOP}p2" /mnt/openwrt
+
+          echo "=== Installing ClashForge binaries ==="
+          sudo cp dist/clashforge-linux-amd64 /mnt/openwrt/usr/bin/clashforge
+          sudo chmod 755 /mnt/openwrt/usr/bin/clashforge
+          sudo cp /tmp/mihomo /mnt/openwrt/usr/bin/mihomo-clashforge
+          sudo chmod 755 /mnt/openwrt/usr/bin/mihomo-clashforge
+
+          echo "=== Installing LuCI files ==="
+          sudo mkdir -p \
+            /mnt/openwrt/usr/share/luci/menu.d \
+            /mnt/openwrt/www/luci-static/resources/view/clashforge \
+            /mnt/openwrt/usr/share/rpcd/acl.d \
+            /mnt/openwrt/usr/share/metaclash \
+            /mnt/openwrt/etc/metaclash
+
+          sudo cp openwrt/files/usr/share/luci/menu.d/luci-app-clashforge.json \
+               /mnt/openwrt/usr/share/luci/menu.d/
+          sudo cp openwrt/files/www/luci-static/resources/view/clashforge/main.js \
+               /mnt/openwrt/www/luci-static/resources/view/clashforge/
+          sudo cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json \
+               /mnt/openwrt/usr/share/rpcd/acl.d/
+
+          echo "=== Installing init.d + helpers ==="
+          sudo cp openwrt/files/etc/init.d/metaclash /mnt/openwrt/etc/init.d/clashforge
+          sudo chmod 755 /mnt/openwrt/etc/init.d/clashforge
+          # Enable at boot (rc.d symlink, as if opkg install had run)
+          sudo ln -sf /etc/init.d/clashforge /mnt/openwrt/etc/rc.d/S99clashforge
+
+          sudo cp openwrt/files/etc/metaclash/uninstall-clashforge.sh \
+               /mnt/openwrt/usr/bin/uninstall-clashforge
+          sudo chmod 755 /mnt/openwrt/usr/bin/uninstall-clashforge
+          if [ -f openwrt/files/usr/bin/clashforge-diag ]; then
+            sudo cp openwrt/files/usr/bin/clashforge-diag /mnt/openwrt/usr/bin/clashforge-diag
+            sudo chmod 755 /mnt/openwrt/usr/bin/clashforge-diag
+          fi
+
+          echo "=== Seeding default config ==="
+          sudo cp openwrt/files/etc/metaclash/config.toml.example \
+               /mnt/openwrt/etc/metaclash/config.toml
+          if [ -f openwrt/files/etc/metaclash/overrides.yaml.example ]; then
+            sudo cp openwrt/files/etc/metaclash/overrides.yaml.example \
+                 /mnt/openwrt/etc/metaclash/overrides.yaml
+          fi
+
+          echo "=== Bundling GeoData ==="
+          sudo cp /tmp/geodata/country.mmdb /mnt/openwrt/usr/share/metaclash/
+          sudo cp /tmp/geodata/GeoIP.dat    /mnt/openwrt/usr/share/metaclash/
+          sudo cp /tmp/geodata/GeoSite.dat  /mnt/openwrt/usr/share/metaclash/
+          ls -lh /mnt/openwrt/usr/share/metaclash/
+
+          echo "=== Configuring network for Hyper-V ==="
+          # eth0 → WAN: DHCP client from Hyper-V Default Switch (internet via NAT)
+          # eth1 → LAN bridge: 192.168.77.1, dnsmasq serves DHCP to host
+          sudo cp openwrt/hyperv/etc/config/network /mnt/openwrt/etc/config/network
+
+          echo "=== Configuring firewall: allow ClashForge ports from LAN ==="
+          sudo cat openwrt/hyperv/etc/config/firewall-clashforge \
+            | sudo tee -a /mnt/openwrt/etc/config/firewall > /dev/null
+
+          echo "=== Setting hostname ==="
+          sudo cp openwrt/hyperv/etc/config/system /mnt/openwrt/etc/config/system
+
+          echo "=== Unmounting ==="
+          sudo umount /mnt/openwrt
+          sudo losetup -d "$LOOP"
+
+      # ── 7. Convert raw → VHDX ────────────────────────────────────────────
+      - name: Convert to VHDX
+        run: |
+          sudo apt-get install -y qemu-utils >/dev/null 2>&1
+
+          OUTFILE="clashforge-openwrt-${{ env.OPENWRT_VER }}-hyperv.vhdx"
+          qemu-img convert \
+            -f raw \
+            -O vhdx \
+            -o subformat=dynamic \
+            /tmp/openwrt.img \
+            "/tmp/${OUTFILE}"
+
+          echo "VHDX: $(du -sh /tmp/${OUTFILE})"
+          echo "VHDX_FILE=$OUTFILE" >> "$GITHUB_ENV"
+
+          # SHA256
+          sha256sum "/tmp/${OUTFILE}" > "/tmp/${OUTFILE}.sha256"
+          cat "/tmp/${OUTFILE}.sha256"
+
+      # ── 8. Upload artifact ────────────────────────────────────────────────
+      - name: Upload VHDX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clashforge-openwrt-hyperv
+          path: |
+            /tmp/clashforge-openwrt-*.vhdx
+            /tmp/clashforge-openwrt-*.sha256
+          retention-days: 30
+
+      # ── 9. Mirror VHDX to Cloudflare R2 (optional) ──────────────────────────
+      # Required secrets (all must be set to enable this step):
+      #   R2_ACCOUNT_ID        — Cloudflare account ID
+      #   R2_ACCESS_KEY_ID     — R2 API token Access Key ID
+      #   R2_SECRET_ACCESS_KEY — R2 API token Secret Access Key
+      #   R2_BUCKET            — R2 bucket name
+      #   R2_PUBLIC_URL        — public base URL, e.g. https://pub-xxx.r2.dev
+      #                          or a custom domain like https://releases.example.com
+      - name: Mirror VHDX to Cloudflare R2
+        if: env.R2_ACCOUNT_ID != ''
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET:             ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_URL:         ${{ vars.R2_PUBLIC_URL }}
+        run: |
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp "/tmp/${VHDX_FILE}" "s3://${R2_BUCKET}/${VHDX_FILE}" \
+            --endpoint-url "$ENDPOINT" --no-progress
+          aws s3 cp "/tmp/${VHDX_FILE}.sha256" "s3://${R2_BUCKET}/${VHDX_FILE}.sha256" \
+            --endpoint-url "$ENDPOINT" --no-progress
+          CDN_URL="${R2_PUBLIC_URL%/}/${VHDX_FILE}"
+          echo "CDN_VHDX_URL=${CDN_URL}" >> "$GITHUB_ENV"
+          echo "Mirrored to R2: ${CDN_URL}"
+
+      # ── 10. Attach to GitHub Release (when triggered by release event) ────────
+      - name: Attach to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            /tmp/clashforge-openwrt-*.vhdx
+            /tmp/clashforge-openwrt-*.sha256
+          append_body: true
+          body: |
+
+            ---
+
+            ### 🖥️ Hyper-V 虚拟路由器镜像
+
+            基于 OpenWrt ${{ env.OPENWRT_VER }} x86_64，已预装 ClashForge + mihomo。
+
+            **一键部署（Windows PowerShell，需管理员权限）：**
+            ```powershell
+            irm https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/Start-ClashForgeHyperV.ps1 | iex
+            ```
+
+            或手动下载 VHDX 后：
+            ```powershell
+            .\Start-ClashForgeHyperV.ps1 -VHDXPath C:\VMs\clashforge-openwrt-${{ env.OPENWRT_VER }}-hyperv.vhdx
+            ```
+
+            **VM 网络规划：**
+            | 接口 | Hyper-V 交换机 | IP |
+            |------|--------------|-----|
+            | WAN (eth0) | Default Switch | DHCP（自动获取互联网） |
+            | LAN (eth1) | ClashForge-LAN | `192.168.77.1` |
+            | Windows 主机 | ClashForge-LAN | DHCP（OpenWrt dnsmasq 分配） |
+
+            **部署后访问：**
+            - Web UI：`http://192.168.77.1:7777`
+            - HTTP 代理：`192.168.77.1:17890`
+            - SOCKS5 代理：`192.168.77.1:17891`
+            - Mixed 代理：`192.168.77.1:17893`
+
+            > **网络受限时下载 VHDX：**
+            > ```powershell
+            > # 使用 GitHub 镜像代理（api.github.com 可访问时）
+            > .\Start-ClashForgeHyperV.ps1 -GithubMirror 'https://ghproxy.net/' -SubscriptionURL '...'
+            > # 或直接指定 CDN 地址（绕过 GitHub）
+            > .\Start-ClashForgeHyperV.ps1 -VHDXUrl 'https://your-cdn/clashforge.vhdx' -SubscriptionURL '...'
+            > ```

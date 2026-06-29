@@ -1,0 +1,13 @@
+config rule
+	option name 'Allow-ClashForge-WebUI'
+	option src 'lan'
+	option dest_port '7777'
+	option proto 'tcp'
+	option target 'ACCEPT'
+
+config rule
+	option name 'Allow-ClashForge-Proxy'
+	option src 'lan'
+	option dest_port '17890 17891 17893'
+	option proto 'tcp'
+	option target 'ACCEPT'
