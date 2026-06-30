@@ -1787,7 +1787,7 @@ if ($Action -in @('hyperv','hyperv-remove','hyperv-stop','hyperv-start','hyperv-
         Write-Host ''
 
         $proc = Start-Process pwsh -Verb RunAs -PassThru `
-            -ArgumentList "-NoLogo -NoProfile -File `"$PSCommandPath`" $argsStr"
+            -ArgumentList "-NoLogo -NoProfile -NoExit -File `"$PSCommandPath`" $argsStr"
         $proc.WaitForExit()
         exit $proc.ExitCode
     }
@@ -2287,9 +2287,17 @@ if ($Action -eq "hyperv-remove") {
             Write-Warn "Switch '$LanSwitchName' is still used by $($otherVMsOnSwitch.Count) other VM(s) — skipping"
             $skipped.Add("Switch '$LanSwitchName' (used by other VMs)")
         } else {
-            Remove-VMSwitch -Name $LanSwitchName -Confirm:$false -ErrorAction SilentlyContinue
-            Write-OK "Switch '$LanSwitchName' removed (vEthernet adapter also released)"
-            $removed.Add("Switch '$LanSwitchName'")
+            # Brief pause so Hyper-V fully releases the switch after VM removal.
+            Start-Sleep -Milliseconds 800
+            try {
+                Remove-VMSwitch -Name $LanSwitchName -Confirm:$false -ErrorAction Stop
+                Write-OK "Switch '$LanSwitchName' removed (vEthernet adapter also released)"
+                $removed.Add("Switch '$LanSwitchName'")
+            } catch {
+                Write-Warn "Could not remove switch '$LanSwitchName': $_"
+                Write-Host "  Hint: open Hyper-V Manager -> Virtual Switch Manager -> delete '$LanSwitchName' manually." -ForegroundColor DarkGray
+                $skipped.Add("Switch '$LanSwitchName' (removal failed — see above)")
+            }
         }
     } else {
         Write-Host "  Switch '$LanSwitchName' not found — already removed or never created" -ForegroundColor DarkGray
