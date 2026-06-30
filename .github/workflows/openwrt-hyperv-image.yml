@@ -161,7 +161,15 @@ jobs:
       # ── 6. Mount image, install ClashForge, configure network ─────────────
       - name: Customize OpenWrt image
         run: |
-          sudo apt-get install -y kpartx >/dev/null 2>&1
+          sudo apt-get install -y cloud-guest-utils e2fsprogs >/dev/null 2>&1
+
+          echo "=== Expanding image (+512 MB for binaries + GeoData) ==="
+          truncate -s +512M /tmp/openwrt.img
+          EXP=$(sudo losetup -fP --show /tmp/openwrt.img)
+          sudo growpart "$EXP" 2
+          sudo e2fsck -fy "${EXP}p2" >/dev/null 2>&1 || true
+          sudo resize2fs "${EXP}p2"
+          sudo losetup -d "$EXP"
 
           LOOP=$(sudo losetup -fP --show /tmp/openwrt.img)
           echo "loop device: $LOOP"
