@@ -48,6 +48,7 @@
 #   .\scripts\clashforgectl.ps1 hyperv-route                # show current routing priority + auto-toggle
 #   .\scripts\clashforgectl.ps1 hyperv-route -HvMode clashforge   # set ClashForge-LAN as preferred gateway
 #   .\scripts\clashforgectl.ps1 hyperv-route -HvMode direct       # set original NIC as preferred gateway
+#   .\scripts\clashforgectl.ps1 hyperv-health-check               # verify proxy works, then suggest hyperv-route
 #
 # Hyper-V cleanup (remove VM, switch, VHDX, proxy; requires Administrator):
 #   .\scripts\clashforgectl.ps1 hyperv-remove
@@ -63,7 +64,7 @@
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "hyperv-remove", "hyperv-stop", "hyperv-start", "hyperv-route", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "hyperv-remove", "hyperv-stop", "hyperv-start", "hyperv-route", "hyperv-health-check", "help")]
     [string]$Action,
 
     # Connection parameters (required for all SSH-based actions; not needed for 'netdiag' or 'hyperv')
@@ -1764,7 +1765,7 @@ $scriptStartedMihomo = $false
 # HYPERV* AUTO-ELEVATION — re-launch as Administrator via UAC if needed
 # All hyperv* subcommands share this single elevation gate.
 # ══════════════════════════════════════════════════════════════════════════════
-if ($Action -in @('hyperv','hyperv-remove','hyperv-stop','hyperv-start','hyperv-route')) {
+if ($Action -in @('hyperv','hyperv-remove','hyperv-stop','hyperv-start','hyperv-route','hyperv-health-check')) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
         $argParts = [System.Collections.Generic.List[string]]::new()
@@ -1978,7 +1979,10 @@ if ($Action -eq "hyperv") {
             Where-Object { $_.PrefixOrigin -ne 'WellKnown' } |
             Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
         Set-NetIPInterface -InterfaceIndex $vEth.InterfaceIndex -Dhcp Enabled -ErrorAction SilentlyContinue
-        Write-OK "vEthernet ($LanSwitchName) set to DHCP — OpenWrt will assign an IP after VM boots"
+        # High metric keeps original NIC as default gateway; user runs hyperv-route to switch
+        Set-NetIPInterface -InterfaceIndex $vEth.InterfaceIndex -AddressFamily IPv4 -InterfaceMetric 9000 -ErrorAction SilentlyContinue
+        Set-NetIPInterface -InterfaceIndex $vEth.InterfaceIndex -AddressFamily IPv6 -InterfaceMetric 9000 -ErrorAction SilentlyContinue
+        Write-OK "vEthernet ($LanSwitchName) — DHCP, metric 9000 (original NIC stays preferred)"
     } else {
         Write-Warn "Could not find vEthernet adapter for '$LanSwitchName'"
     }
@@ -2104,7 +2108,10 @@ if ($Action -eq "hyperv") {
         Write-Host "  SOCKS5    : ${LanIP}:17891"
         Write-Host "  Mixed     : ${LanIP}:17893"
         Write-Host ''
-        Write-Host "  Run 'hyperv-route' to control which traffic goes through ClashForge." -ForegroundColor DarkGray
+        Write-Host "  ClashForge-LAN metric = 9000 — your original NIC is still the default gateway." -ForegroundColor Yellow
+        Write-Host "  Verify the proxy works, then run:" -ForegroundColor Yellow
+        Write-Host "    .\clashforgectl.ps1 hyperv-route -HvMode clashforge   # route all traffic via ClashForge" -ForegroundColor Cyan
+        Write-Host "    .\clashforgectl.ps1 hyperv-route -HvMode direct       # switch back to original NIC" -ForegroundColor DarkGray
     } else {
         Write-Host " ClashForge VM is booted — proxy NOT started" -ForegroundColor Yellow
         Write-Host '------------------------------------------------' -ForegroundColor DarkGray
@@ -2119,15 +2126,10 @@ if ($Action -eq "hyperv") {
 
     try { if ($online) { Start-Process "http://${LanIP}:7777" } } catch { }
 
-    # ── Auto netdiag — only when service is confirmed running ────────────────────
+    # ── Auto health check — only when service is confirmed running ───────────────
     if ($serviceStarted) {
         Write-Host ''
-        Write-Host '════════════════════════════════════════════════' -ForegroundColor DarkCyan
-        Write-Host '  Network Diagnostics (netdiag)' -ForegroundColor Cyan
-        Write-Host '  Verifying ClashForge + Hyper-V is working correctly...' -ForegroundColor DarkGray
-        Write-Host '════════════════════════════════════════════════' -ForegroundColor DarkCyan
-        Write-Host ''
-        & $PSCommandPath netdiag -Router $LanIP -ApiPort $ApiPort
+        & $PSCommandPath hyperv-health-check -LanIP $LanIP -VMName $VMName -ApiSecret $ApiSecret
     }
 
     exit 0
@@ -2509,6 +2511,164 @@ if ($Action -eq "hyperv-route") {
                 $_.InterfaceMetric, $statusStr, $_.InterfaceAlias, ($ip ?? ''), $tag) -ForegroundColor $color
         }
     Write-Host ""
+    exit 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# hyperv-health-check — verify ClashForge proxy health without touching routing
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Action -eq 'hyperv-health-check') {
+
+    $proxyAddr = "http://${LanIP}:17890"
+
+    function HCStep([string]$msg)   { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+    function HCOk  ([string]$msg)   { Write-Host "  [OK] $msg" -ForegroundColor Green }
+    function HCWarn([string]$msg)   { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
+    function HCFail([string]$msg)   { Write-Host "  [XX] $msg" -ForegroundColor Red }
+
+    function HC-ApiGet([string]$path) {
+        $uri = "http://${LanIP}:7777${path}"
+        $h   = @{}
+        if ($ApiSecret -ne '') { $h['Authorization'] = "Bearer $ApiSecret" }
+        try {
+            $r = Invoke-RestMethod -Uri $uri -Headers $h -TimeoutSec 8 -UseBasicParsing -ErrorAction Stop
+            if ($r -and $r.ok) { return $r.data }
+            return $r
+        } catch { return $null }
+    }
+
+    function HC-ProbeUrl([string]$url, [int]$timeout = 10) {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $r = Invoke-WebRequest -Uri $url -Proxy $proxyAddr -ProxyUseDefaultCredentials `
+                     -UseBasicParsing -TimeoutSec $timeout -ErrorAction Stop
+            $sw.Stop()
+            return @{ ok = ($r.StatusCode -lt 500); status = [int]$r.StatusCode; ms = $sw.ElapsedMilliseconds }
+        } catch {
+            $sw.Stop()
+            $detail = $_.Exception.Message
+            return @{ ok = $false; status = 0; ms = $sw.ElapsedMilliseconds; detail = $detail }
+        }
+    }
+
+    Write-Host ''
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+    Write-Host '  ClashForge Hyper-V Health Check' -ForegroundColor Cyan
+    Write-Host "  VM: $VMName   LAN: $LanIP   Proxy: $proxyAddr" -ForegroundColor DarkGray
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+
+    # ── 1. API reachability ───────────────────────────────────────────────────
+    HCStep "Checking ClashForge API ($LanIP:7777)"
+    $apiOk = $false
+    try {
+        $ping = Invoke-WebRequest -Uri "http://${LanIP}:7777" -UseBasicParsing -TimeoutSec 6 -ErrorAction Stop
+        $apiOk = $ping.StatusCode -lt 500
+    } catch { }
+
+    if (-not $apiOk) {
+        HCFail "Cannot reach http://${LanIP}:7777 — VM may be down or still booting."
+        Write-Host ''
+        Write-Host '  Try: .\clashforgectl.ps1 hyperv-start' -ForegroundColor Yellow
+        exit 1
+    }
+    HCOk "Web UI reachable"
+
+    # ── 2. Service status ─────────────────────────────────────────────────────
+    HCStep "Checking mihomo service status"
+    $hc = HC-ApiGet '/api/v1/health/check'
+    if ($hc) {
+        $mihomoOk = $hc.mihomo -and ($hc.mihomo.state -eq 'running' -or $hc.mihomo.active -eq $true)
+        $tpOk     = $hc.transparent_proxy -and $hc.transparent_proxy.active -eq $true
+        if ($mihomoOk) { HCOk "mihomo running" } else { HCWarn "mihomo not running — start it in Web UI or re-run hyperv with -SubscriptionURL" }
+        if ($tpOk)     { HCOk "Transparent proxy (TUN) active" } else { HCWarn "TUN not active — proxy may be in HTTP-only mode" }
+    } else {
+        HCWarn "Could not read health check API — service may not be started yet"
+        $mihomoOk = $false
+    }
+
+    # ── 3. Network probes via HTTP proxy ─────────────────────────────────────
+    HCStep "Network probes via ClashForge proxy ($proxyAddr)"
+    Write-Host "  (each request is routed through ClashForge — not your original NIC)" -ForegroundColor DarkGray
+    Write-Host ''
+
+    $probeTargets = @(
+        @{ name = 'Domestic — Taobao';    url = 'https://www.taobao.com';       group = 'domestic' }
+        @{ name = 'Domestic — 163Music';  url = 'https://music.163.com';        group = 'domestic' }
+        @{ name = 'Foreign  — GitHub';    url = 'https://github.com';           group = 'foreign'  }
+        @{ name = 'Foreign  — Google';    url = 'https://www.google.com';       group = 'foreign'  }
+        @{ name = 'AI       — OpenAI';    url = 'https://chat.openai.com';      group = 'ai'       }
+    )
+
+    $probeResults = @()
+    foreach ($t in $probeTargets) {
+        $r = HC-ProbeUrl $t.url
+        $label = if ($r.ok) { "[OK] $($r.ms)ms" } else { "[XX] failed$(if ($r.status) {" HTTP $($r.status)"} else {''})" }
+        $color = if ($r.ok) { 'Green' } else { 'Red' }
+        Write-Host ("    {0,-30}  {1}" -f $t.name, $label) -ForegroundColor $color
+        if (-not $r.ok -and $r.detail) {
+            Write-Host "         $($r.detail)" -ForegroundColor DarkGray
+        }
+        $probeResults += $r
+    }
+
+    # ── 4. Router-side probes ─────────────────────────────────────────────────
+    HCStep "Router-side probes (from OpenWrt VM perspective)"
+    $overviewProbes = HC-ApiGet '/api/v1/overview/probes'
+    if ($overviewProbes) {
+        $probeList = if ($overviewProbes -is [array]) { $overviewProbes } `
+                     elseif ($overviewProbes.probes) { $overviewProbes.probes } `
+                     else { @() }
+        foreach ($p in $probeList) {
+            $ok    = ($p.success -eq $true -or $p.ok -eq $true)
+            $ms    = if ($p.latency_ms) { "$($p.latency_ms)ms" } elseif ($p.ms) { "$($p.ms)ms" } else { '' }
+            $label = if ($ok) { "[OK] $ms" } else { "[XX] unreachable" }
+            $color = if ($ok) { 'Green' } else { 'Red' }
+            Write-Host ("    {0,-30}  {1}" -f $p.name, $label) -ForegroundColor $color
+        }
+    } else {
+        HCWarn "Could not fetch router-side probes (mihomo may not be running)"
+    }
+
+    # ── 5. Summary + next-step guidance ──────────────────────────────────────
+    Write-Host ''
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+
+    $probeOkCount   = ($probeResults | Where-Object { $_.ok }).Count
+    $probeTotalCount = $probeResults.Count
+    $allProbesOk    = ($probeOkCount -eq $probeTotalCount)
+    $foreignOk      = ($probeResults | Where-Object { $_.ok } | Measure-Object).Count -ge 3
+
+    if ($allProbesOk -and $mihomoOk) {
+        Write-Host '  All checks passed — ClashForge proxy is healthy.' -ForegroundColor Green
+        Write-Host ''
+        Write-Host '  ClashForge-LAN is NOT your default gateway yet (metric = 9000).' -ForegroundColor Yellow
+        Write-Host '  Your original NIC still handles all Windows traffic.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '  To route all Windows traffic through ClashForge:' -ForegroundColor Cyan
+        Write-Host '    .\clashforgectl.ps1 hyperv-route -HvMode clashforge' -ForegroundColor White
+        Write-Host ''
+        Write-Host '  To restore your original network at any time:' -ForegroundColor DarkGray
+        Write-Host '    .\clashforgectl.ps1 hyperv-route -HvMode direct' -ForegroundColor White
+    } elseif ($foreignOk -and $mihomoOk) {
+        Write-Host "  Partial pass ($probeOkCount/$probeTotalCount probes OK) — proxy is working but some targets failed." -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '  You can still switch routing if the important targets work:' -ForegroundColor DarkGray
+        Write-Host '    .\clashforgectl.ps1 hyperv-route -HvMode clashforge' -ForegroundColor White
+        Write-Host '    .\clashforgectl.ps1 hyperv-route -HvMode direct   # to revert' -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Health check failed ($probeOkCount/$probeTotalCount probes OK)." -ForegroundColor Red
+        Write-Host ''
+        if (-not $mihomoOk) {
+            Write-Host '  mihomo is not running. Reconfigure with:' -ForegroundColor Yellow
+            Write-Host "    .\clashforgectl.ps1 hyperv -VHDXPath <path> -SubscriptionURL 'https://your-sub-url'" -ForegroundColor White
+        } else {
+            Write-Host '  Proxy is running but network probes failed.' -ForegroundColor Yellow
+            Write-Host '  Check your subscription URL and node availability in the Web UI:' -ForegroundColor DarkGray
+            Write-Host "    http://${LanIP}:7777" -ForegroundColor White
+        }
+    }
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+    Write-Host ''
     exit 0
 }
 
