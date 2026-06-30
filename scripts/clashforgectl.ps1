@@ -122,7 +122,6 @@ param(
     [string]$GithubMirror    = '',
     [string]$SubscriptionURL = '',
     [string]$ApiSecret       = '',
-    [switch]$SetSystemProxy,
 
     # hyperv-route: routing mode — '' = auto-toggle, 'clashforge' = ClashForge takes priority, 'direct' = original NIC takes priority
     [ValidateSet('', 'clashforge', 'direct')]
@@ -2045,21 +2044,6 @@ if ($Action -eq "hyperv") {
         }
     }
 
-    # ── 9. Optionally set system proxy (only when service is actually running) ────
-    if ($SetSystemProxy -and $serviceStarted) {
-        Write-Step "Configuring Windows system proxy"
-        $proxyServer = "${LanIP}:17890"
-        $lanSubnet   = ($LanIP -split '\.')[0..2] -join '.'
-        $regPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-        Set-ItemProperty -Path $regPath -Name ProxyServer   -Value $proxyServer
-        Set-ItemProperty -Path $regPath -Name ProxyEnable   -Value 1
-        Set-ItemProperty -Path $regPath -Name ProxyOverride -Value "localhost;127.*;${lanSubnet}.*;10.*;172.16.*;<local>"
-        Write-OK "System HTTP proxy set to $proxyServer"
-        Write-Warn "Restart your browser for proxy changes to take effect."
-    } elseif ($SetSystemProxy -and -not $serviceStarted) {
-        Write-Warn "-SetSystemProxy ignored — service is not running (no subscription configured)"
-    }
-
     # ── Summary ───────────────────────────────────────────────────────────────────
     Write-Host ''
     Write-Host '------------------------------------------------' -ForegroundColor DarkGray
@@ -2184,25 +2168,6 @@ if ($Action -eq "hyperv-remove") {
     } else {
         Write-Host "  Switch '$LanSwitchName' not found — already removed or never created" -ForegroundColor DarkGray
         $skipped.Add("Switch '$LanSwitchName' (not found)")
-    }
-
-    # ── 3. Clean up Windows system proxy ─────────────────────────────────────────
-    Write-Step "Windows system proxy"
-    $regPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-    $proxyEnable = (Get-ItemProperty $regPath -Name ProxyEnable -ErrorAction SilentlyContinue).ProxyEnable
-    $proxyServer = (Get-ItemProperty $regPath -Name ProxyServer -ErrorAction SilentlyContinue).ProxyServer
-    if ($proxyEnable -eq 1 -and $proxyServer -like "${LanIP}:*") {
-        Write-Host "  Active proxy: $proxyServer" -ForegroundColor DarkGray
-        if (Confirm-Remove "Disable system proxy ($proxyServer)?") {
-            Set-ItemProperty $regPath -Name ProxyEnable -Value 0
-            Write-OK "System proxy disabled"
-            $removed.Add("System proxy ($proxyServer)")
-        } else {
-            Write-Warn "System proxy left enabled: $proxyServer"
-            $skipped.Add("System proxy ($proxyServer)")
-        }
-    } else {
-        Write-Host "  System proxy is not pointing to $LanIP — nothing to do" -ForegroundColor DarkGray
     }
 
     # ── Summary ───────────────────────────────────────────────────────────────────
