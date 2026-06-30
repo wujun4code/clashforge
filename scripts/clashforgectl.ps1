@@ -41,6 +41,13 @@
 #   .\scripts\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-hyperv.vhdx'
 #   .\scripts\clashforgectl.ps1 hyperv -GithubMirror 'https://ghproxy.net/' -SubscriptionURL '...'
 #
+# Hyper-V lifecycle (requires Administrator):
+#   .\scripts\clashforgectl.ps1 hyperv-stop                 # stop VM + disable ClashForge-LAN adapter (restores original network)
+#   .\scripts\clashforgectl.ps1 hyperv-start                # start VM + enable adapter (metric 9000, won't preempt original NIC)
+#   .\scripts\clashforgectl.ps1 hyperv-route                # show current routing priority + auto-toggle
+#   .\scripts\clashforgectl.ps1 hyperv-route -HvMode clashforge   # set ClashForge-LAN as preferred gateway
+#   .\scripts\clashforgectl.ps1 hyperv-route -HvMode direct       # set original NIC as preferred gateway
+#
 # Hyper-V cleanup (remove VM, switch, VHDX, proxy; requires Administrator):
 #   .\scripts\clashforgectl.ps1 hyperv-remove
 #   .\scripts\clashforgectl.ps1 hyperv-remove -Yes          # skip all confirmations
@@ -55,7 +62,7 @@
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "hyperv-remove", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "hyperv-remove", "hyperv-stop", "hyperv-start", "hyperv-route", "help")]
     [string]$Action,
 
     # Connection parameters (required for all SSH-based actions; not needed for 'netdiag' or 'hyperv')
@@ -102,7 +109,7 @@ param(
     [switch]$Yes,
     [switch]$DryRun,
 
-    # hyperv options (only used when Action = 'hyperv'; requires Administrator)
+    # hyperv options (hyperv / hyperv-stop / hyperv-start / hyperv-route / hyperv-remove; requires Administrator)
     [string]$VMName          = 'ClashForge-Router',
     [string]$VHDXDir         = (Join-Path $env:USERPROFILE 'VMs\ClashForge'),
     [string]$VHDXPath        = '',
@@ -115,7 +122,11 @@ param(
     [string]$GithubMirror    = '',
     [string]$SubscriptionURL = '',
     [string]$ApiSecret       = '',
-    [switch]$SetSystemProxy
+    [switch]$SetSystemProxy,
+
+    # hyperv-route: routing mode — '' = auto-toggle, 'clashforge' = ClashForge takes priority, 'direct' = original NIC takes priority
+    [ValidateSet('', 'clashforge', 'direct')]
+    [string]$HvMode          = ''
 )
 
 Set-StrictMode -Version Latest
@@ -2188,6 +2199,238 @@ if ($Action -eq "hyperv-remove") {
         Write-Host " Nothing was removed." -ForegroundColor Yellow
     }
     Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+    exit 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HYPERV-STOP — stop VM + disable ClashForge-LAN adapter (restore original network)
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Action -eq "hyperv-stop") {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) { Die "The 'hyperv-stop' action requires Administrator privileges." }
+
+    function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+    function Write-OK  ([string]$msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
+    function Write-Warn([string]$msg) { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
+
+    # ── 1. Stop VM ───────────────────────────────────────────────────────────────
+    Write-Step "Stopping VM: $VMName"
+    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if ($vm) {
+        if ($vm.State -eq 'Off') {
+            Write-Warn "VM '$VMName' is already stopped"
+        } else {
+            Stop-VM -Name $VMName -Confirm:$false
+            Write-OK "VM '$VMName' stopped"
+        }
+    } else {
+        Write-Warn "VM '$VMName' not found"
+    }
+
+    # ── 2. Disable ClashForge-LAN adapter ────────────────────────────────────────
+    Write-Step "Disabling adapter: vEthernet ($LanSwitchName)"
+    $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$LanSwitchName*" } | Select-Object -First 1
+    if ($adapter) {
+        if ($adapter.Status -eq 'Disabled') {
+            Write-Warn "Adapter already disabled"
+        } else {
+            Disable-NetAdapter -Name $adapter.Name -Confirm:$false
+            Write-OK "vEthernet ($LanSwitchName) disabled"
+        }
+    } else {
+        Write-Warn "Adapter 'vEthernet ($LanSwitchName)' not found"
+    }
+
+    # ── 3. Show active network ────────────────────────────────────────────────────
+    Write-Step "Active network adapters"
+    Get-NetIPInterface -AddressFamily IPv4 | Where-Object { $_.ConnectionState -eq 'Connected' } |
+        Sort-Object InterfaceMetric |
+        ForEach-Object {
+            $ip = (Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                   Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1).IPAddress
+            Write-Host ("  metric {0,5}  {1,-35}  {2}" -f $_.InterfaceMetric, $_.InterfaceAlias, ($ip ?? '')) -ForegroundColor White
+        }
+
+    Write-Host ''
+    Write-OK "Original network is active. Run 'hyperv-start' to bring ClashForge back."
+    exit 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HYPERV-START — enable ClashForge-LAN adapter + start VM
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Action -eq "hyperv-start") {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) { Die "The 'hyperv-start' action requires Administrator privileges." }
+
+    function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+    function Write-OK  ([string]$msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
+    function Write-Warn([string]$msg) { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
+
+    # ── 1. Enable adapter ────────────────────────────────────────────────────────
+    Write-Step "Enabling adapter: vEthernet ($LanSwitchName)"
+    $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$LanSwitchName*" } | Select-Object -First 1
+    if ($adapter) {
+        if ($adapter.Status -ne 'Disabled') {
+            Write-Warn "Adapter already up (Status=$($adapter.Status))"
+        } else {
+            Enable-NetAdapter -Name $adapter.Name -Confirm:$false
+            Start-Sleep -Seconds 1
+            Write-OK "vEthernet ($LanSwitchName) enabled"
+        }
+        # Set metric high so it doesn't preempt the original NIC until user runs hyperv-route
+        Set-NetIPInterface -InterfaceAlias $adapter.Name -AddressFamily IPv4 -InterfaceMetric 9000 -ErrorAction SilentlyContinue
+        Set-NetIPInterface -InterfaceAlias $adapter.Name -AddressFamily IPv6 -InterfaceMetric 9000 -ErrorAction SilentlyContinue
+        Write-OK "Metric set to 9000 — original NIC still preferred (run 'hyperv-route' to switch)"
+    } else {
+        Write-Warn "Adapter 'vEthernet ($LanSwitchName)' not found — was the switch removed?"
+    }
+
+    # ── 2. Start VM ──────────────────────────────────────────────────────────────
+    Write-Step "Starting VM: $VMName"
+    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if (-not $vm) {
+        Write-Warn "VM '$VMName' not found. Run 'hyperv' to create it."
+        exit 1
+    }
+    if ($vm.State -eq 'Running') {
+        Write-Warn "VM '$VMName' is already running"
+    } else {
+        Start-VM -Name $VMName
+        Write-OK "VM '$VMName' started"
+    }
+
+    # ── 3. Wait for web UI ───────────────────────────────────────────────────────
+    Write-Step "Waiting for ClashForge to come online (up to 60s)..."
+    $deadline = (Get-Date).AddSeconds(60)
+    $online   = $false
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $r = Invoke-WebRequest -Uri "http://${LanIP}:7777" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            if ($r.StatusCode -lt 500) { $online = $true; break }
+        } catch { }
+        Write-Host '.' -NoNewline
+        Start-Sleep 3
+    }
+    Write-Host ''
+    if ($online) {
+        Write-OK "ClashForge is online at http://${LanIP}:7777"
+    } else {
+        Write-Warn "VM started but web UI not yet reachable — it may still be booting"
+    }
+    Write-Host "  Run 'hyperv-route -HvMode clashforge' to route traffic through ClashForge." -ForegroundColor DarkGray
+    exit 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HYPERV-ROUTE — show + switch routing priority between ClashForge and original NIC
+# Metrics: ClashForge mode = 5 (takes default gateway), Direct mode = 9000 (lowest priority)
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Action -eq "hyperv-route") {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) { Die "The 'hyperv-route' action requires Administrator privileges." }
+
+    function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+    function Write-OK  ([string]$msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
+    function Write-Warn([string]$msg) { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
+
+    $CF_METRIC_HIGH  = 5     # ClashForge-LAN takes priority (becomes default gateway)
+    $CF_METRIC_LOW   = 9000  # ClashForge-LAN is lowest priority
+
+    # ── Collect adapter state ────────────────────────────────────────────────────
+    $lanAlias   = "vEthernet ($LanSwitchName)"
+    $lanIface   = Get-NetIPInterface -InterfaceAlias $lanAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    $lanAdapter = Get-NetAdapter | Where-Object { $_.Name -eq $lanAlias } | Select-Object -First 1
+
+    $allIfaces = Get-NetIPInterface -AddressFamily IPv4 |
+        Where-Object { $_.InterfaceAlias -notlike '*Loopback*' } |
+        Sort-Object InterfaceMetric
+
+    Write-Step "Current network priority (IPv4)"
+    Write-Host ""
+    foreach ($iface in $allIfaces) {
+        $adp = Get-NetAdapter -InterfaceIndex $iface.InterfaceIndex -ErrorAction SilentlyContinue
+        $ip  = (Get-NetIPAddress -InterfaceIndex $iface.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1).IPAddress
+
+        $isCF     = ($iface.InterfaceAlias -eq $lanAlias)
+        $isUp     = ($adp -and $adp.Status -eq 'Up')
+        $connStr  = if ($iface.ConnectionState -eq 'Connected') { 'Connected  ' } else { 'Disconnected' }
+        $statusStr = if (-not $isUp) { '[Disabled]' } elseif ($iface.ConnectionState -eq 'Connected') { '[ Active ]' } else { '[No Link ]' }
+        $color     = if ($isCF -and $isUp -and $iface.InterfaceMetric -lt 100)  { 'Green'  } `
+                     elseif ($isCF)                                               { 'Yellow' } `
+                     elseif ($isUp -and $iface.ConnectionState -eq 'Connected')  { 'Cyan'   } `
+                     else                                                          { 'DarkGray' }
+        $tag = if ($isCF) { '<-- ClashForge-LAN' } else { '' }
+        Write-Host ("  metric {0,5}  {1}  {2,-35}  {3,-18}  {4}" -f `
+            $iface.InterfaceMetric, $statusStr, $iface.InterfaceAlias, ($ip ?? ''), $tag) -ForegroundColor $color
+    }
+    Write-Host ""
+
+    # ── Determine current mode ───────────────────────────────────────────────────
+    $lanMetric         = if ($lanIface) { $lanIface.InterfaceMetric } else { 99999 }
+    $isClashForgeMode  = ($lanMetric -le 100)  # metric ≤ 100 means ClashForge is preferred
+    $currentModeLabel  = if ($isClashForgeMode) { 'clashforge (ClashForge-LAN is preferred gateway)' } `
+                         else                    { 'direct (original NIC is preferred gateway)' }
+    Write-Host "  Current mode: $currentModeLabel" -ForegroundColor White
+
+    # ── Determine target mode ────────────────────────────────────────────────────
+    $targetMode = if ($HvMode -ne '') { $HvMode } `
+                  elseif ($isClashForgeMode) { 'direct' } `
+                  else                        { 'clashforge' }
+
+    if ($HvMode -eq '') {
+        Write-Host "  Auto-toggle -> switching to: $targetMode" -ForegroundColor DarkGray
+    }
+
+    # ── Guard: adapter must exist and be Up ──────────────────────────────────────
+    if (-not $lanAdapter) {
+        Write-Warn "Adapter '$lanAlias' not found. Run 'hyperv-start' first."
+        exit 1
+    }
+    if ($lanAdapter.Status -eq 'Disabled' -and $targetMode -eq 'clashforge') {
+        Write-Warn "Adapter '$lanAlias' is disabled. Run 'hyperv-start' to enable it first."
+        exit 1
+    }
+
+    # ── Apply ────────────────────────────────────────────────────────────────────
+    Write-Step "Applying: $targetMode mode"
+
+    if ($targetMode -eq 'clashforge') {
+        Set-NetIPInterface -InterfaceAlias $lanAlias -AddressFamily IPv4 -InterfaceMetric $CF_METRIC_HIGH -ErrorAction Stop
+        Set-NetIPInterface -InterfaceAlias $lanAlias -AddressFamily IPv6 -InterfaceMetric $CF_METRIC_HIGH -ErrorAction SilentlyContinue
+        Write-OK "ClashForge-LAN metric -> $CF_METRIC_HIGH (now preferred gateway)"
+        Write-Host "  All traffic will route through ClashForge ($LanIP)." -ForegroundColor DarkGray
+        Write-Host "  Proxy ports: HTTP=$LanIP`:17890  SOCKS5=$LanIP`:17891  Mixed=$LanIP`:17893" -ForegroundColor DarkGray
+    } else {
+        Set-NetIPInterface -InterfaceAlias $lanAlias -AddressFamily IPv4 -InterfaceMetric $CF_METRIC_LOW -ErrorAction Stop
+        Set-NetIPInterface -InterfaceAlias $lanAlias -AddressFamily IPv6 -InterfaceMetric $CF_METRIC_LOW -ErrorAction SilentlyContinue
+        Write-OK "ClashForge-LAN metric -> $CF_METRIC_LOW (original NIC now preferred)"
+        Write-Host "  Traffic bypasses ClashForge — using your original network." -ForegroundColor DarkGray
+    }
+
+    # ── Show updated table ────────────────────────────────────────────────────────
+    Write-Step "Updated network priority"
+    Write-Host ""
+    Get-NetIPInterface -AddressFamily IPv4 |
+        Where-Object { $_.InterfaceAlias -notlike '*Loopback*' } |
+        Sort-Object InterfaceMetric |
+        ForEach-Object {
+            $adp  = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
+            $ip   = (Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                     Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1).IPAddress
+            $isCF = ($_.InterfaceAlias -eq $lanAlias)
+            $isUp = ($adp -and $adp.Status -eq 'Up')
+            $statusStr = if (-not $isUp) { '[Disabled]' } elseif ($_.ConnectionState -eq 'Connected') { '[ Active ]' } else { '[No Link ]' }
+            $color = if ($isCF -and $isUp -and $_.InterfaceMetric -lt 100) { 'Green' } `
+                     elseif ($isCF)                                          { 'Yellow' } `
+                     elseif ($isUp -and $_.ConnectionState -eq 'Connected') { 'Cyan' }   `
+                     else                                                     { 'DarkGray' }
+            $tag = if ($isCF) { '<-- ClashForge-LAN' } else { '' }
+            Write-Host ("  metric {0,5}  {1}  {2,-35}  {3,-18}  {4}" -f `
+                $_.InterfaceMetric, $statusStr, $_.InterfaceAlias, ($ip ?? ''), $tag) -ForegroundColor $color
+        }
+    Write-Host ""
     exit 0
 }
 
