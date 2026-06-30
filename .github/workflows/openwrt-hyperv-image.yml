@@ -135,8 +135,9 @@ jobs:
 
           echo "Downloading: $IMAGE_NAME"
           curl -fsSL -o /tmp/openwrt.img.gz "${BASE}/${IMAGE_NAME}"
-          # zcat tolerates OpenWrt's trailing-garbage pattern that makes gunzip exit 2
-          zcat /tmp/openwrt.img.gz > /tmp/openwrt.img
+          # OpenWrt combined images have trailing non-gzip bytes that make
+          # gunzip/zcat exit 2; Python's gzip.open reads only the gzip stream.
+          python3 -c "import gzip,shutil; shutil.copyfileobj(gzip.open('/tmp/openwrt.img.gz','rb'), open('/tmp/openwrt.img','wb'))"
           rm /tmp/openwrt.img.gz
           echo "Raw image: $(du -sh /tmp/openwrt.img)"
           echo "OPENWRT_VER=$VER" >> "$GITHUB_ENV"
