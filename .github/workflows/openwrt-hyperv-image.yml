@@ -134,12 +134,27 @@ jobs:
           fi
 
           echo "Downloading: $IMAGE_NAME"
-          curl -fsSL -o /tmp/openwrt.img.gz "${BASE}/${IMAGE_NAME}"
-          # OpenWrt combined images have trailing non-gzip bytes that make
-          # gunzip/zcat exit 2; Python's gzip.open reads only the gzip stream.
+          # CDN occasionally returns a non-gzip body with HTTP 200 — verify
+          # magic bytes (gzip = 1f8b) and retry up to 3 times.
+          for retry in 1 2 3; do
+            HTTP=$(curl -sSL -o /tmp/openwrt.img.gz -w "%{http_code}" "${BASE}/${IMAGE_NAME}")
+            MAGIC=$(xxd -l 2 -p /tmp/openwrt.img.gz 2>/dev/null || echo "")
+            if [ "$MAGIC" = "1f8b" ]; then
+              printf 'Valid gzip on attempt %s (HTTP %s)\n' "$retry" "$HTTP"
+              break
+            fi
+            SZ=$(du -sh /tmp/openwrt.img.gz 2>/dev/null | cut -f1)
+            printf 'Attempt %s bad: HTTP=%s magic=%s size=%s\n' "$retry" "$HTTP" "$MAGIC" "$SZ" >&2
+            head -c 200 /tmp/openwrt.img.gz 2>/dev/null | strings | head -5 >&2 || true
+            rm -f /tmp/openwrt.img.gz
+            [ "$retry" -lt 3 ] && sleep $((retry * 10)) || { echo "No valid gzip after 3 attempts" >&2; exit 1; }
+          done
+          # gzip.open reads only the gzip stream, ignoring trailing non-gzip
+          # bytes that make gunzip/zcat exit 2 on OpenWrt combined images.
           python3 -c "import gzip,shutil; shutil.copyfileobj(gzip.open('/tmp/openwrt.img.gz','rb'), open('/tmp/openwrt.img','wb'))"
           rm /tmp/openwrt.img.gz
-          echo "Raw image: $(du -sh /tmp/openwrt.img)"
+          RAW_SIZE=$(du -sh /tmp/openwrt.img | cut -f1)
+          echo "Raw image: $RAW_SIZE"
           echo "OPENWRT_VER=$VER" >> "$GITHUB_ENV"
 
       # ── 6. Mount image, install ClashForge, configure network ─────────────
