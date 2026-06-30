@@ -294,6 +294,8 @@ jobs:
             --endpoint-url "$ENDPOINT" --no-progress
           aws s3 cp scripts/clashforgectl.ps1 "s3://${R2_BUCKET}/clashforgectl.ps1" \
             --endpoint-url "$ENDPOINT" --no-progress
+          aws s3 cp scripts/clashforgectl_impl.ps1 "s3://${R2_BUCKET}/clashforgectl_impl.ps1" \
+            --endpoint-url "$ENDPOINT" --no-progress
           CDN_URL="${R2_PUBLIC_URL%/}/${VHDX_FILE}"
           echo "CDN_VHDX_URL=${CDN_URL}" >> "$GITHUB_ENV"
           echo "Mirrored to R2: ${CDN_URL}"
@@ -334,8 +336,8 @@ jobs:
             ```powershell
             # 从 CDN 下载管理脚本（国内直连）
             Invoke-WebRequest -Uri 'https://dl.wei1xuan.com/clashforgectl.ps1' -OutFile "$env:TEMP\clashforgectl.ps1"
-            # 以管理员身份运行（会自动下载 VHDX、创建 VM）
-            Start-Process powershell -Verb RunAs -ArgumentList "-File `"$env:TEMP\clashforgectl.ps1`" hyperv -SubscriptionURL 'https://your-sub-url/...'"
+            # 直接运行（会自动检测 PS 版本、弹 UAC 提权、下载 VHDX、创建 VM）
+            & "$env:TEMP\clashforgectl.ps1" hyperv -SubscriptionURL 'https://your-sub-url/...'
             ```
 
             或使用已下载的 VHDX：
