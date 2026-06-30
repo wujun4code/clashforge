@@ -2141,6 +2141,38 @@ if ($Action -eq "hyperv-remove") {
     } else {
         Write-Host "  VM '$VMName' not found — already removed or never created" -ForegroundColor DarkGray
         $skipped.Add("VM '$VMName' (not found)")
+
+        # Fallback: scan $VHDXDir for orphaned .vhdx / .avhdx files
+        if ($VHDXDir -and (Test-Path $VHDXDir)) {
+            $orphans = @(Get-ChildItem $VHDXDir -Recurse -Include '*.vhdx','*.avhdx','*.sha256' -ErrorAction SilentlyContinue)
+            if ($orphans.Count -gt 0) {
+                Write-Step "Orphaned VHDX files in $VHDXDir"
+                foreach ($vhdx in $orphans) {
+                    $sizeMB = '{0:N0}' -f ($vhdx.Length / 1MB)
+                    Write-Host "  $($vhdx.FullName)  (${sizeMB} MB)" -ForegroundColor DarkGray
+                    if (Confirm-Remove "Delete this file?") {
+                        Remove-Item $vhdx.FullName -Force
+                        Write-OK "Deleted: $($vhdx.Name)"
+                        $removed.Add("VHDX: $($vhdx.FullName)")
+                    } else {
+                        Write-Warn "Kept: $($vhdx.Name)"
+                        $skipped.Add("VHDX: $($vhdx.FullName)")
+                    }
+                }
+                # Remove directory if now empty
+                Get-ChildItem $VHDXDir -Recurse -Directory -ErrorAction SilentlyContinue |
+                    Sort-Object FullName -Descending |
+                    Where-Object { @(Get-ChildItem $_.FullName -ErrorAction SilentlyContinue).Count -eq 0 } |
+                    ForEach-Object {
+                        Remove-Item $_.FullName -Force
+                        Write-OK "Removed empty directory: $($_.FullName)"
+                    }
+                if ((Test-Path $VHDXDir) -and @(Get-ChildItem $VHDXDir -ErrorAction SilentlyContinue).Count -eq 0) {
+                    Remove-Item $VHDXDir -Force
+                    Write-OK "Removed empty directory: $VHDXDir"
+                }
+            }
+        }
     }
 
     # ── 2. Remove internal LAN switch ────────────────────────────────────────────
