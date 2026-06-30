@@ -1767,7 +1767,6 @@ $scriptStartedMihomo = $false
 if ($Action -in @('hyperv','hyperv-remove','hyperv-stop','hyperv-start','hyperv-route')) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
-        # Rebuild argument list from bound parameters so we can pass them to the elevated instance
         $argParts = [System.Collections.Generic.List[string]]::new()
         $argParts.Add($Action)
         foreach ($kv in $PSBoundParameters.GetEnumerator()) {
@@ -1775,45 +1774,20 @@ if ($Action -in @('hyperv','hyperv-remove','hyperv-stop','hyperv-start','hyperv-
             if ($kv.Value -is [switch]) {
                 if ($kv.Value.IsPresent) { $argParts.Add("-$($kv.Key)") }
             } else {
-                $escaped = ($kv.Value -replace '"', '`"')
+                $escaped = ($kv.Value -replace '"', '\"')
                 $argParts.Add("-$($kv.Key) `"$escaped`"")
             }
         }
-        $argsStr   = $argParts -join ' '
-        $scriptEsc = $PSCommandPath -replace "'", "''"
-        $logFile   = Join-Path $env:TEMP "clashforgectl-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
-        '' | Out-File $logFile -Encoding utf8
-
-        $cmd = "& '$scriptEsc' $argsStr *>&1 | Tee-Object -FilePath `"$logFile`"; exit `$LASTEXITCODE"
-        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+        $argsStr = $argParts -join ' '
 
         Write-Host ''
         Write-Host '[clashforgectl] Hyper-V commands require Administrator.' -ForegroundColor Yellow
-        Write-Host '               Requesting elevation via UAC — approve the prompt to continue...' -ForegroundColor DarkGray
+        Write-Host '               A new elevated window will open — approve the UAC prompt.' -ForegroundColor DarkGray
         Write-Host ''
 
-        $proc = Start-Process pwsh -Verb RunAs -PassThru -WindowStyle Hidden `
-            -ArgumentList "-NoLogo -NoProfile -EncodedCommand $enc"
-
-        # Stream output from the elevated process to this terminal in real-time
-        $lastLen = 0
-        while (-not $proc.HasExited) {
-            try {
-                $raw = [System.IO.File]::ReadAllText($logFile, [System.Text.Encoding]::UTF8)
-                if ($raw.Length -gt $lastLen) {
-                    Write-Host $raw.Substring($lastLen) -NoNewline
-                    $lastLen = $raw.Length
-                }
-            } catch {}
-            Start-Sleep -Milliseconds 200
-        }
-        # Flush any remaining output after process exits
-        try {
-            $raw = [System.IO.File]::ReadAllText($logFile, [System.Text.Encoding]::UTF8)
-            if ($raw.Length -gt $lastLen) { Write-Host $raw.Substring($lastLen) -NoNewline }
-        } catch {}
-        Remove-Item $logFile -Force -ErrorAction SilentlyContinue
-        Write-Host ''
+        $proc = Start-Process pwsh -Verb RunAs -PassThru `
+            -ArgumentList "-NoLogo -NoProfile -File `"$PSCommandPath`" $argsStr"
+        $proc.WaitForExit()
         exit $proc.ExitCode
     }
 }
