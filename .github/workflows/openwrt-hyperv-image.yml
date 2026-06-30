@@ -294,8 +294,6 @@ jobs:
             --endpoint-url "$ENDPOINT" --no-progress
           aws s3 cp scripts/clashforgectl.ps1 "s3://${R2_BUCKET}/clashforgectl.ps1" \
             --endpoint-url "$ENDPOINT" --no-progress
-          aws s3 cp scripts/clashforgectl_impl.ps1 "s3://${R2_BUCKET}/clashforgectl_impl.ps1" \
-            --endpoint-url "$ENDPOINT" --no-progress
           CDN_URL="${R2_PUBLIC_URL%/}/${VHDX_FILE}"
           echo "CDN_VHDX_URL=${CDN_URL}" >> "$GITHUB_ENV"
           echo "Mirrored to R2: ${CDN_URL}"
