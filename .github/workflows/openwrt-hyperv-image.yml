@@ -22,10 +22,7 @@ jobs:
     env:
       # Hoisted to job level so step `if:` can use env.R2_ACCOUNT_ID != ''
       # (secrets context is unavailable in step-level if: expressions).
-      # R2_ACCOUNT_ID, R2_BUCKET, R2_PUBLIC_URL are non-sensitive → store as
-      # repository *variables* (Settings → Secrets and variables → Variables).
-      # R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY stay as secrets.
-      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -287,8 +284,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET:             ${{ vars.R2_BUCKET }}
-          R2_PUBLIC_URL:         ${{ vars.R2_PUBLIC_URL }}
+          R2_BUCKET:             ${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_URL:         https://dl.wei1xuan.com
         run: |
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           aws s3 cp "/tmp/${VHDX_FILE}" "s3://${R2_BUCKET}/${VHDX_FILE}" \
