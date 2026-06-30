@@ -1933,40 +1933,55 @@ if ($Action -eq "hyperv") {
         }
 
     } else {
-        Write-Step "Downloading latest ClashForge Hyper-V image from GitHub"
-        $mirrorPrefix = if ($GithubMirror -ne '') { $GithubMirror.TrimEnd('/') + '/' } else { '' }
-        if ($mirrorPrefix -ne '') { Write-Warn "GitHub download mirror: $mirrorPrefix" }
+        Write-Step "Downloading latest ClashForge Hyper-V image"
 
-        $releaseApi = "https://api.github.com/repos/$GitHubRepo/releases/latest"
-        Write-Host "  Querying $releaseApi ..."
+        # Primary: query R2 CDN manifest (works without GitHub access)
+        $r2ManifestUrl = 'https://dl.wei1xuan.com/hyperv-latest.json'
+        Write-Host "  Querying CDN manifest: $r2ManifestUrl ..."
+        $dlUrl   = ''
+        $vhdxName = ''
         try {
-            $release = Invoke-RestMethod -Uri $releaseApi -UseBasicParsing `
-                -Headers @{ 'Accept' = 'application/vnd.github+json' }
+            $manifest = Invoke-RestMethod -Uri $r2ManifestUrl -UseBasicParsing
+            $dlUrl    = $manifest.vhdx_url
+            $vhdxName = $manifest.vhdx
+            Write-OK "Found: $vhdxName  (OpenWrt $($manifest.openwrt_version), built $($manifest.built_at))"
         } catch {
-            Write-Fail "Failed to query GitHub API: $_"
-            Write-Host ""
-            Write-Host "  If GitHub is unreachable, try one of these alternatives:" -ForegroundColor Yellow
-            Write-Host "    1. Mirror  : .\clashforgectl.ps1 hyperv -GithubMirror 'https://ghproxy.net/'" -ForegroundColor Yellow
-            Write-Host "    2. CDN URL : .\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-hyperv.vhdx'" -ForegroundColor Yellow
-            Write-Host "    3. Local   : .\clashforgectl.ps1 hyperv -VHDXPath C:\path\to\clashforge.vhdx" -ForegroundColor Yellow
-            exit 1
+            Write-Warn "CDN manifest unavailable ($_), falling back to GitHub releases API..."
         }
 
-        $vhdxAsset = $release.assets | Where-Object { $_.name -like '*.vhdx' } | Select-Object -First 1
-        if (-not $vhdxAsset) {
-            Write-Fail "No .vhdx asset found in release '$($release.tag_name)'."
-            Write-Host "  Has the 'Build OpenWrt + ClashForge Hyper-V Image' workflow run for this release?"
-            exit 1
+        # Fallback: GitHub releases API
+        if (-not $dlUrl) {
+            $mirrorPrefix = if ($GithubMirror -ne '') { $GithubMirror.TrimEnd('/') + '/' } else { '' }
+            if ($mirrorPrefix -ne '') { Write-Warn "GitHub download mirror: $mirrorPrefix" }
+            $releaseApi = "https://api.github.com/repos/$GitHubRepo/releases/latest"
+            Write-Host "  Querying $releaseApi ..."
+            try {
+                $release   = Invoke-RestMethod -Uri $releaseApi -UseBasicParsing `
+                    -Headers @{ 'Accept' = 'application/vnd.github+json' }
+                $vhdxAsset = $release.assets | Where-Object { $_.name -like '*.vhdx' } | Select-Object -First 1
+                if (-not $vhdxAsset) {
+                    Write-Fail "No .vhdx asset found in GitHub release '$($release.tag_name)'."
+                    exit 1
+                }
+                $dlUrl    = if ($mirrorPrefix) { "${mirrorPrefix}$($vhdxAsset.browser_download_url)" } `
+                            else               { $vhdxAsset.browser_download_url }
+                $vhdxName = $vhdxAsset.name
+            } catch {
+                Write-Fail "Both CDN and GitHub are unreachable: $_"
+                Write-Host ""
+                Write-Host "  Alternatives:" -ForegroundColor Yellow
+                Write-Host "    Direct URL : .\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-hyperv.vhdx'" -ForegroundColor Yellow
+                Write-Host "    Local file : .\clashforgectl.ps1 hyperv -VHDXPath C:\path\to\clashforge.vhdx" -ForegroundColor Yellow
+                exit 1
+            }
         }
 
         New-Item -ItemType Directory -Path $VHDXDir -Force | Out-Null
-        $VHDXPath = Join-Path $VHDXDir $vhdxAsset.name
+        $VHDXPath = Join-Path $VHDXDir $vhdxName
 
         if (Test-Path $VHDXPath) {
             Write-Warn "File already exists at $VHDXPath, skipping download."
         } else {
-            $dlUrl = if ($mirrorPrefix) { "${mirrorPrefix}$($vhdxAsset.browser_download_url)" } `
-                     else               { $vhdxAsset.browser_download_url }
             Invoke-DownloadFile -Url $dlUrl -Dest $VHDXPath
         }
     }

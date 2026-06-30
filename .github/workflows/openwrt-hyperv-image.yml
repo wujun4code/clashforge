@@ -302,6 +302,19 @@ jobs:
           echo "Mirrored to R2: ${CDN_URL}"
           echo "clashforgectl.ps1 mirrored to R2: ${R2_PUBLIC_URL%/}/clashforgectl.ps1"
 
+          # Publish latest-version manifest so clashforgectl.ps1 can discover
+          # the VHDX URL without hitting the GitHub API (useful in CN networks).
+          # Use printf to avoid YAML-unsafe heredoc with { } at column 0.
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf '{"openwrt_version":"%s","vhdx":"%s","vhdx_url":"%s","sha256_url":"%s","built_at":"%s"}\n' \
+            "$OPENWRT_VER" "$VHDX_FILE" "$CDN_URL" "${CDN_URL}.sha256" "$BUILT_AT" \
+            > /tmp/hyperv-latest.json
+          cat /tmp/hyperv-latest.json
+          aws s3 cp /tmp/hyperv-latest.json "s3://${R2_BUCKET}/hyperv-latest.json" \
+            --endpoint-url "$ENDPOINT" --no-progress \
+            --content-type "application/json" --cache-control "no-cache"
+          echo "hyperv-latest.json published to R2"
+
       # ── 10. Attach to GitHub Release (when triggered by release event) ────────
       - name: Attach to GitHub Release
         if: github.event_name == 'release'
