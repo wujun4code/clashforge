@@ -149,9 +149,10 @@ jobs:
             rm -f /tmp/openwrt.img.gz
             [ "$retry" -lt 3 ] && sleep $((retry * 10)) || { echo "No valid gzip after 3 attempts" >&2; exit 1; }
           done
-          # gzip.open reads only the gzip stream, ignoring trailing non-gzip
-          # bytes that make gunzip/zcat exit 2 on OpenWrt combined images.
-          python3 -c "import gzip,shutil; shutil.copyfileobj(gzip.open('/tmp/openwrt.img.gz','rb'), open('/tmp/openwrt.img','wb'))"
+          # OpenWrt combined images have non-gzip trailing bytes; gunzip exits 2
+          # ("trailing garbage ignored") but the output is complete.  The ||
+          # clause accepts exit 2 while still failing on exit 1 (real error).
+          gunzip -c /tmp/openwrt.img.gz > /tmp/openwrt.img || [ "$?" -eq 2 ]
           rm /tmp/openwrt.img.gz
           RAW_SIZE=$(du -sh /tmp/openwrt.img | cut -f1)
           echo "Raw image: $RAW_SIZE"
