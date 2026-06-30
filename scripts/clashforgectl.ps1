@@ -34,21 +34,28 @@
 #   .\scripts\clashforgectl.ps1 -Router 192.168.20.1 netdiag -Monitor
 #   .\scripts\clashforgectl.ps1 -Router 192.168.20.1 netdiag -ApiPort 7777 -LogDir .\diag-logs
 #
+# Hyper-V one-click deploy (no -Router needed, requires Administrator):
+#   .\scripts\clashforgectl.ps1 hyperv
+#   .\scripts\clashforgectl.ps1 hyperv -SubscriptionURL 'https://your-sub-url/...'
+#   .\scripts\clashforgectl.ps1 hyperv -VHDXPath C:\VMs\clashforge.vhdx -SubscriptionURL '...'
+#   .\scripts\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-hyperv.vhdx'
+#   .\scripts\clashforgectl.ps1 hyperv -GithubMirror 'https://ghproxy.net/' -SubscriptionURL '...'
+#
 # Requirements:
-#   - ssh and scp must be available (OpenSSH bundled with Windows 10/11)
-#   - clashforgectl.sh must exist alongside this script (or in scripts/)
+#   - ssh and scp must be available for SSH-based actions (OpenSSH bundled with Windows 10/11)
+#   - clashforgectl.sh must exist alongside this script (or in scripts/) for SSH-based actions
 #   - Password-less SSH key auth is recommended
+#   - The 'hyperv' action requires Administrator privileges and Windows Hyper-V
 
 [CmdletBinding()]
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "help")]
     [string]$Action,
 
-    # Connection parameters
-    [Parameter(Mandatory)]
-    [string]$Router,                      # Router IP or hostname
+    # Connection parameters (required for all SSH-based actions; not needed for 'netdiag' or 'hyperv')
+    [string]$Router = '',                 # Router IP or hostname
 
     [string]$User     = "root",
     [int]$Port        = 22,
@@ -89,7 +96,22 @@ param(
 
     # common options
     [switch]$Yes,
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    # hyperv options (only used when Action = 'hyperv'; requires Administrator)
+    [string]$VMName          = 'ClashForge-Router',
+    [string]$VHDXDir         = (Join-Path $env:USERPROFILE 'VMs\ClashForge'),
+    [string]$VHDXPath        = '',
+    [string]$LanSwitchName   = 'ClashForge-LAN',
+    [string]$LanIP           = '192.168.77.1',
+    [int]   $MemoryMB        = 512,
+    [int]   $CPUCount        = 1,
+    [string]$GitHubRepo      = 'wujun4code/clashforge',
+    [string]$VHDXUrl         = '',
+    [string]$GithubMirror    = '',
+    [string]$SubscriptionURL = '',
+    [string]$ApiSecret       = '',
+    [switch]$SetSystemProxy
 )
 
 Set-StrictMode -Version Latest
@@ -1723,6 +1745,314 @@ $scriptStartedMihomo = $false
     exit 0
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# HYPERV — create OpenWrt + ClashForge VM on Windows Hyper-V
+# Requires Administrator privileges.
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Action -eq "hyperv") {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Die "The 'hyperv' action requires Administrator privileges.`nRight-click PowerShell -> 'Run as administrator', then retry."
+    }
+
+    function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+    function Write-OK  ([string]$msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
+    function Write-Warn([string]$msg) { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
+    function Write-Fail([string]$msg) { Write-Host "  [XX] $msg" -ForegroundColor Red }
+
+    function Invoke-DownloadFile([string]$Url, [string]$Dest) {
+        Write-Host "  Downloading: $Url"
+        Write-Host "  Destination: $Dest"
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+        $sw.Stop()
+        Write-OK "Downloaded in $($sw.Elapsed.TotalSeconds.ToString('F1'))s  ($('{0:N1}' -f ((Get-Item $Dest).Length / 1MB)) MB)"
+    }
+
+    function Invoke-CF {
+        param([string]$Method, [string]$Path, [object]$Body = $null, [switch]$SSE)
+        $uri     = "http://${LanIP}:7777${Path}"
+        $headers = @{ 'Content-Type' = 'application/json' }
+        if ($ApiSecret -ne '') { $headers['Authorization'] = "Bearer $ApiSecret" }
+        if ($SSE) {
+            $client  = [System.Net.Http.HttpClient]::new()
+            $client.Timeout = [System.TimeSpan]::FromSeconds(120)
+            foreach ($k in $headers.Keys) { $client.DefaultRequestHeaders.Add($k, $headers[$k]) }
+            $json   = if ($Body) { [System.Net.Http.StringContent]::new(($Body | ConvertTo-Json -Depth 10 -Compress), [System.Text.Encoding]::UTF8, 'application/json') } else { $null }
+            $req    = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), $uri)
+            if ($json) { $req.Content = $json }
+            $resp   = $client.SendAsync($req, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+            $stream = $resp.Content.ReadAsStreamAsync().Result
+            $reader = [System.IO.StreamReader]::new($stream)
+            $result = $null
+            while (-not $reader.EndOfStream) {
+                $line = $reader.ReadLine()
+                if ($line -match '^data:\s*(\{.+\})$') {
+                    $evt = $Matches[1] | ConvertFrom-Json
+                    if ($evt.type -eq 'step') {
+                        $icon = if ($evt.status -eq 'ok') { '  [OK]' } elseif ($evt.status -eq 'error') { '  [XX]' } else { '  [ ]' }
+                        Write-Host "$icon $($evt.step): $($evt.message)"
+                    }
+                    if ($evt.type -eq 'done') { $result = $evt; break }
+                }
+            }
+            $client.Dispose()
+            return $result
+        } else {
+            $bodyJson = if ($Body) { $Body | ConvertTo-Json -Depth 10 -Compress } else { $null }
+            return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers `
+                   -Body $bodyJson -UseBasicParsing -ErrorAction Stop
+        }
+    }
+
+    # ── 0. Pre-flight checks ─────────────────────────────────────────────────────
+    Write-Step "Pre-flight checks"
+
+    $hvEnabled = $false
+    try {
+        $hvFeature = Get-WindowsOptionalFeature -Online -FeatureName 'Microsoft-Hyper-V-All' -ErrorAction Stop
+        $hvEnabled = $hvFeature.State -eq 'Enabled'
+    } catch {
+        $vmms = Get-Service -Name vmms -ErrorAction SilentlyContinue
+        $hvEnabled = ($vmms -and $vmms.Status -eq 'Running')
+    }
+    if (-not $hvEnabled) {
+        Write-Fail "Hyper-V is not enabled on this machine."
+        Write-Host @"
+
+  To enable Hyper-V, run this in an elevated PowerShell and reboot:
+    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
+
+  Or via Settings -> Apps -> Optional features -> More Windows features -> Hyper-V
+"@
+        exit 1
+    }
+    Write-OK "Hyper-V is enabled"
+
+    if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
+        Write-Warn "VM '$VMName' already exists."
+        $choice = Read-Host "  Delete and recreate? [y/N]"
+        if ($choice -match '^[Yy]') {
+            $existing = Get-VM -Name $VMName
+            if ($existing.State -ne 'Off') { Stop-VM -Name $VMName -Force }
+            Remove-VM -Name $VMName -Force
+            Write-OK "Removed existing VM"
+        } else {
+            Write-Host "Aborted." -ForegroundColor Yellow
+            exit 0
+        }
+    }
+
+    # ── 1. Download / locate VHDX ────────────────────────────────────────────────
+    if ($VHDXPath -ne '' -and (Test-Path $VHDXPath)) {
+        Write-Step "Using provided VHDX: $VHDXPath"
+        Write-OK "$('{0:N0}' -f ((Get-Item $VHDXPath).Length / 1MB)) MB"
+
+    } elseif ($VHDXUrl -ne '') {
+        Write-Step "Downloading VHDX from custom URL"
+        New-Item -ItemType Directory -Path $VHDXDir -Force | Out-Null
+        $vhdxName = [System.IO.Path]::GetFileName(([uri]$VHDXUrl).LocalPath)
+        if (-not $vhdxName -or $vhdxName -notlike '*.vhdx') { $vhdxName = 'clashforge-hyperv.vhdx' }
+        $VHDXPath = Join-Path $VHDXDir $vhdxName
+        if (Test-Path $VHDXPath) {
+            Write-Warn "File already exists at $VHDXPath, skipping download."
+        } else {
+            Invoke-DownloadFile -Url $VHDXUrl -Dest $VHDXPath
+        }
+
+    } else {
+        Write-Step "Downloading latest ClashForge Hyper-V image from GitHub"
+        $mirrorPrefix = if ($GithubMirror -ne '') { $GithubMirror.TrimEnd('/') + '/' } else { '' }
+        if ($mirrorPrefix -ne '') { Write-Warn "GitHub download mirror: $mirrorPrefix" }
+
+        $releaseApi = "https://api.github.com/repos/$GitHubRepo/releases/latest"
+        Write-Host "  Querying $releaseApi ..."
+        try {
+            $release = Invoke-RestMethod -Uri $releaseApi -UseBasicParsing `
+                -Headers @{ 'Accept' = 'application/vnd.github+json' }
+        } catch {
+            Write-Fail "Failed to query GitHub API: $_"
+            Write-Host ""
+            Write-Host "  If GitHub is unreachable, try one of these alternatives:" -ForegroundColor Yellow
+            Write-Host "    1. Mirror  : .\clashforgectl.ps1 hyperv -GithubMirror 'https://ghproxy.net/'" -ForegroundColor Yellow
+            Write-Host "    2. CDN URL : .\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-hyperv.vhdx'" -ForegroundColor Yellow
+            Write-Host "    3. Local   : .\clashforgectl.ps1 hyperv -VHDXPath C:\path\to\clashforge.vhdx" -ForegroundColor Yellow
+            exit 1
+        }
+
+        $vhdxAsset = $release.assets | Where-Object { $_.name -like '*.vhdx' } | Select-Object -First 1
+        if (-not $vhdxAsset) {
+            Write-Fail "No .vhdx asset found in release '$($release.tag_name)'."
+            Write-Host "  Has the 'Build OpenWrt + ClashForge Hyper-V Image' workflow run for this release?"
+            exit 1
+        }
+
+        New-Item -ItemType Directory -Path $VHDXDir -Force | Out-Null
+        $VHDXPath = Join-Path $VHDXDir $vhdxAsset.name
+
+        if (Test-Path $VHDXPath) {
+            Write-Warn "File already exists at $VHDXPath, skipping download."
+        } else {
+            $dlUrl = if ($mirrorPrefix) { "${mirrorPrefix}$($vhdxAsset.browser_download_url)" } `
+                     else               { $vhdxAsset.browser_download_url }
+            Invoke-DownloadFile -Url $dlUrl -Dest $VHDXPath
+        }
+    }
+
+    # ── 2. Create internal LAN switch ────────────────────────────────────────────
+    Write-Step "Configuring Hyper-V internal switch: $LanSwitchName"
+
+    $lanSwitch = Get-VMSwitch -Name $LanSwitchName -ErrorAction SilentlyContinue
+    if (-not $lanSwitch) {
+        New-VMSwitch -Name $LanSwitchName -SwitchType Internal | Out-Null
+        Write-OK "Created internal switch '$LanSwitchName'"
+    } else {
+        Write-OK "Switch '$LanSwitchName' already exists"
+    }
+
+    $vEth = Get-NetAdapter | Where-Object { $_.Name -like "*$LanSwitchName*" } | Select-Object -First 1
+    if ($vEth) {
+        Get-NetIPAddress -InterfaceIndex $vEth.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.PrefixOrigin -ne 'WellKnown' } |
+            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+        Set-NetIPInterface -InterfaceIndex $vEth.InterfaceIndex -Dhcp Enabled -ErrorAction SilentlyContinue
+        Write-OK "vEthernet ($LanSwitchName) set to DHCP — OpenWrt will assign an IP after VM boots"
+    } else {
+        Write-Warn "Could not find vEthernet adapter for '$LanSwitchName'"
+    }
+
+    # ── 3. Check Default Switch (for WAN) ────────────────────────────────────────
+    Write-Step "Verifying WAN switch"
+    $defaultSwitch = Get-VMSwitch | Where-Object { $_.Name -eq 'Default Switch' } | Select-Object -First 1
+    if (-not $defaultSwitch) {
+        Write-Warn "'Default Switch' not found. Using first external/NAT switch as WAN."
+        $defaultSwitch = Get-VMSwitch | Where-Object { $_.SwitchType -in 'External','Internal' } | Select-Object -First 1
+        if (-not $defaultSwitch) {
+            Write-Fail "No suitable WAN switch found. Connect the VM to a switch manually after creation."
+        }
+    }
+    $wanSwitchName = if ($defaultSwitch) { $defaultSwitch.Name } else { '' }
+    Write-OK "WAN switch: $wanSwitchName"
+
+    # ── 4. Create VM ─────────────────────────────────────────────────────────────
+    Write-Step "Creating VM: $VMName"
+
+    $null = New-VM -Name $VMName -Generation 1 -MemoryStartupBytes ($MemoryMB * 1MB) -NoVHD
+    Set-VMProcessor -VMName $VMName -Count $CPUCount
+    Set-VMMemory    -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes ($MemoryMB * 1MB)
+    Set-VMDvdDrive  -VMName $VMName -Path $null -ErrorAction SilentlyContinue
+    Add-VMHardDiskDrive -VMName $VMName -Path $VHDXPath -ControllerType IDE -ControllerNumber 0 -ControllerLocation 0
+    Set-VMBios          -VMName $VMName -StartupOrder @('IDE', 'CD', 'LegacyNetworkAdapter', 'Floppy')
+    Write-OK "VM created (Gen1, ${MemoryMB}MB RAM, ${CPUCount} vCPU)"
+
+    # ── 5. Configure NICs ────────────────────────────────────────────────────────
+    Write-Step "Configuring network adapters"
+
+    Get-VMNetworkAdapter -VMName $VMName | Remove-VMNetworkAdapter
+
+    if ($wanSwitchName) {
+        Add-VMNetworkAdapter -VMName $VMName -SwitchName $wanSwitchName -Name 'WAN'
+        Write-OK "WAN NIC -> $wanSwitchName"
+    } else {
+        Add-VMNetworkAdapter -VMName $VMName -Name 'WAN'
+        Write-Warn "WAN NIC created but not connected (no switch found)"
+    }
+    Add-VMNetworkAdapter -VMName $VMName -SwitchName $LanSwitchName -Name 'LAN'
+    Write-OK "LAN NIC -> $LanSwitchName (OpenWrt LAN: $LanIP)"
+
+    # ── 6. Start VM ──────────────────────────────────────────────────────────────
+    Write-Step "Starting VM"
+    Start-VM -Name $VMName
+    Write-OK "VM started"
+
+    # ── 7. Wait for web UI ───────────────────────────────────────────────────────
+    Write-Step "Waiting for ClashForge to come online (up to 90s)..."
+    $deadline = (Get-Date).AddSeconds(90)
+    $online   = $false
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $r = Invoke-WebRequest -Uri "http://${LanIP}:7777" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            if ($r.StatusCode -lt 500) { $online = $true; break }
+        } catch { }
+        Write-Host '.' -NoNewline
+        Start-Sleep 3
+    }
+    Write-Host ''
+
+    if ($online) {
+        Write-OK "ClashForge is online!"
+    } else {
+        Write-Warn "Could not reach http://${LanIP}:7777 within 90s. VM may still be booting."
+    }
+
+    # ── 8. Configure subscription + apply TUN mode ───────────────────────────────
+    if ($SubscriptionURL -ne '' -and $online) {
+        Write-Step "Configuring subscription"
+
+        $sub   = Invoke-CF -Method POST -Path '/api/v1/subscriptions' -Body @{
+            name = 'auto'; type = 'url'; url = $SubscriptionURL; enabled = $true
+        }
+        $subId = $sub.id
+        Write-OK "Subscription added (id=$subId)"
+
+        Write-Host "  Fetching nodes from subscription URL..."
+        try {
+            Invoke-CF -Method POST -Path "/api/v1/subscriptions/$subId/sync-update" | Out-Null
+            Write-OK "Nodes fetched"
+        } catch {
+            Write-Warn "sync-update failed ($_) — will proceed anyway"
+        }
+
+        Write-Step "Applying TUN mode (transparent proxy)"
+        $applyResult = Invoke-CF -Method POST -Path '/api/v1/core/apply' -SSE -Body @{
+            source  = @{ type = 'sub_id'; sub_id = $subId; sync = $false }
+            network = @{ mode = 'tun'; firewall_backend = 'auto'; bypass_lan = $true; bypass_china = $false; apply_on_start = $true; ipv6 = $false }
+            dns     = @{ enable = $true; mode = 'fake-ip'; dnsmasq_mode = 'upstream'; apply_on_start = $true; nameservers = @('119.29.29.29', '223.5.5.5'); fallback = @('8.8.8.8', '1.1.1.1') }
+        }
+        if ($applyResult -and $applyResult.success) {
+            Write-OK "TUN mode active — proxy is running"
+        } else {
+            $errMsg = if ($applyResult) { $applyResult.error } else { 'no response' }
+            Write-Warn "Apply finished with issues: $errMsg"
+            Write-Host "  Open http://${LanIP}:7777 to check status and configure manually."
+        }
+    } elseif ($SubscriptionURL -eq '') {
+        Write-Warn "No -SubscriptionURL provided — proxy not started."
+        Write-Host "  Open http://${LanIP}:7777 and configure a subscription manually."
+    }
+
+    # ── 9. Optionally set system proxy ───────────────────────────────────────────
+    if ($SetSystemProxy) {
+        Write-Step "Configuring Windows system proxy"
+        $proxyServer = "${LanIP}:17890"
+        $lanSubnet   = ($LanIP -split '\.')[0..2] -join '.'
+        $regPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        Set-ItemProperty -Path $regPath -Name ProxyServer  -Value $proxyServer
+        Set-ItemProperty -Path $regPath -Name ProxyEnable  -Value 1
+        Set-ItemProperty -Path $regPath -Name ProxyOverride -Value "localhost;127.*;${lanSubnet}.*;10.*;172.16.*;<local>"
+        Write-OK "System HTTP proxy set to $proxyServer"
+        Write-Warn "Restart your browser for proxy changes to take effect."
+    }
+
+    # ── Summary ───────────────────────────────────────────────────────────────────
+    Write-Host ''
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+    Write-Host " ClashForge VM is running!" -ForegroundColor Green
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+    Write-Host "  VM Name   : $VMName"
+    Write-Host "  Web UI    : http://${LanIP}:7777"
+    Write-Host "  HTTP Proxy: ${LanIP}:17890"
+    Write-Host "  SOCKS5    : ${LanIP}:17891"
+    Write-Host "  Mixed     : ${LanIP}:17893"
+    Write-Host ''
+    Write-Host "  To stop the VM:" -ForegroundColor DarkGray
+    Write-Host "    Stop-VM -Name '$VMName'" -ForegroundColor DarkGray
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+
+    try { if ($online) { Start-Process "http://${LanIP}:7777" } } catch { }
+    exit 0
+}
+
 function Download-WithFallback {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -1932,6 +2262,10 @@ if ($Identity -ne "") {
 }
 
 $RemoteScript = "/tmp/clashforgectl.sh"
+
+if ($Router -eq '') {
+    Die "-Router is required for '$Action'. Example: .\clashforgectl.ps1 -Router 192.168.1.1 $Action"
+}
 
 Log "Router  : $Target  (port $Port)"
 Log "Script  : $ShScript"
