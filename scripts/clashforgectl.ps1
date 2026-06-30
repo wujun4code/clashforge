@@ -1,4 +1,5 @@
-﻿# clashforgectl.ps1 — ClashForge Remote Control Script (Windows)
+﻿#Requires -Version 7.0
+# clashforgectl.ps1 — ClashForge Remote Control Script (Windows)
 #
 # Uploads clashforgectl.sh to the target router and executes the requested
 # subcommand over SSH, providing a unified control surface from Windows.
