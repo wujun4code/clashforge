@@ -295,9 +295,12 @@ jobs:
             --endpoint-url "$ENDPOINT" --no-progress
           aws s3 cp "/tmp/${VHDX_FILE}.sha256" "s3://${R2_BUCKET}/${VHDX_FILE}.sha256" \
             --endpoint-url "$ENDPOINT" --no-progress
+          aws s3 cp scripts/clashforgectl.ps1 "s3://${R2_BUCKET}/clashforgectl.ps1" \
+            --endpoint-url "$ENDPOINT" --no-progress
           CDN_URL="${R2_PUBLIC_URL%/}/${VHDX_FILE}"
           echo "CDN_VHDX_URL=${CDN_URL}" >> "$GITHUB_ENV"
           echo "Mirrored to R2: ${CDN_URL}"
+          echo "clashforgectl.ps1 mirrored to R2: ${R2_PUBLIC_URL%/}/clashforgectl.ps1"
 
       # ── 10. Attach to GitHub Release (when triggered by release event) ────────
       - name: Attach to GitHub Release
@@ -307,6 +310,7 @@ jobs:
           files: |
             /tmp/clashforge-openwrt-*.vhdx
             /tmp/clashforge-openwrt-*.sha256
+            scripts/clashforgectl.ps1
           append_body: true
           body: |
 
@@ -318,12 +322,15 @@ jobs:
 
             **一键部署（Windows PowerShell，需管理员权限）：**
             ```powershell
-            irm https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/Start-ClashForgeHyperV.ps1 | iex
+            # 从 CDN 下载管理脚本（国内直连）
+            Invoke-WebRequest -Uri 'https://dl.wei1xuan.com/clashforgectl.ps1' -OutFile "$env:TEMP\clashforgectl.ps1"
+            # 以管理员身份运行（会自动下载 VHDX、创建 VM）
+            Start-Process powershell -Verb RunAs -ArgumentList "-File `"$env:TEMP\clashforgectl.ps1`" hyperv -SubscriptionURL 'https://your-sub-url/...'"
             ```
 
-            或手动下载 VHDX 后：
+            或使用已下载的 VHDX：
             ```powershell
-            .\Start-ClashForgeHyperV.ps1 -VHDXPath C:\VMs\clashforge-openwrt-${{ env.OPENWRT_VER }}-hyperv.vhdx
+            .\clashforgectl.ps1 hyperv -VHDXPath C:\VMs\clashforge-openwrt-${{ env.OPENWRT_VER }}-hyperv.vhdx -SubscriptionURL '...'
             ```
 
             **VM 网络规划：**
@@ -341,8 +348,8 @@ jobs:
 
             > **网络受限时下载 VHDX：**
             > ```powershell
-            > # 使用 GitHub 镜像代理（api.github.com 可访问时）
-            > .\Start-ClashForgeHyperV.ps1 -GithubMirror 'https://ghproxy.net/' -SubscriptionURL '...'
+            > # 使用 GitHub 镜像代理
+            > .\clashforgectl.ps1 hyperv -GithubMirror 'https://ghproxy.net/' -SubscriptionURL '...'
             > # 或直接指定 CDN 地址（绕过 GitHub）
-            > .\Start-ClashForgeHyperV.ps1 -VHDXUrl 'https://your-cdn/clashforge.vhdx' -SubscriptionURL '...'
+            > .\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-${{ env.OPENWRT_VER }}-hyperv.vhdx' -SubscriptionURL '...'
             > ```
