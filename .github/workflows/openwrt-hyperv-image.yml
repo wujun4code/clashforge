@@ -22,10 +22,7 @@ jobs:
     env:
       # Hoisted to job level so step `if:` can use env.R2_ACCOUNT_ID != ''
       # (secrets context is unavailable in step-level if: expressions).
-      # R2_ACCOUNT_ID, R2_BUCKET, R2_PUBLIC_URL are non-sensitive → store as
-      # repository *variables* (Settings → Secrets and variables → Variables).
-      # R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY stay as secrets.
-      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -287,8 +284,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET:             ${{ vars.R2_BUCKET }}
-          R2_PUBLIC_URL:         ${{ vars.R2_PUBLIC_URL }}
+          R2_BUCKET:             ${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_URL:         https://dl.wei1xuan.com
         run: |
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           aws s3 cp "/tmp/${VHDX_FILE}" "s3://${R2_BUCKET}/${VHDX_FILE}" \
@@ -297,10 +294,25 @@ jobs:
             --endpoint-url "$ENDPOINT" --no-progress
           aws s3 cp scripts/clashforgectl.ps1 "s3://${R2_BUCKET}/clashforgectl.ps1" \
             --endpoint-url "$ENDPOINT" --no-progress
+          aws s3 cp scripts/clashforgectl_impl.ps1 "s3://${R2_BUCKET}/clashforgectl_impl.ps1" \
+            --endpoint-url "$ENDPOINT" --no-progress
           CDN_URL="${R2_PUBLIC_URL%/}/${VHDX_FILE}"
           echo "CDN_VHDX_URL=${CDN_URL}" >> "$GITHUB_ENV"
           echo "Mirrored to R2: ${CDN_URL}"
           echo "clashforgectl.ps1 mirrored to R2: ${R2_PUBLIC_URL%/}/clashforgectl.ps1"
+
+          # Publish latest-version manifest so clashforgectl.ps1 can discover
+          # the VHDX URL without hitting the GitHub API (useful in CN networks).
+          # Use printf to avoid YAML-unsafe heredoc with { } at column 0.
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf '{"openwrt_version":"%s","vhdx":"%s","vhdx_url":"%s","sha256_url":"%s","built_at":"%s"}\n' \
+            "$OPENWRT_VER" "$VHDX_FILE" "$CDN_URL" "${CDN_URL}.sha256" "$BUILT_AT" \
+            > /tmp/hyperv-latest.json
+          cat /tmp/hyperv-latest.json
+          aws s3 cp /tmp/hyperv-latest.json "s3://${R2_BUCKET}/hyperv-latest.json" \
+            --endpoint-url "$ENDPOINT" --no-progress \
+            --content-type "application/json" --cache-control "no-cache"
+          echo "hyperv-latest.json published to R2"
 
       # ── 10. Attach to GitHub Release (when triggered by release event) ────────
       - name: Attach to GitHub Release
@@ -324,8 +336,8 @@ jobs:
             ```powershell
             # 从 CDN 下载管理脚本（国内直连）
             Invoke-WebRequest -Uri 'https://dl.wei1xuan.com/clashforgectl.ps1' -OutFile "$env:TEMP\clashforgectl.ps1"
-            # 以管理员身份运行（会自动下载 VHDX、创建 VM）
-            Start-Process powershell -Verb RunAs -ArgumentList "-File `"$env:TEMP\clashforgectl.ps1`" hyperv -SubscriptionURL 'https://your-sub-url/...'"
+            # 直接运行（会自动检测 PS 版本、弹 UAC 提权、下载 VHDX、创建 VM）
+            & "$env:TEMP\clashforgectl.ps1" hyperv -SubscriptionURL 'https://your-sub-url/...'
             ```
 
             或使用已下载的 VHDX：
