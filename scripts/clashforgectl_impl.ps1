@@ -1848,8 +1848,15 @@ if ($Action -eq "hyperv") {
             return $result
         } else {
             $bodyJson = if ($Body) { $Body | ConvertTo-Json -Depth 10 -Compress } else { $null }
-            return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers `
+            $raw = Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers `
                    -Body $bodyJson -UseBasicParsing -ErrorAction Stop
+            # All ClashForge API responses are wrapped in {ok, data, ts} — unwrap so
+            # callers can use $result.fieldName directly without going through .data.
+            if ($raw -and $raw.PSObject.Properties['ok'] -and $raw.ok -and
+                $raw.PSObject.Properties['data'] -and $null -ne $raw.data) {
+                return $raw.data
+            }
+            return $raw
         }
     }
 
@@ -1877,21 +1884,46 @@ if ($Action -eq "hyperv") {
     }
     Write-OK "Hyper-V is enabled"
 
+    $script:SkipVMCreation = $false
     if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
         Write-Warn "VM '$VMName' already exists."
-        $choice = Read-Host "  Delete and recreate? [y/N]"
-        if ($choice -match '^[Yy]') {
+        if ($SubscriptionURL -ne '') {
+            Write-Host "  [1] Delete and recreate VM (full setup)" -ForegroundColor White
+            Write-Host "  [2] Keep VM, configure subscription only (skip VM creation)" -ForegroundColor White
+            Write-Host "  [3] Abort" -ForegroundColor DarkGray
+            $choice = Read-Host "  Choice [1/2/3]"
+        } else {
+            Write-Host "  [y] Delete and recreate VM" -ForegroundColor White
+            Write-Host "  [N] Abort (default)" -ForegroundColor DarkGray
+            $choice = Read-Host "  Delete and recreate? [y/N]"
+        }
+
+        if ($choice -eq '1' -or ($SubscriptionURL -eq '' -and $choice -match '^[Yy]')) {
             $existing = Get-VM -Name $VMName
             if ($existing.State -ne 'Off') { Stop-VM -Name $VMName -Force }
             Remove-VM -Name $VMName -Force
-            Write-OK "Removed existing VM"
+            Write-OK "Removed existing VM — will recreate"
+        } elseif ($choice -eq '2') {
+            $script:SkipVMCreation = $true
+            Write-OK "Keeping existing VM — will configure subscription only"
+            # Make sure the VM is running
+            $existingVm = Get-VM -Name $VMName
+            if ($existingVm.State -ne 'Running') {
+                Write-Host "  Starting VM..." -ForegroundColor DarkGray
+                Start-VM -Name $VMName
+            }
         } else {
             Write-Host "Aborted." -ForegroundColor Yellow
             exit 0
         }
     }
 
-    # ── 1. Download / locate VHDX ────────────────────────────────────────────────
+    # ── 1-6. Download / create / start VM (skipped when keeping existing VM) ───────
+    if ($script:SkipVMCreation) {
+        Write-Step "Skipping VM setup — using existing VM '$VMName'"
+        Write-OK "VM '$VMName' is running"
+    } else {
+
     if ($VHDXPath -ne '' -and (Test-Path $VHDXPath)) {
         Write-Step "Using provided VHDX: $VHDXPath"
         Write-OK "$('{0:N0}' -f ((Get-Item $VHDXPath).Length / 1MB)) MB"
@@ -2030,6 +2062,8 @@ if ($Action -eq "hyperv") {
     Write-Step "Starting VM"
     Start-VM -Name $VMName
     Write-OK "VM started"
+
+    } # end if (-not $script:SkipVMCreation)
 
     # ── 7. Wait for web UI ───────────────────────────────────────────────────────
     Write-Step "Waiting for ClashForge to come online (up to 90s)..."
