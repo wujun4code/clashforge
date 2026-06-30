@@ -135,7 +135,9 @@ jobs:
 
           echo "Downloading: $IMAGE_NAME"
           curl -fsSL -o /tmp/openwrt.img.gz "${BASE}/${IMAGE_NAME}"
-          gunzip /tmp/openwrt.img.gz
+          # zcat tolerates OpenWrt's trailing-garbage pattern that makes gunzip exit 2
+          zcat /tmp/openwrt.img.gz > /tmp/openwrt.img
+          rm /tmp/openwrt.img.gz
           echo "Raw image: $(du -sh /tmp/openwrt.img)"
           echo "OPENWRT_VER=$VER" >> "$GITHUB_ENV"
 
