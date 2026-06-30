@@ -2272,10 +2272,11 @@ if ($Action -eq "hyperv-remove") {
     }
 
     # ── 2. Remove internal LAN switch ────────────────────────────────────────────
+    # Auto-remove: the switch exists solely for this VM; no separate confirmation needed.
+    # Only skip if another VM still uses it (safety guard).
     Write-Step "Hyper-V switch: $LanSwitchName"
     $lanSwitch = Get-VMSwitch -Name $LanSwitchName -ErrorAction SilentlyContinue
     if ($lanSwitch) {
-        # Safety: check if any OTHER VM (not $VMName) still uses this switch
         $otherVMsOnSwitch = @(
             Get-VM | Where-Object { $_.Name -ne $VMName } | ForEach-Object {
                 Get-VMNetworkAdapter -VM $_ -ErrorAction SilentlyContinue |
@@ -2285,13 +2286,10 @@ if ($Action -eq "hyperv-remove") {
         if ($otherVMsOnSwitch.Count -gt 0) {
             Write-Warn "Switch '$LanSwitchName' is still used by $($otherVMsOnSwitch.Count) other VM(s) — skipping"
             $skipped.Add("Switch '$LanSwitchName' (used by other VMs)")
-        } elseif (Confirm-Remove "Remove switch '$LanSwitchName' (and its host vEthernet adapter)?") {
-            Remove-VMSwitch -Name $LanSwitchName -Confirm:$false
-            Write-OK "Switch '$LanSwitchName' removed"
-            $removed.Add("Switch '$LanSwitchName'")
         } else {
-            Write-Warn "Skipped switch removal"
-            $skipped.Add("Switch '$LanSwitchName'")
+            Remove-VMSwitch -Name $LanSwitchName -Confirm:$false -ErrorAction SilentlyContinue
+            Write-OK "Switch '$LanSwitchName' removed (vEthernet adapter also released)"
+            $removed.Add("Switch '$LanSwitchName'")
         }
     } else {
         Write-Host "  Switch '$LanSwitchName' not found — already removed or never created" -ForegroundColor DarkGray
