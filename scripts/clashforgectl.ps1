@@ -2001,9 +2001,20 @@ if ($Action -eq "hyperv") {
     }
 
     # ── 8. Configure subscription + apply TUN mode ───────────────────────────────
-    if ($SubscriptionURL -ne '' -and $online) {
-        Write-Step "Configuring subscription"
+    $serviceStarted = $false
 
+    if ($SubscriptionURL -eq '') {
+        Write-Host ''
+        Write-Host '  No -SubscriptionURL provided.' -ForegroundColor Yellow
+        Write-Host '  VM is up with empty config — ClashForge service has NOT been started.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '  To start with a subscription, re-run:' -ForegroundColor DarkGray
+        Write-Host "    .\clashforgectl.ps1 hyperv -SubscriptionURL 'https://your-sub-url/...'" -ForegroundColor DarkGray
+        Write-Host "  Or open the web UI to configure manually: http://${LanIP}:7777" -ForegroundColor DarkGray
+    } elseif (-not $online) {
+        Write-Warn "VM not reachable — cannot configure subscription. Open http://${LanIP}:7777 when it finishes booting, then re-run with -SubscriptionURL."
+    } else {
+        Write-Step "Configuring subscription"
         $sub   = Invoke-CF -Method POST -Path '/api/v1/subscriptions' -Body @{
             name = 'auto'; type = 'url'; url = $SubscriptionURL; enabled = $true
         }
@@ -2026,42 +2037,52 @@ if ($Action -eq "hyperv") {
         }
         if ($applyResult -and $applyResult.success) {
             Write-OK "TUN mode active — proxy is running"
+            $serviceStarted = $true
         } else {
             $errMsg = if ($applyResult) { $applyResult.error } else { 'no response' }
             Write-Warn "Apply finished with issues: $errMsg"
-            Write-Host "  Open http://${LanIP}:7777 to check status and configure manually."
+            Write-Host "  Open http://${LanIP}:7777 to check status and configure manually." -ForegroundColor DarkGray
         }
-    } elseif ($SubscriptionURL -eq '') {
-        Write-Warn "No -SubscriptionURL provided — proxy not started."
-        Write-Host "  Open http://${LanIP}:7777 and configure a subscription manually."
     }
 
-    # ── 9. Optionally set system proxy ───────────────────────────────────────────
-    if ($SetSystemProxy) {
+    # ── 9. Optionally set system proxy (only when service is actually running) ────
+    if ($SetSystemProxy -and $serviceStarted) {
         Write-Step "Configuring Windows system proxy"
         $proxyServer = "${LanIP}:17890"
         $lanSubnet   = ($LanIP -split '\.')[0..2] -join '.'
         $regPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-        Set-ItemProperty -Path $regPath -Name ProxyServer  -Value $proxyServer
-        Set-ItemProperty -Path $regPath -Name ProxyEnable  -Value 1
+        Set-ItemProperty -Path $regPath -Name ProxyServer   -Value $proxyServer
+        Set-ItemProperty -Path $regPath -Name ProxyEnable   -Value 1
         Set-ItemProperty -Path $regPath -Name ProxyOverride -Value "localhost;127.*;${lanSubnet}.*;10.*;172.16.*;<local>"
         Write-OK "System HTTP proxy set to $proxyServer"
         Write-Warn "Restart your browser for proxy changes to take effect."
+    } elseif ($SetSystemProxy -and -not $serviceStarted) {
+        Write-Warn "-SetSystemProxy ignored — service is not running (no subscription configured)"
     }
 
     # ── Summary ───────────────────────────────────────────────────────────────────
     Write-Host ''
     Write-Host '------------------------------------------------' -ForegroundColor DarkGray
-    Write-Host " ClashForge VM is running!" -ForegroundColor Green
-    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
-    Write-Host "  VM Name   : $VMName"
-    Write-Host "  Web UI    : http://${LanIP}:7777"
-    Write-Host "  HTTP Proxy: ${LanIP}:17890"
-    Write-Host "  SOCKS5    : ${LanIP}:17891"
-    Write-Host "  Mixed     : ${LanIP}:17893"
-    Write-Host ''
-    Write-Host "  To stop the VM:" -ForegroundColor DarkGray
-    Write-Host "    Stop-VM -Name '$VMName'" -ForegroundColor DarkGray
+    if ($serviceStarted) {
+        Write-Host " ClashForge VM is running  — proxy ACTIVE" -ForegroundColor Green
+        Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+        Write-Host "  VM Name   : $VMName"
+        Write-Host "  Web UI    : http://${LanIP}:7777"
+        Write-Host "  HTTP Proxy: ${LanIP}:17890"
+        Write-Host "  SOCKS5    : ${LanIP}:17891"
+        Write-Host "  Mixed     : ${LanIP}:17893"
+        Write-Host ''
+        Write-Host "  Run 'hyperv-route' to control which traffic goes through ClashForge." -ForegroundColor DarkGray
+    } else {
+        Write-Host " ClashForge VM is booted — proxy NOT started" -ForegroundColor Yellow
+        Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+        Write-Host "  VM Name   : $VMName"
+        Write-Host "  Web UI    : http://${LanIP}:7777"
+        Write-Host ''
+        Write-Host "  No proxy service is running. To start it:" -ForegroundColor DarkGray
+        Write-Host "    .\clashforgectl.ps1 hyperv -SubscriptionURL 'https://your-sub-url/...'" -ForegroundColor DarkGray
+    }
+    Write-Host "  To stop VM : .\clashforgectl.ps1 hyperv-stop" -ForegroundColor DarkGray
     Write-Host '------------------------------------------------' -ForegroundColor DarkGray
 
     try { if ($online) { Start-Process "http://${LanIP}:7777" } } catch { }
