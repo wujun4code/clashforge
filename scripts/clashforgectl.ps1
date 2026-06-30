@@ -2070,6 +2070,18 @@ if ($Action -eq "hyperv") {
     Write-Host '------------------------------------------------' -ForegroundColor DarkGray
 
     try { if ($online) { Start-Process "http://${LanIP}:7777" } } catch { }
+
+    # ── Auto netdiag — only when service is confirmed running ────────────────────
+    if ($serviceStarted) {
+        Write-Host ''
+        Write-Host '════════════════════════════════════════════════' -ForegroundColor DarkCyan
+        Write-Host '  Network Diagnostics (netdiag)' -ForegroundColor Cyan
+        Write-Host '  Verifying ClashForge + Hyper-V is working correctly...' -ForegroundColor DarkGray
+        Write-Host '════════════════════════════════════════════════' -ForegroundColor DarkCyan
+        Write-Host ''
+        & $PSCommandPath netdiag -Router $LanIP -ApiPort $ApiPort
+    }
+
     exit 0
 }
 
