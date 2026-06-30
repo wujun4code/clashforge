@@ -41,6 +41,10 @@
 #   .\scripts\clashforgectl.ps1 hyperv -VHDXUrl 'https://dl.wei1xuan.com/clashforge-openwrt-hyperv.vhdx'
 #   .\scripts\clashforgectl.ps1 hyperv -GithubMirror 'https://ghproxy.net/' -SubscriptionURL '...'
 #
+# Hyper-V cleanup (remove VM, switch, VHDX, proxy; requires Administrator):
+#   .\scripts\clashforgectl.ps1 hyperv-remove
+#   .\scripts\clashforgectl.ps1 hyperv-remove -Yes          # skip all confirmations
+#
 # Requirements:
 #   - ssh and scp must be available for SSH-based actions (OpenSSH bundled with Windows 10/11)
 #   - clashforgectl.sh must exist alongside this script (or in scripts/) for SSH-based actions
@@ -51,7 +55,7 @@
 param(
     # Subcommand — positional argument 0
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "help")]
+    [ValidateSet("status", "stop", "reset", "upgrade", "deploy", "check", "compat", "uninstall", "diag", "openclash", "flush-dns", "netdiag", "hyperv", "hyperv-remove", "help")]
     [string]$Action,
 
     # Connection parameters (required for all SSH-based actions; not needed for 'netdiag' or 'hyperv')
@@ -2050,6 +2054,140 @@ if ($Action -eq "hyperv") {
     Write-Host '------------------------------------------------' -ForegroundColor DarkGray
 
     try { if ($online) { Start-Process "http://${LanIP}:7777" } } catch { }
+    exit 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HYPERV-REMOVE — remove VM, switch, VHDX and proxy created by 'hyperv'
+# Requires Administrator privileges.
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Action -eq "hyperv-remove") {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Die "The 'hyperv-remove' action requires Administrator privileges.`nRight-click PowerShell -> 'Run as administrator', then retry."
+    }
+
+    function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+    function Write-OK  ([string]$msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
+    function Write-Warn([string]$msg) { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
+
+    $removed = [System.Collections.Generic.List[string]]::new()
+    $skipped = [System.Collections.Generic.List[string]]::new()
+
+    function Confirm-Remove([string]$prompt) {
+        if ($Yes) { return $true }
+        return (Read-Host "  $prompt [y/N]") -match '^[Yy]'
+    }
+
+    # ── 1. Stop and remove VM ────────────────────────────────────────────────────
+    Write-Step "VM: $VMName"
+    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if ($vm) {
+        Write-Host "  State: $($vm.State)  Generation: $($vm.Generation)"
+
+        # Collect VHDX paths before VM is removed
+        $vhdxPaths = @(Get-VMHardDiskDrive -VMName $VMName -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Path | Where-Object { $_ -and (Test-Path $_) })
+
+        if (Confirm-Remove "Remove VM '$VMName'?") {
+            if ($vm.State -ne 'Off') {
+                Write-Host "  Stopping VM (force power-off)..."
+                Stop-VM -Name $VMName -TurnOff -Confirm:$false
+                Write-OK "VM stopped"
+            }
+            Remove-VM -Name $VMName -Force -Confirm:$false
+            Write-OK "VM '$VMName' removed"
+            $removed.Add("VM '$VMName'")
+
+            # ── 1b. Optionally delete VHDX files ─────────────────────────────────
+            foreach ($vhdx in $vhdxPaths) {
+                $sizeMB = '{0:N0}' -f ((Get-Item $vhdx).Length / 1MB)
+                Write-Host "  VHDX: $vhdx  (${sizeMB} MB)" -ForegroundColor DarkGray
+                if (Confirm-Remove "Delete this VHDX?") {
+                    Remove-Item $vhdx -Force
+                    Write-OK "Deleted VHDX: $(Split-Path $vhdx -Leaf)"
+                    $removed.Add("VHDX: $vhdx")
+                    # Remove parent dir if now empty
+                    $parent = Split-Path $vhdx -Parent
+                    if ($parent -and (Test-Path $parent) -and @(Get-ChildItem $parent -ErrorAction SilentlyContinue).Count -eq 0) {
+                        Remove-Item $parent -Force
+                        Write-OK "Removed empty directory: $parent"
+                    }
+                } else {
+                    Write-Warn "VHDX kept: $vhdx"
+                    $skipped.Add("VHDX: $vhdx")
+                }
+            }
+        } else {
+            Write-Warn "Skipped VM removal"
+            $skipped.Add("VM '$VMName'")
+        }
+    } else {
+        Write-Host "  VM '$VMName' not found — already removed or never created" -ForegroundColor DarkGray
+        $skipped.Add("VM '$VMName' (not found)")
+    }
+
+    # ── 2. Remove internal LAN switch ────────────────────────────────────────────
+    Write-Step "Hyper-V switch: $LanSwitchName"
+    $lanSwitch = Get-VMSwitch -Name $LanSwitchName -ErrorAction SilentlyContinue
+    if ($lanSwitch) {
+        # Safety: check if any OTHER VM (not $VMName) still uses this switch
+        $otherVMsOnSwitch = @(
+            Get-VM | Where-Object { $_.Name -ne $VMName } | ForEach-Object {
+                Get-VMNetworkAdapter -VM $_ -ErrorAction SilentlyContinue |
+                    Where-Object { $_.SwitchName -eq $LanSwitchName }
+            }
+        )
+        if ($otherVMsOnSwitch.Count -gt 0) {
+            Write-Warn "Switch '$LanSwitchName' is still used by $($otherVMsOnSwitch.Count) other VM(s) — skipping"
+            $skipped.Add("Switch '$LanSwitchName' (used by other VMs)")
+        } elseif (Confirm-Remove "Remove switch '$LanSwitchName' (and its host vEthernet adapter)?") {
+            Remove-VMSwitch -Name $LanSwitchName -Confirm:$false
+            Write-OK "Switch '$LanSwitchName' removed"
+            $removed.Add("Switch '$LanSwitchName'")
+        } else {
+            Write-Warn "Skipped switch removal"
+            $skipped.Add("Switch '$LanSwitchName'")
+        }
+    } else {
+        Write-Host "  Switch '$LanSwitchName' not found — already removed or never created" -ForegroundColor DarkGray
+        $skipped.Add("Switch '$LanSwitchName' (not found)")
+    }
+
+    # ── 3. Clean up Windows system proxy ─────────────────────────────────────────
+    Write-Step "Windows system proxy"
+    $regPath     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    $proxyEnable = (Get-ItemProperty $regPath -Name ProxyEnable -ErrorAction SilentlyContinue).ProxyEnable
+    $proxyServer = (Get-ItemProperty $regPath -Name ProxyServer -ErrorAction SilentlyContinue).ProxyServer
+    if ($proxyEnable -eq 1 -and $proxyServer -like "${LanIP}:*") {
+        Write-Host "  Active proxy: $proxyServer" -ForegroundColor DarkGray
+        if (Confirm-Remove "Disable system proxy ($proxyServer)?") {
+            Set-ItemProperty $regPath -Name ProxyEnable -Value 0
+            Write-OK "System proxy disabled"
+            $removed.Add("System proxy ($proxyServer)")
+        } else {
+            Write-Warn "System proxy left enabled: $proxyServer"
+            $skipped.Add("System proxy ($proxyServer)")
+        }
+    } else {
+        Write-Host "  System proxy is not pointing to $LanIP — nothing to do" -ForegroundColor DarkGray
+    }
+
+    # ── Summary ───────────────────────────────────────────────────────────────────
+    Write-Host ''
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
+    if ($removed.Count -gt 0) {
+        Write-Host " Removed:" -ForegroundColor Green
+        foreach ($r in $removed) { Write-Host "  [OK] $r" -ForegroundColor Green }
+    }
+    if ($skipped.Count -gt 0) {
+        Write-Host " Skipped / not found:" -ForegroundColor Yellow
+        foreach ($s in $skipped) { Write-Host "  [ ] $s" -ForegroundColor DarkGray }
+    }
+    if ($removed.Count -eq 0 -and $skipped.Count -gt 0) {
+        Write-Host " Nothing was removed." -ForegroundColor Yellow
+    }
+    Write-Host '------------------------------------------------' -ForegroundColor DarkGray
     exit 0
 }
 
