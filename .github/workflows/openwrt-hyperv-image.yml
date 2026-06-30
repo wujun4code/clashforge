@@ -134,15 +134,42 @@ jobs:
           fi
 
           echo "Downloading: $IMAGE_NAME"
-          curl -fsSL -o /tmp/openwrt.img.gz "${BASE}/${IMAGE_NAME}"
-          gunzip /tmp/openwrt.img.gz
-          echo "Raw image: $(du -sh /tmp/openwrt.img)"
+          # CDN occasionally returns a non-gzip body with HTTP 200 — verify
+          # magic bytes (gzip = 1f8b) and retry up to 3 times.
+          for retry in 1 2 3; do
+            HTTP=$(curl -sSL -o /tmp/openwrt.img.gz -w "%{http_code}" "${BASE}/${IMAGE_NAME}")
+            MAGIC=$(xxd -l 2 -p /tmp/openwrt.img.gz 2>/dev/null || echo "")
+            if [ "$MAGIC" = "1f8b" ]; then
+              printf 'Valid gzip on attempt %s (HTTP %s)\n' "$retry" "$HTTP"
+              break
+            fi
+            SZ=$(du -sh /tmp/openwrt.img.gz 2>/dev/null | cut -f1)
+            printf 'Attempt %s bad: HTTP=%s magic=%s size=%s\n' "$retry" "$HTTP" "$MAGIC" "$SZ" >&2
+            head -c 200 /tmp/openwrt.img.gz 2>/dev/null | strings | head -5 >&2 || true
+            rm -f /tmp/openwrt.img.gz
+            [ "$retry" -lt 3 ] && sleep $((retry * 10)) || { echo "No valid gzip after 3 attempts" >&2; exit 1; }
+          done
+          # OpenWrt combined images have non-gzip trailing bytes; gunzip exits 2
+          # ("trailing garbage ignored") but the output is complete.  The ||
+          # clause accepts exit 2 while still failing on exit 1 (real error).
+          gunzip -c /tmp/openwrt.img.gz > /tmp/openwrt.img || [ "$?" -eq 2 ]
+          rm /tmp/openwrt.img.gz
+          RAW_SIZE=$(du -sh /tmp/openwrt.img | cut -f1)
+          echo "Raw image: $RAW_SIZE"
           echo "OPENWRT_VER=$VER" >> "$GITHUB_ENV"
 
       # ── 6. Mount image, install ClashForge, configure network ─────────────
       - name: Customize OpenWrt image
         run: |
-          sudo apt-get install -y kpartx >/dev/null 2>&1
+          sudo apt-get install -y cloud-guest-utils e2fsprogs >/dev/null 2>&1
+
+          echo "=== Expanding image (+512 MB for binaries + GeoData) ==="
+          truncate -s +512M /tmp/openwrt.img
+          EXP=$(sudo losetup -fP --show /tmp/openwrt.img)
+          sudo growpart "$EXP" 2
+          sudo e2fsck -fy "${EXP}p2" >/dev/null 2>&1 || true
+          sudo resize2fs "${EXP}p2"
+          sudo losetup -d "$EXP"
 
           LOOP=$(sudo losetup -fP --show /tmp/openwrt.img)
           echo "loop device: $LOOP"
