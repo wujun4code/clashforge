@@ -40,7 +40,20 @@ jobs:
             --pattern "clashforgectl.cmd" \
             --pattern "clashforgectl" \
             --pattern "SHA256SUMS.txt"
-          echo "=== Downloaded assets ==="
+          echo "=== Downloaded release assets ==="
+          ls -lh dist/
+
+      - uses: actions/checkout@v4
+
+      - name: Overlay current ctl scripts
+        run: |
+          cp scripts/clashforgectl.sh dist/clashforgectl.sh
+          cp scripts/clashforgectl.ps1 dist/clashforgectl.ps1
+          cp scripts/clashforgectl_impl.ps1 dist/clashforgectl_impl.ps1
+          cp scripts/clashforgectl.cmd dist/clashforgectl.cmd
+          cp scripts/clashforgectl dist/clashforgectl
+          chmod +x dist/clashforgectl.sh dist/clashforgectl
+          echo "=== Release assets plus current ctl scripts ==="
           ls -lh dist/
 
       - name: Install rclone
