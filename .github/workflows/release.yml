@@ -508,11 +508,13 @@ jobs:
           path: |
             scripts/clashforgectl.sh
             scripts/clashforgectl.ps1
+            scripts/clashforgectl_impl.ps1
+            scripts/clashforgectl.cmd
             scripts/clashforgectl
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
-  # Stage 5: Create GitHub Release (tag pushes only)
+  # Stage 5: Create GitHub Release (tag pushes and manual dispatch)
   # ────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
@@ -564,7 +566,7 @@ jobs:
         run: |
           cd release-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl_impl.ps1 clashforgectl.cmd clashforgectl )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -587,6 +589,7 @@ jobs:
             **Windows（PowerShell，一行下载）：**
             ```powershell
             irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
+            irm https://dl.wei1xuan.com/releases/latest/clashforgectl_impl.ps1 -OutFile clashforgectl_impl.ps1
             .\clashforgectl.ps1 -Router <路由器IP> compat     # 安装前检查
             .\clashforgectl.ps1 -Router <路由器IP> upgrade    # 一键安装/升级
             ```
@@ -645,6 +648,30 @@ jobs:
 
             > 将 `https://releases.example.com` 替换为你在 R2 bucket 上绑定的自定义域名。
             > R2 配置方法参见：[Fork 后配置自己的 Cloudflare R2 下载加速](https://github.com/wujun4code/clashforge/blob/main/docs/guides/fork-r2-setup.md)
+
+            ---
+
+            ### 🖥️ Hyper-V / x86_64 OpenWrt 快速安装（R2 最新版）
+
+            如果你是在 Hyper-V 里的 x86_64 OpenWrt 虚拟机中安装，可以直接使用 R2 上的最新 x86_64 IPK：
+
+            ```sh
+            cd /tmp
+            wget -O clashforge-latest-x86_64.ipk https://dl.wei1xuan.com/clashforge-latest-x86_64.ipk
+            opkg install --nodeps ./clashforge-latest-x86_64.ipk
+            /etc/init.d/clashforge enable
+            /etc/init.d/clashforge restart
+            ```
+
+            安装完成后打开：`http://<OpenWrt-IP>:7777`
+
+            Windows 主机也可以下载最新 ctl 脚本后远程安装：
+
+            ```powershell
+            Invoke-WebRequest 'https://dl.wei1xuan.com/clashforgectl.ps1' -OutFile .\clashforgectl.ps1
+            Invoke-WebRequest 'https://dl.wei1xuan.com/clashforgectl_impl.ps1' -OutFile .\clashforgectl_impl.ps1
+            .\clashforgectl.ps1 -Router <OpenWrt-IP> upgrade
+            ```
 
             ---
 
@@ -729,5 +756,160 @@ jobs:
             release-assets/*.apk
             release-assets/clashforgectl.sh
             release-assets/clashforgectl.ps1
+            release-assets/clashforgectl_impl.ps1
+            release-assets/clashforgectl.cmd
             release-assets/clashforgectl
             release-assets/SHA256SUMS.txt
+
+  # ────────────────────────────────────────────────────────────
+  # Stage 6: Publish current release assets to Cloudflare R2
+  # Keeps both versioned paths and latest convenience aliases fresh.
+  # ────────────────────────────────────────────────────────────
+  publish-r2:
+    name: Publish release assets to R2
+    runs-on: ubuntu-latest
+    needs: [build-ui, package-ipk, package-apk, upload-installer, release]
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+
+    env:
+      R2_BUCKET:      ${{ secrets.R2_BUCKET_NAME }}
+      R2_ACCOUNT_ID:  ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY:  ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_KEY:  ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      TAG: ${{ needs.build-ui.outputs.version }}
+
+    steps:
+      - name: Check R2 secrets
+        id: r2
+        run: |
+          if [ -n "$R2_BUCKET" ] && [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY" ] && [ -n "$R2_SECRET_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::R2 secrets are incomplete; skip R2 publish. Required: R2_BUCKET_NAME, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY."
+          fi
+
+      - name: Download IPK artifacts
+        if: steps.r2.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ipk-*
+          path: r2-assets/
+          merge-multiple: true
+
+      - name: Download APK artifacts
+        if: steps.r2.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: apk-*
+          path: r2-assets/
+          merge-multiple: true
+
+      - name: Download ctl scripts
+        if: steps.r2.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: r2-assets/
+
+      - name: Create checksums
+        if: steps.r2.outputs.enabled == 'true'
+        run: |
+          cd r2-assets
+          shopt -s nullglob
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl_impl.ps1 clashforgectl.cmd clashforgectl )
+          sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Install rclone
+        if: steps.r2.outputs.enabled == 'true'
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version
+
+      - name: Configure rclone for R2
+        if: steps.r2.outputs.enabled == 'true'
+        run: |
+          mkdir -p ~/.config/rclone
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [r2]
+          type = s3
+          provider = Cloudflare
+          access_key_id = ${R2_ACCESS_KEY}
+          secret_access_key = ${R2_SECRET_KEY}
+          endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+          acl = private
+          EOF
+
+      - name: Upload release assets to R2
+        if: steps.r2.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          PKG_VERSION="${TAG#v}"
+          X86_IPK="clashforge_${PKG_VERSION}_x86_64.ipk"
+          test -f "r2-assets/${X86_IPK}"
+          test -f r2-assets/clashforgectl.sh
+          test -f r2-assets/clashforgectl.ps1
+          test -f r2-assets/clashforgectl_impl.ps1
+          test -f r2-assets/clashforgectl.cmd
+          test -f r2-assets/clashforgectl
+
+          # Versioned release path and moving latest path used by installers.
+          rclone copy r2-assets/ "r2:${R2_BUCKET}/releases/${TAG}/" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copy r2-assets/ "r2:${R2_BUCKET}/releases/latest/" \
+            --s3-no-check-bucket --progress --stats-one-line
+
+          # Root-level convenience aliases for Windows/Hyper-V bootstrap and manual x86_64 install.
+          rclone copyto r2-assets/clashforgectl.ps1 "r2:${R2_BUCKET}/clashforgectl.ps1" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/clashforgectl_impl.ps1 "r2:${R2_BUCKET}/clashforgectl_impl.ps1" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/clashforgectl.cmd "r2:${R2_BUCKET}/clashforgectl.cmd" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/clashforgectl.sh "r2:${R2_BUCKET}/clashforgectl.sh" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/clashforgectl "r2:${R2_BUCKET}/clashforgectl" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto "r2-assets/${X86_IPK}" "r2:${R2_BUCKET}/clashforge-latest-x86_64.ipk" \
+            --s3-no-check-bucket --progress --stats-one-line
+
+          echo "=== R2 releases/${TAG}/ ==="
+          rclone ls "r2:${R2_BUCKET}/releases/${TAG}/"
+          echo "=== R2 latest aliases ==="
+          rclone ls "r2:${R2_BUCKET}/" | grep -E 'clashforgectl|clashforge-latest-x86_64\.ipk' || true
+
+      - name: Summary
+        if: steps.r2.outputs.enabled == 'true'
+        run: |
+          PKG_VERSION="${TAG#v}"
+          X86_IPK="clashforge_${PKG_VERSION}_x86_64.ipk"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## ✅ R2 Release Assets Published
+
+          **Release:** \`${TAG}\`
+
+          **Versioned paths:**
+          - \`releases/${TAG}/clashforgectl.sh\`
+          - \`releases/${TAG}/clashforgectl.ps1\`
+          - \`releases/${TAG}/clashforgectl_impl.ps1\`
+          - \`releases/${TAG}/clashforgectl.cmd\`
+          - \`releases/${TAG}/clashforgectl\`
+          - \`releases/${TAG}/${X86_IPK}\`
+
+          **Latest paths:**
+          - \`releases/latest/clashforgectl.sh\`
+          - \`releases/latest/clashforgectl.ps1\`
+          - \`releases/latest/clashforgectl_impl.ps1\`
+          - \`releases/latest/clashforgectl.cmd\`
+          - \`releases/latest/clashforgectl\`
+          - \`releases/latest/${X86_IPK}\`
+          - \`clashforgectl.ps1\`
+          - \`clashforgectl_impl.ps1\`
+          - \`clashforgectl.cmd\`
+          - \`clashforgectl.sh\`
+          - \`clashforgectl\`
+          - \`clashforge-latest-x86_64.ipk\`
+          EOF

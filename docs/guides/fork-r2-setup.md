@@ -108,10 +108,16 @@ releases/
 │   ├── clashforge_0.1.0-rc.1_x86_64.ipk
 │   ├── clashforge_0.1.0-rc.1_aarch64_generic.ipk
 │   ├── clashforge_0.1.0-rc.1_aarch64_cortex-a53.ipk
-│   ├── install.sh
+│   ├── clashforgectl.sh
+│   ├── clashforgectl.ps1
+│   ├── clashforgectl
 │   └── SHA256SUMS.txt
-└── latest/
-    └── （同上，始终指向最新同步的版本）
+├── latest/
+│   └── （同上，始终指向最新同步的版本）
+├── clashforgectl.sh
+├── clashforgectl.ps1
+├── clashforgectl
+└── clashforge-latest-x86_64.ipk
 ```
 
 ---
@@ -128,7 +134,14 @@ releases/
 绑定后，用户可以通过如下链接下载：
 
 ```sh
+# 指定版本
 wget https://releases.example.com/releases/v0.1.0-rc.1/clashforge_0.1.0-rc.1_x86_64.ipk
+
+# 最新 x86_64 OpenWrt IPK 便捷别名
+wget https://releases.example.com/clashforge-latest-x86_64.ipk
+
+# 最新 ctl 脚本便捷别名
+wget -qO- https://releases.example.com/clashforgectl.sh | sh
 ```
 
 如果暂时不绑定自定义域名，也可以在 R2 bucket 的 **Settings → Public Access** 开启公开访问，使用 Cloudflare 自动分配的 `*.r2.dev` 域名。

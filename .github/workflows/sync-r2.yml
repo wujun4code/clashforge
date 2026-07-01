@@ -36,6 +36,8 @@ jobs:
             --pattern "*.apk" \
             --pattern "clashforgectl.sh" \
             --pattern "clashforgectl.ps1" \
+            --pattern "clashforgectl_impl.ps1" \
+            --pattern "clashforgectl.cmd" \
             --pattern "clashforgectl" \
             --pattern "SHA256SUMS.txt"
           echo "=== Downloaded assets ==="
@@ -61,6 +63,10 @@ jobs:
 
       - name: Upload assets to R2
         run: |
+          set -euo pipefail
+          PKG_VERSION="${TAG#v}"
+          X86_IPK="clashforge_${PKG_VERSION}_x86_64.ipk"
+
           # Upload all assets under releases/<tag>/
           rclone copy dist/ r2:${R2_BUCKET}/releases/${TAG}/ \
             --s3-no-check-bucket \
@@ -72,6 +78,14 @@ jobs:
             --s3-no-check-bucket \
             --progress \
             --stats-one-line
+
+          # Root-level convenience aliases for bootstrap/manual x86_64 installs.
+          [ -f dist/clashforgectl.ps1 ] && rclone copyto dist/clashforgectl.ps1 r2:${R2_BUCKET}/clashforgectl.ps1 --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/clashforgectl_impl.ps1 ] && rclone copyto dist/clashforgectl_impl.ps1 r2:${R2_BUCKET}/clashforgectl_impl.ps1 --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/clashforgectl.cmd ] && rclone copyto dist/clashforgectl.cmd r2:${R2_BUCKET}/clashforgectl.cmd --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/clashforgectl.sh ] && rclone copyto dist/clashforgectl.sh r2:${R2_BUCKET}/clashforgectl.sh --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/clashforgectl ] && rclone copyto dist/clashforgectl r2:${R2_BUCKET}/clashforgectl --s3-no-check-bucket --progress --stats-one-line
+          [ -f "dist/${X86_IPK}" ] && rclone copyto "dist/${X86_IPK}" r2:${R2_BUCKET}/clashforge-latest-x86_64.ipk --s3-no-check-bucket --progress --stats-one-line
 
           echo "=== Uploaded to R2 ==="
           rclone ls r2:${R2_BUCKET}/releases/${TAG}/
@@ -85,6 +99,8 @@ jobs:
           echo "**R2 paths:**" >> $GITHUB_STEP_SUMMARY
           echo "- \`releases/${TAG}/\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`releases/latest/\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`clashforgectl.ps1\`, \`clashforgectl_impl.ps1\`, \`clashforgectl.cmd\`, \`clashforgectl.sh\`, \`clashforgectl\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`clashforge-latest-x86_64.ipk\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Files:**" >> $GITHUB_STEP_SUMMARY
           ls dist/ | while read f; do
