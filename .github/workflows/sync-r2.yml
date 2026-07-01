@@ -24,6 +24,8 @@ jobs:
       TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.event.release.tag_name }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,8 +44,6 @@ jobs:
             --pattern "SHA256SUMS.txt"
           echo "=== Downloaded release assets ==="
           ls -lh dist/
-
-      - uses: actions/checkout@v4
 
       - name: Overlay current ctl scripts
         run: |
