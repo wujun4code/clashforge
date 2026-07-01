@@ -620,13 +620,13 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 		return merged
 	}
 
-	dnsMap, ok := merged["dns"].(map[string]interface{})
-	if !ok || dnsMap == nil {
-		dnsMap = map[string]interface{}{}
-	}
-	dnsMap["enable"] = true
-	dnsMap["listen"] = fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS)
-	merged["dns"] = dnsMap
+	// DNS is runtime-managed by ClashForge.  Subscriptions and overrides may
+	// contain stale/partial mihomo DNS blocks, but the final runtime config must
+	// always follow ClashForge's selected DNS mode/strategy.  Replace the whole
+	// block instead of patching individual fields; otherwise DeepMerge may keep or
+	// append legacy nameserver/fallback/default-nameserver values and alter the
+	// effective DNS behaviour.
+	merged["dns"] = buildDNSMap(cfg)
 
 	return merged
 }

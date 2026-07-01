@@ -620,6 +620,99 @@ func TestApplyManagedRuntimeSettings_NonTUN_StripsTUN(t *testing.T) {
 	}
 }
 
+func TestApplyManagedRuntimeSettings_DNSEnabled_ReplacesImportedDNS(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Enable = true
+	cfg.DNS.Mode = "fake-ip"
+	cfg.DNS.Nameservers = []string{"223.5.5.5"}
+	cfg.DNS.Fallback = []string{"tls://1.1.1.1"}
+	withoutGeosite(cfg)
+
+	merged := map[string]interface{}{
+		"dns": map[string]interface{}{
+			"enable":             false,
+			"listen":             "127.0.0.1:53",
+			"enhanced-mode":      "redir-host",
+			"nameserver":         []interface{}{"1.2.3.4"},
+			"fallback":           []interface{}{"tls://9.9.9.9"},
+			"default-nameserver": []interface{}{"8.8.8.8"},
+		},
+	}
+
+	result := config.ApplyManagedRuntimeSettings(cfg, merged)
+	dns, ok := result["dns"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected managed dns map, got %T", result["dns"])
+	}
+	if dns["enable"] != true {
+		t.Errorf("expected dns.enable=true, got %v", dns["enable"])
+	}
+	if dns["listen"] != "0.0.0.0:17874" {
+		t.Errorf("expected managed DNS listen port, got %v", dns["listen"])
+	}
+	if dns["enhanced-mode"] != "fake-ip" {
+		t.Errorf("expected enhanced-mode=fake-ip from ClashForge mode, got %v", dns["enhanced-mode"])
+	}
+	if stringsValueContains(dns["nameserver"], "1.2.3.4") {
+		t.Errorf("imported nameserver leaked into managed DNS: %v", dns["nameserver"])
+	}
+	if stringsValueContains(dns["fallback"], "tls://9.9.9.9") {
+		t.Errorf("imported fallback leaked into managed DNS: %v", dns["fallback"])
+	}
+	if stringsValueContains(dns["default-nameserver"], "8.8.8.8") {
+		t.Errorf("imported default-nameserver leaked into managed DNS: %v", dns["default-nameserver"])
+	}
+}
+
+func TestApplyManagedRuntimeSettings_DNSDisabled_StripsImportedDNS(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Enable = false
+
+	result := config.ApplyManagedRuntimeSettings(cfg, map[string]interface{}{
+		"dns": map[string]interface{}{"enable": true, "nameserver": []interface{}{"1.2.3.4"}},
+	})
+	if _, ok := result["dns"]; ok {
+		t.Error("ApplyManagedRuntimeSettings: dns must be removed when ClashForge DNS is disabled")
+	}
+}
+
+func TestApplyManagedRuntimeSettings_TUNMode_ForcesFakeIPDNS(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.DNS.Enable = true
+	cfg.DNS.Mode = "redir-host"
+	withoutGeosite(cfg)
+
+	result := config.ApplyManagedRuntimeSettings(cfg, map[string]interface{}{
+		"dns": map[string]interface{}{"enhanced-mode": "redir-host"},
+	})
+	dns, ok := result["dns"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected managed dns map, got %T", result["dns"])
+	}
+	if dns["enhanced-mode"] != "fake-ip" {
+		t.Errorf("TUN runtime DNS must force fake-ip, got %v", dns["enhanced-mode"])
+	}
+}
+
+func stringsValueContains(v interface{}, want string) bool {
+	switch xs := v.(type) {
+	case []string:
+		for _, s := range xs {
+			if s == want {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, x := range xs {
+			if s, ok := x.(string); ok && s == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestApplyManagedRuntimeSettings_TUNMode_DeviceField(t *testing.T) {
 	cfg := defaultTestCfg()
 	cfg.Network.Mode = "tun"
