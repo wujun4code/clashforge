@@ -1,6 +1,6 @@
 # ClashForge CLI Installer
 #
-# Usage:
+# Install only:
 #   irm dl.wei1xuan.com/install.ps1 | iex
 #
 # After install, use from any terminal:
@@ -10,7 +10,17 @@
 # To also run Hyper-V setup immediately after install:
 #   $env:CF_SUB='https://your-sub-url'; irm dl.wei1xuan.com/install.ps1 | iex
 #
+# Install (or upgrade to latest) and immediately run any clashforgectl
+# command in one line — `iex` alone can't forward arguments, so wrap the
+# downloaded text in a scriptblock and invoke it with `&` instead:
+#   &([scriptblock]::Create((irm dl.wei1xuan.com/install.ps1))) -Router 192.168.20.1 upgrade
+#
 # Compatible with PowerShell 5.1 and 7+.
+
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RestArgs
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -85,4 +95,16 @@ if ($subUrl) {
     Write-Host '  (A UAC prompt will appear to request Administrator privileges)' -ForegroundColor DarkGray
     Write-Host ''
     & $ps1Path hyperv -SubscriptionURL $subUrl
+}
+
+# ── 7. Optional: forward any extra arguments straight to clashforgectl ────────
+# Lets a single scriptblock-wrapped invocation both install (or upgrade to the
+# latest ctl scripts) and run a command in one line, e.g.:
+#   &([scriptblock]::Create((irm dl.wei1xuan.com/install.ps1))) -Router 192.168.20.1 upgrade
+# Plain `irm ... | iex` never reaches here with arguments — iex can't forward
+# them — so this only fires on the scriptblock-invocation form above.
+if ($RestArgs.Count -gt 0) {
+    Write-Host ''
+    Write-Host "  Running: clashforgectl $($RestArgs -join ' ')" -ForegroundColor Cyan
+    & $cmdPath @RestArgs
 }
