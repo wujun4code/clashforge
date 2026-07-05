@@ -50,7 +50,9 @@ jobs:
           cp scripts/clashforgectl.ps1 dist/clashforgectl.ps1
           cp scripts/clashforgectl.cmd dist/clashforgectl.cmd
           cp scripts/clashforgectl dist/clashforgectl
-          chmod +x dist/clashforgectl.sh dist/clashforgectl
+          cp scripts/install.ps1 dist/install.ps1
+          cp scripts/install.sh dist/install.sh
+          chmod +x dist/clashforgectl.sh dist/clashforgectl dist/install.sh
           echo "=== Release assets plus current ctl scripts ==="
           ls -lh dist/
 
@@ -97,6 +99,10 @@ jobs:
           [ -f dist/clashforgectl ] && rclone copyto dist/clashforgectl r2:${R2_BUCKET}/clashforgectl --s3-no-check-bucket --progress --stats-one-line
           [ -f "dist/${X86_IPK}" ] && rclone copyto "dist/${X86_IPK}" r2:${R2_BUCKET}/clashforge-latest-x86_64.ipk --s3-no-check-bucket --progress --stats-one-line
 
+          # Root-level one-liner installer entrypoints.
+          [ -f dist/install.ps1 ] && rclone copyto dist/install.ps1 r2:${R2_BUCKET}/install.ps1 --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/install.sh ] && rclone copyto dist/install.sh r2:${R2_BUCKET}/install.sh --s3-no-check-bucket --progress --stats-one-line
+
           echo "=== Uploaded to R2 ==="
           rclone ls r2:${R2_BUCKET}/releases/${TAG}/
 
@@ -111,6 +117,7 @@ jobs:
           echo "- \`releases/latest/\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`clashforgectl.ps1\`, \`clashforgectl.cmd\`, \`clashforgectl.sh\`, \`clashforgectl\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`clashforge-latest-x86_64.ipk\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`install.ps1\`, \`install.sh\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Files:**" >> $GITHUB_STEP_SUMMARY
           ls dist/ | while read f; do

@@ -510,6 +510,8 @@ jobs:
             scripts/clashforgectl.ps1
             scripts/clashforgectl.cmd
             scripts/clashforgectl
+            scripts/install.ps1
+            scripts/install.sh
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
@@ -815,7 +817,7 @@ jobs:
         run: |
           cd r2-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl install.ps1 install.sh )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -850,6 +852,8 @@ jobs:
           test -f r2-assets/clashforgectl.ps1
           test -f r2-assets/clashforgectl.cmd
           test -f r2-assets/clashforgectl
+          test -f r2-assets/install.ps1
+          test -f r2-assets/install.sh
 
           # Versioned release path and moving latest path used by installers.
           rclone copy r2-assets/ "r2:${R2_BUCKET}/releases/${TAG}/" \
@@ -867,6 +871,14 @@ jobs:
           rclone copyto r2-assets/clashforgectl "r2:${R2_BUCKET}/clashforgectl" \
             --s3-no-check-bucket --progress --stats-one-line
           rclone copyto "r2-assets/${X86_IPK}" "r2:${R2_BUCKET}/clashforge-latest-x86_64.ipk" \
+            --s3-no-check-bucket --progress --stats-one-line
+
+          # Root-level one-liner installer entrypoints:
+          #   irm https://dl.wei1xuan.com/install.ps1 | iex
+          #   curl -fsSL https://dl.wei1xuan.com/install.sh | sh
+          rclone copyto r2-assets/install.ps1 "r2:${R2_BUCKET}/install.ps1" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/install.sh "r2:${R2_BUCKET}/install.sh" \
             --s3-no-check-bucket --progress --stats-one-line
 
           echo "=== R2 releases/${TAG}/ ==="
@@ -902,4 +914,6 @@ jobs:
           - \`clashforgectl.sh\`
           - \`clashforgectl\`
           - \`clashforge-latest-x86_64.ipk\`
+          - \`install.ps1\` (irm https://dl.wei1xuan.com/install.ps1 | iex)
+          - \`install.sh\` (curl -fsSL https://dl.wei1xuan.com/install.sh | sh)
           EOF
