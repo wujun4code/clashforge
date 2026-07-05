@@ -118,34 +118,38 @@ You also need a Cloudflare account + domain (see above).
 
 ### Install ClashForge on Router
 
-The script downloads the IPK on your computer and uploads it to the router — more reliable than letting the router fetch directly from GitHub.
+First, install the `clashforgectl` CLI on your own computer (one-liner, installs onto your PATH so `clashforgectl` works from any terminal afterward):
 
-**Windows (run from PowerShell):**
+**Windows (PowerShell):**
 
 ```powershell
-irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
-.\clashforgectl.ps1 -Router 192.168.20.1 upgrade
+irm https://dl.wei1xuan.com/install.ps1 | iex
 ```
 
-**macOS / Linux (run from Terminal):**
+**macOS / Linux:**
 
 ```sh
-curl -fsSL https://dl.wei1xuan.com/releases/latest/clashforgectl -o clashforgectl && chmod +x clashforgectl
-./clashforgectl --router 192.168.20.1 upgrade
+curl -fsSL https://dl.wei1xuan.com/install.sh | sh
 ```
 
-**Router-local (inside an SSH session on the router):**
+Then use it to install ClashForge onto the router — this downloads the IPK on your computer and uploads it to the router, more reliable than letting the router fetch directly from GitHub:
+
+```powershell
+clashforgectl -Router 192.168.20.1 upgrade
+```
+
+Replace `192.168.20.1` with your router's actual IP address. Full remote-management reference (upgrade/stop/uninstall/`netdiag`, etc.) is in every [release's notes](https://github.com/wujun4code/clashforge/releases/latest).
+
+**Router-local instead** (inside an SSH session on the router, no `clashforgectl` needed):
 
 ```sh
-wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh
+wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- upgrade
 ```
-
-Replace `192.168.20.1` with your router's actual IP address.
 
 If GitHub downloads are slow (Windows):
 
 ```powershell
-.\clashforgectl.ps1 -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
+clashforgectl -Router 192.168.20.1 upgrade -Mirror https://ghproxy.com
 ```
 
 After install, open the Web UI:
@@ -228,30 +232,34 @@ If you have a Clash-compatible subscription URL from a proxy provider:
 
 ### Operations Reference
 
-Download the script once; then run these as needed.
+Install `clashforgectl` once (see above); then run these from any terminal as needed.
 
-**Windows** (`clashforgectl.ps1`):
+**Windows:**
 
 ```powershell
-.\clashforgectl.ps1 -Router 192.168.20.1 compat           # Pre-install check: CPU arch, memory, kernel
-.\clashforgectl.ps1 -Router 192.168.20.1 status
-.\clashforgectl.ps1 -Router 192.168.20.1 check
-.\clashforgectl.ps1 -Router 192.168.20.1 stop
-.\clashforgectl.ps1 -Router 192.168.20.1 upgrade
-.\clashforgectl.ps1 -Router 192.168.20.1 diag -Fetch -Redact
-.\clashforgectl.ps1 -Router 192.168.20.1 uninstall -KeepConfig
+clashforgectl -Router 192.168.20.1 compat           # Pre-install check: CPU arch, memory, kernel
+clashforgectl -Router 192.168.20.1 status
+clashforgectl -Router 192.168.20.1 check
+clashforgectl -Router 192.168.20.1 netdiag           # Full network/service diagnostic, no SSH needed
+clashforgectl -Router 192.168.20.1 stop
+clashforgectl -Router 192.168.20.1 upgrade
+clashforgectl -Router 192.168.20.1 diag -Fetch -Redact
+clashforgectl -Router 192.168.20.1 uninstall -KeepConfig
 ```
 
-**macOS / Linux** (`clashforgectl`):
+**macOS / Linux:**
 
 ```sh
-./clashforgectl --router 192.168.20.1 compat
-./clashforgectl --router 192.168.20.1 status
-./clashforgectl --router 192.168.20.1 check
-./clashforgectl --router 192.168.20.1 stop
-./clashforgectl --router 192.168.20.1 upgrade
-./clashforgectl --router 192.168.20.1 diag --fetch --redact
+clashforgectl --router 192.168.20.1 compat
+clashforgectl --router 192.168.20.1 status
+clashforgectl --router 192.168.20.1 check
+clashforgectl --router 192.168.20.1 netdiag
+clashforgectl --router 192.168.20.1 stop
+clashforgectl --router 192.168.20.1 upgrade
+clashforgectl --router 192.168.20.1 diag --fetch --redact
 ```
+
+To fully remove `clashforgectl` from your own computer: `irm https://dl.wei1xuan.com/uninstall.ps1 | iex` (Windows) or `curl -fsSL https://dl.wei1xuan.com/uninstall.sh | sh` (macOS/Linux) — this doesn't touch anything already installed on a router.
 
 **Router-local** (inside SSH session):
 

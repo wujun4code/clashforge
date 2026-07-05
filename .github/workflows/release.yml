@@ -585,22 +585,97 @@ jobs:
 
             ---
 
-            ### 💻 从电脑远程管理（推荐）
+            ### 💻 第一步：在电脑上安装 clashforgectl（一键脚本，推荐）
 
-            > 脚本在本机下载 IPK 再上传路由器，比让路由器直接访问 GitHub 更稳。
+            `clashforgectl` 是从你自己电脑远程管理路由器用的命令行工具（装/升级/诊断路由器上的 ClashForge），跟装在路由器上的 ClashForge 本体是两回事。装好之后，任意新开的终端窗口直接敲 `clashforgectl` 即可，无需再下载或指定路径。
 
-            **Windows（PowerShell，一行下载）：**
+            **Windows（PowerShell）：**
             ```powershell
-            irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
-            .\clashforgectl.ps1 -Router <路由器IP> compat     # 安装前检查
-            .\clashforgectl.ps1 -Router <路由器IP> upgrade    # 一键安装/升级
+            irm https://dl.wei1xuan.com/install.ps1 | iex
             ```
 
-            **macOS / Linux（一行下载）：**
+            **macOS / Linux：**
             ```sh
-            curl -fsSL https://dl.wei1xuan.com/releases/latest/clashforgectl -o clashforgectl && chmod +x clashforgectl
-            ./clashforgectl --router <路由器IP> compat        # 安装前检查
-            ./clashforgectl --router <路由器IP> upgrade       # 一键安装/升级
+            curl -fsSL https://dl.wei1xuan.com/install.sh | sh
+            ```
+
+            > 一行装完直接执行命令（`irm | iex` 本身不能带参数，需要包一层 scriptblock）：
+            > ```powershell
+            > &([scriptblock]::Create((irm https://dl.wei1xuan.com/install.ps1))) -Router 192.168.20.1 upgrade
+            > ```
+            > ```sh
+            > curl -fsSL https://dl.wei1xuan.com/install.sh | sh -s -- --router 192.168.20.1 upgrade
+            > ```
+
+            **🇨🇳 dl.wei1xuan.com 访问不了时，直接从 GitHub 装：**
+            ```powershell
+            irm https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.ps1 | iex
+            ```
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/install.sh | sh
+            ```
+
+            ---
+
+            ### 🚀 用 clashforgectl 管理路由器
+
+            以下命令里的 `<路由器IP>` 换成你路由器的局域网 IP（如 `192.168.20.1`）。PowerShell 用 `-Router`，macOS/Linux 用 `--router`——下面统一用 PowerShell 语法举例，Unix 下把 `-Xxx` 换成 `--xxx`（小写）即可，例如 `-Router` → `--router`。
+
+            **① 首次安装 ClashForge 到路由器：**
+            ```powershell
+            clashforgectl -Router <路由器IP> compat     # 安装前兼容性检查（可选但推荐）
+            clashforgectl -Router <路由器IP> upgrade    # 下载并安装（首次运行=全新安装，非首次=原地升级）
+            ```
+            > 全新安装时如果服务没有自动启动，SSH 到路由器执行：`/etc/init.d/clashforge enable && /etc/init.d/clashforge start`，然后打开 `http://<路由器IP>:7777`。
+
+            **② 网络与服务状况诊断（netdiag）：**
+            ```powershell
+            clashforgectl -Router <路由器IP> netdiag
+            ```
+            直接从你电脑访问路由器的 ClashForge HTTP API 做诊断（不需要 SSH），依次检查：路由器连通性、DNS 解析（含 fake-ip 污染检测）、透明代理/防火墙接管状态、mihomo 核心状态等。加 `-Monitor` 可持续监控：
+            ```powershell
+            clashforgectl -Router <路由器IP> netdiag -Monitor
+            ```
+
+            **③ 升级 ClashForge 到最新版（或指定版本）：**
+            ```powershell
+            clashforgectl -Router <路由器IP> upgrade                       # 升级到最新版
+            clashforgectl -Router <路由器IP> upgrade -Version v0.1.0-beta.1 # 升级到指定版本
+            clashforgectl -Router <路由器IP> upgrade -Purge                 # 先清空旧配置再升级（全新开始）
+            ```
+
+            **④ 停止 / 启动路由器上的 ClashForge 服务：**
+            ```powershell
+            clashforgectl -Router <路由器IP> stop    # 停止服务并完全退出接管模式（DNS/防火墙规则一并恢复）
+            ```
+            目前没有单独的"启动"命令。`stop` 之后要重新跑起来，SSH 到路由器执行：
+            ```sh
+            /etc/init.d/clashforge start
+            ```
+            > ⚠️ `clashforgectl reset` 也能把服务重新拉起来，但它会**清空所有订阅、规则、覆盖配置和缓存**，恢复到刚装完的状态——只是想重启服务的话不要用这个，用上面的 `/etc/init.d/clashforge start`。真的要清空重来时才用 `clashforgectl -Router <路由器IP> reset -Start`（`-Start` 表示清空后立即启动）。
+
+            **⑤ 卸载路由器上的 ClashForge 服务：**
+            ```powershell
+            clashforgectl -Router <路由器IP> uninstall                # 完全卸载（删除 /etc/metaclash 配置）
+            clashforgectl -Router <路由器IP> uninstall -KeepConfig    # 卸载但保留订阅/配置，方便以后重装
+            ```
+
+            其它常用命令：`status`（查看当前状态）、`diag`（生成完整诊断报告）、`openclash -Kill`（检测并清理 OpenClash 残留）。完整参数说明：`clashforgectl help`。
+
+            ---
+
+            ### 🗑️ 在电脑上卸载 clashforgectl
+
+            移除的是你电脑上的 `clashforgectl` 命令本身，不影响路由器上已安装的 ClashForge（路由器那边请用上面的 ⑤ `uninstall`）。
+
+            **Windows：**
+            ```powershell
+            irm https://dl.wei1xuan.com/uninstall.ps1 | iex
+            ```
+
+            **macOS / Linux：**
+            ```sh
+            curl -fsSL https://dl.wei1xuan.com/uninstall.sh | sh
             ```
 
             ---
@@ -610,23 +685,23 @@ jobs:
             SSH 进入路由器后执行，**自动检测 CPU 架构**，自动下载并安装最新版：
 
             ```sh
-            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh
+            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- upgrade
             ```
 
             **🇨🇳 GitHub 访问慢时：**
             ```sh
-            wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | sh
+            wget -qO- https://ghproxy.com/https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | sh -s -- upgrade
             ```
-            > 也可手动指定镜像：`sh clashforgectl.sh --mirror https://ghproxy.com`
+            > 也可手动指定镜像：`sh clashforgectl.sh upgrade --mirror https://ghproxy.com`
 
             **安装本版本（${{ steps.ver.outputs.tag }}）：**
             ```sh
-            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- --version ${{ steps.ver.outputs.tag }}
+            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- upgrade --version ${{ steps.ver.outputs.tag }}
             ```
 
             **全新安装（清除旧版所有残留后重装）：**
             ```sh
-            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- --purge
+            wget -qO- https://dl.wei1xuan.com/releases/latest/clashforgectl.sh | sh -s -- upgrade --purge
             ```
 
             > 💡 安装脚本地址固定，无需随版本更新
@@ -639,13 +714,13 @@ jobs:
 
             ```sh
             wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | \
-              sh -s -- --base-url https://releases.example.com
+              sh -s -- upgrade --base-url https://releases.example.com
             ```
 
             安装指定版本：
             ```sh
             wget -qO- https://raw.githubusercontent.com/wujun4code/clashforge/main/scripts/clashforgectl.sh | \
-              sh -s -- --base-url https://releases.example.com --version ${{ steps.ver.outputs.tag }}
+              sh -s -- upgrade --base-url https://releases.example.com --version ${{ steps.ver.outputs.tag }}
             ```
 
             > 将 `https://releases.example.com` 替换为你在 R2 bucket 上绑定的自定义域名。
