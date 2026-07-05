@@ -1,5 +1,12 @@
 ﻿# clashforgectl.ps1 — ClashForge Remote Control Script (Windows)
-# Compatible with PowerShell 5.1+ (auto-relaunches with pwsh/PS7 when needed).
+# Requires PowerShell 7+ (pwsh) — uses `??` throughout, which Windows
+# PowerShell 5.1 cannot even parse (PowerShell parses a script file as one
+# unit before running any of it, so a version check inside this file can
+# never rescue a 5.1 run — by the time any code here would run, the whole
+# file has already failed to parse). The PS7 requirement is enforced by the
+# clashforgectl.cmd shim instead, which — being a separate batch process —
+# can check the PowerShell version *before* ever invoking a parser on this
+# file, and print an actionable error if pwsh isn't installed.
 #
 # Uploads clashforgectl.sh to the target router and executes the requested
 # subcommand over SSH, providing a unified control surface from Windows.
@@ -129,34 +136,6 @@ param(
     [ValidateSet('', 'clashforge', 'direct')]
     [string]$HvMode          = ''
 )
-
-# ── PS 5.1 bootstrap ──────────────────────────────────────────────────────────
-# PS 5.1 can parse this file (no PS7-exclusive syntax used anywhere below), but
-# some runtime APIs require PS 7+.  Re-launch with pwsh when needed and exit.
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
-    if (-not $pwshCmd) {
-        Write-Host ''
-        Write-Host '  [clashforgectl] PowerShell 7 (pwsh) is required but not installed.' -ForegroundColor Red
-        Write-Host ''
-        Write-Host '  Install it:' -ForegroundColor Yellow
-        Write-Host '    winget install Microsoft.PowerShell' -ForegroundColor White
-        Write-Host '  Or download: https://github.com/PowerShell/PowerShell/releases/latest' -ForegroundColor White
-        Write-Host ''
-        exit 1
-    }
-    $fwdArgs = [System.Collections.Generic.List[object]]::new()
-    foreach ($kv in $PSBoundParameters.GetEnumerator()) {
-        if ($kv.Value -is [switch]) {
-            if ($kv.Value.IsPresent) { $fwdArgs.Add("-$($kv.Key)") }
-        } else {
-            $fwdArgs.Add("-$($kv.Key)")
-            $fwdArgs.Add($kv.Value)
-        }
-    }
-    & $pwshCmd.Source -NoLogo -NoProfile -File $PSCommandPath @fwdArgs
-    exit $LASTEXITCODE
-}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
