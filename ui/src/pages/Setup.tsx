@@ -930,11 +930,16 @@ export function Setup() {
         type: 'sub_id',
         sub_id: selectedSaved.sub.id,
         sub_name: selectedSaved.sub.name,
-        sync: !selectedSaved.sub.has_cache,  // force sync when no local cache yet
+        // "在线更新订阅" must force a fresh fetch even when a local cache already
+        // exists — otherwise the button only changes its own highlight and the
+        // apply flow silently keeps using the stale cached subscription/config.
+        // Only fall back to the "no cache yet" heuristic when the user hasn't
+        // explicitly picked either option (subImportChoice === null).
+        sync: subImportChoice === 'live' || (subImportChoice === null && !selectedSaved.sub.has_cache),
       }
     }
     return { type: 'current' }
-  }, [importMode, pasteContent, resolvedSubId, activateSub, activateFile, selectedSaved])
+  }, [importMode, pasteContent, resolvedSubId, activateSub, activateFile, selectedSaved, subImportChoice])
 
   const buildLaunchPayload = useCallback(() => ({
     dns: {
@@ -944,7 +949,14 @@ export function Setup() {
       // Canonical values that drive buildDNSMap
       nameservers: ['223.5.5.5', '119.29.29.29'],
       fallback: ['tls://8.8.4.4', 'tls://1.1.1.1', 'https://dns.google/dns-query', 'https://cloudflare-dns.com/dns-query'],
-      doh: [],  // core/apply auto-probes and injects DoH when upstream hijacking is detected
+      // Deliberately omitted (not sent as []): core/apply's dns-probe step
+      // auto-probes and injects DoH when upstream hijacking is detected, and
+      // persists it to config.toml. Sending an explicit [] here would reset
+      // that already-proven-working result back to empty on every single
+      // apply, forcing a from-scratch re-probe each time — if that one probe
+      // attempt doesn't happen to succeed (GFW interference is inconsistent
+      // run to run), the node silently reverts to the hijacked nameservers
+      // even though a working fallback was found moments earlier.
       fake_ip_filter: ['+.lan', '+.local', 'time.*.com', 'ntp.*.com', '+.ntp.org'],
     },
     network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
@@ -1263,6 +1275,14 @@ export function Setup() {
             const ev: LaunchEvent = JSON.parse(line.slice(6))
             setLaunchLog(prev => [...prev, ev])
             setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+            // "在线更新订阅" failed (source step errored while syncing). Send the
+            // user back to the import step so the "请点击使用本地缓存继续" hint
+            // — which only renders there — is actually visible, instead of
+            // leaving them on the launch screen with just a generic failure.
+            if (ev.type === 'step' && ev.step === 'source' && ev.status === 'error' && subImportChoice === 'live') {
+              setSubLiveFailed(true)
+              setStep('import')
+            }
             if (ev.type === 'done') {
               setLaunchDone(ev.success ?? false)
               if (!ev.success) setLaunchError(ev.error ?? '启动失败')
@@ -1282,7 +1302,7 @@ export function Setup() {
     } finally {
       setLaunching(false)
     }
-  }, [buildLaunchPayload, buildSourcePayload, handlePortCheck, launchDeviceDirty, launchDeviceLoading, net.wan_interface, refreshLaunchConfigPreview, syncLaunchDeviceGroups])
+  }, [buildLaunchPayload, buildSourcePayload, handlePortCheck, launchDeviceDirty, launchDeviceLoading, net.wan_interface, refreshLaunchConfigPreview, subImportChoice, syncLaunchDeviceGroups])
 
   // ── prepare final runtime config preview when entering launch step ──
   useEffect(() => {

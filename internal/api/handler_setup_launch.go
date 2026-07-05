@@ -122,7 +122,14 @@ func handleSetupFinalConfigPreview(deps Dependencies) http.HandlerFunc {
 		if len(req.DNS.Fallback) > 0 {
 			cfgCopy.DNS.Fallback = req.DNS.Fallback
 		}
-		cfgCopy.DNS.DoH = req.DNS.DoH
+		// cfgCopy starts as a copy of the real, already-persisted deps.Config
+		// (including any DoH a previous dns-probe found and saved). Only
+		// override it when the request explicitly supplies a non-empty value —
+		// otherwise the preview would show stale/wrong proxy-server-nameserver
+		// by discarding a working fallback the caller simply didn't send.
+		if len(req.DNS.DoH) > 0 {
+			cfgCopy.DNS.DoH = req.DNS.DoH
+		}
 		if len(req.DNS.FakeIPFilter) > 0 {
 			cfgCopy.DNS.FakeIPFilter = req.DNS.FakeIPFilter
 		}
@@ -306,7 +313,13 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		if len(req.DNS.Fallback) > 0 {
 			deps.Config.DNS.Fallback = req.DNS.Fallback
 		}
-		deps.Config.DNS.DoH = req.DNS.DoH
+		// Same guard as handleCoreApply: only overwrite when the caller sends a
+		// non-empty value, otherwise a request that omits/zeroes this field
+		// would wipe out a DoH fallback a previous dns-probe already found and
+		// persisted, forcing a from-scratch re-probe on every launch.
+		if len(req.DNS.DoH) > 0 {
+			deps.Config.DNS.DoH = req.DNS.DoH
+		}
 		if len(req.DNS.FakeIPFilter) > 0 {
 			deps.Config.DNS.FakeIPFilter = req.DNS.FakeIPFilter
 		}

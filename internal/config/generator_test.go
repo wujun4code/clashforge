@@ -10,22 +10,24 @@ import (
 	"github.com/wujun4code/clashforge/internal/subscription"
 )
 
-// withGeosite creates a temporary geosite.dat placeholder and sets
-// cfg.Core.GeositePath to it. It returns a cleanup function.
+// withGeosite creates a temporary GeoSite.dat placeholder in a fresh dir and
+// points cfg.Core.DataDir at it — the directory geositeExists actually checks
+// (it must match geodata-path, not cfg.Core.GeositePath). Returns a cleanup
+// function that restores the original DataDir.
 func withGeosite(t *testing.T, cfg *config.MetaclashConfig) func() {
 	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "geosite-*.dat")
-	if err != nil {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "GeoSite.dat"), []byte{}, 0o644); err != nil {
 		t.Fatalf("create temp geosite: %v", err)
 	}
-	_ = f.Close()
-	cfg.Core.GeositePath = f.Name()
-	return func() { os.Remove(f.Name()) }
+	orig := cfg.Core.DataDir
+	cfg.Core.DataDir = dir
+	return func() { cfg.Core.DataDir = orig }
 }
 
-// withoutGeosite sets cfg.Core.GeositePath to a path that does not exist.
+// withoutGeosite points cfg.Core.DataDir at a directory that has no GeoSite.dat.
 func withoutGeosite(cfg *config.MetaclashConfig) {
-	cfg.Core.GeositePath = filepath.Join(os.TempDir(), "nonexistent-geosite-XXXXX.dat")
+	cfg.Core.DataDir = filepath.Join(os.TempDir(), "nonexistent-geodata-dir-XXXXX")
 }
 
 func defaultTestCfg() *config.MetaclashConfig {

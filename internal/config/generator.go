@@ -135,25 +135,27 @@ func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]
 	return out, nil
 }
 
-// geositeExists reports whether the geosite.dat file at path exists and is
-// readable.  nameserver-policy requires geosite data; if the file is missing
+// geositeExists reports whether a geosite.dat file (any case) exists in
+// dataDir.  nameserver-policy requires geosite data; if the file is missing
 // we silently fall back to "legacy" behaviour.
 //
-// The IPK bundles "GeoSite.dat" (mixed case) while config.toml stores the path
-// as "geosite.dat" (lowercase).  On Linux the two differ; fall back to a
-// case-insensitive scan of the parent directory so both spellings match.
-func geositeExists(path string) bool {
-	if _, err := os.Stat(path); err == nil {
-		return true
-	}
-	dir := filepath.Dir(path)
-	want := strings.ToLower(filepath.Base(path))
-	entries, err := os.ReadDir(dir)
+// dataDir must be cfg.Core.DataDir — the same directory ClashForge feeds to
+// mihomo as geodata-path (see buildDNSMap/out["geodata-path"]) and the same
+// directory GeoData management / auto-update actually write to.  It must NOT
+// be cfg.Core.GeositePath: that field defaults to the read-only
+// /usr/share/metaclash install-time seed copy, which is never touched again
+// after install, so checking it can diverge from what mihomo actually has
+// (e.g. after the user resets GeoData via the management page).
+//
+// The IPK bundles "GeoSite.dat" (mixed case); match case-insensitively so
+// both spellings work.
+func geositeExists(dataDir string) bool {
+	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false
 	}
 	for _, e := range entries {
-		if strings.ToLower(e.Name()) == want {
+		if strings.EqualFold(e.Name(), "geosite.dat") {
 			return true
 		}
 	}
@@ -294,14 +296,18 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 
 	if effectiveDNSMode == "fake-ip" {
 		dnsMap["enhanced-mode"] = "fake-ip"
-		dnsMap["fake-ip-range"] = "198.18.0.1/16"
+		fakeIPRange, fakeIPWarning := SelectFakeIPRange(cfg.Core.DataDir)
+		if fakeIPWarning != "" {
+			log.Warn().Str("fake_ip_range", fakeIPRange).Msg("config: " + fakeIPWarning)
+		}
+		dnsMap["fake-ip-range"] = fakeIPRange
 		dnsMap["fake-ip-filter-mode"] = "blacklist"
 		filter := cfg.DNS.FakeIPFilter
 		// When geosite.dat is present, prepend geosite:cn so that all domestic
 		// domains bypass fake-ip and receive real IPs.  This prevents QUIC
 		// packets destined for fake IPs from leaking past the tproxy bypass rule
 		// (udp dport 443 return) into the public internet unreachable.
-		if geositeExists(cfg.Core.GeositePath) {
+		if geositeExists(cfg.Core.DataDir) {
 			filter = append([]string{"geosite:cn"}, filter...)
 		}
 		if len(filter) > 0 {
@@ -335,7 +341,7 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 	policy := buildNameserverPolicy(cfg, bootstrapIPs)
 	policyApplied := false
 	if policy != nil {
-		if geositeExists(cfg.Core.GeositePath) {
+		if geositeExists(cfg.Core.DataDir) {
 			dnsMap["nameserver-policy"] = policy
 			policyApplied = true
 			// privacy mode: replace nameserver with CN DoH so ISP sees zero queries.
@@ -347,7 +353,7 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 			}
 		} else {
 			log.Warn().
-				Str("geosite_path", cfg.Core.GeositePath).
+				Str("data_dir", cfg.Core.DataDir).
 				Str("strategy", cfg.DNS.Strategy).
 				Msg("config: geosite.dat 不存在，nameserver-policy 降级到 legacy 模式（请先下载 GeoData）")
 		}

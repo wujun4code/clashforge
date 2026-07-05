@@ -232,6 +232,21 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 			log.Info().Str("side", "core_apply").Str("step", step).Msg(message)
 		}
 
+		// logProbeWarn persists a dns-probe warn outcome to the log file with the
+		// full per-nameserver/per-hostname detail. The warn branches below only
+		// used sendSSE (no persistent log), so a hijack detected outside of an
+		// actively-watched Setup Wizard tab left zero trace for later diagnosis.
+		logProbeWarn := func(message, detail string, report dns.NSProbeReport) {
+			resultsJSON, _ := json.Marshal(report.Results)
+			log.Warn().
+				Str("side", "core_apply").
+				Str("step", "dns-probe").
+				Str("status", "warn").
+				Str("detail", detail).
+				RawJSON("probe_results", resultsJSON).
+				Msg(message)
+		}
+
 		emitDone := func(success bool, errMsg string) {
 			ev := launchEvent{Type: "done", Success: success}
 			if !success {
@@ -429,7 +444,11 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		} else if len(deps.Config.DNS.Fallback) == 0 {
 			deps.Config.DNS.Fallback = def.DNS.Fallback
 		}
-		if req.DNS.DoH != nil {
+		if len(req.DNS.DoH) > 0 {
+			// len()>0, not != nil: an already-detected-working DoH fallback
+			// (persisted by the dns-probe step below on a previous apply) must
+			// survive a request that merely omits/zeroes this field — only an
+			// explicit, non-empty value from the caller should override it.
 			deps.Config.DNS.DoH = req.DNS.DoH
 		}
 		if len(req.DNS.FakeIPFilter) > 0 {
@@ -501,8 +520,41 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		case len(udpNameservers) == 0:
 			emitStep("dns-probe", "skip", "未配置 UDP nameserver，跳过检测", "")
 		default:
-			probeCtx, probeCancel := context.WithTimeout(context.Background(), 20*time.Second)
-			report := dns.ProbeNameservers(probeCtx, udpNameservers, nodeHostnames)
+			// ProbeNameservers tests candidates sequentially, not in parallel,
+			// each with its own multi-second per-call timeout (see probe.go).
+			// Worst case — every candidate actually times out rather than
+			// failing fast — is (nameservers × sample hostnames × 5s) for the
+			// initial hijack check plus (fallback candidates × 6s) for the
+			// DoH search; with the current candidate list that can approach
+			// 90s. A 20s parent deadline would silently truncate the fallback
+			// loop partway through, making later candidates fail with "context
+			// deadline exceeded" regardless of whether they're actually
+			// reachable — indistinguishable from a real network block, and
+			// non-deterministic run to run depending on how many earlier
+			// candidates happened to time out first. 120s covers the
+			// pathological case; typical runs (most candidates answer or
+			// reject within milliseconds) finish in a few seconds.
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), 120*time.Second)
+			probeDone := make(chan dns.NSProbeReport, 1)
+			go func() {
+				probeDone <- dns.ProbeNameservers(probeCtx, udpNameservers, nodeHostnames)
+			}()
+			// A silently blocked candidate can eat its full per-call timeout
+			// with zero output; without a keepalive the SSE connection can sit
+			// idle long enough for a browser/reverse-proxy to kill it before
+			// the 120s worst case ever resolves.
+			var report dns.NSProbeReport
+			ticker := time.NewTicker(10 * time.Second)
+		waitProbe:
+			for {
+				select {
+				case report = <-probeDone:
+					break waitProbe
+				case <-ticker.C:
+					emitInfo("dns-probe", "仍在检测 proxy-server-nameserver 是否被劫持…（部分候选 DNS 无响应，正在等待超时）")
+				}
+			}
+			ticker.Stop()
 			probeCancel()
 
 			if report.AllClear {
@@ -519,23 +571,33 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 					deps.Config.DNS.DoH = mergeDNSList(deps.Config.DNS.DoH, report.SuggestedFallbacks)
 					probeData.AutoApplied = report.SuggestedFallbacks
 					_ = saveRuntimeConfig(deps) // persist DoH; config-gen (step 3) will pick it up
+					msg := fmt.Sprintf(
+						"⚠️ 检测到 %d 个 nameserver 被上游路由劫持，已自动追加 DoH 到 proxy-server-nameserver",
+						len(report.HijackedNameservers))
+					detail := fmt.Sprintf("被劫持: %s → 已追加: %s", hijackedList, strings.Join(report.SuggestedFallbacks, ", "))
 					sendSSE(launchEvent{
 						Type: "step", Step: "dns-probe", Status: "warn",
-						Message: fmt.Sprintf(
-							"⚠️ 检测到 %d 个 nameserver 被上游路由劫持，已自动追加 DoH 到 proxy-server-nameserver",
-							len(report.HijackedNameservers)),
-						Detail:   fmt.Sprintf("被劫持: %s → 已追加: %s", hijackedList, strings.Join(report.SuggestedFallbacks, ", ")),
-						DNSProbe: probeData,
+						Message: msg, Detail: detail, DNSProbe: probeData,
 					})
+					logProbeWarn(msg, detail, report)
 				} else {
+					msg := fmt.Sprintf(
+						"⚠️ 检测到 %d 个 nameserver 被上游劫持，且所有备用 DoH（含同 IP 的 DoH 重试）均无法访问，proxy-server-nameserver 仍使用被劫持的原值——依赖该节点的连接预计会失败",
+						len(report.HijackedNameservers))
+					detail := fmt.Sprintf("被劫持: %s", hijackedList)
+					// Break down *why* every fallback candidate failed — network
+					// unreachable (GFW-style path blocking, unrelated to this
+					// domain) vs. reachable-but-still-fake-ip (this resolver itself
+					// poisons the domain) — so a future incident doesn't need a
+					// manual SSH session to tell the two apart.
+					if breakdown := report.SummarizeFallbackFailures(); breakdown != "" {
+						detail = fmt.Sprintf("%s | 备用 DoH 失败详情: %s", detail, breakdown)
+					}
 					sendSSE(launchEvent{
 						Type: "step", Step: "dns-probe", Status: "warn",
-						Message: fmt.Sprintf(
-							"⚠️ 检测到 %d 个 nameserver 被上游劫持，且所有备用 DoH 也无法访问",
-							len(report.HijackedNameservers)),
-						Detail:   fmt.Sprintf("被劫持: %s", hijackedList),
-						DNSProbe: probeData,
+						Message: msg, Detail: detail, DNSProbe: probeData,
 					})
+					logProbeWarn(msg, detail, report)
 				}
 			}
 		}

@@ -102,13 +102,13 @@ rules:
   - RULE-SET,applications,🎯 全球直连
   - RULE-SET,icloud,🎯 全球直连
   - RULE-SET,apple,🎯 全球直连
-  - RULE-SET,lancidr,🎯 全球直连,no-resolve
-  - GEOIP,LAN,🎯 全球直连
   - RULE-SET,google,🚀 节点选择
   - RULE-SET,gfw,🚀 节点选择
   - RULE-SET,proxy,🚀 节点选择
   - GEOSITE,CN,🎯 全球直连
   - RULE-SET,tld-not-cn,🚀 节点选择
+  - RULE-SET,lancidr,🎯 全球直连,no-resolve
+  - GEOIP,LAN,🎯 全球直连
   - RULE-SET,telegramcidr,🚀 节点选择,no-resolve
   - RULE-SET,cncidr,🎯 全球直连,no-resolve
   - GEOIP,CN,🎯 全球直连
@@ -203,12 +203,12 @@ rules:
   - RULE-SET,private,🎯 全球直连
   - RULE-SET,icloud,🎯 全球直连
   - RULE-SET,apple,🎯 全球直连
-  - RULE-SET,lancidr,🎯 全球直连,no-resolve
-  - GEOIP,LAN,🎯 全球直连
   - RULE-SET,google,🚀 节点选择
   - RULE-SET,direct,🎯 全球直连
   - RULE-SET,proxy,🚀 节点选择
   - GEOSITE,CN,🎯 全球直连
+  - RULE-SET,lancidr,🎯 全球直连,no-resolve
+  - GEOIP,LAN,🎯 全球直连
   - RULE-SET,telegramcidr,🚀 节点选择,no-resolve
   - RULE-SET,cncidr,🎯 全球直连,no-resolve
   - GEOIP,CN,🎯 全球直连
