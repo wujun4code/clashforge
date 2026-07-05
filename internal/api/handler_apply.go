@@ -602,6 +602,12 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 			}
 		}
 
+		// ── Step 2.6: upstream ClashForge discovery ───────────────────────────
+		// Best-effort, silent on any failure (no gateway, unreachable, not
+		// ClashForge, redir-host mode) — see discoverUpstreamDNSTopology. Must
+		// run before config-gen so SelectFakeIPRange can read the result.
+		discoverUpstreamDNSTopology(deps.Config.Core.DataDir)
+
 		// ── Step 3: generate mihomo config ────────────────────────────────────
 		// deps.Config.DNS.DoH is already populated if hijacking was detected above.
 

@@ -54,6 +54,29 @@ func TestSelectFakeIPRange_RejectsWhateverLancidrActuallyContains(t *testing.T) 
 // TestSelectFakeIPRange_AllCandidatesCollide exercises the extremely-unlikely
 // "every built-in candidate collides" path and checks it still returns a
 // usable CIDR (never an empty string) plus a non-empty warning.
+// TestSelectFakeIPRange_AvoidsDiscoveredUpstreamRange covers the case an
+// IANA-only check can't catch: a directly-connected upstream ClashForge
+// instance whose fake-ip-range is a non-reserved "clever trick" block that
+// happens to be OUR second candidate (28.18.0.1/16). Without reading the
+// upstream-discovery cache file, SelectFakeIPRange would happily pick it —
+// this proves the discovered range is honored and pushes selection past it.
+func TestSelectFakeIPRange_AvoidsDiscoveredUpstreamRange(t *testing.T) {
+	dir := t.TempDir()
+	topology := `{"fake_ip_range":"28.18.0.1/16"}`
+	if err := os.WriteFile(config.UpstreamTopologyPath(dir), []byte(topology), 0o644); err != nil {
+		t.Fatalf("write upstream topology cache: %v", err)
+	}
+
+	got, warning := config.SelectFakeIPRange(dir)
+
+	if warning != "" {
+		t.Fatalf("expected no warning, got %q", warning)
+	}
+	if got == "198.18.0.1/16" || got == "28.18.0.1/16" {
+		t.Fatalf("expected the default (IANA-reserved) and the discovered-upstream range to both be rejected, got %q", got)
+	}
+}
+
 func TestSelectFakeIPRange_AllCandidatesCollide(t *testing.T) {
 	dir := t.TempDir()
 	ruleDir := filepath.Join(dir, "rule_provider")

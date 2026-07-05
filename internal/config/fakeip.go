@@ -1,11 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"net/netip"
 	"os"
 	"path/filepath"
 
 	"github.com/rs/zerolog/log"
+	"github.com/wujun4code/clashforge/internal/netreserved"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,47 +32,47 @@ var fakeIPRangeCandidates = []string{
 	"29.18.0.1/16",
 }
 
-// ianaReservedRanges mirrors the IANA IPv4 Special-Purpose Address Registry —
-// the same "not really Internet-routable" blocks that public LAN/reserved
-// rule-sets (lancidr.txt and equivalents) bundle alongside genuine private
-// ranges. This is the baseline fallback used before any rule-provider has
-// been downloaded (first boot); once a lancidr-style provider is cached on
-// disk, its actual payload is unioned in on top of this list (see
-// reservedRangesForDataDir) so the check stays in sync with whatever the
-// active template really ships, instead of a hand-maintained copy drifting
-// out of date with it.
-var ianaReservedRanges = []string{
-	"0.0.0.0/8",
-	"10.0.0.0/8",
-	"100.64.0.0/10",
-	"127.0.0.0/8",
-	"169.254.0.0/16",
-	"172.16.0.0/12",
-	"192.0.0.0/24",
-	"192.0.2.0/24",
-	"192.88.99.0/24",
-	"192.168.0.0/16",
-	"198.18.0.0/15",
-	"198.51.100.0/24",
-	"203.0.113.0/24",
-	"224.0.0.0/4",
-	"240.0.0.0/4",
-	"255.255.255.255/32",
-}
-
 // ExtractFakeIPRange reads dns.fake-ip-range out of a full mihomo-config.yaml
 // document. Returns "" if the file can't be parsed or the field is absent
 // (e.g. DNS is disabled, or enhanced-mode is redir-host).
 func ExtractFakeIPRange(mihomoConfigYAML []byte) string {
+	return ExtractDNSTopology(mihomoConfigYAML).FakeIPRange
+}
+
+// DNSTopology is the non-sensitive subset of DNS settings ClashForge exposes
+// to a downstream ClashForge instance via GET /api/discovery/dns-topology —
+// deliberately just enough to let it avoid picking a colliding fake-ip pool,
+// nothing about proxies, subscriptions, or credentials.
+type DNSTopology struct {
+	EnhancedMode string `json:"enhanced_mode" yaml:"enhanced-mode"`
+	FakeIPRange  string `json:"fake_ip_range" yaml:"fake-ip-range"`
+}
+
+// ExtractDNSTopology reads dns.enhanced-mode and dns.fake-ip-range out of a
+// full mihomo-config.yaml document. Returns a zero-value DNSTopology if the
+// file can't be parsed.
+func ExtractDNSTopology(mihomoConfigYAML []byte) DNSTopology {
 	var doc struct {
-		DNS struct {
-			FakeIPRange string `yaml:"fake-ip-range"`
-		} `yaml:"dns"`
+		DNS DNSTopology `yaml:"dns"`
 	}
 	if err := yaml.Unmarshal(mihomoConfigYAML, &doc); err != nil {
-		return ""
+		return DNSTopology{}
 	}
-	return doc.DNS.FakeIPRange
+	return doc.DNS
+}
+
+// upstreamTopologyFile is the on-disk shape written by the apply flow's
+// upstream-discovery step (see internal/api) when a directly-connected
+// upstream router answers GET /api/discovery/dns-topology as another
+// ClashForge instance running fake-ip.
+type upstreamTopologyFile struct {
+	FakeIPRange string `json:"fake_ip_range"`
+}
+
+// UpstreamTopologyPath returns where the upstream-discovery step persists a
+// confirmed upstream fake-ip-range for a given DataDir.
+func UpstreamTopologyPath(dataDir string) string {
+	return filepath.Join(dataDir, "upstream_dns_topology.json")
 }
 
 // ruleProviderCIDRFile is the on-disk shape of a Mihomo ipcidr rule-provider
@@ -79,15 +81,24 @@ type ruleProviderCIDRFile struct {
 	Payload []string `yaml:"payload"`
 }
 
-// reservedRangesForDataDir returns ianaReservedRanges plus, best-effort, the
-// actual CIDR entries currently cached for the ipcidr rule-providers that the
-// generated rule list matches as DIRECT ahead of any domain-based rule
-// (lancidr, cncidr, telegramcidr — see internal/publish/template.go). Missing
-// or unparsable files are skipped silently: this only ever narrows the set of
-// safe candidates, it never widens fake-ip-range's own space, so a cold boot
-// with no cache yet still gets the IANA baseline protection.
+// reservedRangesForDataDir returns the IANA baseline plus, best-effort, two
+// kinds of on-disk data that only ever narrow the set of safe fake-ip-range
+// candidates (never widen it, so a cold boot with nothing cached yet still
+// gets the IANA baseline protection):
+//
+//   - the actual CIDR entries currently cached for the ipcidr rule-providers
+//     the generated rule list matches as DIRECT ahead of any domain-based
+//     rule (lancidr, cncidr, telegramcidr — see internal/publish/template.go)
+//   - a directly-connected upstream router's own fake-ip-range, if it
+//     answered GET /api/discovery/dns-topology as another ClashForge
+//     instance (see internal/api's upstream-discovery step and
+//     UpstreamTopologyPath). This is the precise, authoritative fix for the
+//     case a rule-set/IANA-only check can't catch: two chained ClashForge
+//     routers whose fake-ip pools happen to collide on a range that is
+//     neither reserved nor a known non-reserved trick — we don't need to
+//     guess or infer it, we can just ask.
 func reservedRangesForDataDir(dataDir string) []netip.Prefix {
-	prefixes := parseCIDRList(ianaReservedRanges)
+	prefixes := netreserved.ParsePrefixes(netreserved.IANARanges)
 	for _, provider := range []string{"lancidr", "cncidr", "telegramcidr"} {
 		path := filepath.Join(dataDir, "rule_provider", provider+".yaml")
 		data, err := os.ReadFile(path)
@@ -98,16 +109,12 @@ func reservedRangesForDataDir(dataDir string) []netip.Prefix {
 		if err := yaml.Unmarshal(data, &file); err != nil {
 			continue
 		}
-		prefixes = append(prefixes, parseCIDRList(file.Payload)...)
+		prefixes = append(prefixes, netreserved.ParsePrefixes(file.Payload)...)
 	}
-	return prefixes
-}
-
-func parseCIDRList(cidrs []string) []netip.Prefix {
-	prefixes := make([]netip.Prefix, 0, len(cidrs))
-	for _, c := range cidrs {
-		if p, err := netip.ParsePrefix(c); err == nil {
-			prefixes = append(prefixes, p)
+	if data, err := os.ReadFile(UpstreamTopologyPath(dataDir)); err == nil {
+		var topo upstreamTopologyFile
+		if err := json.Unmarshal(data, &topo); err == nil && topo.FakeIPRange != "" {
+			prefixes = append(prefixes, netreserved.ParsePrefixes([]string{topo.FakeIPRange})...)
 		}
 	}
 	return prefixes
