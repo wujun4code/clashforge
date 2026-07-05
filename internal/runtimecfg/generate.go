@@ -167,7 +167,7 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 		return false, err
 	}
 	generated, providerSpecs := config.ApplyPerDeviceSubRulesWithProviders(generated, deviceGroups)
-	if err := config.SyncDeviceRuleProviderFiles(cfg.Core.RuntimeDir, providerSpecs); err != nil {
+	if err := config.SyncDeviceRuleProviderFiles(cfg.Core.DataDir, providerSpecs); err != nil {
 		return false, err
 	}
 

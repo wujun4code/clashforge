@@ -300,9 +300,20 @@ func deviceGroupOverrideKey(group DeviceGroup) string {
 }
 
 // SyncDeviceRuleProviderFiles writes generated device-group rule-provider files into
-// runtimeDir/rule_provider and cleans up stale managed files.
-func SyncDeviceRuleProviderFiles(runtimeDir string, specs []DeviceRuleProviderSpec) error {
-	ruleProviderDir := filepath.Join(runtimeDir, managedDeviceProviderDir)
+// dataDir/rule_provider and cleans up stale managed files.
+//
+// dataDir must be mihomo's home dir (cfg.Core.DataDir, the process's -d flag
+// in core.NewManager) — mihomo resolves every rule-provider's relative
+// "path:" (managedDeviceProviderPathTmpl, "./rule_provider/%s") against that
+// directory, the same place it downloads and caches the HTTP-vehicle
+// providers (apple/google/proxy/...). These device-group providers are
+// vehicleType "file" (ClashForge writes them directly; mihomo never fetches
+// them), so passing RuntimeDir here — a different directory — silently
+// produces a rule-provider mihomo can never find: it loads with ruleCount 0
+// and stays that way even across a full core restart, because the file
+// genuinely isn't at the path mihomo looks for.
+func SyncDeviceRuleProviderFiles(dataDir string, specs []DeviceRuleProviderSpec) error {
+	ruleProviderDir := filepath.Join(dataDir, managedDeviceProviderDir)
 	if err := os.MkdirAll(ruleProviderDir, 0o755); err != nil {
 		return fmt.Errorf("create device rule-provider dir: %w", err)
 	}
