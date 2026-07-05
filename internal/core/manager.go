@@ -196,6 +196,25 @@ func (m *CoreManager) stopLocked() error {
 	return nil
 }
 
+// stageConfigForReload returns a path mihomo's PUT /configs will accept.
+// mihomo rejects any `path` outside its own home directory (or SAFE_PATHS),
+// so if configFile isn't already there, its content is copied to a fixed
+// filename under homeDir and that path is returned instead.
+func stageConfigForReload(homeDir, configFile string) (string, error) {
+	if homeDir == "" || filepath.Dir(configFile) == homeDir {
+		return configFile, nil
+	}
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return "", fmt.Errorf("read generated config for reload: %w", err)
+	}
+	staged := filepath.Join(homeDir, ".reload-mihomo-config.yaml")
+	if err := os.WriteFile(staged, data, 0o644); err != nil {
+		return "", fmt.Errorf("stage config under mihomo home dir for reload: %w", err)
+	}
+	return staged, nil
+}
+
 func (m *CoreManager) Restart(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -224,8 +243,23 @@ func (m *CoreManager) Reload(configFile string) error {
 		log.Error().Err(err).Str("output", string(out)).Msg("core: ⚠️ mihomo 配置验证失败！配置未生效，当前运行配置继续使用")
 		return fmt.Errorf("config validation failed: %s", string(out))
 	}
+
+	// mihomo's PUT /configs enforces that `path` is a subpath of its home
+	// directory (the already-running process's `-d` flag) or an explicit
+	// SAFE_PATHS entry — a security restriction against path traversal via
+	// the API. configFile normally lives in RuntimeDir (regenerated on every
+	// apply, kept off persistent storage), which sits outside HomeDir, so
+	// passing it directly gets rejected with "path is not subpath of home
+	// directory or SAFE_PATHS". Stage a copy under HomeDir and reload from
+	// there instead — mihomo already reads this same content via -f at
+	// startup, this just satisfies the runtime API's separate path check.
+	reloadPath, err := stageConfigForReload(m.cfg.HomeDir, configFile)
+	if err != nil {
+		return err
+	}
+
 	url := fmt.Sprintf("http://127.0.0.1:%d/configs?force=false", m.cfg.APIPort)
-	body := fmt.Sprintf(`{"path":"%s"}`, configFile)
+	body := fmt.Sprintf(`{"path":"%s"}`, reloadPath)
 	req, err := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
 	if err != nil {
 		return err
