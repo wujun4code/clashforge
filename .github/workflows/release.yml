@@ -508,7 +508,6 @@ jobs:
           path: |
             scripts/clashforgectl.sh
             scripts/clashforgectl.ps1
-            scripts/clashforgectl_impl.ps1
             scripts/clashforgectl.cmd
             scripts/clashforgectl
           retention-days: 7
@@ -566,7 +565,7 @@ jobs:
         run: |
           cd release-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl_impl.ps1 clashforgectl.cmd clashforgectl )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -589,7 +588,6 @@ jobs:
             **Windows（PowerShell，一行下载）：**
             ```powershell
             irm https://dl.wei1xuan.com/releases/latest/clashforgectl.ps1 -OutFile clashforgectl.ps1
-            irm https://dl.wei1xuan.com/releases/latest/clashforgectl_impl.ps1 -OutFile clashforgectl_impl.ps1
             .\clashforgectl.ps1 -Router <路由器IP> compat     # 安装前检查
             .\clashforgectl.ps1 -Router <路由器IP> upgrade    # 一键安装/升级
             ```
@@ -669,7 +667,6 @@ jobs:
 
             ```powershell
             Invoke-WebRequest 'https://dl.wei1xuan.com/clashforgectl.ps1' -OutFile .\clashforgectl.ps1
-            Invoke-WebRequest 'https://dl.wei1xuan.com/clashforgectl_impl.ps1' -OutFile .\clashforgectl_impl.ps1
             .\clashforgectl.ps1 -Router <OpenWrt-IP> upgrade
             ```
 
@@ -756,7 +753,6 @@ jobs:
             release-assets/*.apk
             release-assets/clashforgectl.sh
             release-assets/clashforgectl.ps1
-            release-assets/clashforgectl_impl.ps1
             release-assets/clashforgectl.cmd
             release-assets/clashforgectl
             release-assets/SHA256SUMS.txt
@@ -819,7 +815,7 @@ jobs:
         run: |
           cd r2-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl_impl.ps1 clashforgectl.cmd clashforgectl )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -852,7 +848,6 @@ jobs:
           test -f "r2-assets/${X86_IPK}"
           test -f r2-assets/clashforgectl.sh
           test -f r2-assets/clashforgectl.ps1
-          test -f r2-assets/clashforgectl_impl.ps1
           test -f r2-assets/clashforgectl.cmd
           test -f r2-assets/clashforgectl
 
@@ -864,8 +859,6 @@ jobs:
 
           # Root-level convenience aliases for Windows/Hyper-V bootstrap and manual x86_64 install.
           rclone copyto r2-assets/clashforgectl.ps1 "r2:${R2_BUCKET}/clashforgectl.ps1" \
-            --s3-no-check-bucket --progress --stats-one-line
-          rclone copyto r2-assets/clashforgectl_impl.ps1 "r2:${R2_BUCKET}/clashforgectl_impl.ps1" \
             --s3-no-check-bucket --progress --stats-one-line
           rclone copyto r2-assets/clashforgectl.cmd "r2:${R2_BUCKET}/clashforgectl.cmd" \
             --s3-no-check-bucket --progress --stats-one-line
@@ -894,7 +887,6 @@ jobs:
           **Versioned paths:**
           - \`releases/${TAG}/clashforgectl.sh\`
           - \`releases/${TAG}/clashforgectl.ps1\`
-          - \`releases/${TAG}/clashforgectl_impl.ps1\`
           - \`releases/${TAG}/clashforgectl.cmd\`
           - \`releases/${TAG}/clashforgectl\`
           - \`releases/${TAG}/${X86_IPK}\`
@@ -902,12 +894,10 @@ jobs:
           **Latest paths:**
           - \`releases/latest/clashforgectl.sh\`
           - \`releases/latest/clashforgectl.ps1\`
-          - \`releases/latest/clashforgectl_impl.ps1\`
           - \`releases/latest/clashforgectl.cmd\`
           - \`releases/latest/clashforgectl\`
           - \`releases/latest/${X86_IPK}\`
           - \`clashforgectl.ps1\`
-          - \`clashforgectl_impl.ps1\`
           - \`clashforgectl.cmd\`
           - \`clashforgectl.sh\`
           - \`clashforgectl\`

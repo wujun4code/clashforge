@@ -52,7 +52,6 @@ ip route
 
 ```powershell
 Invoke-WebRequest 'https://dl.wei1xuan.com/clashforgectl.ps1' -OutFile .\clashforgectl.ps1
-Invoke-WebRequest 'https://dl.wei1xuan.com/clashforgectl_impl.ps1' -OutFile .\clashforgectl_impl.ps1
 ```
 
 先做兼容性检查：
