@@ -53,6 +53,7 @@ jobs:
           cp scripts/install.ps1 dist/install.ps1
           cp scripts/install.sh dist/install.sh
           chmod +x dist/clashforgectl.sh dist/clashforgectl dist/install.sh
+          echo "$TAG" > dist/version.txt
           echo "=== Release assets plus current ctl scripts ==="
           ls -lh dist/
 
@@ -102,6 +103,7 @@ jobs:
           # Root-level one-liner installer entrypoints.
           [ -f dist/install.ps1 ] && rclone copyto dist/install.ps1 r2:${R2_BUCKET}/install.ps1 --s3-no-check-bucket --progress --stats-one-line
           [ -f dist/install.sh ] && rclone copyto dist/install.sh r2:${R2_BUCKET}/install.sh --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/version.txt ] && rclone copyto dist/version.txt r2:${R2_BUCKET}/version.txt --s3-no-check-bucket --progress --stats-one-line
 
           echo "=== Uploaded to R2 ==="
           rclone ls r2:${R2_BUCKET}/releases/${TAG}/

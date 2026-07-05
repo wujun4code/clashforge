@@ -812,12 +812,16 @@ jobs:
           name: installer
           path: r2-assets/
 
+      - name: Write version marker
+        if: steps.r2.outputs.enabled == 'true'
+        run: echo "$TAG" > r2-assets/version.txt
+
       - name: Create checksums
         if: steps.r2.outputs.enabled == 'true'
         run: |
           cd r2-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl install.ps1 install.sh )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl install.ps1 install.sh version.txt )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -879,6 +883,8 @@ jobs:
           rclone copyto r2-assets/install.ps1 "r2:${R2_BUCKET}/install.ps1" \
             --s3-no-check-bucket --progress --stats-one-line
           rclone copyto r2-assets/install.sh "r2:${R2_BUCKET}/install.sh" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/version.txt "r2:${R2_BUCKET}/version.txt" \
             --s3-no-check-bucket --progress --stats-one-line
 
           echo "=== R2 releases/${TAG}/ ==="
