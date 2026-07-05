@@ -106,10 +106,22 @@ func buildDNSSection(cfg map[string]interface{}, geoDataDir string, dnsMode stri
 	// Android mandatory overrides.
 	dns["enable"] = true
 	dns["listen"] = "0.0.0.0:1053"
-	// respect-rules: false keeps mihomo's own DNS queries out of proxy rules,
-	// which is safe because addDisallowedApplication excludes ourselves from the
-	// VPN tunnel so our outbound sockets travel the physical network directly.
-	dns["respect-rules"] = false
+	// respect-rules: true — strongly indicated by live debug logging as the
+	// fix for Google Play downloads hanging indefinitely (a redirector
+	// hostname like rr2---sn-xxxx.googlevideo.com resolved through the
+	// plain-UDP domestic nameservers to a *poisoned* domestic IP, e.g.
+	// 180.163.150.131 for a Google CDN host — mainland ISP/GFW-style DNS
+	// injection targeting this class of hostname). With this false, that
+	// resolution happened directly over the phone's real network path,
+	// subject to that injection. With it true, when the hostname being
+	// resolved matches a proxy rule, mihomo's own DNS dial for it is routed
+	// through that same proxy — the query leaves from the proxy's location
+	// (unaffected by domestic injection) instead of the phone's. The
+	// previous rationale here ("safe because addDisallowedApplication
+	// excludes us from the tunnel") was true but answered a different
+	// question (why this doesn't self-capture/loop) — it didn't actually
+	// justify false over true for poisoning resistance.
+	dns["respect-rules"] = true
 
 	if dnsMode == "redir-host" {
 		dns["enhanced-mode"] = "redir-host"
@@ -133,7 +145,20 @@ func buildDNSSection(cfg map[string]interface{}, geoDataDir string, dnsMode stri
 		delete(dns, "fake-ip-filter-mode")
 	} else {
 		dns["enhanced-mode"] = "fake-ip"
-		dns["fake-ip-range"] = "198.18.0.0/15"
+		// Not 198.18.0.0/15: Loyalsoldier's lancidr.txt (used by
+		// LoyalsoldierTemplate/LiteTemplate rule-providers) bundles that exact
+		// IANA-reserved block as a "route DIRECT" range. Any fake-ip literal
+		// for a domain not covered by a more specific rule-provider falls
+		// through to lancidr and gets force-routed DIRECT instead of through
+		// the proxy — mirrors the router-side fix in
+		// internal/config/fakeip.go (SelectFakeIPRange). 28.18.0.1/16 is a
+		// real, allocated-but-obscure block (part of 28.0.0.0/8, long
+		// assigned to the US DoD network) that lancidr does not bundle.
+		//
+		// (Was briefly reverted to 198.18.0.1/16 to diagnose a Google Play
+		// download hang; confirmed unrelated — the actual cause was a TUN
+		// MTU mismatch, see the "mtu" field in buildAndroidTUN below.)
+		dns["fake-ip-range"] = "28.18.0.1/16"
 		dns["fake-ip-filter-mode"] = "blacklist"
 		dns["fake-ip-filter"] = fakeIPFilter(geoDataDir)
 	}
@@ -143,19 +168,55 @@ func buildDNSSection(cfg map[string]interface{}, geoDataDir string, dnsMode stri
 
 func buildAndroidTUN(tunFd int) map[string]interface{} {
 	return map[string]interface{}{
-		"enable":                true,
-		"stack":                 "gvisor",
-		"file-descriptor":       tunFd,
+		"enable": true,
+		// Tried "system" (kernel TCP via local NAT listener) to test whether
+		// a gvisor bug explained Google Play downloads stalling at an
+		// identical byte count right after the TLS handshake. Reverted:
+		// mihomo's system-stack TUN reader does blocking read() with no
+		// EAGAIN/readiness handling, but ClashVpnService.kt's
+		// Builder.setBlocking(false) hands it a non-blocking fd — the result
+		// is a tight busy-loop logging "read packet: read tun: resource
+		// temporarily unavailable" with no packets ever processed, not a
+		// partial improvement. gvisor is epoll-driven and handles the
+		// non-blocking fd correctly, which is presumably why it was chosen
+		// originally.
+		"stack":           "gvisor",
+		"file-descriptor": tunFd,
 		"auto-route":            false,
 		"auto-detect-interface": false,
 		"dns-hijack":            defaultDNSHijack,
+		// Must match ClashVpnService's VpnService.Builder.setMtu(1500)
+		// exactly. When omitted, mihomo's gvisor TUN stack defaults to 9000
+		// (listener/sing_tun/server.go: "if tunMTU == 0 { tunMTU = 9000 }"),
+		// while the real Android TUN interface backing this fd only accepts
+		// 1500-byte packets. Small requests never approach either limit, so
+		// they work fine; any transfer that grows past 1500 bytes has gvisor
+		// negotiate/produce packets the real interface can't carry, and they
+		// get silently dropped — the exact symptom that made large CDN
+		// downloads (Google Play app installs, video CDN edges) stall
+		// indefinitely a few KB in while ordinary API calls kept working.
+		"mtu": 1500,
 	}
 }
 
 func buildSniffer() map[string]interface{} {
 	return map[string]interface{}{
-		"enable":               true,
-		"override-destination": true,
+		"enable": true,
+		// Global override-destination must be false (mihomo's own official
+		// default — we previously diverged from it and paid for it once
+		// already, see docs/clashforge-wechat-video-bug-report.md). With it
+		// true, mihomo re-resolves every sniffed TLS/QUIC hostname via its
+		// own DNS and redials that fresh IP instead of preserving the
+		// client's original connection — which breaks any session/token-
+		// bound CDN redirector (WeChat's video CDN in that report; Google
+		// Play's "rr---sn-*.googlevideo.com"-style download redirector here)
+		// where the destination IP the client resolved is only valid for
+		// that specific request. The symptom is identical both times: the
+		// TLS handshake to the re-resolved IP succeeds, but the actual
+		// payload transfer fails because that edge wasn't the one the
+		// session was authorized for, so the client retries indefinitely
+		// against a fresh redirect target.
+		"override-destination": false,
 		"parse-pure-ip":        true,
 		"sniff": map[string]interface{}{
 			"TLS": map[string]interface{}{
@@ -163,6 +224,10 @@ func buildSniffer() map[string]interface{} {
 			},
 			"HTTP": map[string]interface{}{
 				"ports": []interface{}{"80", "8080-8880"},
+				// Plain HTTP has no SNI; override-destination here is what
+				// makes Host-header-based transparent proxying work at all,
+				// and plain HTTP has no CDN-session-token concept to break.
+				"override-destination": true,
 			},
 			"QUIC": map[string]interface{}{
 				"ports": []interface{}{443},

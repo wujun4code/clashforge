@@ -47,4 +47,22 @@ class VpnManager {
       return {'error': e.message};
     }
   }
+
+  static Future<String> readNativeLogs() async {
+    try {
+      final String result = await _channel.invokeMethod('readNativeLogs');
+      return result;
+    } on PlatformException catch (e) {
+      return 'error: ${e.message}';
+    }
+  }
+
+  static Future<String> clearNativeLogs() async {
+    try {
+      final String result = await _channel.invokeMethod('clearNativeLogs');
+      return result;
+    } on PlatformException catch (e) {
+      return 'error: ${e.message}';
+    }
+  }
 }

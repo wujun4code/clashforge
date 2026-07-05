@@ -57,8 +57,8 @@ class ConfigGenerator {
   /// Generate a complete Clash/mihomo config map ready for YAML serialisation.
   ///
   /// **Rule-selection logic** (per spec):
-  /// 1. [customRules] non-empty → pass-through mode: use [customProxyGroups]
-  ///    (if any) and [customRules] exactly as imported.
+  /// 1. [customRules] non-empty → subscription mode: use [customProxyGroups]
+  ///    (if any), but normalize rule order for Android TUN/fake-ip safety.
   /// 2. [customRules] empty → Loyalsoldier template: generate Auto + 🚀 Proxy
   ///    groups and apply Loyalsoldier rule-providers / rules.
   ///
@@ -113,7 +113,9 @@ class ConfigGenerator {
         'port': node.port,
       };
       node.raw.forEach((k, v) {
-        if (k != 'name' && k != 'type' && k != 'server' && k != 'port') p[k] = v;
+        if (k != 'name' && k != 'type' && k != 'server' && k != 'port') {
+          p[k] = v;
+        }
       });
       if (p['tls'] == true) p['skip-cert-verify'] = true;
       proxies.add(p);
@@ -125,11 +127,13 @@ class ConfigGenerator {
     final hasCustomRules = customRules.isNotEmpty;
 
     if (hasCustomRules) {
-      // Pass-through mode: honour subscription's own groups and rules.
+      // Subscription mode: keep the provider/group intent, but normalize rules
+      // that are known to break Android TUN/fake-ip when imported verbatim.
       out['proxy-groups'] = customProxyGroups.isNotEmpty
           ? customProxyGroups
           : _defaultProxyGroups(proxyNames, selectedNodeName);
-      out['rules'] = customRules;
+      final normalizedRules = _normalizeCustomRules(customRules);
+      out['rules'] = normalizedRules;
       // Build rule-providers for the custom rules:
       //   1. Start with the subscription's own rule-providers (exact definitions).
       //   2. For any RULE-SET reference not covered by (1), fall back to the
@@ -137,7 +141,7 @@ class ConfigGenerator {
       //      rules without bundling the matching rule-providers block).
       final ruleProviders = <String, dynamic>{...customRuleProviders};
       final loyalsoldierProviders = LoyalsoldierTemplate.ruleProviders();
-      for (final rule in customRules) {
+      for (final rule in normalizedRules) {
         if (rule.startsWith('RULE-SET,')) {
           final name = rule.split(',')[1];
           if (!ruleProviders.containsKey(name) &&
@@ -165,6 +169,152 @@ class ConfigGenerator {
 
   // ── helpers ─────────────────────────────────────────────────────────────────
 
+  static List<String> _normalizeCustomRules(List<String> rules) {
+    final cleaned = rules
+        .map((rule) => rule.trim())
+        .where((rule) => rule.isNotEmpty)
+        .toList();
+    if (cleaned.isEmpty) return cleaned;
+
+    final proxyPolicy = _inferProxyPolicy(cleaned);
+    final directPolicy = _inferDirectPolicy(cleaned) ?? 'DIRECT';
+    final prefix = <String>[];
+    final proxyRules = <String>[];
+    final directRules = <String>[];
+    final matchRules = <String>[];
+
+    for (final rule in cleaned) {
+      if (_isMatchRule(rule)) {
+        matchRules.add(rule);
+      } else if (_isProxyBoundRule(rule)) {
+        proxyRules.add(rule);
+      } else if (_isLateDirectRule(rule)) {
+        directRules.add(rule);
+      } else {
+        prefix.add(rule);
+      }
+    }
+
+    final normalized = <String>[];
+    final seen = <String>{};
+    void addRule(String rule) {
+      if (seen.add(rule)) normalized.add(rule);
+    }
+
+    for (final rule in prefix) {
+      addRule(rule);
+    }
+    if (proxyPolicy != null) {
+      for (final rule in _googlePlayDownloadRules(proxyPolicy, directPolicy)) {
+        addRule(rule);
+      }
+    }
+    for (final rule in proxyRules) {
+      addRule(rule);
+    }
+    for (final rule in directRules) {
+      addRule(rule);
+    }
+
+    if (proxyPolicy != null) {
+      addRule('MATCH,$proxyPolicy');
+    } else {
+      for (final rule in matchRules) {
+        addRule(rule);
+      }
+    }
+
+    return normalized;
+  }
+
+  static String? _inferProxyPolicy(List<String> rules) {
+    for (final rule in rules) {
+      final parts = rule.split(',');
+      if (parts.length >= 3 &&
+          parts[0] == 'RULE-SET' &&
+          _proxyRuleSetNames.contains(parts[1]) &&
+          parts[2] != 'DIRECT' &&
+          parts[2] != 'REJECT') {
+        return parts[2];
+      }
+    }
+    return null;
+  }
+
+  static String? _inferDirectPolicy(List<String> rules) {
+    for (final rule in rules) {
+      final parts = rule.split(',');
+      if (parts.length < 3 || parts[2] == 'REJECT') continue;
+      if (parts[0] == 'RULE-SET' &&
+          const {'private', 'direct', 'lancidr', 'cncidr'}.contains(parts[1])) {
+        return parts[2];
+      }
+      if (parts[0] == 'GEOSITE' && parts[1].toLowerCase() == 'cn') {
+        return parts[2];
+      }
+      if (parts[0] == 'GEOIP' &&
+          const {'LAN', 'CN'}.contains(parts[1].toUpperCase())) {
+        return parts[2];
+      }
+    }
+    return null;
+  }
+
+  static List<String> _googlePlayDownloadRules(
+    String proxyPolicy,
+    String directPolicy,
+  ) =>
+      [
+        // Cronet/Google Play can try QUIC first. Android TUN fake-ip may not
+        // carry enough domain context for UDP/443 rule matching, so reject
+        // QUIC early and let clients retry over TCP, where the domain rules
+        // below are reliable.
+        'AND,((NETWORK,UDP),(DST-PORT,443)),REJECT',
+        'DOMAIN-SUFFIX,googleapis.com,$proxyPolicy',
+        'DOMAIN-SUFFIX,googleusercontent.com,$proxyPolicy',
+        'DOMAIN-SUFFIX,gvt1.com,$proxyPolicy',
+        'DOMAIN-SUFFIX,gvt2.com,$proxyPolicy',
+        'DOMAIN-SUFFIX,gvt3.com,$proxyPolicy',
+        // Play's download CDN can resolve to nearby Google cache addresses.
+        // On China networks those 114.x cache targets are reachable directly,
+        // while our overseas HTTP proxy nodes return 503/504 tunneling them.
+        'DOMAIN-SUFFIX,xn--ngstr-lra8j.com,$directPolicy',
+      ];
+
+  static const _proxyRuleSetNames = {
+    'google',
+    'proxy',
+    'gfw',
+    'tld-not-cn',
+    'telegramcidr',
+  };
+
+  static bool _isProxyBoundRule(String rule) {
+    final parts = rule.split(',');
+    return parts.length >= 2 &&
+        parts[0] == 'RULE-SET' &&
+        _proxyRuleSetNames.contains(parts[1]);
+  }
+
+  static bool _isLateDirectRule(String rule) {
+    final parts = rule.split(',');
+    if (parts.isEmpty) return false;
+    if (parts[0] == 'RULE-SET' && parts.length >= 2) {
+      return parts[1] == 'lancidr' ||
+          parts[1] == 'direct' ||
+          parts[1] == 'cncidr';
+    }
+    if (parts[0] == 'GEOSITE' && parts.length >= 2) {
+      return parts[1].toLowerCase() == 'cn';
+    }
+    if (parts[0] == 'GEOIP' && parts.length >= 2) {
+      return parts[1].toUpperCase() == 'CN';
+    }
+    return false;
+  }
+
+  static bool _isMatchRule(String rule) => rule.startsWith('MATCH,');
+
   /// Build the DNS config block based on [strategy] and [mode].
   ///
   /// strategy:
@@ -176,14 +326,39 @@ class ConfigGenerator {
   /// - legacy  : Original fallback-filter behaviour; no nameserver-policy.
   ///
   /// mode: 'fake-ip' | 'redir-host'
-  static Map<String, dynamic> _buildDns(String geodataPath, String strategy, String mode) {
+  static Map<String, dynamic> _buildDns(
+      String geodataPath, String strategy, String mode) {
     final isFakeIp = mode != 'redir-host';
     final base = <String, dynamic>{
       'enable': true,
       'listen': '0.0.0.0:1053',
-      'respect-rules': false,
+      // true so a hostname resolution that matches a proxy rule is dialed
+      // through that proxy — otherwise it resolves directly over the
+      // device's real network path, which is exactly where domestic ISP/
+      // GFW-style DNS injection happens. Debug logging on Android caught
+      // this precisely: a Google download-CDN redirector hostname resolved
+      // to a poisoned domestic IP via the plain-UDP domestic nameservers,
+      // which is what made large downloads (Play Store installs) hang
+      // indefinitely. See mobile/cfgen/generator.go's matching comment —
+      // both native layers set this unconditionally on top of whatever
+      // Dart writes, this is kept in sync for consistency/no-native-patch
+      // paths (e.g. config preview).
+      'respect-rules': true,
       'enhanced-mode': isFakeIp ? 'fake-ip' : 'redir-host',
-      if (isFakeIp) 'fake-ip-range': '198.18.0.0/15',
+      // Not 198.18.0.0/15: Loyalsoldier's lancidr.txt (used by
+      // LoyalsoldierTemplate/LiteTemplate rule-providers) bundles that exact
+      // IANA-reserved block as a "route DIRECT" range, so a fake-ip literal
+      // for a domain not covered by a more specific rule-provider falls
+      // through to lancidr and gets force-routed DIRECT instead of through
+      // the proxy. 28.18.0.1/16 is a real, allocated-but-obscure block (part
+      // of 28.0.0.0/8, long assigned to the US DoD network) that lancidr
+      // does not bundle — mirrors internal/config/fakeip.go's
+      // SelectFakeIPRange on the router side.
+      //
+      // (Was briefly reverted to 198.18.0.1/16 to diagnose a Google Play
+      // download hang; confirmed unrelated — the actual cause was a TUN
+      // MTU mismatch, see mobile/cfgen/generator.go's buildAndroidTUN.)
+      if (isFakeIp) 'fake-ip-range': '28.18.0.1/16',
       if (isFakeIp) 'fake-ip-filter': _fakeIpFilter,
       'default-nameserver': _cnPlainDns,
       'proxy-server-nameserver': _cnPlainDns,
@@ -245,12 +420,15 @@ class ConfigGenerator {
   ) {
     final selected = selectedNodeName?.trim();
     final ordered = <String>[];
-    if (selected != null && selected.isNotEmpty && proxyNames.contains(selected)) {
+    if (selected != null &&
+        selected.isNotEmpty &&
+        proxyNames.contains(selected)) {
       ordered.add(selected);
     }
     ordered.addAll(proxyNames.where((n) => n != selected));
 
-    final autoProxies = ordered.isNotEmpty ? List<String>.from(ordered) : ['DIRECT'];
+    final autoProxies =
+        ordered.isNotEmpty ? List<String>.from(ordered) : ['DIRECT'];
     final selectProxies = ordered.isNotEmpty
         ? <String>[...ordered, 'Auto', 'DIRECT']
         : ['DIRECT'];

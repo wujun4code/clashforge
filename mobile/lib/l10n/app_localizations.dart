@@ -69,6 +69,7 @@ abstract class AppLocalizations {
   String get sectionAccessCheck;
   String get categoryDirectPath;
   String get categoryVpnProxy;
+  String get categoryGooglePlay;
   String get categoryAiVpnProxy;
   String get ipResolved;
   String get ipFailed;
@@ -243,6 +244,8 @@ abstract class AppLocalizations {
   String get siteNeteaseDesc;
   String get siteGitHubDesc;
   String get siteGoogleDesc;
+  String get siteGooglePlayApiDesc;
+  String get siteGooglePlayCdnDesc;
   String get siteOpenAIDesc;
   String get siteGeminiDesc;
 
@@ -258,8 +261,7 @@ class _AppLocalizationsDelegate
   const _AppLocalizationsDelegate();
 
   @override
-  bool isSupported(Locale locale) =>
-      ['en', 'zh'].contains(locale.languageCode);
+  bool isSupported(Locale locale) => ['en', 'zh'].contains(locale.languageCode);
 
   @override
   Future<AppLocalizations> load(Locale locale) async {
@@ -274,467 +276,846 @@ class _AppLocalizationsDelegate
 // ─── English ──────────────────────────────────────────────────────────────────
 
 class _AppLocalizationsEn extends AppLocalizations {
-  @override String get navHome => 'Home';
-  @override String get navProxies => 'Routes';
-  @override String get navSubscriptions => 'Subscriptions';
-  @override String get navSettings => 'Settings';
+  @override
+  String get navHome => 'Home';
+  @override
+  String get navProxies => 'Routes';
+  @override
+  String get navSubscriptions => 'Subscriptions';
+  @override
+  String get navSettings => 'Settings';
 
-  @override String get statusActive => 'ACTIVE';
-  @override String get statusIdle => 'IDLE';
+  @override
+  String get statusActive => 'ACTIVE';
+  @override
+  String get statusIdle => 'IDLE';
 
-  @override String get vpnRunning => 'Passage Active';
-  @override String get vpnIdle => 'Passage Off';
-  @override String get btnConnect => 'Connect';
-  @override String get btnDisconnect => 'Disconnect';
-  @override String get btnMoreNodes => 'More Nodes';
+  @override
+  String get vpnRunning => 'Passage Active';
+  @override
+  String get vpnIdle => 'Passage Off';
+  @override
+  String get btnConnect => 'Connect';
+  @override
+  String get btnDisconnect => 'Disconnect';
+  @override
+  String get btnMoreNodes => 'More Nodes';
 
-  @override String get connTapToConnect => 'Tap to connect';
-  @override String get connGrantPermission => 'Grant network permission, then tap again';
-  @override String get connConnected => 'Connected';
-  @override String get connNodeSelectedTapConnect => 'Node selected, tap connect';
-  @override String get connNodeSwitchPending => 'Node switch pending, retry after core is ready';
-  @override String connSwitchedTo(String nodeName) => 'Switched to $nodeName';
-  @override String connError(String error) => 'Error: $error';
+  @override
+  String get connTapToConnect => 'Tap to connect';
+  @override
+  String get connGrantPermission => 'Grant network permission, then tap again';
+  @override
+  String get connConnected => 'Connected';
+  @override
+  String get connNodeSelectedTapConnect => 'Node selected, tap connect';
+  @override
+  String get connNodeSwitchPending =>
+      'Node switch pending, retry after core is ready';
+  @override
+  String connSwitchedTo(String nodeName) => 'Switched to $nodeName';
+  @override
+  String connError(String error) => 'Error: $error';
 
-  @override String privateDnsWarningHostname(String specifier) =>
+  @override
+  String privateDnsWarningHostname(String specifier) =>
       'Private DNS strict hostname mode ($specifier) detected. '
       'Android may not intercept DNS — browsers may report DNS_PROBE_FINISHED_BAD_CONFIG. '
       'Disable Private DNS in system settings and retry.';
-  @override String get privateDnsWarningAuto =>
-      'Private DNS auto mode detected. '
+  @override
+  String get privateDnsWarningAuto => 'Private DNS auto mode detected. '
       'Android may not intercept DNS — browsers may report DNS_PROBE_FINISHED_BAD_CONFIG. '
       'Disable Private DNS in system settings and retry.';
 
-  @override String get connectivityTitle => 'Connectivity';
-  @override String get connectivitySubtitle => 'Auto-runs after switching nodes';
-  @override String get btnRecheck => 'Recheck';
-  @override String lastChecked(String time) => 'Last checked: $time';
-  @override String get hintClickRecheck => 'Tap "Recheck" to start connectivity check';
+  @override
+  String get connectivityTitle => 'Connectivity';
+  @override
+  String get connectivitySubtitle => 'Auto-runs after switching nodes';
+  @override
+  String get btnRecheck => 'Recheck';
+  @override
+  String lastChecked(String time) => 'Last checked: $time';
+  @override
+  String get hintClickRecheck => 'Tap "Recheck" to start connectivity check';
 
-  @override String get sectionExitIp => 'Exit IP';
-  @override String get categoryDirect => 'Direct';
-  @override String get directSubtitle => 'Direct path, exits via router';
-  @override String get categoryVpnExit => 'Passage Exit';
-  @override String get vpnExitSubtitle => 'Via ClashForge passage';
-  @override String get sectionAccessCheck => 'Access Check';
-  @override String get categoryDirectPath => 'Direct Path';
-  @override String get categoryVpnProxy => 'Passage Route';
-  @override String get categoryAiVpnProxy => 'AI · Passage';
-  @override String get ipResolved => 'resolved';
-  @override String get ipFailed => 'failed';
-  @override String get siteStatusOk => 'OK';
-  @override String get siteStatusError => 'FAIL';
+  @override
+  String get sectionExitIp => 'Exit IP';
+  @override
+  String get categoryDirect => 'Direct';
+  @override
+  String get directSubtitle => 'Direct path, exits via router';
+  @override
+  String get categoryVpnExit => 'Passage Exit';
+  @override
+  String get vpnExitSubtitle => 'Via ClashForge passage';
+  @override
+  String get sectionAccessCheck => 'Access Check';
+  @override
+  String get categoryDirectPath => 'Direct Path';
+  @override
+  String get categoryVpnProxy => 'Passage Route';
+  @override
+  String get categoryGooglePlay => 'Google Play CDN';
+  @override
+  String get categoryAiVpnProxy => 'AI · Passage';
+  @override
+  String get ipResolved => 'resolved';
+  @override
+  String get ipFailed => 'failed';
+  @override
+  String get siteStatusOk => 'OK';
+  @override
+  String get siteStatusError => 'FAIL';
 
-  @override String get browserDnsTitle => 'Browser DNS Diagnostics';
-  @override String get browserDnsSubtitle => 'Pinpoint "connectivity OK but browser can\'t open domain"';
-  @override String get hintClickRecheckBrowserDns => 'Tap "Recheck" to run browser DNS diagnostics';
-  @override String get browserDnsPathLabel => 'Browser DNS Path';
-  @override String get statusHealthy => 'Healthy';
-  @override String get statusRisk => 'Risk';
+  @override
+  String get browserDnsTitle => 'Browser DNS Diagnostics';
+  @override
+  String get browserDnsSubtitle =>
+      'Pinpoint "connectivity OK but browser can\'t open domain"';
+  @override
+  String get hintClickRecheckBrowserDns =>
+      'Tap "Recheck" to run browser DNS diagnostics';
+  @override
+  String get browserDnsPathLabel => 'Browser DNS Path';
+  @override
+  String get statusHealthy => 'Healthy';
+  @override
+  String get statusRisk => 'Risk';
 
-  @override String get checkPrivateDns => 'System Private DNS';
-  @override String get checkProxyChain => 'Outbound Chain';
+  @override
+  String get checkPrivateDns => 'System Private DNS';
+  @override
+  String get checkProxyChain => 'Outbound Chain';
 
-  @override String get privateDnsOff => 'Off';
-  @override String privateDnsOnHostname(String specifier) => 'On (strict hostname: $specifier)';
-  @override String privateDnsOn(String mode) => 'On ($mode)';
-  @override String proxyChainSuccess(int ms) => 'Outbound check to gstatic succeeded (${ms}ms)';
+  @override
+  String get privateDnsOff => 'Off';
+  @override
+  String privateDnsOnHostname(String specifier) =>
+      'On (strict hostname: $specifier)';
+  @override
+  String privateDnsOn(String mode) => 'On ($mode)';
+  @override
+  String proxyChainSuccess(int ms) =>
+      'Outbound check to gstatic succeeded (${ms}ms)';
 
-  @override String get dnsGroupDomestic => 'Domestic (expect real IP)';
-  @override String get dnsGroupForeign => 'International (expect fake-ip)';
-  @override String get dnsGroupForeignRealIp => 'International (expect real IP)';
-  @override String get dnsGroupAI => 'AI Services (expect fake-ip)';
-  @override String get dnsGroupAIRealIp => 'AI Services (expect real IP)';
-  @override String get dnsFakeIpActive => 'fake-ip';
-  @override String get dnsRealIp => 'real IP';
-  @override String get dnsFailed => 'no response';
+  @override
+  String get dnsGroupDomestic => 'Domestic (expect real IP)';
+  @override
+  String get dnsGroupForeign => 'International (expect fake-ip)';
+  @override
+  String get dnsGroupForeignRealIp => 'International (expect real IP)';
+  @override
+  String get dnsGroupAI => 'AI Services (expect fake-ip)';
+  @override
+  String get dnsGroupAIRealIp => 'AI Services (expect real IP)';
+  @override
+  String get dnsFakeIpActive => 'fake-ip';
+  @override
+  String get dnsRealIp => 'real IP';
+  @override
+  String get dnsFailed => 'no response';
 
-  @override String get summaryPrivateDnsOn =>
+  @override
+  String get summaryPrivateDnsOn =>
       'Private DNS is enabled. Browsers may report DNS_PROBE_FINISHED_BAD_CONFIG. '
       'Disable Private DNS in system settings.';
-  @override String get summaryDnsFailed =>
+  @override
+  String get summaryDnsFailed =>
       'One or more domains returned an unexpected result. '
       'Check that Mihomo is running and fake-ip mode is active.';
-  @override String get summaryProxyChainFailed =>
+  @override
+  String get summaryProxyChainFailed =>
       'Outbound route test failed. DNS may be OK but the exit node is unreachable.';
-  @override String get summaryAllOk =>
+  @override
+  String get summaryAllOk =>
       'Browser DNS path is healthy. If browsers still fail, try switching networks.';
-  @override String browserDnsFailed(String error) => 'Diagnostics failed: $error';
+  @override
+  String browserDnsFailed(String error) => 'Diagnostics failed: $error';
 
-  @override String get nodeSwitchTitle => 'Node Switch';
-  @override String nodeSwitchSubtitle(String group) => 'Current group: $group';
-  @override String get hintNoNodes => 'No nodes — import a subscription in the Subscriptions tab';
-  @override String get linkViewAllNodes => 'View all nodes  →';
+  @override
+  String get nodeSwitchTitle => 'Node Switch';
+  @override
+  String nodeSwitchSubtitle(String group) => 'Current group: $group';
+  @override
+  String get hintNoNodes =>
+      'No nodes — import a subscription in the Subscriptions tab';
+  @override
+  String get linkViewAllNodes => 'View all nodes  →';
 
-  @override String get proxiesTitle => 'Routes';
-  @override String nodesCount(int count) => '$count nodes';
-  @override String get noNodesYet => 'No nodes yet';
-  @override String get noNodesHint => 'Add a subscription in the\nSubscriptions tab';
+  @override
+  String get proxiesTitle => 'Routes';
+  @override
+  String nodesCount(int count) => '$count nodes';
+  @override
+  String get noNodesYet => 'No nodes yet';
+  @override
+  String get noNodesHint => 'Add a subscription in the\nSubscriptions tab';
 
-  @override String get subscriptionsTitle => 'Subscriptions';
-  @override String get subscriptionUrlLabel => 'SUBSCRIPTION URL';
-  @override String get btnFetching => 'Fetching…';
-  @override String get btnImport => 'Import';
-  @override String importedNodes(int count, String name) => 'Imported $count nodes as "$name"';
-  @override String fetchFailed(int code) => 'Fetch failed: HTTP $code';
-  @override String get pasteNodesLabel => 'PASTE NODE TEXT';
-  @override String get pasteNodesDesc =>
+  @override
+  String get subscriptionsTitle => 'Subscriptions';
+  @override
+  String get subscriptionUrlLabel => 'SUBSCRIPTION URL';
+  @override
+  String get btnFetching => 'Fetching…';
+  @override
+  String get btnImport => 'Import';
+  @override
+  String importedNodes(int count, String name) =>
+      'Imported $count nodes as "$name"';
+  @override
+  String fetchFailed(int code) => 'Fetch failed: HTTP $code';
+  @override
+  String get pasteNodesLabel => 'PASTE NODE TEXT';
+  @override
+  String get pasteNodesDesc =>
       'Supports ss:// vmess:// trojan:// vless:// links or Clash YAML. '
       'Auto-applies Loyalsoldier rules to generate a full config.';
-  @override String get btnParsing => 'Parsing…';
-  @override String get btnImportAndGenerate => 'Import & Generate Config';
-  @override String get noValidNodes =>
-      'No valid nodes found. Check format '
+  @override
+  String get btnParsing => 'Parsing…';
+  @override
+  String get btnImportAndGenerate => 'Import & Generate Config';
+  @override
+  String get noValidNodes => 'No valid nodes found. Check format '
       '(supports ss:// vmess:// trojan:// vless:// and Clash YAML)';
-  @override String importedFromPaste(int count) =>
+  @override
+  String importedFromPaste(int count) =>
       'Imported $count nodes. Config generated with Loyalsoldier rules. Passage ready to activate.';
-  @override String parseFailedMsg(Object error) => 'Parse error: $error';
-  @override String get savedSubscriptions => 'SAVED SUBSCRIPTIONS';
-  @override String get activeLabel => 'Active';
-  @override String get btnSwitch => 'Switch';
-  @override String nodesCountSub(int count) => '$count nodes';
-  @override String get subNameDialogTitle => 'Name this subscription';
-  @override String get subNameHint => 'e.g. Work Profile';
-  @override String get btnCancel => 'Cancel';
-  @override String get btnSave => 'Save';
-  @override String get deleteSubTitle => 'Delete Subscription';
-  @override String deleteSubContent(String name) => 'Delete "$name"?\nThis cannot be undone.';
-  @override String get btnDelete => 'Delete';
-  @override String importedAtLabel(String date) => 'Imported $date';
-  @override String bundledAtLabel(String date) => 'Built $date';
+  @override
+  String parseFailedMsg(Object error) => 'Parse error: $error';
+  @override
+  String get savedSubscriptions => 'SAVED SUBSCRIPTIONS';
+  @override
+  String get activeLabel => 'Active';
+  @override
+  String get btnSwitch => 'Switch';
+  @override
+  String nodesCountSub(int count) => '$count nodes';
+  @override
+  String get subNameDialogTitle => 'Name this subscription';
+  @override
+  String get subNameHint => 'e.g. Work Profile';
+  @override
+  String get btnCancel => 'Cancel';
+  @override
+  String get btnSave => 'Save';
+  @override
+  String get deleteSubTitle => 'Delete Subscription';
+  @override
+  String deleteSubContent(String name) =>
+      'Delete "$name"?\nThis cannot be undone.';
+  @override
+  String get btnDelete => 'Delete';
+  @override
+  String importedAtLabel(String date) => 'Imported $date';
+  @override
+  String bundledAtLabel(String date) => 'Built $date';
 
-  @override String get settingsTitle => 'Settings';
-  @override String get tileLogsTitle => 'Logs';
-  @override String get tileLogsSubtitle => 'Runtime events, passage & core output';
-  @override String get tileUpdatesTitle => 'Check for Updates';
-  @override String get tileUpdatesSubtitle => 'See if a newer version is available';
-  @override String get tileAboutTitle => 'About';
-  @override String get tileAboutSubtitle => 'App version, runtime status, memory';
-  @override String get tileLanguageTitle => 'Language';
-  @override String get tileLanguageSubtitle => 'App display language';
-  @override String get tileDnsModeTitle => 'DNS Interception Mode';
-  @override String tileDnsModeSub(String current) => 'Current: $current';
-  @override String get dnsModeSheetTitle => 'DNS Interception Mode';
-  @override String get dnsModeFakeIpLabel => 'Fake-IP';
-  @override String get dnsModeFakeIpBadge => 'Recommended';
-  @override String get dnsModeFakeIpDesc =>
+  @override
+  String get settingsTitle => 'Settings';
+  @override
+  String get tileLogsTitle => 'Logs';
+  @override
+  String get tileLogsSubtitle => 'Runtime events, passage & core output';
+  @override
+  String get tileUpdatesTitle => 'Check for Updates';
+  @override
+  String get tileUpdatesSubtitle => 'See if a newer version is available';
+  @override
+  String get tileAboutTitle => 'About';
+  @override
+  String get tileAboutSubtitle => 'App version, runtime status, memory';
+  @override
+  String get tileLanguageTitle => 'Language';
+  @override
+  String get tileLanguageSubtitle => 'App display language';
+  @override
+  String get tileDnsModeTitle => 'DNS Interception Mode';
+  @override
+  String tileDnsModeSub(String current) => 'Current: $current';
+  @override
+  String get dnsModeSheetTitle => 'DNS Interception Mode';
+  @override
+  String get dnsModeFakeIpLabel => 'Fake-IP';
+  @override
+  String get dnsModeFakeIpBadge => 'Recommended';
+  @override
+  String get dnsModeFakeIpDesc =>
       'Returns synthetic 198.18.x.x IPs immediately. No DNS cache races. '
       'Best for TUN mode — prevents GFW-poisoned real IPs from reaching apps.';
-  @override String get dnsModeRedirHostLabel => 'Redir-Host';
-  @override String get dnsModeRedirHostBadge => 'Compatible';
-  @override String get dnsModeRedirHostDesc =>
+  @override
+  String get dnsModeRedirHostLabel => 'Redir-Host';
+  @override
+  String get dnsModeRedirHostBadge => 'Compatible';
+  @override
+  String get dnsModeRedirHostDesc =>
       'Returns real upstream IPs. Better for NTP, STUN, and games. '
       'Works on single-device TUN because Mihomo intercepts all DNS queries.';
-  @override String get dnsModeReconnectHint => 'Reconnect to apply the new DNS mode.';
-  @override String get dnsModeApplying => 'Switching DNS mode, restarting VPN…';
-  @override String get dnsModeApplied => 'DNS mode updated — VPN restarted';
-  @override String get dnsModeImportPromptTitle => 'DNS Interception Mode';
+  @override
+  String get dnsModeReconnectHint => 'Reconnect to apply the new DNS mode.';
+  @override
+  String get dnsModeApplying => 'Switching DNS mode, restarting VPN…';
+  @override
+  String get dnsModeApplied => 'DNS mode updated — VPN restarted';
+  @override
+  String get dnsModeImportPromptTitle => 'DNS Interception Mode';
 
-  @override String get tileDnsStrategyTitle => 'DNS Strategy';
-  @override String tileDnsStrategySub(String current) => 'Current: $current';
+  @override
+  String get tileDnsStrategyTitle => 'DNS Strategy';
+  @override
+  String tileDnsStrategySub(String current) => 'Current: $current';
 
-  @override String get dnsStrategySheetTitle => 'DNS Strategy';
-  @override String get dnsStrategySplitLabel => 'Split-Route';
-  @override String get dnsStrategySplitBadge => 'Recommended';
-  @override String get dnsStrategySplitDesc =>
+  @override
+  String get dnsStrategySheetTitle => 'DNS Strategy';
+  @override
+  String get dnsStrategySplitLabel => 'Split-Route';
+  @override
+  String get dnsStrategySplitBadge => 'Recommended';
+  @override
+  String get dnsStrategySplitDesc =>
       'CN domains via ISP DNS (best CDN). International via Google/Cloudflare DoH. '
       'ISP cannot see international queries. Requires GeoData.';
-  @override String get dnsStrategyPrivacyLabel => 'Full Encryption';
-  @override String get dnsStrategyPrivacyBadge => 'Max Privacy';
-  @override String get dnsStrategyPrivacyDesc =>
+  @override
+  String get dnsStrategyPrivacyLabel => 'Full Encryption';
+  @override
+  String get dnsStrategyPrivacyBadge => 'Max Privacy';
+  @override
+  String get dnsStrategyPrivacyDesc =>
       'All DNS via DoH. ISP sees zero DNS records. '
       'Slight CDN penalty for domestic sites. Requires GeoData.';
-  @override String get dnsStrategyLegacyLabel => 'Legacy Mode';
-  @override String get dnsStrategyLegacyBadge => 'Compatible';
-  @override String get dnsStrategyLegacyDesc =>
+  @override
+  String get dnsStrategyLegacyLabel => 'Legacy Mode';
+  @override
+  String get dnsStrategyLegacyBadge => 'Compatible';
+  @override
+  String get dnsStrategyLegacyDesc =>
       'Preserves fallback-filter behaviour, no nameserver-policy. '
       'For existing custom DNS configs or when GeoData is unavailable.';
-  @override String get dnsStrategyReconnectHint =>
+  @override
+  String get dnsStrategyReconnectHint =>
       'Reconnect to apply the new DNS strategy.';
 
-  @override String get logsTitle => 'Logs';
-  @override String get tooltipCopyAll => 'Copy all';
-  @override String get tooltipAutoScrollOn => 'Auto-scroll on';
-  @override String get tooltipAutoScrollOff => 'Auto-scroll off';
-  @override String get tooltipClear => 'Clear';
-  @override String get logsCopied => 'Logs copied to clipboard';
-  @override String get noLogsYet => 'No logs yet.';
-  @override String noFilterLogs(String filter) => 'No $filter logs.';
+  @override
+  String get logsTitle => 'Logs';
+  @override
+  String get tooltipCopyAll => 'Copy all';
+  @override
+  String get tooltipAutoScrollOn => 'Auto-scroll on';
+  @override
+  String get tooltipAutoScrollOff => 'Auto-scroll off';
+  @override
+  String get tooltipClear => 'Clear';
+  @override
+  String get logsCopied => 'Logs copied to clipboard';
+  @override
+  String get noLogsYet => 'No logs yet.';
+  @override
+  String noFilterLogs(String filter) => 'No $filter logs.';
 
-  @override String get aboutTitle => 'About';
-  @override String get sectionApplication => 'APPLICATION';
-  @override String get sectionUpdate => 'UPDATE';
-  @override String get sectionRuntime => 'RUNTIME';
-  @override String get sectionMemory => 'MEMORY';
-  @override String get rowVersion => 'Version';
-  @override String get rowNodesLoaded => 'Nodes loaded';
-  @override String get rowDeviceAbi => 'Device ABI';
-  @override String get rowVpn => 'Passage';
-  @override String get rowMihomo => 'Mihomo';
-  @override String get rowAppPss => 'App (PSS)';
-  @override String get rowAvailable => 'Available';
-  @override String get rowRunning => 'Running';
-  @override String get rowStopped => 'Stopped';
-  @override String rowMihomoRunning(int pid) => 'Running (PID $pid)';
-  @override String get checkingUpdates => 'Checking for updates…';
-  @override String get updateStatus => 'Status';
-  @override String get updateCouldNotCheck => 'Could not check';
-  @override String get updateUpToDate => 'Up to date  ✓';
-  @override String get rowLatest => 'Latest';
-  @override String downloadVersion(String tag) => 'Download $tag';
-  @override String get btnRecheck2 => 'Re-check';
-  @override String get pullDownToRefresh => 'Pull down to refresh';
+  @override
+  String get aboutTitle => 'About';
+  @override
+  String get sectionApplication => 'APPLICATION';
+  @override
+  String get sectionUpdate => 'UPDATE';
+  @override
+  String get sectionRuntime => 'RUNTIME';
+  @override
+  String get sectionMemory => 'MEMORY';
+  @override
+  String get rowVersion => 'Version';
+  @override
+  String get rowNodesLoaded => 'Nodes loaded';
+  @override
+  String get rowDeviceAbi => 'Device ABI';
+  @override
+  String get rowVpn => 'Passage';
+  @override
+  String get rowMihomo => 'Mihomo';
+  @override
+  String get rowAppPss => 'App (PSS)';
+  @override
+  String get rowAvailable => 'Available';
+  @override
+  String get rowRunning => 'Running';
+  @override
+  String get rowStopped => 'Stopped';
+  @override
+  String rowMihomoRunning(int pid) => 'Running (PID $pid)';
+  @override
+  String get checkingUpdates => 'Checking for updates…';
+  @override
+  String get updateStatus => 'Status';
+  @override
+  String get updateCouldNotCheck => 'Could not check';
+  @override
+  String get updateUpToDate => 'Up to date  ✓';
+  @override
+  String get rowLatest => 'Latest';
+  @override
+  String downloadVersion(String tag) => 'Download $tag';
+  @override
+  String get btnRecheck2 => 'Re-check';
+  @override
+  String get pullDownToRefresh => 'Pull down to refresh';
 
-  @override String get updateSheetTitle => 'Check for Updates';
-  @override String get updateChecking => 'Checking…';
-  @override String get updateCouldNotCheckLong =>
+  @override
+  String get updateSheetTitle => 'Check for Updates';
+  @override
+  String get updateChecking => 'Checking…';
+  @override
+  String get updateCouldNotCheckLong =>
       'Could not check for updates.\nVerify internet connection.';
-  @override String get updateUpToDateTitle => 'You are up to date';
-  @override String updateVersionLabel(String tag) => 'Version: $tag';
-  @override String get updateAvailableTitle => 'Update available';
-  @override String downloadBtn(String tag) => 'Download $tag';
-  @override String get allReleases => 'All releases →';
+  @override
+  String get updateUpToDateTitle => 'You are up to date';
+  @override
+  String updateVersionLabel(String tag) => 'Version: $tag';
+  @override
+  String get updateAvailableTitle => 'Update available';
+  @override
+  String downloadBtn(String tag) => 'Download $tag';
+  @override
+  String get allReleases => 'All releases →';
 
-  @override String get siteTaobaoName => 'Taobao';
-  @override String get siteTaobaoDesc => 'Verify direct connectivity to domestic e-commerce';
-  @override String get siteNeteaseName => 'NetEase Music';
-  @override String get siteNeteaseDesc => 'Verify latency to domestic content sites';
-  @override String get siteGitHubDesc => 'Verify routed access to international dev sites';
-  @override String get siteGoogleDesc => 'Verify Google search is reachable via passage';
-  @override String get siteOpenAIDesc => 'Verify ChatGPT is reachable via passage';
-  @override String get siteGeminiDesc => 'Verify Gemini is reachable via passage';
+  @override
+  String get siteTaobaoName => 'Taobao';
+  @override
+  String get siteTaobaoDesc =>
+      'Verify direct connectivity to domestic e-commerce';
+  @override
+  String get siteNeteaseName => 'NetEase Music';
+  @override
+  String get siteNeteaseDesc => 'Verify latency to domestic content sites';
+  @override
+  String get siteGitHubDesc =>
+      'Verify routed access to international dev sites';
+  @override
+  String get siteGoogleDesc => 'Verify Google search is reachable via passage';
+  @override
+  String get siteGooglePlayApiDesc => 'Verify Google Play API reachability';
+  @override
+  String get siteGooglePlayCdnDesc =>
+      'Verify Play Store download CDN reachability';
+  @override
+  String get siteOpenAIDesc => 'Verify ChatGPT is reachable via passage';
+  @override
+  String get siteGeminiDesc => 'Verify Gemini is reachable via passage';
 
-  @override String get langEnglish => 'English';
-  @override String get langChinese => '中文';
+  @override
+  String get langEnglish => 'English';
+  @override
+  String get langChinese => '中文';
 }
 
 // ─── Chinese ──────────────────────────────────────────────────────────────────
 
 class _AppLocalizationsZh extends AppLocalizations {
-  @override String get navHome => '主页';
-  @override String get navProxies => '线路';
-  @override String get navSubscriptions => '订阅';
-  @override String get navSettings => '设置';
+  @override
+  String get navHome => '主页';
+  @override
+  String get navProxies => '线路';
+  @override
+  String get navSubscriptions => '订阅';
+  @override
+  String get navSettings => '设置';
 
-  @override String get statusActive => '已连接';
-  @override String get statusIdle => '未连接';
+  @override
+  String get statusActive => '已连接';
+  @override
+  String get statusIdle => '未连接';
 
-  @override String get vpnRunning => '畅行已开启';
-  @override String get vpnIdle => '畅行未开启';
-  @override String get btnConnect => '连接';
-  @override String get btnDisconnect => '断开';
-  @override String get btnMoreNodes => '更多节点';
+  @override
+  String get vpnRunning => '畅行已开启';
+  @override
+  String get vpnIdle => '畅行未开启';
+  @override
+  String get btnConnect => '连接';
+  @override
+  String get btnDisconnect => '断开';
+  @override
+  String get btnMoreNodes => '更多节点';
 
-  @override String get connTapToConnect => '轻触以连接';
-  @override String get connGrantPermission => '授予网络权限后再次轻触';
-  @override String get connConnected => '已连接';
-  @override String get connNodeSelectedTapConnect => '节点已选定，轻触连接';
-  @override String get connNodeSwitchPending => '节点切换待生效，等待核心就绪后重试';
-  @override String connSwitchedTo(String nodeName) => '已切换至 $nodeName';
-  @override String connError(String error) => '错误：$error';
+  @override
+  String get connTapToConnect => '轻触以连接';
+  @override
+  String get connGrantPermission => '授予网络权限后再次轻触';
+  @override
+  String get connConnected => '已连接';
+  @override
+  String get connNodeSelectedTapConnect => '节点已选定，轻触连接';
+  @override
+  String get connNodeSwitchPending => '节点切换待生效，等待核心就绪后重试';
+  @override
+  String connSwitchedTo(String nodeName) => '已切换至 $nodeName';
+  @override
+  String connError(String error) => '错误：$error';
 
-  @override String privateDnsWarningHostname(String specifier) =>
+  @override
+  String privateDnsWarningHostname(String specifier) =>
       '检测到系统 Private DNS 严格主机名模式（$specifier），Android 可能无法接管 DNS 请求，'
       '浏览器可能报 DNS_PROBE_FINISHED_BAD_CONFIG。请先在系统设置中关闭 Private DNS 后重试。';
-  @override String get privateDnsWarningAuto =>
+  @override
+  String get privateDnsWarningAuto =>
       '检测到系统 Private DNS 自动模式，Android 可能无法接管 DNS 请求，'
       '浏览器可能报 DNS_PROBE_FINISHED_BAD_CONFIG。请先在系统设置中关闭 Private DNS 后重试。';
 
-  @override String get connectivityTitle => '连通性检测';
-  @override String get connectivitySubtitle => '切换节点后自动重新执行连通性检测';
-  @override String get btnRecheck => '重测';
-  @override String lastChecked(String time) => '最近检测: $time';
-  @override String get hintClickRecheck => '点击"重测"开始连通性检查';
+  @override
+  String get connectivityTitle => '连通性检测';
+  @override
+  String get connectivitySubtitle => '切换节点后自动重新执行连通性检测';
+  @override
+  String get btnRecheck => '重测';
+  @override
+  String lastChecked(String time) => '最近检测: $time';
+  @override
+  String get hintClickRecheck => '点击"重测"开始连通性检查';
 
-  @override String get sectionExitIp => '出口 IP';
-  @override String get categoryDirect => '直连';
-  @override String get directSubtitle => '直连路径，经路由器直出';
-  @override String get categoryVpnExit => '畅行出口';
-  @override String get vpnExitSubtitle => '经 ClashForge 畅行';
-  @override String get sectionAccessCheck => '访问检查';
-  @override String get categoryDirectPath => '直连路径';
-  @override String get categoryVpnProxy => '畅行线路';
-  @override String get categoryAiVpnProxy => 'AI · 畅行线路';
-  @override String get ipResolved => '已解析';
-  @override String get ipFailed => '未能获取';
-  @override String get siteStatusOk => '正常';
-  @override String get siteStatusError => '异常';
+  @override
+  String get sectionExitIp => '出口 IP';
+  @override
+  String get categoryDirect => '直连';
+  @override
+  String get directSubtitle => '直连路径，经路由器直出';
+  @override
+  String get categoryVpnExit => '畅行出口';
+  @override
+  String get vpnExitSubtitle => '经 ClashForge 畅行';
+  @override
+  String get sectionAccessCheck => '访问检查';
+  @override
+  String get categoryDirectPath => '直连路径';
+  @override
+  String get categoryVpnProxy => '畅行线路';
+  @override
+  String get categoryGooglePlay => 'Google Play CDN';
+  @override
+  String get categoryAiVpnProxy => 'AI · 畅行线路';
+  @override
+  String get ipResolved => '已解析';
+  @override
+  String get ipFailed => '未能获取';
+  @override
+  String get siteStatusOk => '正常';
+  @override
+  String get siteStatusError => '异常';
 
-  @override String get browserDnsTitle => '浏览器 DNS 专项检测';
-  @override String get browserDnsSubtitle => '定位"连通性通过但浏览器打不开域名"';
-  @override String get hintClickRecheckBrowserDns => '点击"重测"开始浏览器 DNS 专项排查';
-  @override String get browserDnsPathLabel => '浏览器 DNS 路径';
-  @override String get statusHealthy => '正常';
-  @override String get statusRisk => '风险';
+  @override
+  String get browserDnsTitle => '浏览器 DNS 专项检测';
+  @override
+  String get browserDnsSubtitle => '定位"连通性通过但浏览器打不开域名"';
+  @override
+  String get hintClickRecheckBrowserDns => '点击"重测"开始浏览器 DNS 专项排查';
+  @override
+  String get browserDnsPathLabel => '浏览器 DNS 路径';
+  @override
+  String get statusHealthy => '正常';
+  @override
+  String get statusRisk => '风险';
 
-  @override String get checkPrivateDns => '系统 Private DNS';
-  @override String get checkProxyChain => '出口链路';
+  @override
+  String get checkPrivateDns => '系统 Private DNS';
+  @override
+  String get checkProxyChain => '出口链路';
 
-  @override String get privateDnsOff => '关闭';
-  @override String privateDnsOnHostname(String specifier) => '开启（严格主机名：$specifier）';
-  @override String privateDnsOn(String mode) => '开启（$mode）';
-  @override String proxyChainSuccess(int ms) => '经出口访问 gstatic 成功（${ms}ms）';
+  @override
+  String get privateDnsOff => '关闭';
+  @override
+  String privateDnsOnHostname(String specifier) => '开启（严格主机名：$specifier）';
+  @override
+  String privateDnsOn(String mode) => '开启（$mode）';
+  @override
+  String proxyChainSuccess(int ms) => '经出口访问 gstatic 成功（${ms}ms）';
 
-  @override String get dnsGroupDomestic => '国内域名（应返回真实 IP）';
-  @override String get dnsGroupForeign => '国际域名（应命中 fake-ip）';
-  @override String get dnsGroupForeignRealIp => '国际域名（应返回真实 IP）';
-  @override String get dnsGroupAI => 'AI 服务（应命中 fake-ip）';
-  @override String get dnsGroupAIRealIp => 'AI 服务（应返回真实 IP）';
-  @override String get dnsFakeIpActive => 'fake-ip 生效';
-  @override String get dnsRealIp => '真实解析';
-  @override String get dnsFailed => '无响应';
+  @override
+  String get dnsGroupDomestic => '国内域名（应返回真实 IP）';
+  @override
+  String get dnsGroupForeign => '国际域名（应命中 fake-ip）';
+  @override
+  String get dnsGroupForeignRealIp => '国际域名（应返回真实 IP）';
+  @override
+  String get dnsGroupAI => 'AI 服务（应命中 fake-ip）';
+  @override
+  String get dnsGroupAIRealIp => 'AI 服务（应返回真实 IP）';
+  @override
+  String get dnsFakeIpActive => 'fake-ip 生效';
+  @override
+  String get dnsRealIp => '真实解析';
+  @override
+  String get dnsFailed => '无响应';
 
-  @override String get summaryPrivateDnsOn =>
+  @override
+  String get summaryPrivateDnsOn =>
       '检测到 Private DNS 已开启。该状态下浏览器可能出现 DNS_PROBE_FINISHED_BAD_CONFIG，'
       '建议先关闭系统 Private DNS 再重试。';
-  @override String get summaryDnsFailed =>
+  @override
+  String get summaryDnsFailed =>
       '部分域名返回了非预期结果，建议确认 Mihomo 正在运行且 fake-ip 模式已生效。';
-  @override String get summaryProxyChainFailed =>
-      '出口链路探测失败。DNS 可能正常，但出站线路不可达。';
-  @override String get summaryAllOk =>
-      '浏览器 DNS 链路整体正常。若浏览器仍报错，请切换网络后再测一次。';
-  @override String browserDnsFailed(String error) => '专项检测失败: $error';
+  @override
+  String get summaryProxyChainFailed => '出口链路探测失败。DNS 可能正常，但出站线路不可达。';
+  @override
+  String get summaryAllOk => '浏览器 DNS 链路整体正常。若浏览器仍报错，请切换网络后再测一次。';
+  @override
+  String browserDnsFailed(String error) => '专项检测失败: $error';
 
-  @override String get nodeSwitchTitle => '节点切换';
-  @override String nodeSwitchSubtitle(String group) => '当前组：$group';
-  @override String get hintNoNodes => '暂无节点，请先在"订阅"页面导入订阅';
-  @override String get linkViewAllNodes => '查看完整节点列表  →';
+  @override
+  String get nodeSwitchTitle => '节点切换';
+  @override
+  String nodeSwitchSubtitle(String group) => '当前组：$group';
+  @override
+  String get hintNoNodes => '暂无节点，请先在"订阅"页面导入订阅';
+  @override
+  String get linkViewAllNodes => '查看完整节点列表  →';
 
-  @override String get proxiesTitle => '线路';
-  @override String nodesCount(int count) => '$count 个节点';
-  @override String get noNodesYet => '暂无节点';
-  @override String get noNodesHint => '请在"订阅"页面\n添加订阅';
+  @override
+  String get proxiesTitle => '线路';
+  @override
+  String nodesCount(int count) => '$count 个节点';
+  @override
+  String get noNodesYet => '暂无节点';
+  @override
+  String get noNodesHint => '请在"订阅"页面\n添加订阅';
 
-  @override String get subscriptionsTitle => '订阅';
-  @override String get subscriptionUrlLabel => '订阅链接';
-  @override String get btnFetching => '获取中…';
-  @override String get btnImport => '导入';
-  @override String importedNodes(int count, String name) => '已导入 $count 个节点，订阅名称"$name"';
-  @override String fetchFailed(int code) => '获取失败：HTTP $code';
-  @override String get pasteNodesLabel => '粘贴节点文本';
-  @override String get pasteNodesDesc =>
+  @override
+  String get subscriptionsTitle => '订阅';
+  @override
+  String get subscriptionUrlLabel => '订阅链接';
+  @override
+  String get btnFetching => '获取中…';
+  @override
+  String get btnImport => '导入';
+  @override
+  String importedNodes(int count, String name) => '已导入 $count 个节点，订阅名称"$name"';
+  @override
+  String fetchFailed(int code) => '获取失败：HTTP $code';
+  @override
+  String get pasteNodesLabel => '粘贴节点文本';
+  @override
+  String get pasteNodesDesc =>
       '支持 ss:// vmess:// trojan:// vless:// 链接或 Clash YAML，'
       '自动套用 Loyalsoldier 规则生成完整配置';
-  @override String get btnParsing => '解析中…';
-  @override String get btnImportAndGenerate => '导入并生成配置';
-  @override String get noValidNodes =>
+  @override
+  String get btnParsing => '解析中…';
+  @override
+  String get btnImportAndGenerate => '导入并生成配置';
+  @override
+  String get noValidNodes =>
       '未识别到有效节点，请检查格式（支持 ss:// vmess:// trojan:// vless:// 及 Clash YAML）';
-  @override String importedFromPaste(int count) =>
+  @override
+  String importedFromPaste(int count) =>
       '已导入 $count 个节点，配置已生成（使用 Loyalsoldier 规则），可直接开启畅行';
-  @override String parseFailedMsg(Object error) => '解析失败: $error';
-  @override String get savedSubscriptions => '已保存的订阅';
-  @override String get activeLabel => '使用中';
-  @override String get btnSwitch => '切换';
-  @override String nodesCountSub(int count) => '$count 个节点';
-  @override String get subNameDialogTitle => '为订阅命名';
-  @override String get subNameHint => '例：工作线路';
-  @override String get btnCancel => '取消';
-  @override String get btnSave => '保存';
-  @override String get deleteSubTitle => '删除订阅';
-  @override String deleteSubContent(String name) => '确认删除 "$name"？\n该操作不可撤销。';
-  @override String get btnDelete => '删除';
-  @override String importedAtLabel(String date) => '导入于 $date';
-  @override String bundledAtLabel(String date) => '打包于 $date';
+  @override
+  String parseFailedMsg(Object error) => '解析失败: $error';
+  @override
+  String get savedSubscriptions => '已保存的订阅';
+  @override
+  String get activeLabel => '使用中';
+  @override
+  String get btnSwitch => '切换';
+  @override
+  String nodesCountSub(int count) => '$count 个节点';
+  @override
+  String get subNameDialogTitle => '为订阅命名';
+  @override
+  String get subNameHint => '例：工作线路';
+  @override
+  String get btnCancel => '取消';
+  @override
+  String get btnSave => '保存';
+  @override
+  String get deleteSubTitle => '删除订阅';
+  @override
+  String deleteSubContent(String name) => '确认删除 "$name"？\n该操作不可撤销。';
+  @override
+  String get btnDelete => '删除';
+  @override
+  String importedAtLabel(String date) => '导入于 $date';
+  @override
+  String bundledAtLabel(String date) => '打包于 $date';
 
-  @override String get settingsTitle => '设置';
-  @override String get tileLogsTitle => '日志';
-  @override String get tileLogsSubtitle => '运行时事件、服务及核心输出';
-  @override String get tileUpdatesTitle => '检查更新';
-  @override String get tileUpdatesSubtitle => '查看是否有新版本可用';
-  @override String get tileAboutTitle => '关于';
-  @override String get tileAboutSubtitle => '应用版本、运行状态、内存用量';
-  @override String get tileLanguageTitle => '语言';
-  @override String get tileLanguageSubtitle => '应用显示语言';
-  @override String get tileDnsModeTitle => 'DNS 拦截模式';
-  @override String tileDnsModeSub(String current) => '当前：$current';
-  @override String get dnsModeSheetTitle => 'DNS 拦截模式';
-  @override String get dnsModeFakeIpLabel => 'Fake-IP';
-  @override String get dnsModeFakeIpBadge => '推荐';
-  @override String get dnsModeFakeIpDesc =>
-      '立即返回 198.18.x.x 虚假 IP，无 DNS 缓存竞态。'
+  @override
+  String get settingsTitle => '设置';
+  @override
+  String get tileLogsTitle => '日志';
+  @override
+  String get tileLogsSubtitle => '运行时事件、服务及核心输出';
+  @override
+  String get tileUpdatesTitle => '检查更新';
+  @override
+  String get tileUpdatesSubtitle => '查看是否有新版本可用';
+  @override
+  String get tileAboutTitle => '关于';
+  @override
+  String get tileAboutSubtitle => '应用版本、运行状态、内存用量';
+  @override
+  String get tileLanguageTitle => '语言';
+  @override
+  String get tileLanguageSubtitle => '应用显示语言';
+  @override
+  String get tileDnsModeTitle => 'DNS 拦截模式';
+  @override
+  String tileDnsModeSub(String current) => '当前：$current';
+  @override
+  String get dnsModeSheetTitle => 'DNS 拦截模式';
+  @override
+  String get dnsModeFakeIpLabel => 'Fake-IP';
+  @override
+  String get dnsModeFakeIpBadge => '推荐';
+  @override
+  String get dnsModeFakeIpDesc => '立即返回 198.18.x.x 虚假 IP，无 DNS 缓存竞态。'
       'TUN 模式最佳选择 — 防止 GFW 毒化真实 IP 到达应用。';
-  @override String get dnsModeRedirHostLabel => 'Redir-Host';
-  @override String get dnsModeRedirHostBadge => '兼容';
-  @override String get dnsModeRedirHostDesc =>
-      '返回真实上游 IP，NTP、STUN、游戏兼容性更好。'
+  @override
+  String get dnsModeRedirHostLabel => 'Redir-Host';
+  @override
+  String get dnsModeRedirHostBadge => '兼容';
+  @override
+  String get dnsModeRedirHostDesc => '返回真实上游 IP，NTP、STUN、游戏兼容性更好。'
       '单机 TUN 可用 — Mihomo 拦截全部 DNS 查询，映射链不会断。';
-  @override String get dnsModeReconnectHint => '重新连接以应用新的 DNS 拦截模式。';
-  @override String get dnsModeApplying => '正在切换 DNS 模式，重启服务中…';
-  @override String get dnsModeApplied => 'DNS 模式已切换，服务重启完成';
-  @override String get dnsModeImportPromptTitle => 'DNS 拦截模式';
+  @override
+  String get dnsModeReconnectHint => '重新连接以应用新的 DNS 拦截模式。';
+  @override
+  String get dnsModeApplying => '正在切换 DNS 模式，重启服务中…';
+  @override
+  String get dnsModeApplied => 'DNS 模式已切换，服务重启完成';
+  @override
+  String get dnsModeImportPromptTitle => 'DNS 拦截模式';
 
-  @override String get tileDnsStrategyTitle => 'DNS 分流策略';
-  @override String tileDnsStrategySub(String current) => '当前：$current';
+  @override
+  String get tileDnsStrategyTitle => 'DNS 分流策略';
+  @override
+  String tileDnsStrategySub(String current) => '当前：$current';
 
-  @override String get dnsStrategySheetTitle => 'DNS 分流策略';
-  @override String get dnsStrategySplitLabel => '分流优先';
-  @override String get dnsStrategySplitBadge => '推荐';
-  @override String get dnsStrategySplitDesc =>
+  @override
+  String get dnsStrategySheetTitle => 'DNS 分流策略';
+  @override
+  String get dnsStrategySplitLabel => '分流优先';
+  @override
+  String get dnsStrategySplitBadge => '推荐';
+  @override
+  String get dnsStrategySplitDesc =>
       '国内域名走 ISP DNS（最优 CDN），国际域名走 Google / Cloudflare DoH。'
       'ISP 无法看到国际查询，DNS 泄露检测显示洁净。需要 GeoData。';
-  @override String get dnsStrategyPrivacyLabel => '全链路加密';
-  @override String get dnsStrategyPrivacyBadge => '隐私最大';
-  @override String get dnsStrategyPrivacyDesc =>
+  @override
+  String get dnsStrategyPrivacyLabel => '全链路加密';
+  @override
+  String get dnsStrategyPrivacyBadge => '隐私最大';
+  @override
+  String get dnsStrategyPrivacyDesc =>
       '所有 DNS 查询走 DoH。ISP 完全看不到任何 DNS 记录，DNS 泄露检测 100% 洁净。'
       '国内 CDN 路由略有损耗。需要 GeoData。';
-  @override String get dnsStrategyLegacyLabel => '传统模式';
-  @override String get dnsStrategyLegacyBadge => '兼容';
-  @override String get dnsStrategyLegacyDesc =>
+  @override
+  String get dnsStrategyLegacyLabel => '传统模式';
+  @override
+  String get dnsStrategyLegacyBadge => '兼容';
+  @override
+  String get dnsStrategyLegacyDesc =>
       '保持原有 fallback-filter 行为，不生成 nameserver-policy。'
       '适合已有自定义 DNS 配置、不需要分流的场景。';
-  @override String get dnsStrategyReconnectHint => '重新连接以应用新的 DNS 策略。';
+  @override
+  String get dnsStrategyReconnectHint => '重新连接以应用新的 DNS 策略。';
 
-  @override String get logsTitle => '日志';
-  @override String get tooltipCopyAll => '全部复制';
-  @override String get tooltipAutoScrollOn => '自动滚动：开';
-  @override String get tooltipAutoScrollOff => '自动滚动：关';
-  @override String get tooltipClear => '清空';
-  @override String get logsCopied => '日志已复制到剪贴板';
-  @override String get noLogsYet => '暂无日志。';
-  @override String noFilterLogs(String filter) => '无 $filter 级别日志。';
+  @override
+  String get logsTitle => '日志';
+  @override
+  String get tooltipCopyAll => '全部复制';
+  @override
+  String get tooltipAutoScrollOn => '自动滚动：开';
+  @override
+  String get tooltipAutoScrollOff => '自动滚动：关';
+  @override
+  String get tooltipClear => '清空';
+  @override
+  String get logsCopied => '日志已复制到剪贴板';
+  @override
+  String get noLogsYet => '暂无日志。';
+  @override
+  String noFilterLogs(String filter) => '无 $filter 级别日志。';
 
-  @override String get aboutTitle => '关于';
-  @override String get sectionApplication => '应用信息';
-  @override String get sectionUpdate => '更新';
-  @override String get sectionRuntime => '运行状态';
-  @override String get sectionMemory => '内存';
-  @override String get rowVersion => '版本';
-  @override String get rowNodesLoaded => '已加载节点';
-  @override String get rowDeviceAbi => '设备 ABI';
-  @override String get rowVpn => '畅行';
-  @override String get rowMihomo => 'Mihomo';
-  @override String get rowAppPss => '应用 (PSS)';
-  @override String get rowAvailable => '可用内存';
-  @override String get rowRunning => '运行中';
-  @override String get rowStopped => '已停止';
-  @override String rowMihomoRunning(int pid) => '运行中 (PID $pid)';
-  @override String get checkingUpdates => '正在检查更新…';
-  @override String get updateStatus => '状态';
-  @override String get updateCouldNotCheck => '检查失败';
-  @override String get updateUpToDate => '已是最新  ✓';
-  @override String get rowLatest => '最新版本';
-  @override String downloadVersion(String tag) => '下载 $tag';
-  @override String get btnRecheck2 => '重新检查';
-  @override String get pullDownToRefresh => '下拉刷新';
+  @override
+  String get aboutTitle => '关于';
+  @override
+  String get sectionApplication => '应用信息';
+  @override
+  String get sectionUpdate => '更新';
+  @override
+  String get sectionRuntime => '运行状态';
+  @override
+  String get sectionMemory => '内存';
+  @override
+  String get rowVersion => '版本';
+  @override
+  String get rowNodesLoaded => '已加载节点';
+  @override
+  String get rowDeviceAbi => '设备 ABI';
+  @override
+  String get rowVpn => '畅行';
+  @override
+  String get rowMihomo => 'Mihomo';
+  @override
+  String get rowAppPss => '应用 (PSS)';
+  @override
+  String get rowAvailable => '可用内存';
+  @override
+  String get rowRunning => '运行中';
+  @override
+  String get rowStopped => '已停止';
+  @override
+  String rowMihomoRunning(int pid) => '运行中 (PID $pid)';
+  @override
+  String get checkingUpdates => '正在检查更新…';
+  @override
+  String get updateStatus => '状态';
+  @override
+  String get updateCouldNotCheck => '检查失败';
+  @override
+  String get updateUpToDate => '已是最新  ✓';
+  @override
+  String get rowLatest => '最新版本';
+  @override
+  String downloadVersion(String tag) => '下载 $tag';
+  @override
+  String get btnRecheck2 => '重新检查';
+  @override
+  String get pullDownToRefresh => '下拉刷新';
 
-  @override String get updateSheetTitle => '检查更新';
-  @override String get updateChecking => '检查中…';
-  @override String get updateCouldNotCheckLong => '无法检查更新。\n请确认网络连接。';
-  @override String get updateUpToDateTitle => '已是最新版本';
-  @override String updateVersionLabel(String tag) => '版本：$tag';
-  @override String get updateAvailableTitle => '发现新版本';
-  @override String downloadBtn(String tag) => '下载 $tag';
-  @override String get allReleases => '全部版本 →';
+  @override
+  String get updateSheetTitle => '检查更新';
+  @override
+  String get updateChecking => '检查中…';
+  @override
+  String get updateCouldNotCheckLong => '无法检查更新。\n请确认网络连接。';
+  @override
+  String get updateUpToDateTitle => '已是最新版本';
+  @override
+  String updateVersionLabel(String tag) => '版本：$tag';
+  @override
+  String get updateAvailableTitle => '发现新版本';
+  @override
+  String downloadBtn(String tag) => '下载 $tag';
+  @override
+  String get allReleases => '全部版本 →';
 
-  @override String get siteTaobaoName => '淘宝';
-  @override String get siteTaobaoDesc => '验证国内主要电商平台直连可达性';
-  @override String get siteNeteaseName => '网易云音乐';
-  @override String get siteNeteaseDesc => '验证国内常见内容站点延迟';
-  @override String get siteGitHubDesc => '验证国际开发站点的访问效果';
-  @override String get siteGoogleDesc => '验证 Google 搜索是否可正常访问';
-  @override String get siteOpenAIDesc => '验证 ChatGPT 是否可正常访问';
-  @override String get siteGeminiDesc => '验证 Gemini 是否可正常访问';
+  @override
+  String get siteTaobaoName => '淘宝';
+  @override
+  String get siteTaobaoDesc => '验证国内主要电商平台直连可达性';
+  @override
+  String get siteNeteaseName => '网易云音乐';
+  @override
+  String get siteNeteaseDesc => '验证国内常见内容站点延迟';
+  @override
+  String get siteGitHubDesc => '验证国际开发站点的访问效果';
+  @override
+  String get siteGoogleDesc => '验证 Google 搜索是否可正常访问';
+  @override
+  String get siteGooglePlayApiDesc => '验证 Google Play API 是否可访问';
+  @override
+  String get siteGooglePlayCdnDesc => '验证 Play 商店下载 CDN 是否可访问';
+  @override
+  String get siteOpenAIDesc => '验证 ChatGPT 是否可正常访问';
+  @override
+  String get siteGeminiDesc => '验证 Gemini 是否可正常访问';
 
-  @override String get langEnglish => 'English';
-  @override String get langChinese => '中文';
+  @override
+  String get langEnglish => 'English';
+  @override
+  String get langChinese => '中文';
 }

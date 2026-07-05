@@ -43,7 +43,6 @@ class LoyalsoldierTemplate {
         'RULE-SET,applications,DIRECT',
         'RULE-SET,icloud,DIRECT',
         'RULE-SET,apple,DIRECT',
-        'RULE-SET,lancidr,DIRECT,no-resolve',
 
         // Local IP ranges (no-resolve to avoid fake-IP loops in TUN mode)
         'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
@@ -62,6 +61,17 @@ class LoyalsoldierTemplate {
         'RULE-SET,gfw,$proxyGroup',
         'RULE-SET,tld-not-cn,$proxyGroup',
         'RULE-SET,telegramcidr,$proxyGroup,no-resolve',
+
+        // lancidr runs AFTER domain-based rules, not before: Loyalsoldier's
+        // lancidr.txt bundles the IANA-reserved 198.18.0.0/15 "benchmark
+        // testing" block alongside genuine private ranges, which fully
+        // contains mihomo's default fake-ip pool. If this ran first, every
+        // fake-ip literal would match here (raw destination IP, no-resolve)
+        // before mihomo ever consults the domain it was assigned to, forcing
+        // proxy-bound traffic to DIRECT and tripping mihomo's own anti-loop
+        // guard ("reject loopback connection"). Running it last means it only
+        // catches genuine raw-IP LAN traffic that no domain rule claimed.
+        'RULE-SET,lancidr,DIRECT,no-resolve',
 
         // China bypass (conditional)
         if (bypassChina) ...const [
@@ -129,7 +139,6 @@ class LiteTemplate {
         'RULE-SET,private,DIRECT',
         'RULE-SET,icloud,DIRECT',
         'RULE-SET,apple,DIRECT',
-        'RULE-SET,lancidr,DIRECT,no-resolve',
 
         // Local IP ranges
         'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
@@ -146,6 +155,10 @@ class LiteTemplate {
         'RULE-SET,google,$proxyGroup',
         'RULE-SET,proxy,$proxyGroup',
         'RULE-SET,telegramcidr,$proxyGroup,no-resolve',
+
+        // See LoyalsoldierTemplate.rules() for why lancidr runs after
+        // domain-based rules instead of before.
+        'RULE-SET,lancidr,DIRECT,no-resolve',
 
         // China bypass (conditional)
         if (bypassChina) ...['RULE-SET,direct,DIRECT'],

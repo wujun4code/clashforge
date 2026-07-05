@@ -62,11 +62,12 @@ void main() {
       // geosite.dat does not exist at the test path → effective strategy is
       // legacy; default-nameserver / proxy-server-nameserver are _cnPlainDns.
       final dns = config['dns'] as Map<String, dynamic>;
-      expect(dns['respect-rules'], isFalse);
+      expect(dns['respect-rules'], isTrue);
       expect(dns['enhanced-mode'], equals('fake-ip'));
-      expect(dns['fake-ip-range'], equals('198.18.0.0/15'));
+      expect(dns['fake-ip-range'], equals('28.18.0.1/16'));
       expect(dns['default-nameserver'], equals(['223.5.5.5', '119.29.29.29']));
-      expect(dns['proxy-server-nameserver'], equals(['223.5.5.5', '119.29.29.29']));
+      expect(dns['proxy-server-nameserver'],
+          equals(['223.5.5.5', '119.29.29.29']));
       expect((dns['fallback'] as List), contains('https://1.1.1.1/dns-query'));
       expect((dns['fallback'] as List), contains('https://8.8.8.8/dns-query'));
       final fallbackFilter = dns['fallback-filter'] as Map<String, dynamic>;
@@ -83,7 +84,8 @@ void main() {
       expect(rules, contains('MATCH,🚀 Proxy'));
     });
 
-    test('DNS strategy: legacy — no nameserver-policy, fallback-filter present', () {
+    test('DNS strategy: legacy — no nameserver-policy, fallback-filter present',
+        () {
       final config = ConfigGenerator.generate(
         nodes: _twoNodes(),
         geodataPath: '/nonexistent',
@@ -99,7 +101,9 @@ void main() {
       expect(ff['geoip-code'], equals('CN'));
     });
 
-    test('DNS strategy: split/privacy without geosite.dat auto-downgrades to legacy', () {
+    test(
+        'DNS strategy: split/privacy without geosite.dat auto-downgrades to legacy',
+        () {
       for (final strategy in ['split', 'privacy']) {
         final config = ConfigGenerator.generate(
           nodes: _twoNodes(),
@@ -108,13 +112,16 @@ void main() {
         );
         final dns = config['dns'] as Map<String, dynamic>;
         expect(dns.containsKey('nameserver-policy'), isFalse,
-            reason: '$strategy without geosite.dat should not emit nameserver-policy');
+            reason:
+                '$strategy without geosite.dat should not emit nameserver-policy');
         expect(dns['nameserver'], equals(['223.5.5.5', '8.8.8.8']),
             reason: '$strategy should fall back to legacy nameserver');
       }
     });
 
-    test('DNS strategy: split with geosite.dat — nameserver-policy uses plain ISP DNS', () {
+    test(
+        'DNS strategy: split with geosite.dat — nameserver-policy uses plain ISP DNS',
+        () {
       final tmp = Directory.systemTemp.createTempSync('geosite_test_');
       final geosite = File('${tmp.path}/geosite.dat')..writeAsBytesSync([0]);
       try {
@@ -131,7 +138,8 @@ void main() {
         expect(policy['geosite:cn'], equals(['223.5.5.5', '119.29.29.29']));
         expect(policy['geosite:geolocation-!cn'],
             equals(['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query']));
-        expect((dns['fallback'] as List), contains('https://1.1.1.1/dns-query'));
+        expect(
+            (dns['fallback'] as List), contains('https://1.1.1.1/dns-query'));
       } finally {
         geosite.deleteSync();
         tmp.deleteSync();
@@ -148,12 +156,20 @@ void main() {
           dnsStrategy: 'privacy',
         );
         final dns = config['dns'] as Map<String, dynamic>;
-        expect(dns['nameserver'],
-            equals(['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']));
+        expect(
+            dns['nameserver'],
+            equals([
+              'https://dns.alidns.com/dns-query',
+              'https://doh.pub/dns-query'
+            ]));
         expect(dns.containsKey('nameserver-policy'), isTrue);
         final policy = dns['nameserver-policy'] as Map<String, dynamic>;
-        expect(policy['geosite:cn'],
-            equals(['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']));
+        expect(
+            policy['geosite:cn'],
+            equals([
+              'https://dns.alidns.com/dns-query',
+              'https://doh.pub/dns-query'
+            ]));
         expect(policy['geosite:geolocation-!cn'],
             equals(['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query']));
         expect(dns.containsKey('fallback'), isFalse);
@@ -163,7 +179,8 @@ void main() {
       }
     });
 
-    test('DNS mode: redir-host — enhanced-mode is redir-host, no fake-ip keys', () {
+    test('DNS mode: redir-host — enhanced-mode is redir-host, no fake-ip keys',
+        () {
       final config = ConfigGenerator.generate(
         nodes: _twoNodes(),
         geodataPath: '/nonexistent',
@@ -173,6 +190,73 @@ void main() {
       expect(dns['enhanced-mode'], equals('redir-host'));
       expect(dns.containsKey('fake-ip-range'), isFalse);
       expect(dns.containsKey('fake-ip-filter'), isFalse);
+    });
+
+    test('custom rules are normalized for Android TUN downloads', () {
+      final config = ConfigGenerator.generate(
+        nodes: _twoNodes(),
+        geodataPath: '/nonexistent',
+        customRules: const [
+          'RULE-SET,home,🚀 节点选择',
+          'RULE-SET,reject,REJECT',
+          'RULE-SET,private,🎯 全球直连',
+          'RULE-SET,lancidr,🎯 全球直连,no-resolve',
+          'GEOIP,LAN,🎯 全球直连',
+          'RULE-SET,google,🚀 节点选择',
+          'RULE-SET,direct,🎯 全球直连',
+          'RULE-SET,proxy,🚀 节点选择',
+          'GEOSITE,CN,🎯 全球直连',
+          'RULE-SET,telegramcidr,🚀 节点选择,no-resolve',
+          'RULE-SET,cncidr,🎯 全球直连,no-resolve',
+          'GEOIP,CN,🎯 全球直连',
+          'MATCH,🐟 漏网之鱼',
+        ],
+        customProxyGroups: const [
+          {
+            'name': '🚀 节点选择',
+            'type': 'select',
+            'proxies': ['JP-01', 'DIRECT'],
+          },
+          {
+            'name': '🎯 全球直连',
+            'type': 'select',
+            'proxies': ['DIRECT', '🚀 节点选择'],
+          },
+          {
+            'name': '🐟 漏网之鱼',
+            'type': 'select',
+            'proxies': ['🚀 节点选择', '🎯 全球直连'],
+          },
+        ],
+      );
+
+      final rules = (config['rules'] as List).cast<String>();
+      final googleIndex = rules.indexOf('RULE-SET,google,🚀 节点选择');
+      final proxyIndex = rules.indexOf('RULE-SET,proxy,🚀 节点选择');
+      final quicRejectIndex =
+          rules.indexOf('AND,((NETWORK,UDP),(DST-PORT,443)),REJECT');
+      final googleApisIndex =
+          rules.indexOf('DOMAIN-SUFFIX,googleapis.com,🚀 节点选择');
+      final playCdnIndex =
+          rules.indexOf('DOMAIN-SUFFIX,xn--ngstr-lra8j.com,🎯 全球直连');
+      final lancidrIndex = rules.indexOf('RULE-SET,lancidr,🎯 全球直连,no-resolve');
+      final directIndex = rules.indexOf('RULE-SET,direct,🎯 全球直连');
+
+      expect(quicRejectIndex, greaterThanOrEqualTo(0));
+      expect(googleApisIndex, greaterThan(quicRejectIndex));
+      expect(playCdnIndex, greaterThan(googleApisIndex));
+      expect(rules, contains('DOMAIN-SUFFIX,googleusercontent.com,🚀 节点选择'));
+      expect(rules, contains('DOMAIN-SUFFIX,xn--ngstr-lra8j.com,🎯 全球直连'));
+      expect(
+        rules,
+        isNot(contains('DOMAIN-SUFFIX,xn--ngstr-lra8j.com,🚀 节点选择')),
+      );
+      expect(googleIndex, greaterThanOrEqualTo(0));
+      expect(googleIndex, greaterThan(playCdnIndex));
+      expect(proxyIndex, greaterThan(googleIndex));
+      expect(lancidrIndex, greaterThan(proxyIndex));
+      expect(directIndex, greaterThan(proxyIndex));
+      expect(rules.last, equals('MATCH,🚀 节点选择'));
     });
   });
 }
