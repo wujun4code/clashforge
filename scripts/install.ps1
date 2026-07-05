@@ -53,14 +53,30 @@ try {
 # ── 3. Write .cmd shim ────────────────────────────────────────────────────────
 # The shim lets `clashforgectl` be called from cmd.exe, PowerShell, and
 # Windows Terminal without typing the full path or .ps1 extension.
+#
+# clashforgectl.ps1 requires pwsh (PS7+) — it uses `??` throughout, which
+# Windows PowerShell 5.1 cannot even parse, so there is no working fallback
+# to `powershell.exe`. Deliberately NOT using `where pwsh && (a) || (b)`
+# here: if block (a) itself exits non-zero (e.g. a diagnostic subcommand
+# reporting a problem it found), cmd's `||` re-evaluates against block (a)'s
+# exit code and ALSO runs block (b) — silently double-invoking the script,
+# with the second (5.1) run always failing on `??`. `if/else` on `where`'s
+# own captured errorlevel avoids that.
 @'
 @echo off
-where pwsh >nul 2>&1 && (
+where pwsh >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
     pwsh -NoLogo -NoProfile -File "%~dp0clashforgectl.ps1" %*
-) || (
-    powershell -NoLogo -NoProfile -File "%~dp0clashforgectl.ps1" %*
+    exit /b %ERRORLEVEL%
 )
-exit /b %ERRORLEVEL%
+echo.
+echo   [clashforgectl] PowerShell 7 (pwsh) is required but not installed.
+echo.
+echo   Install it:
+echo     winget install Microsoft.PowerShell
+echo   Or download: https://github.com/PowerShell/PowerShell/releases/latest
+echo.
+exit /b 1
 '@ | Set-Content -Path $cmdPath -Encoding ASCII
 Write-Host '  [OK] clashforgectl.cmd' -ForegroundColor Green
 
