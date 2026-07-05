@@ -31,6 +31,12 @@ log "Installing clashforgectl to $BIN_PATH ..."
 curl -fsSL "$BASE_URL/clashforgectl" -o "$BIN_PATH" || die "download failed"
 chmod +x "$BIN_PATH"
 
+# Fetch the version marker so the printed banner reflects exactly what was
+# just downloaded — the quickest way to tell "did I actually get the latest
+# build" apart from "my local copy is stale".
+VERSION=$(curl -fsSL "$BASE_URL/version.txt" 2>/dev/null || true)
+[ -n "$VERSION" ] || VERSION="(unknown)"
+
 # Add ~/.local/bin to PATH for future shells if it isn't already there.
 # Many distros already add it via /etc/profile.d — only touch rc files if needed.
 case ":$PATH:" in
@@ -55,7 +61,7 @@ case ":$PATH:" in
         ;;
 esac
 
-log "clashforgectl installed ✓ — open a new terminal and run 'clashforgectl' from anywhere."
+log "clashforgectl installed ✓ ($VERSION) — open a new terminal and run 'clashforgectl' from anywhere."
 
 if [ "$#" -gt 0 ]; then
     log "Running: clashforgectl $*"

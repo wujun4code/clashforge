@@ -50,6 +50,16 @@ try {
     exit 1
 }
 
+# Fetch the version marker so the printed banner reflects exactly what was
+# just downloaded — the quickest way to tell "did I actually get the latest
+# build" apart from "my local copy is stale", instead of comparing file dates.
+$version = '(unknown)'
+try {
+    $version = (Invoke-WebRequest -Uri "$cdnBase/version.txt" -UseBasicParsing -ErrorAction Stop).Content.Trim()
+} catch {
+    # version.txt may not exist yet on older R2 mirrors — non-fatal.
+}
+
 # ── 3. Write .cmd shim ────────────────────────────────────────────────────────
 # The shim lets `clashforgectl` be called from cmd.exe, PowerShell, and
 # Windows Terminal without typing the full path or .ps1 extension.
@@ -94,7 +104,7 @@ if ($userPath -notlike "*$installDir*") {
 
 # ── 5. Summary ────────────────────────────────────────────────────────────────
 Write-Host ''
-Write-Host '  Installation complete.' -ForegroundColor Green
+Write-Host "  Installation complete — clashforgectl $version" -ForegroundColor Green
 Write-Host ''
 Write-Host '  Run from any terminal (new window required for PATH to take effect):' -ForegroundColor Yellow
 Write-Host '    clashforgectl help' -ForegroundColor White
