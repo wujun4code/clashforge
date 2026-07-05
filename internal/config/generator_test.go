@@ -82,6 +82,24 @@ func TestGenerate_DNSConfig(t *testing.T) {
 	}
 }
 
+// TestGenerate_DNSRespectRules_True guards against regressing back to
+// respect-rules: false, which routed mihomo's own DNS resolution for
+// proxy-rule-matched hostnames (e.g. Google Play's CDN redirector servers)
+// via the plain nameserver over the real WAN path instead of through the
+// proxy — exposing it to domestic DNS injection targeting exactly that
+// class of hostname. See the matching, confirmed fix in
+// mobile/cfgen/generator.go.
+func TestGenerate_DNSRespectRules_True(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Enable = true
+	cfg.DNS.Mode = "fake-ip"
+
+	dns := dnsSection(t, cfg)
+	if dns["respect-rules"] != true {
+		t.Errorf("dns.respect-rules: expected true, got %v", dns["respect-rules"])
+	}
+}
+
 // ── DNS strategy tests ────────────────────────────────────────────────────────
 
 func dnsSection(t *testing.T, cfg *config.MetaclashConfig) map[string]interface{} {
@@ -562,6 +580,31 @@ func TestGenerate_TUNMode_EmitsTUNBlock(t *testing.T) {
 	hijack, _ := tun["dns-hijack"].([]string)
 	if len(hijack) == 0 || hijack[0] != "any:53" {
 		t.Errorf("tun.dns-hijack: expected [any:53], got %v", tun["dns-hijack"])
+	}
+	if tun["mtu"] != 1500 {
+		t.Errorf("tun.mtu: expected 1500 default, got %v", tun["mtu"])
+	}
+}
+
+// TestGenerate_TUNMode_MTU_CustomOverride guards against regressing back to
+// omitting mtu entirely, which let mihomo's TUN listener default to 9000 —
+// far above the ~1500-byte MTU of the real LAN/WAN Ethernet path packets
+// actually have to fit through, silently dropping any transfer that grows
+// past 1500 bytes partway in (e.g. Play Store app installs stalling
+// indefinitely a few KB in). See the matching, confirmed fix in
+// mobile/cfgen/generator.go's buildAndroidTUN.
+func TestGenerate_TUNMode_MTU_CustomOverride(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.Network.TUN = config.TUNConfig{MTU: 9000}
+
+	result, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	tun := result["tun"].(map[string]interface{})
+	if tun["mtu"] != 9000 {
+		t.Errorf("tun.mtu: expected explicit override 9000 to be respected, got %v", tun["mtu"])
 	}
 }
 

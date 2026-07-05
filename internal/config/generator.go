@@ -271,10 +271,21 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 	}
 
 	dnsMap := map[string]interface{}{
-		"enable":        true,
-		"listen":        fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS),
-		"ipv6":          cfg.DNS.IPv6,
-		"respect-rules": false,
+		"enable": true,
+		"listen": fmt.Sprintf("0.0.0.0:%d", cfg.Ports.DNS),
+		"ipv6":   cfg.DNS.IPv6,
+		// respect-rules: true — when a hostname mihomo needs to resolve on
+		// its own behalf (not a client's DNS query) matches a proxy routing
+		// rule, its DNS dial for that hostname is routed through the same
+		// proxy tunnel instead of going out via the plain nameserver over
+		// the router's real WAN path. Domestic ISP/GFW-style DNS injection
+		// specifically targets foreign CDN redirector hostnames (e.g. Google
+		// Play's "rr---sn-*.googlevideo.com" download servers) — with this
+		// false, mihomo's own resolution of those names took the plain WAN
+		// path and got handed a poisoned IP, breaking downloads for every
+		// LAN client behind this router. See the identical, confirmed fix
+		// in mobile/cfgen/generator.go's buildDNSSection.
+		"respect-rules": true,
 		"nameserver":    nameserverList,
 	}
 
@@ -549,12 +560,21 @@ func buildTUNMap(cfg *MetaclashConfig) map[string]interface{} {
 	if len(hijack) == 0 {
 		hijack = []string{"any:53"}
 	}
+	mtu := t.MTU
+	if mtu <= 0 {
+		mtu = 1500
+	}
 	m := map[string]interface{}{
 		"enable":                true,
 		"stack":                 stack,
 		"dns-hijack":            hijack,
 		"auto-route":            t.AutoRoute,
 		"auto-detect-interface": t.AutoDetectInterface,
+		// Must match the real LAN/WAN Ethernet path (1500). Mihomo's TUN
+		// listener defaults to 9000 when this is omitted, silently dropping
+		// any transfer that grows past 1500 bytes partway through — see the
+		// MTU field doc comment on TUNConfig.
+		"mtu": mtu,
 	}
 	if t.Device != "" {
 		m["device"] = t.Device
