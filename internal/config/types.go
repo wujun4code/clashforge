@@ -53,6 +53,16 @@ type TUNConfig struct {
 	AutoDetectInterface bool `toml:"auto_detect_interface" json:"auto_detect_interface"`
 	// Device is the TUN interface name (e.g. "Meta"). Leave empty for mihomo's default.
 	Device string `toml:"device" json:"device"`
+	// MTU for the TUN device. Mihomo's TUN listener defaults to 9000 when
+	// unset — far above the ~1500-byte MTU of the real LAN/WAN Ethernet path
+	// packets actually have to fit through. The mismatch doesn't affect small
+	// requests, but any transfer that grows past 1500 bytes gets silently
+	// dropped partway through (see the identical fix in
+	// mobile/cfgen/generator.go's buildAndroidTUN — large CDN downloads,
+	// e.g. Play Store app installs, stalling indefinitely a few KB in).
+	// 0 (the zero value, e.g. an unmigrated config.toml) means "use the
+	// 1500 default" — see buildTUNMap.
+	MTU int `toml:"mtu" json:"mtu"`
 }
 
 type NetworkConfig struct {
