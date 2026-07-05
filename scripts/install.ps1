@@ -31,6 +31,7 @@ $cdnBase    = 'https://dl.wei1xuan.com'
 $installDir = Join-Path $env:USERPROFILE '.clashforge'
 $ps1Path    = Join-Path $installDir 'clashforgectl.ps1'
 $cmdPath    = Join-Path $installDir 'clashforgectl.cmd'
+$shPath     = Join-Path $installDir 'clashforgectl.sh'
 
 Write-Host ''
 Write-Host '  ClashForge CLI Installer' -ForegroundColor Cyan
@@ -43,11 +44,24 @@ if (-not (Test-Path $installDir)) {
 }
 Write-Host "  Install directory: $installDir" -ForegroundColor DarkGray
 
-# ── 2. Download clashforgectl.ps1 ─────────────────────────────────────────────
+# ── 2. Download clashforgectl.ps1 + clashforgectl.sh ──────────────────────────
+# clashforgectl.ps1 is only a thin Windows wrapper: it uploads clashforgectl.sh
+# to the router over SCP and executes it there over SSH for every subcommand
+# except help/netdiag/hyperv*. Without clashforgectl.sh sitting right next to
+# it, every one of those subcommands dies with "clashforgectl.sh not found".
 Write-Host '  Downloading clashforgectl.ps1...' -ForegroundColor DarkGray
 try {
     Invoke-WebRequest -Uri "$cdnBase/clashforgectl.ps1" -OutFile $ps1Path -UseBasicParsing -ErrorAction Stop
     Write-Host '  [OK] clashforgectl.ps1' -ForegroundColor Green
+} catch {
+    Write-Host "  [XX] Download failed: $_" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host '  Downloading clashforgectl.sh...' -ForegroundColor DarkGray
+try {
+    Invoke-WebRequest -Uri "$cdnBase/clashforgectl.sh" -OutFile $shPath -UseBasicParsing -ErrorAction Stop
+    Write-Host '  [OK] clashforgectl.sh' -ForegroundColor Green
 } catch {
     Write-Host "  [XX] Download failed: $_" -ForegroundColor Red
     exit 1
