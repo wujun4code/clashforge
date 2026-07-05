@@ -327,10 +327,14 @@ jobs:
           # 传输 IPK（OpenWrt 无 sftp-server，用 ssh + cat）
           _ssh "cat > /tmp/clashforge.ipk" < "$IPK_LOCAL"
 
-          # 验证传输成功
+          # 验证传输完整 — 必须跟本地文件大小完全一致，而不是只判断"大于一个固定阈值"。
+          # 之前用 "> 1000 bytes" 当阈值，曾经出现过 SSH 传输中途被打断、传了 24MB
+          # 只到 21MB 就断了，但因为 21MB 仍然 > 1000 bytes 而没被这道检查拦下来，
+          # 一路传到 opkg install 那一步才报出让人摸不着头脑的 "Malformed package file"。
+          LOCAL_SIZE=$(wc -c < "$IPK_LOCAL")
           IPK_SIZE=$(_ssh "wc -c < /tmp/clashforge.ipk")
-          echo "IPK 传输完成，大小: ${IPK_SIZE} bytes"
-          [ "$IPK_SIZE" -gt 1000 ] || (echo 'IPK 传输失败，文件过小' && exit 1)
+          echo "IPK 传输完成 — 本地: ${LOCAL_SIZE} bytes，路由器收到: ${IPK_SIZE} bytes"
+          [ "$IPK_SIZE" = "$LOCAL_SIZE" ] || (echo "IPK 传输不完整：本地 ${LOCAL_SIZE} bytes，路由器只收到 ${IPK_SIZE} bytes（SSH 连接可能被中途打断，重跑一次即可）" && exit 1)
 
           _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
 
