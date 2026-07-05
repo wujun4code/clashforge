@@ -68,12 +68,14 @@ func TestPatchConfigWithTun(t *testing.T) {
 		"file-descriptor: 7",
 		"stack: system",
 		"auto-detect-interface: true",
+		"mtu: 1500",
 		"  enhanced-mode: fake-ip",
-		"  fake-ip-range: 198.18.0.0/15",
-		"  respect-rules: false",
+		"  fake-ip-range: 28.18.0.1/16",
+		"  respect-rules: true",
 		"geodata-loader: memconservative",
 		`- "geosite:cn"`,
-		"override-destination: true",
+		"  override-destination: false", // global — see buildSniffer's doc comment (Android) for why
+		"      override-destination: true", // HTTP-only — needed for Host-header transparent proxying
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("patched config missing %q\n---\n%s", want, got)

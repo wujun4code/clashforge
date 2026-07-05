@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
 import android.net.VpnService
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.service.quicksettings.TileService
@@ -20,6 +22,7 @@ import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 class ClashVpnService : VpnService(), Runnable {
     private var vpnThread: Thread? = null
@@ -39,6 +42,12 @@ class ClashVpnService : VpnService(), Runnable {
         @Volatile var vpnRunning     = false
         @Volatile var mihomoRunning  = false
         @Volatile var mihomoPid      = -1
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        NativeLogStore.init(applicationContext)
+        LogEventBridge.info("vpn", "Service onCreate")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -87,6 +96,7 @@ class ClashVpnService : VpnService(), Runnable {
             stopForeground(true)
         }
         sendVpnStateBroadcast(false)
+        logConnectivitySnapshot("stop_requested")
 
         coreProcess?.destroy()
         coreProcess = null
@@ -109,6 +119,14 @@ class ClashVpnService : VpnService(), Runnable {
 
             val configFile = File(filesDir, "config.yaml")
             val isCiMode = shouldUseCiTorConfig()
+            LogEventBridge.info("vpn", "VPN run starting", mapOf(
+                "ciMode" to isCiMode,
+                "config_exists" to configFile.exists(),
+                "config_size" to configFile.length(),
+                "sdk" to Build.VERSION.SDK_INT,
+                "target_sdk" to applicationInfo.targetSdkVersion,
+            ))
+            logConnectivitySnapshot("before_establish")
 
             // ── Step 1: DNS probe (before VPN interface is established) ─────────
             // Probe sockets travel the physical network here.  Once the VPN
@@ -136,6 +154,19 @@ class ClashVpnService : VpnService(), Runnable {
                 .setSession("ClashForge")
                 .setBlocking(false)
 
+            // VPNs default to metered for apps targeting Android Q+. Passing
+            // false does not force the VPN to be unmetered; Android then
+            // inherits meteredness from the underlying network. This keeps the
+            // VPN unmetered on unmetered Wi-Fi, but Play Store jobs requiring
+            // NOT_METERED may still wait forever on metered cellular data.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setMetered(false)
+                LogEventBridge.info("vpn", "Applied VPN metered policy", mapOf(
+                    "set_metered" to false,
+                    "behavior" to "inherit_underlying_meteredness",
+                ))
+            }
+
             try {
                 builder.addDisallowedApplication(packageName)
                 LogEventBridge.info("vpn", "Excluded app from VPN routing",
@@ -151,6 +182,7 @@ class ClashVpnService : VpnService(), Runnable {
             }
             val tunFd = vpnInterface!!.fd
             LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
+            logConnectivitySnapshot("after_establish")
 
             // ── Step 3: Core apply — write final config.yaml ─────────────────────
             // tunFd argument is always 0: startMihomoCore dup2s the real fd onto
@@ -171,6 +203,7 @@ class ClashVpnService : VpnService(), Runnable {
                 val ok = ConfigGen.generateConfig(configFile.absolutePath, 0, geoDataDir, dnsMode)
                 LogEventBridge.info("vpn", "Core apply complete",
                     mapOf("ok" to ok, "dnsMode" to dnsMode, "stack" to "gvisor", "note" to "stdin(fd0)=TUN"))
+                logRuntimeConfigSummary(configFile, ok, dnsMode)
             }
 
             // ── Step 4: Start mihomo core ─────────────────────────────────────────
@@ -181,6 +214,7 @@ class ClashVpnService : VpnService(), Runnable {
             // internet" during the ~1-2 s mihomo needs to bind its DNS server and
             // start intercepting packets from the TUN device.
             waitForMihomoReady()
+            logConnectivitySnapshot("after_core_ready")
 
             LogEventBridge.info("vpn", "VPN loop running")
             while (isRunning) Thread.sleep(1000)
@@ -192,6 +226,116 @@ class ClashVpnService : VpnService(), Runnable {
         } finally {
             stopVpn()
         }
+    }
+
+    private fun logConnectivitySnapshot(reason: String) {
+        try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = cm.activeNetwork
+            val activeCaps = activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            val activeLp = activeNetwork?.let { cm.getLinkProperties(it) }
+            val vpnNetwork = cm.allNetworks.firstOrNull { network ->
+                cm.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+            }
+            val vpnCaps = vpnNetwork?.let { cm.getNetworkCapabilities(it) }
+            val vpnLp = vpnNetwork?.let { cm.getLinkProperties(it) }
+            val vpnNotMetered =
+                vpnCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+
+            LogEventBridge.info("net", "Connectivity snapshot", mapOf(
+                "reason" to reason,
+                "active_metered" to cm.isActiveNetworkMetered,
+                "active_transports" to describeTransports(activeCaps),
+                "active_caps" to describeCapabilities(activeCaps),
+                "active_if" to (activeLp?.interfaceName ?: ""),
+                "vpn_present" to (vpnCaps != null),
+                "vpn_metered" to (vpnCaps != null && !vpnNotMetered),
+                "vpn_not_metered" to vpnNotMetered,
+                "vpn_transports" to describeTransports(vpnCaps),
+                "vpn_caps" to describeCapabilities(vpnCaps),
+                "vpn_if" to (vpnLp?.interfaceName ?: ""),
+                "vpn_dns" to (vpnLp?.dnsServers?.joinToString(",") ?: ""),
+                "vpn_mtu" to (vpnLp?.mtu ?: 0),
+            ))
+        } catch (e: Exception) {
+            LogEventBridge.warn("net", "Connectivity snapshot failed",
+                mapOf("reason" to reason, "error" to (e.message ?: e.javaClass.simpleName)))
+        }
+    }
+
+    private fun logRuntimeConfigSummary(configFile: File, ok: Boolean, dnsMode: String) {
+        try {
+            val text = configFile.readText()
+            val lines = text.lines()
+            LogEventBridge.info("config", "Runtime config summary", mapOf(
+                "ok" to ok,
+                "dnsMode" to dnsMode,
+                "size" to configFile.length(),
+                "sha256_12" to sha256(text).take(12),
+                "dns_enhanced_mode" to findScalarInSection(lines, "dns", "enhanced-mode"),
+                "dns_respect_rules" to findScalarInSection(lines, "dns", "respect-rules"),
+                "fake_ip_range" to findScalarInSection(lines, "dns", "fake-ip-range"),
+                "tun_stack" to findScalarInSection(lines, "tun", "stack"),
+                "tun_mtu" to findScalarInSection(lines, "tun", "mtu"),
+                "tun_auto_route" to findScalarInSection(lines, "tun", "auto-route"),
+                "sniffer_override_destination" to
+                    findScalarInSection(lines, "sniffer", "override-destination"),
+            ))
+        } catch (e: Exception) {
+            LogEventBridge.warn("config", "Runtime config summary failed",
+                mapOf("error" to (e.message ?: e.javaClass.simpleName)))
+        }
+    }
+
+    private fun findScalarInSection(lines: List<String>, section: String, key: String): String {
+        var inSection = false
+        val sectionHeader = "$section:"
+        val keyPrefix = "$key:"
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (!line.startsWith(" ") && !line.startsWith("-")) {
+                inSection = trimmed == sectionHeader
+                continue
+            }
+            if (inSection && trimmed.startsWith(keyPrefix)) {
+                return trimmed.substringAfter(":").trim().take(96)
+            }
+        }
+        return ""
+    }
+
+    private fun sha256(text: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(text.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+
+    private fun describeTransports(caps: NetworkCapabilities?): String {
+        if (caps == null) return ""
+        val values = mutableListOf<String>()
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) values += "CELLULAR"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) values += "WIFI"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) values += "VPN"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) values += "ETHERNET"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) values += "BLUETOOTH"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)) values += "USB"
+        return values.joinToString("|").ifEmpty { "unknown" }
+    }
+
+    private fun describeCapabilities(caps: NetworkCapabilities?): String {
+        if (caps == null) return ""
+        val values = mutableListOf<String>()
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) values += "INTERNET"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) values += "VALIDATED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)) values += "TRUSTED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) values += "NOT_METERED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) values += "NOT_RESTRICTED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) values += "NOT_VPN"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)) values += "FOREGROUND"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)) values += "NOT_CONGESTED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)) values += "NOT_SUSPENDED"
+        return values.joinToString("|").ifEmpty { "none" }
     }
 
     // ── CI / Tor bypass ───────────────────────────────────────────────────────

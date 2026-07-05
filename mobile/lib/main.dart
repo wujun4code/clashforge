@@ -86,6 +86,7 @@ class _ConnectivitySnapshot {
     required this.proxyIpResults,
     required this.domesticResults,
     required this.foreignResults,
+    required this.playResults,
     required this.aiResults,
   });
   final DateTime checkedAt;
@@ -93,6 +94,7 @@ class _ConnectivitySnapshot {
   final List<_IpInfo> proxyIpResults;
   final List<_SiteCheckResult> domesticResults;
   final List<_SiteCheckResult> foreignResults;
+  final List<_SiteCheckResult> playResults;
   final List<_SiteCheckResult> aiResults;
 }
 
@@ -113,11 +115,11 @@ class _DnsGroupResult {
   final List<_DnsDomainResult> domains;
 
   bool get ok => domains.every((d) {
-    if (d.ips.isEmpty) return false;
-    return expectFakeIp
-        ? d.ips.any(_isFakeIp)
-        : d.ips.any((ip) => !_isFakeIp(ip));
-  });
+        if (d.ips.isEmpty) return false;
+        return expectFakeIp
+            ? d.ips.any(_isFakeIp)
+            : d.ips.any((ip) => !_isFakeIp(ip));
+      });
 }
 
 class _BrowserDnsSnapshot {
@@ -145,25 +147,41 @@ class _BrowserDnsSnapshot {
 
 // ─── DNS probe utilities ──────────────────────────────────────
 
-bool _isFakeIp(String ip) =>
-    ip.startsWith('198.18.') || ip.startsWith('198.19.');
+// Prefixes of Mihomo's configured fake-ip pool. '28.18.' is the current
+// default (see ConfigGenerator._buildDns / mobile/cfgen/generator.go /
+// configpatch.go — all three changed from 198.18.0.0/15 to 28.18.0.1/16 to
+// avoid colliding with Loyalsoldier's lancidr rule-set). '198.18.'/'198.19.'
+// are kept so this check still recognizes a device that hasn't regenerated
+// its config yet (see the "regenerate config" action in the Subscriptions
+// tab) as correctly running fake-ip, instead of flagging a false
+// "Mihomo isn't running" warning.
+const _fakeIpPrefixes = ['28.18.', '198.18.', '198.19.'];
+
+bool _isFakeIp(String ip) => _fakeIpPrefixes.any(ip.startsWith);
 
 Uint8List _buildDnsQuery(int id, String domain) {
   final buf = BytesBuilder();
   buf.addByte((id >> 8) & 0xff);
   buf.addByte(id & 0xff);
-  buf.addByte(0x01); buf.addByte(0x00); // flags: standard query, recursion desired
-  buf.addByte(0x00); buf.addByte(0x01); // QDCOUNT = 1
-  buf.addByte(0x00); buf.addByte(0x00); // ANCOUNT = 0
-  buf.addByte(0x00); buf.addByte(0x00); // NSCOUNT = 0
-  buf.addByte(0x00); buf.addByte(0x00); // ARCOUNT = 0
+  buf.addByte(0x01);
+  buf.addByte(0x00); // flags: standard query, recursion desired
+  buf.addByte(0x00);
+  buf.addByte(0x01); // QDCOUNT = 1
+  buf.addByte(0x00);
+  buf.addByte(0x00); // ANCOUNT = 0
+  buf.addByte(0x00);
+  buf.addByte(0x00); // NSCOUNT = 0
+  buf.addByte(0x00);
+  buf.addByte(0x00); // ARCOUNT = 0
   for (final label in domain.split('.')) {
     buf.addByte(label.length);
     buf.add(label.codeUnits);
   }
-  buf.addByte(0x00);                    // end of QNAME
-  buf.addByte(0x00); buf.addByte(0x01); // QTYPE = A
-  buf.addByte(0x00); buf.addByte(0x01); // QCLASS = IN
+  buf.addByte(0x00); // end of QNAME
+  buf.addByte(0x00);
+  buf.addByte(0x01); // QTYPE = A
+  buf.addByte(0x00);
+  buf.addByte(0x01); // QCLASS = IN
   return buf.toBytes();
 }
 
@@ -178,8 +196,14 @@ List<String> _parseDnsARecords(Uint8List data, int expectedId) {
   // skip QNAME in the question section
   while (pos < data.length) {
     final len = data[pos];
-    if (len == 0) { pos++; break; }
-    if ((len & 0xC0) == 0xC0) { pos += 2; break; } // compression pointer
+    if (len == 0) {
+      pos++;
+      break;
+    }
+    if ((len & 0xC0) == 0xC0) {
+      pos += 2;
+      break;
+    } // compression pointer
     pos += len + 1;
   }
   pos += 4; // QTYPE + QCLASS
@@ -189,7 +213,9 @@ List<String> _parseDnsARecords(Uint8List data, int expectedId) {
     if ((data[pos] & 0xC0) == 0xC0) {
       pos += 2;
     } else {
-      while (pos < data.length && data[pos] != 0) { pos += data[pos] + 1; }
+      while (pos < data.length && data[pos] != 0) {
+        pos += data[pos] + 1;
+      }
       pos++;
     }
     if (pos + 10 > data.length) break;
@@ -197,7 +223,8 @@ List<String> _parseDnsARecords(Uint8List data, int expectedId) {
     final rdlength = (data[pos + 8] << 8) | data[pos + 9];
     pos += 10;
     if (type == 1 && rdlength == 4 && pos + 4 <= data.length) {
-      ips.add('${data[pos]}.${data[pos+1]}.${data[pos+2]}.${data[pos+3]}');
+      ips.add(
+          '${data[pos]}.${data[pos + 1]}.${data[pos + 2]}.${data[pos + 3]}');
     }
     pos += rdlength;
   }
@@ -423,6 +450,13 @@ class _HomeScreenState extends State<HomeScreen> {
     ('https://github.com', 'github.com'),
     ('https://www.google.com', 'www.google.com'),
   ];
+  static const _googlePlaySiteUrls = [
+    ('https://play.googleapis.com/generate_204', 'play.googleapis.com'),
+    (
+      'https://rr4---sn-2x3een7k.xn--ngstr-lra8j.com/generate_204',
+      'rr4---sn-2x3een7k.xn--ngstr-lra8j.com'
+    ),
+  ];
   static const _aiSiteUrls = [
     ('https://chat.openai.com', 'chat.openai.com'),
     ('https://gemini.google.com', 'gemini.google.com'),
@@ -457,6 +491,22 @@ class _HomeScreenState extends State<HomeScreen> {
           l10n.siteGoogleDesc,
           _foreignSiteUrls[1].$1,
           _foreignSiteUrls[1].$2
+        ),
+      ];
+  List<(String, String, String, String)> _googlePlaySites(
+          AppLocalizations l10n) =>
+      [
+        (
+          'Play API',
+          l10n.siteGooglePlayApiDesc,
+          _googlePlaySiteUrls[0].$1,
+          _googlePlaySiteUrls[0].$2
+        ),
+        (
+          'Play CDN',
+          l10n.siteGooglePlayCdnDesc,
+          _googlePlaySiteUrls[1].$1,
+          _googlePlaySiteUrls[1].$2
         ),
       ];
   List<(String, String, String, String)> _aiSites(AppLocalizations l10n) => [
@@ -597,7 +647,8 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Center(
                   child: Container(
-                    width: 36, height: 4,
+                    width: 36,
+                    height: 4,
                     decoration: BoxDecoration(
                       color: const Color(0xFF2D2D44),
                       borderRadius: BorderRadius.circular(2),
@@ -606,10 +657,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 20),
                 Row(children: [
-                  const Icon(Icons.tune_outlined, color: Color(0xFF8B5CF6), size: 20),
+                  const Icon(Icons.tune_outlined,
+                      color: Color(0xFF8B5CF6), size: 20),
                   const SizedBox(width: 8),
                   Text(l10n.dnsModeImportPromptTitle,
-                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
                 ]),
                 const SizedBox(height: 16),
                 _DnsModeCard(
@@ -620,7 +675,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   badge: l10n.dnsModeFakeIpBadge,
                   badgeColor: const Color(0xFF8B5CF6),
                   description: l10n.dnsModeFakeIpDesc,
-                  onTap: () { Navigator.pop(ctx); _setDnsMode('fake-ip'); },
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _setDnsMode('fake-ip');
+                  },
                 ),
                 const SizedBox(height: 10),
                 _DnsModeCard(
@@ -630,7 +688,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   badge: l10n.dnsModeRedirHostBadge,
                   badgeColor: const Color(0xFF22D3EE),
                   description: l10n.dnsModeRedirHostDesc,
-                  onTap: () { Navigator.pop(ctx); _setDnsMode('redir-host'); },
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _setDnsMode('redir-host');
+                  },
                 ),
               ],
             ),
@@ -715,9 +776,8 @@ class _HomeScreenState extends State<HomeScreen> {
       AppLogger.instance
           .info('app', 'Importing bundled subscription', fields: {'url': url});
       try {
-        final response = await http
-            .get(Uri.parse(url))
-            .timeout(const Duration(seconds: 20));
+        final response =
+            await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
         if (response.statusCode != 200) {
           AppLogger.instance.warn('app', 'Bundled sub fetch failed',
               fields: {'url': url, 'status': response.statusCode});
@@ -725,8 +785,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         final parsed = SubscriptionParser.parse(response.body);
         if (parsed.proxies.isEmpty) {
-          AppLogger.instance.warn('app', 'Bundled sub has no proxies',
-              fields: {'url': url});
+          AppLogger.instance
+              .warn('app', 'Bundled sub has no proxies', fields: {'url': url});
           continue;
         }
         _onNodesImported(parsed,
@@ -771,8 +831,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // 2. Extract a meaningful last path segment.
       const skipSegments = {
-        'sub', 'subscribe', 'subscription', 'clash', 'api', 'v1', 'v2', 'v3',
-        'client', 'config', 'download', 'get', 'fetch', 'link', 'node',
+        'sub',
+        'subscribe',
+        'subscription',
+        'clash',
+        'api',
+        'v1',
+        'v2',
+        'v3',
+        'client',
+        'config',
+        'download',
+        'get',
+        'fetch',
+        'link',
+        'node',
       };
       final segments = uri.pathSegments
           .map((s) => s.replaceFirst(RegExp(r'\.\w{1,5}$'), '')) // strip ext
@@ -1215,6 +1288,62 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } finally {
       if (mounted) setState(() => _isConnecting = false);
+    }
+  }
+
+  // Regenerates config.yaml from [sub]'s stored nodes/rules right now,
+  // regardless of whether the VPN is connected — unlike every other
+  // subscription-change path in this app, which only writes a fresh config
+  // as a side effect of the next VPN connect. This exists specifically so a
+  // generator-side fix (DNS defaults, rule ordering, etc.) can be applied to
+  // an already-imported subscription without re-importing it or needing to
+  // fully disconnect/reconnect to "discover" the file was stale.
+  Future<_NodeImportActionResult> _regenerateSubscriptionConfig(
+      Subscription sub) async {
+    if (sub.id != _activeSubscriptionId) {
+      _activateSubscription(sub);
+    }
+    if (_nodes.isEmpty || _selectedNode == null) {
+      return const _NodeImportActionResult(
+        success: false,
+        message: '该订阅没有可用节点，无法生成配置',
+      );
+    }
+
+    if (_isConnected) {
+      // Same generate+write+restart sequence used when DNS settings change
+      // while connected — the running tunnel picks up the fresh config
+      // immediately instead of waiting for the next manual reconnect.
+      final result = await _restartVpnAfterSubscriptionChange();
+      return _NodeImportActionResult(
+        success: result.success,
+        message: result.success ? '配置已重新生成并应用 ✓' : result.message,
+      );
+    }
+
+    final logger = AppLogger.instance;
+    try {
+      final filesDir = await VpnManager.getFilesDir();
+      final configMap = ConfigGenerator.generate(
+        nodes: _nodes,
+        geodataPath: filesDir,
+        selectedNodeName: _selectedNode!.name,
+        customRules: sub.customRules,
+        customProxyGroups: sub.customProxyGroups,
+        customRuleProviders: sub.customRuleProviders,
+        dnsStrategy: _dnsStrategy,
+        dnsMode: _dnsMode,
+      );
+      final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
+      logger.info('subscription',
+          'Regenerated config for ${sub.nickname}: $writeResult');
+      if (writeResult.toLowerCase().startsWith('error')) {
+        throw Exception(writeResult);
+      }
+      return const _NodeImportActionResult(success: true, message: '配置已重新生成 ✓');
+    } catch (e) {
+      logger.error('subscription', 'Regenerate config failed: $e');
+      return _NodeImportActionResult(success: false, message: '生成失败：$e');
     }
   }
 
@@ -1662,13 +1791,28 @@ class _HomeScreenState extends State<HomeScreen> {
       final proxyIpFut = _fetchAllIpInfos(proxyClient, _proxyIpCandidates);
       final domesticFut = _checkSites(directClient, _domesticSites(l10n));
       final foreignFut = _checkSites(proxyClient, _foreignSites(l10n));
+      final playFut = _checkSites(proxyClient, _googlePlaySites(l10n));
       final aiFut = _checkSites(proxyClient, _aiSites(l10n));
 
       final directIps = await directIpFut;
       final proxyIps = await proxyIpFut;
       final domestic = await domesticFut;
       final foreign = await foreignFut;
+      final play = await playFut;
       final ai = await aiFut;
+
+      for (final result in play) {
+        AppLogger.instance.info(
+          'probe',
+          'Google Play connectivity probe: ${result.name}',
+          fields: {
+            'ok': result.ok,
+            if (result.latencyMs != null) 'latency_ms': result.latencyMs,
+            if (result.dnsLabel != null) 'dns': result.dnsLabel,
+            if (result.error != null) 'error': result.error,
+          },
+        );
+      }
 
       if (!mounted) return;
       setState(() {
@@ -1678,6 +1822,7 @@ class _HomeScreenState extends State<HomeScreen> {
           proxyIpResults: proxyIps,
           domesticResults: domestic,
           foreignResults: foreign,
+          playResults: play,
           aiResults: ai,
         );
       });
@@ -1779,7 +1924,7 @@ class _HomeScreenState extends State<HomeScreen> {
         String? dnsLabel;
         if (dnsIps.isNotEmpty) {
           final ip = dnsIps.first;
-          final isFake = ip.startsWith('198.18.') || ip.startsWith('198.19.');
+          final isFake = _isFakeIp(ip);
           dnsLabel = isFake ? '$ip (fake-ip)' : ip;
         }
 
@@ -1825,10 +1970,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final info = await VpnManager.getSystemInfo();
       final modeRaw =
           (info['private_dns_mode'] ?? '').toString().trim().toLowerCase();
-      final specifier =
-          (info['private_dns_specifier'] ?? '').toString().trim();
-      final privateDnsOn =
-          modeRaw == 'hostname' || modeRaw == 'opportunistic';
+      final specifier = (info['private_dns_specifier'] ?? '').toString().trim();
+      final privateDnsOn = modeRaw == 'hostname' || modeRaw == 'opportunistic';
       final privateDnsDetail = privateDnsOn
           ? (modeRaw == 'hostname' && specifier.isNotEmpty
               ? l10n.privateDnsOnHostname(specifier)
@@ -2011,6 +2154,7 @@ class _HomeScreenState extends State<HomeScreen> {
         activeSubId: _activeSubscriptionId,
         onActivate: _activateSubscription,
         onDelete: _deleteSubscription,
+        onRegenerate: _regenerateSubscriptionConfig,
         onMergeParsedNodes: _mergeParsedNodesIntoSubscription,
         onCreateStandardFromParsed: _createStandardSubFromParsedNodes,
       ),
@@ -2105,12 +2249,13 @@ class _HomeTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final accent = isConnected ? _kConnected : _kBrand;
-    final _fmt = (DateTime dt) => '${dt.hour.toString().padLeft(2, '0')}:'
+    String formatTime(DateTime dt) => '${dt.hour.toString().padLeft(2, '0')}:'
         '${dt.minute.toString().padLeft(2, '0')}:'
         '${dt.second.toString().padLeft(2, '0')}';
-    final checkedAt = snapshot == null ? '--' : _fmt(snapshot!.checkedAt);
-    final browserDnsCheckedAt =
-        browserDnsSnapshot == null ? '--' : _fmt(browserDnsSnapshot!.checkedAt);
+    final checkedAt = snapshot == null ? '--' : formatTime(snapshot!.checkedAt);
+    final browserDnsCheckedAt = browserDnsSnapshot == null
+        ? '--'
+        : formatTime(browserDnsSnapshot!.checkedAt);
 
     return Container(
       decoration: const BoxDecoration(
@@ -2634,6 +2779,13 @@ class _ConnectivityPane extends StatelessWidget {
           ...snapshot.foreignResults.map((r) => _SiteCheckRow(result: r)),
           const SizedBox(height: 8),
         ],
+        if (snapshot.playResults.isNotEmpty) ...[
+          _CategoryTag(
+              label: l10n.categoryGooglePlay, color: const Color(0xFF00A884)),
+          const SizedBox(height: 6),
+          ...snapshot.playResults.map((r) => _SiteCheckRow(result: r)),
+          const SizedBox(height: 8),
+        ],
         if (snapshot.aiResults.isNotEmpty) ...[
           _CategoryTag(
               label: l10n.categoryAiVpnProxy, color: const Color(0xFF9C6DFF)),
@@ -2903,17 +3055,21 @@ class _BrowserDnsPane extends StatelessWidget {
         ),
       );
 
-  Widget _checkRow({required bool ok, required String label, required String detail}) {
+  Widget _checkRow(
+      {required bool ok, required String label, required String detail}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _dot(ok),
         const SizedBox(width: 8),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
                 style: const TextStyle(
-                    color: _kTextHi, fontSize: 12, fontWeight: FontWeight.w600)),
+                    color: _kTextHi,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
             const SizedBox(height: 1),
             Text(detail,
                 style: const TextStyle(color: _kTextMuted, fontSize: 11)),
@@ -2923,8 +3079,8 @@ class _BrowserDnsPane extends StatelessWidget {
     );
   }
 
-  Widget _domainRow(
-      BuildContext context, _DnsDomainResult d, bool expectFakeIp, AppLocalizations l10n) {
+  Widget _domainRow(BuildContext context, _DnsDomainResult d, bool expectFakeIp,
+      AppLocalizations l10n) {
     final hasFakeIp = d.ips.any(_isFakeIp);
     final hasRealIp = d.ips.any((ip) => !_isFakeIp(ip));
 
@@ -2942,7 +3098,8 @@ class _BrowserDnsPane extends StatelessWidget {
       tag = hasFakeIp ? l10n.dnsFakeIpActive : null;
     } else {
       ok = hasRealIp;
-      ipText = d.ips.firstWhere((ip) => !_isFakeIp(ip), orElse: () => d.ips.first);
+      ipText =
+          d.ips.firstWhere((ip) => !_isFakeIp(ip), orElse: () => d.ips.first);
       tag = hasRealIp ? l10n.dnsRealIp : null;
     }
 
@@ -2965,15 +3122,13 @@ class _BrowserDnsPane extends StatelessWidget {
                           fontSize: 11,
                           fontWeight: FontWeight.w500)),
                   Text(ipText,
-                      style:
-                          const TextStyle(color: _kTextMuted, fontSize: 10)),
+                      style: const TextStyle(color: _kTextMuted, fontSize: 10)),
                 ],
               ),
             ),
             if (tag != null)
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                 decoration: BoxDecoration(
                   color: tagColor.withAlpha(20),
                   borderRadius: BorderRadius.circular(4),
@@ -3017,8 +3172,7 @@ class _BrowserDnsPane extends StatelessWidget {
                       fontWeight: FontWeight.w600)),
             ),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
               decoration: BoxDecoration(
                 color: tone.withAlpha(16),
                 borderRadius: BorderRadius.circular(999),
@@ -3072,8 +3226,7 @@ class _BrowserDnsPane extends StatelessWidget {
           // ── Summary box ──────────────────────────────────────
           Container(
             width: double.infinity,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             decoration: BoxDecoration(
               color: tone.withAlpha(12),
               borderRadius: BorderRadius.circular(10),
@@ -3501,6 +3654,8 @@ typedef _OnImported = void Function(ParsedSubscription parsed,
     {String url, String nickname});
 typedef _OnSubActivated = void Function(Subscription sub);
 typedef _OnSubDeleted = void Function(Subscription sub);
+typedef _OnSubRegenerate = Future<_NodeImportActionResult> Function(
+    Subscription sub);
 typedef _OnMergeParsedNodes = Future<_NodeImportActionResult>
     Function(ParsedSubscription parsed, {required String targetSubscriptionId});
 typedef _OnCreateStandardSubFromParsed = Future<_NodeImportActionResult>
@@ -3530,6 +3685,7 @@ class _SubscriptionsTab extends StatefulWidget {
     required this.activeSubId,
     required this.onActivate,
     required this.onDelete,
+    required this.onRegenerate,
     required this.onMergeParsedNodes,
     required this.onCreateStandardFromParsed,
   });
@@ -3539,6 +3695,7 @@ class _SubscriptionsTab extends StatefulWidget {
   final String? activeSubId;
   final _OnSubActivated onActivate;
   final _OnSubDeleted onDelete;
+  final _OnSubRegenerate onRegenerate;
   final _OnMergeParsedNodes onMergeParsedNodes;
   final _OnCreateStandardSubFromParsed onCreateStandardFromParsed;
 
@@ -3656,8 +3813,7 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
         logger.warn('subscription', 'No nodes parsed');
       }
 
-      final existingNames =
-          widget.subscriptions.map((s) => s.nickname).toSet();
+      final existingNames = widget.subscriptions.map((s) => s.nickname).toSet();
       final defaultName = input.startsWith('http')
           ? _HomeScreenState.nicknameForUrl(input, existingNames)
           : await SubscriptionStore.generateDefaultNickname();
@@ -3886,8 +4042,18 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
 
   static String _fmtDate(DateTime dt) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${months[dt.month - 1]} ${dt.day}';
   }
@@ -3919,6 +4085,28 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
       ),
     );
     if (confirmed == true && mounted) widget.onDelete(sub);
+  }
+
+  bool _regenerating = false;
+
+  Future<void> _regenerateConfig(Subscription sub) async {
+    if (_regenerating) return;
+    setState(() => _regenerating = true);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(
+        content: Text('正在重新生成配置…'),
+        duration: Duration(seconds: 10),
+      ));
+    final result = await widget.onRegenerate(sub);
+    if (!mounted) return;
+    setState(() => _regenerating = false);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(result.message),
+        duration: const Duration(seconds: 3),
+      ));
   }
 
   Widget _buildSubCard(Subscription sub) {
@@ -4030,6 +4218,20 @@ class _SubscriptionsTabState extends State<_SubscriptionsTab> {
                   );
                 }),
               ],
+              IconButton(
+                icon: _regenerating
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: _kTextFaint),
+                      )
+                    : const Icon(Icons.refresh, color: _kTextFaint, size: 18),
+                tooltip: '重新生成配置',
+                onPressed: _regenerating ? null : () => _regenerateConfig(sub),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
               IconButton(
                 icon: const Icon(Icons.delete_outline,
                     color: _kTextFaint, size: 18),
@@ -4975,7 +5177,8 @@ class _SettingsTab extends StatelessWidget {
           children: [
             Center(
               child: Container(
-                width: 36, height: 4,
+                width: 36,
+                height: 4,
                 decoration: BoxDecoration(
                     color: _kBorder, borderRadius: BorderRadius.circular(2)),
               ),
@@ -4986,7 +5189,9 @@ class _SettingsTab extends StatelessWidget {
               const SizedBox(width: 8),
               Text(l10n.dnsModeSheetTitle,
                   style: const TextStyle(
-                      color: _kTextHi, fontSize: 18, fontWeight: FontWeight.bold)),
+                      color: _kTextHi,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
             ]),
             const SizedBox(height: 16),
             _DnsModeCard(
@@ -4996,7 +5201,10 @@ class _SettingsTab extends StatelessWidget {
               badge: l10n.dnsModeFakeIpBadge,
               badgeColor: _kBrand,
               description: l10n.dnsModeFakeIpDesc,
-              onTap: () { Navigator.pop(context); onDnsModeChanged('fake-ip'); },
+              onTap: () {
+                Navigator.pop(context);
+                onDnsModeChanged('fake-ip');
+              },
             ),
             const SizedBox(height: 10),
             _DnsModeCard(
@@ -5006,7 +5214,10 @@ class _SettingsTab extends StatelessWidget {
               badge: l10n.dnsModeRedirHostBadge,
               badgeColor: const Color(0xFF22D3EE),
               description: l10n.dnsModeRedirHostDesc,
-              onTap: () { Navigator.pop(context); onDnsModeChanged('redir-host'); },
+              onTap: () {
+                Navigator.pop(context);
+                onDnsModeChanged('redir-host');
+              },
             ),
           ],
         ),
@@ -5049,7 +5260,8 @@ class _SettingsTab extends StatelessWidget {
                   iconColor: _kBrand,
                   icon: Icons.dns_outlined,
                   title: l10n.tileDnsStrategyTitle,
-                  subtitle: l10n.tileDnsStrategySub(_strategyLabel(dnsStrategy, l10n)),
+                  subtitle: l10n
+                      .tileDnsStrategySub(_strategyLabel(dnsStrategy, l10n)),
                   onTap: () => _showDnsStrategyPicker(context),
                 ),
                 const SizedBox(height: 8),
@@ -5270,14 +5482,17 @@ class _DnsModeCard extends StatelessWidget {
                         )),
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
                         color: badgeColor.withAlpha(40),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(badge,
                           style: TextStyle(
-                            color: badgeColor, fontSize: 10, fontWeight: FontWeight.w700,
+                            color: badgeColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
                           )),
                     ),
                   ]),
@@ -5463,7 +5678,16 @@ class _LogsTabState extends State<_LogsTab> {
   }
 
   Future<void> _copyAll() async {
-    await Clipboard.setData(ClipboardData(text: AppLogger.instance.export()));
+    final flutterLogs = AppLogger.instance.export();
+    final nativeLogs = await VpnManager.readNativeLogs();
+    final combined = [
+      '=== Flutter in-memory logs ===',
+      flutterLogs.isEmpty ? '(empty)' : flutterLogs,
+      '',
+      '=== Android native persisted logs ===',
+      nativeLogs.trim().isEmpty ? '(empty)' : nativeLogs.trimRight(),
+    ].join('\n');
+    await Clipboard.setData(ClipboardData(text: combined));
     if (mounted) {
       final l10n = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -5518,8 +5742,9 @@ class _LogsTabState extends State<_LogsTab> {
                   tooltip: l10n.tooltipClear,
                   icon: const Icon(Icons.delete_outline,
                       size: 19, color: _kTextMuted),
-                  onPressed: () {
+                  onPressed: () async {
                     AppLogger.instance.clear();
+                    await VpnManager.clearNativeLogs();
                     setState(() {});
                   },
                 ),

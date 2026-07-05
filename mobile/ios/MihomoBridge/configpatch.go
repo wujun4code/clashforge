@@ -32,6 +32,27 @@ var iosFakeIPFilter = []string{
 //   - auto-detect-interface: true — iOS has no addDisallowedApplication,
 //     so mihomo must bind upstream sockets to the physical interface to
 //     avoid routing its own traffic back into the tunnel.
+//
+// mtu: 1500 must match PacketTunnelProvider's NEPacketTunnelNetworkSettings
+// mtu (also 1500) exactly. Confirmed on Android as a real bug, not just a
+// theoretical mismatch: when this field is omitted, mihomo's TUN stack
+// defaults to 9000 (listener/sing_tun/server.go), while the real OS-level
+// TUN interface only accepts 1500-byte packets — small requests work fine,
+// but any transfer that grows past 1500 bytes gets silently dropped, which
+// is exactly what made large downloads (Play Store app installs, video CDN)
+// hang indefinitely a few KB in on Android. Setting it explicitly here so
+// iOS doesn't ship with the same latent bug.
+//
+// sniffer.override-destination: false (global) is likewise a confirmed-on-
+// Android fix, not precautionary — see docs/clashforge-wechat-video-bug-report.md
+// for the first time this exact bug shipped (WeChat's video CDN) and
+// buildSniffer's doc comment on the Android side for the second (Google
+// Play's download redirector). With it true, mihomo re-resolves every
+// sniffed TLS/QUIC hostname via its own DNS and redials that fresh IP
+// instead of preserving the client's original connection, which breaks any
+// session/token-bound CDN redirector. HTTP keeps its own true — plain HTTP
+// has no SNI, so override-destination there is what makes Host-header
+// transparent proxying work, and no CDN-session-token concept to break.
 func PatchConfigWithTun(configPath string, tunFd int) error {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
@@ -40,10 +61,25 @@ func PatchConfigWithTun(configPath string, tunFd int) error {
 	original := string(raw)
 
 	// fake-ip migration applies on every start so configs written by older
-	// app versions (redir-host era) are upgraded too.
-	patched := upsertDNSScalar(original, "respect-rules", "false")
+	// app versions (redir-host era, or the 198.18.0.0/15 default) are
+	// upgraded too. Not 198.18.0.0/15: Loyalsoldier's lancidr.txt (used by
+	// LoyalsoldierTemplate/LiteTemplate rule-providers) bundles that exact
+	// IANA-reserved block as a "route DIRECT" range, so a fake-ip literal
+	// for a domain not covered by a more specific rule-provider falls
+	// through to lancidr and gets force-routed DIRECT instead of through
+	// the proxy. 28.18.0.1/16 is a real, allocated-but-obscure block (part
+	// of 28.0.0.0/8, long assigned to the US DoD network) that lancidr does
+	// not bundle — mirrors internal/config/fakeip.go's SelectFakeIPRange on
+	// the router side.
+	// respect-rules: true — see mobile/cfgen/generator.go's matching comment
+	// (Android debug logging caught domestic DNS injection returning a
+	// poisoned CN IP for a Google download-CDN redirector hostname; routing
+	// that resolution through the proxy, which respect-rules does for any
+	// hostname matching a proxy rule, avoids the domestic network path
+	// where the injection happens).
+	patched := upsertDNSScalar(original, "respect-rules", "true")
 	patched = upsertDNSScalar(patched, "enhanced-mode", "fake-ip")
-	patched = upsertDNSScalar(patched, "fake-ip-range", "198.18.0.0/15")
+	patched = upsertDNSScalar(patched, "fake-ip-range", "28.18.0.1/16")
 	patched = upsertDNSList(patched, "fake-ip-filter", iosFakeIPFilter)
 
 	// memconservative trades geosite lookup speed for a drastically smaller
@@ -61,6 +97,7 @@ tun:
   file-descriptor: %d
   auto-route: false
   auto-detect-interface: true
+  mtu: 1500
   dns-hijack:
     - "any:53"
     - "tcp://any:53"
@@ -68,13 +105,14 @@ tun:
 
 sniffer:
   enable: true
-  override-destination: true
+  override-destination: false
   parse-pure-ip: true
   sniff:
     TLS:
       ports: [443, 8443]
     HTTP:
       ports: [80, 8080-8880]
+      override-destination: true
     QUIC:
       ports: [443]
 `, tunFd)

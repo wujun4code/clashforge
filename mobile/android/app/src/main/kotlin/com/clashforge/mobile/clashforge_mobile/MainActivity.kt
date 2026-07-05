@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Process
@@ -58,6 +60,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        NativeLogStore.init(applicationContext)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VPN_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -89,7 +92,17 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "getSystemInfo" -> {
-                        result.success(buildSystemInfo())
+                        val info = buildSystemInfo()
+                        LogEventBridge.info("diagnostic", "System info requested",
+                            networkDiagnosticFields(info))
+                        result.success(info)
+                    }
+                    "readNativeLogs" -> {
+                        result.success(NativeLogStore.read())
+                    }
+                    "clearNativeLogs" -> {
+                        NativeLogStore.clear()
+                        result.success("cleared")
                     }
                     else -> result.notImplemented()
                 }
@@ -269,7 +282,7 @@ class MainActivity : FlutterActivity() {
         val privateDnsMode = readGlobalSetting("private_dns_mode")
         val privateDnsSpecifier = readGlobalSetting("private_dns_specifier")
 
-        return mapOf(
+        val info = mutableMapOf<String, Any>(
             "app_version"         to versionName,
             "build_number"        to versionCode,
             "vpn_running"         to ClashVpnService.vpnRunning,
@@ -281,6 +294,91 @@ class MainActivity : FlutterActivity() {
             "private_dns_mode"    to privateDnsMode,
             "private_dns_specifier" to privateDnsSpecifier
         )
+        info.putAll(buildNetworkDiagnostics())
+        return info
+    }
+
+    private fun buildNetworkDiagnostics(): Map<String, Any> {
+        return try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeCaps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            val vpnCaps = cm.allNetworks
+                .mapNotNull { cm.getNetworkCapabilities(it) }
+                .firstOrNull { it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+
+            val activeNotMetered =
+                activeCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+            val vpnNotMetered =
+                vpnCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+            val vpnPresent = vpnCaps != null
+
+            mapOf(
+                "active_network_metered" to cm.isActiveNetworkMetered,
+                "active_network_not_metered" to activeNotMetered,
+                "active_network_validated" to
+                    (activeCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true),
+                "active_network_trusted" to
+                    (activeCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED) == true),
+                "active_network_transports" to describeTransports(activeCaps),
+                "active_network_capabilities" to describeKeyCapabilities(activeCaps),
+                "vpn_network_present" to vpnPresent,
+                "vpn_network_metered" to (vpnPresent && !vpnNotMetered),
+                "vpn_network_not_metered" to vpnNotMetered,
+                "vpn_network_validated" to
+                    (vpnCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true),
+                "vpn_network_trusted" to
+                    (vpnCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED) == true),
+                "vpn_network_transports" to describeTransports(vpnCaps),
+                "vpn_network_capabilities" to describeKeyCapabilities(vpnCaps),
+                "play_download_unmetered_required_may_wait" to
+                    (ClashVpnService.vpnRunning && vpnPresent && !vpnNotMetered),
+            )
+        } catch (e: Exception) {
+            mapOf("network_diagnostics_error" to (e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun describeTransports(caps: NetworkCapabilities?): String {
+        if (caps == null) return ""
+        val transports = mutableListOf<String>()
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) transports += "CELLULAR"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) transports += "WIFI"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) transports += "VPN"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) transports += "ETHERNET"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) transports += "BLUETOOTH"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)) transports += "USB"
+        return transports.joinToString("|").ifEmpty { "unknown" }
+    }
+
+    private fun describeKeyCapabilities(caps: NetworkCapabilities?): String {
+        if (caps == null) return ""
+        val values = mutableListOf<String>()
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) values += "INTERNET"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) values += "VALIDATED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)) values += "TRUSTED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) values += "NOT_METERED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) values += "NOT_RESTRICTED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) values += "NOT_VPN"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)) values += "FOREGROUND"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)) values += "NOT_CONGESTED"
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)) values += "NOT_SUSPENDED"
+        return values.joinToString("|").ifEmpty { "none" }
+    }
+
+    private fun networkDiagnosticFields(info: Map<String, Any>): Map<String, Any> {
+        val keys = listOf(
+            "vpn_running",
+            "mihomo_running",
+            "active_network_metered",
+            "active_network_transports",
+            "active_network_capabilities",
+            "vpn_network_present",
+            "vpn_network_metered",
+            "vpn_network_transports",
+            "vpn_network_capabilities",
+            "play_download_unmetered_required_may_wait",
+        )
+        return keys.mapNotNull { key -> info[key]?.let { key to it } }.toMap()
     }
 
     private fun readGlobalSetting(key: String): String {
