@@ -2894,18 +2894,28 @@ foreach ($Tool in @("ssh", "scp")) {
     }
 }
 
-# ── resolve repo root (for deploy) ───────────────────────────────────────────
-if ($RepoRoot -eq "") {
-    # Walk up from the script directory to find the repo root (contains go.mod)
-    $RepoRoot = $ScriptDir
-    if (-not (Test-Path (Join-Path $RepoRoot "go.mod"))) {
-        $RepoRoot = Split-Path -Parent $ScriptDir
+# ── resolve repo root (deploy only) ──────────────────────────────────────────
+# $RepoRoot is exclusively consumed inside the "deploy" action block below (it
+# locates go.mod/build_ipk.py/etc. to build ClashForge from source) — every
+# other action (upgrade, status, stop, uninstall, ...) downloads a pre-built
+# release and has no use for it. Gating this on $Action avoids requiring a git
+# checkout with go.mod just to run a normal remote-management command, which
+# unconditionally failed for anyone using the standalone installed CLI
+# (install.ps1's ~/.clashforge, no go.mod anywhere nearby) with
+# "Cannot auto-detect repo root (no go.mod found)".
+if ($Action -eq "deploy") {
+    if ($RepoRoot -eq "") {
+        # Walk up from the script directory to find the repo root (contains go.mod)
+        $RepoRoot = $ScriptDir
+        if (-not (Test-Path (Join-Path $RepoRoot "go.mod"))) {
+            $RepoRoot = Split-Path -Parent $ScriptDir
+        }
+        if (-not (Test-Path (Join-Path $RepoRoot "go.mod"))) {
+            Die "Cannot auto-detect repo root (no go.mod found). Pass -RepoRoot explicitly."
+        }
     }
-    if (-not (Test-Path (Join-Path $RepoRoot "go.mod"))) {
-        Die "Cannot auto-detect repo root (no go.mod found). Pass -RepoRoot explicitly."
-    }
+    $RepoRoot = (Resolve-Path $RepoRoot).Path
 }
-$RepoRoot = (Resolve-Path $RepoRoot).Path
 
 # ── build SSH / SCP base args ─────────────────────────────────────────────────
 $Target  = "${User}@${Router}"
