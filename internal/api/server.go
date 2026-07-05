@@ -211,6 +211,12 @@ func NewRouter(deps Dependencies) http.Handler {
 		JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Deliberately unauthenticated (unlike everything under /api/v1): a
+	// downstream ClashForge instance querying its upstream router has no
+	// shared credential. Exposes only DNS enhanced-mode/fake-ip-range — see
+	// handleDNSTopology's doc comment for what must never be added here.
+	r.Get("/api/discovery/dns-topology", handleDNSTopology(deps))
+
 	// Serve embedded React SPA
 	registerUI(r)
 

@@ -9,15 +9,25 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/wujun4code/clashforge/internal/netreserved"
 )
 
-// KnownFakeIPRanges contains CIDR ranges used by Clash/Mihomo fake-ip.
-// These cover the default 198.18.0.0/15 range (198.18.x.x and 198.19.x.x)
-// and a few variant ranges seen in the wild.
-var KnownFakeIPRanges = []string{
-	"198.18.0.0/15", // Mihomo / OpenClash default (covers 198.18.0.0–198.19.255.255)
-	"28.0.0.0/8",    // rare variant used by some Clash forks
-}
+// KnownFakeIPRanges is the full IANA reserved/special-purpose registry plus a
+// handful of known non-reserved tricks (see netreserved.KnownNonReservedFakeIPRanges).
+// A hijacked/substituted DNS answer for a domain that should have a real
+// public IP is detected by checking membership here — NOT by matching one or
+// two specific "known fake-ip pool" CIDRs. This matters because virtually
+// every fake-ip implementation (Mihomo, OpenClash, Surge, ...) is
+// constrained to pick its pool from non-globally-routable space (or it would
+// collide with real destinations), so checking the full reserved registry
+// catches an upstream hijack regardless of which specific pool it happens to
+// use — including one we've never seen before — not just the historical
+// 198.18.0.0/16 default.
+var KnownFakeIPRanges = append(
+	append([]string{}, netreserved.IANARanges...),
+	netreserved.KnownNonReservedFakeIPRanges...,
+)
 
 // DefaultFallbackDNS is the built-in list of DoH servers offered as replacement
 // when user-configured UDP nameservers are found to be hijacked.
