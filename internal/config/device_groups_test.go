@@ -406,8 +406,8 @@ func TestApplyPerDeviceSubRulesWithProviders_ReturnsDeviceProviderSpecs(t *testi
 }
 
 func TestSyncDeviceRuleProviderFiles_RewritesManagedFilesOnly(t *testing.T) {
-	runtimeDir := t.TempDir()
-	ruleDir := filepath.Join(runtimeDir, "rule_provider")
+	dataDir := t.TempDir()
+	ruleDir := filepath.Join(dataDir, "rule_provider")
 	if err := os.MkdirAll(ruleDir, 0o755); err != nil {
 		t.Fatalf("mkdir rule_provider: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestSyncDeviceRuleProviderFiles_RewritesManagedFilesOnly(t *testing.T) {
 			Payload:  []string{"192.168.1.100/32", "192.168.1.101/32"},
 		},
 	}
-	if err := config.SyncDeviceRuleProviderFiles(runtimeDir, specs); err != nil {
+	if err := config.SyncDeviceRuleProviderFiles(dataDir, specs); err != nil {
 		t.Fatalf("SyncDeviceRuleProviderFiles: %v", err)
 	}
 
