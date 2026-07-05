@@ -2865,6 +2865,14 @@ function Sync-GeoDataToRouter {
     }
 }
 
+# ── show help ─────────────────────────────────────────────────────────────────
+# Checked before the clashforgectl.sh/ssh/scp requirements below — help text
+# doesn't need the SSH upload payload or OpenSSH installed.
+if ($Action -eq "help") {
+    Get-Help $MyInvocation.MyCommand.Path -Detailed
+    exit 0
+}
+
 # ── locate clashforgectl.sh ───────────────────────────────────────────────────
 # Look next to this PS1 file first, then in the scripts/ directory.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -2884,12 +2892,6 @@ foreach ($Tool in @("ssh", "scp")) {
     if (-not (Get-Command $Tool -ErrorAction SilentlyContinue)) {
         Die "$Tool not found. Install OpenSSH: Settings → Apps → Optional Features → OpenSSH Client"
     }
-}
-
-# ── show help ─────────────────────────────────────────────────────────────────
-if ($Action -eq "help") {
-    Get-Help $MyInvocation.MyCommand.Path -Detailed
-    exit 0
 }
 
 # ── resolve repo root (for deploy) ───────────────────────────────────────────
