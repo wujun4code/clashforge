@@ -125,6 +125,7 @@ func autoConfigureClashForge(
 			DropQUIC:          cfg.Network.DropQUIC,
 			WANInterface:      cfg.Network.WANInterface,
 			TunDevice:         cfg.Network.TUN.Device,
+			FakeIPRange:       config.ReadRuntimeFakeIPRange(cfg.Core.RuntimeDir),
 		})
 	}
 

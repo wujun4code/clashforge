@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oschwald/geoip2-golang"
+	cfDNS "github.com/wujun4code/clashforge/internal/dns"
 )
 
 // DNSSourceResult holds the DNS resolution result from one upstream source.
@@ -303,50 +304,11 @@ func queryFakeIP(domain string) string {
 		return ""
 	}
 	for _, a := range addrs {
-		if isFakeIP(a) {
+		if cfDNS.AnyInFakeIPRanges([]string{a}) {
 			return a
 		}
 	}
 	return ""
-}
-
-func isFakeIP(ipStr string) bool {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
-	}
-	// Mihomo default fake-ip range: 198.18.0.0/15
-	fakeStart := net.ParseIP("198.18.0.0")
-	fakeEnd := net.ParseIP("198.19.255.255")
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return false
-	}
-	return bytesGTE(ip4, fakeStart.To4()) && bytesLTE(ip4, fakeEnd.To4())
-}
-
-func bytesGTE(a, b []byte) bool {
-	for i := range a {
-		if a[i] > b[i] {
-			return true
-		}
-		if a[i] < b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func bytesLTE(a, b []byte) bool {
-	for i := range a {
-		if a[i] < b[i] {
-			return true
-		}
-		if a[i] > b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // ── ISP DNS detection ─────────────────────────────────────────────────────────

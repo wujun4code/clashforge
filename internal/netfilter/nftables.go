@@ -83,6 +83,11 @@ const RouteTable = routeTable
 const FWMarkOutput = fwMarkOutput
 const RouteTableOutput = routeTableOutput
 
+// defaultFakeIPRange is the historical Clash/Mihomo fake-ip-range, used as a
+// fallback when the caller doesn't know the actually-configured range (e.g.
+// DNS disabled, or the runtime config hasn't been generated yet).
+const defaultFakeIPRange = "198.18.0.0/15"
+
 // NftablesBackend manages nftables TProxy rules.
 type NftablesBackend struct {
 	TProxyPort        int
@@ -93,6 +98,18 @@ type NftablesBackend struct {
 	EnableIPv6        bool
 	DropQUIC          bool
 	WANInterface      string
+	// FakeIPRange is the CIDR mihomo's dns.fake-ip-range is actually set to
+	// (see config.SelectFakeIPRange) — NOT always the historical
+	// 198.18.0.0/16 default. tproxy_output (and the fake-ip bypass set, when
+	// BypassFakeIP is enabled) must match against this exact pool: a chained
+	// upstream ClashForge can force this instance to pick a different pool
+	// (e.g. 28.18.0.0/16) to avoid colliding with the upstream's own fake-ip
+	// range, and if these rules kept matching the old default, router-
+	// originated traffic (curl/wget/opkg, ClashForge's own subscription
+	// updates, ...) to fake-ip destinations would silently stop being
+	// redirected into the transparent proxy and time out instead. Falls back
+	// to defaultFakeIPRange when empty.
+	FakeIPRange string
 }
 
 var nftTableTemplate = template.Must(template.New("nft").Parse(`
@@ -179,21 +196,37 @@ table inet metaclash {
 {{ end }}
     # Intercept traffic originating from the router itself (curl, wget, opkg, etc.).
     # Router-originated packets skip PREROUTING entirely, so without this chain they
-    # would attempt direct connections to mihomo fake-IPs (198.18.0.x) which do not
-    # exist as real destinations.
+    # would attempt direct connections to mihomo's fake-IP pool, which does not
+    # exist as a real destination.
     # Only fake-IP destinations are matched — mihomo's own upstream connections always
     # target real IPs, so there is no routing loop.
     chain tproxy_output {
         type route hook output priority mangle; policy accept;
         meta mark {{ .FWMark }} return
         meta mark {{ .FWMarkOutput }} return
-        ip daddr 198.18.0.0/15 meta l4proto { tcp, udp } meta mark set {{ .FWMarkOutput }}
+        ip daddr {{ .FakeIPRange }} meta l4proto { tcp, udp } meta mark set {{ .FWMarkOutput }}
     }
 }
 `))
 
+// normalizedFakeIPRange parses raw (as reported by config.SelectFakeIPRange /
+// mihomo's dns.fake-ip-range, e.g. "28.18.0.1/16" — a host address plus a
+// pool-size prefix, not necessarily network-aligned) and returns its network
+// CIDR form (e.g. "28.18.0.0/16"). nftables interval sets require a properly
+// masked base address; falls back to defaultFakeIPRange when raw is empty or
+// unparseable.
+func normalizedFakeIPRange(raw string) string {
+	if raw != "" {
+		if _, network, err := net.ParseCIDR(raw); err == nil {
+			return network.String()
+		}
+	}
+	return defaultFakeIPRange
+}
+
 // Apply writes and applies the nftables ruleset.
 func (n *NftablesBackend) Apply() error {
+	fakeIPRange := normalizedFakeIPRange(n.FakeIPRange)
 	vars := struct {
 		FWMark             string
 		FWMarkOutput       string
@@ -203,6 +236,7 @@ func (n *NftablesBackend) Apply() error {
 		EnableIPv6         bool
 		DropQUIC           bool
 		BypassIPv4Elements string
+		FakeIPRange        string
 	}{
 		FWMark:             fwMark,
 		FWMarkOutput:       fwMarkOutput,
@@ -211,7 +245,8 @@ func (n *NftablesBackend) Apply() error {
 		EnableDNSRedirect:  n.EnableDNSRedirect,
 		EnableIPv6:         n.EnableIPv6,
 		DropQUIC:           n.DropQUIC,
-		BypassIPv4Elements: buildBypassIPv4Elements(n.BypassFakeIP, n.BypassCIDR),
+		BypassIPv4Elements: buildBypassIPv4Elements(n.BypassFakeIP, n.BypassCIDR, fakeIPRange),
+		FakeIPRange:        fakeIPRange,
 	}
 
 	log.Info().
@@ -298,7 +333,7 @@ func (n *NftablesBackend) Cleanup() error {
 	return nil
 }
 
-func buildBypassIPv4Elements(bypassFakeIP bool, bypassCIDR []string) string {
+func buildBypassIPv4Elements(bypassFakeIP bool, bypassCIDR []string, fakeIPRange string) string {
 	elements := []string{
 		"0.0.0.0/8",
 		"10.0.0.0/8",
@@ -311,7 +346,7 @@ func buildBypassIPv4Elements(bypassFakeIP bool, bypassCIDR []string) string {
 	}
 
 	if bypassFakeIP {
-		elements = append(elements, "198.18.0.0/15")
+		elements = append(elements, fakeIPRange)
 	}
 
 	elements = append(elements,

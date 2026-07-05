@@ -39,6 +39,22 @@ func ExtractFakeIPRange(mihomoConfigYAML []byte) string {
 	return ExtractDNSTopology(mihomoConfigYAML).FakeIPRange
 }
 
+// ReadRuntimeFakeIPRange reads dns.fake-ip-range back out of the
+// already-generated <RuntimeDir>/mihomo-config.yaml, so callers that need to
+// match firewall rules against whatever pool SelectFakeIPRange actually chose
+// (which can differ from the historical 198.18.0.0/16 default — see
+// SelectFakeIPRange) don't have to re-run the same selection logic
+// themselves. Returns "" if the file is missing/unparseable (e.g. config not
+// generated yet, or DNS disabled) — callers should fall back to the
+// historical default in that case.
+func ReadRuntimeFakeIPRange(runtimeDir string) string {
+	data, err := os.ReadFile(filepath.Join(runtimeDir, "mihomo-config.yaml"))
+	if err != nil {
+		return ""
+	}
+	return ExtractFakeIPRange(data)
+}
+
 // DNSTopology is the non-sensitive subset of DNS settings ClashForge exposes
 // to a downstream ClashForge instance via GET /api/discovery/dns-topology —
 // deliberately just enough to let it avoid picking a colliding fake-ip pool,

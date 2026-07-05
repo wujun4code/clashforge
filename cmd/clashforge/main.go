@@ -132,6 +132,7 @@ func main() {
 		BypassFakeIP:      shouldBypassFakeIPOnStartup(cfg),
 		BypassCIDR:        cfg.Network.BypassCIDR,
 		TunDevice:         cfg.Network.TUN.Device,
+		FakeIPRange:       config.ReadRuntimeFakeIPRange(cfg.Core.RuntimeDir),
 	})
 
 	// Crash watchdog: when mihomo exits unexpectedly (e.g. OOM kill), immediately

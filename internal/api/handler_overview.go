@@ -1528,6 +1528,7 @@ func refreshNetfilterManager(deps Dependencies) {
 		DropQUIC:          deps.Config.Network.DropQUIC,
 		WANInterface:      deps.Config.Network.WANInterface,
 		TunDevice:         deps.Config.Network.TUN.Device,
+		FakeIPRange:       config.ReadRuntimeFakeIPRange(deps.Config.Core.RuntimeDir),
 	})
 }
 
@@ -2101,7 +2102,7 @@ func logDNSSnapshot(snap dnsSnapshot, batch, side string) {
 // mihomo's DNS port directly (127.0.0.1:dnsPort). This avoids false "connection
 // refused" errors in replace mode where the system resolver at [::1]:53 has
 // nothing listening (dnsmasq disabled, nft redirect only covers non-loopback).
-// Checks whether any returned address falls in the mihomo fake-IP range 198.18.0.0/15.
+// Checks whether any returned address falls in a known fake-IP range (see dns.KnownFakeIPRanges).
 func resolveForDebug(rawURL string, dnsPort int) dnsResolveResult {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -2135,13 +2136,7 @@ func resolveForDebug(rawURL string, dnsPort int) dnsResolveResult {
 	if err != nil {
 		return dnsResolveResult{Host: host, LatencyMS: latency.Milliseconds(), Err: err.Error()}
 	}
-	fakeIP := false
-	for _, a := range addrs {
-		if isMihomoFakeIP(a) {
-			fakeIP = true
-			break
-		}
-	}
+	fakeIP := dns.AnyInFakeIPRanges(addrs)
 	return dnsResolveResult{Host: host, Addrs: addrs, IsFakeIP: fakeIP, LatencyMS: latency.Milliseconds()}
 }
 
@@ -2163,19 +2158,6 @@ func logResolveResult(res dnsResolveResult, batch, side string) {
 // shortBatchID returns a compact 6-char hex identifier for grouping probe log lines.
 func shortBatchID() string {
 	return fmt.Sprintf("%06x", time.Now().UnixNano()&0xFFFFFF)
-}
-
-// isMihomoFakeIP reports whether addr falls in the default mihomo fake-IP
-// range 198.18.0.0/15 (covers 198.18.x.x and 198.19.x.x).
-func isMihomoFakeIP(addr string) bool {
-	ip := net.ParseIP(addr)
-	if ip == nil {
-		return false
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		return ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19)
-	}
-	return false
 }
 
 func dedupeInts(items []int) []int {

@@ -1056,7 +1056,7 @@ export interface DnsPathResult {
   server: string
   /** A-record IPs returned (absent on error) */
   ips?: string[]
-  /** true when ANY returned IP is in Mihomo's fake-ip range (198.18/15 or 28/8) */
+  /** true when ANY returned IP is in Mihomo's fake-ip range (198.18/15, 28/8, or 29/8) */
   is_fake_ip: boolean
   error?: string
 }

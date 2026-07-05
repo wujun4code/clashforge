@@ -24,6 +24,7 @@ func renderNFTTemplateOpts(t *testing.T, enableDNSRedirect, bypassFakeIP, enable
 		EnableIPv6         bool
 		DropQUIC           bool
 		BypassIPv4Elements string
+		FakeIPRange        string
 	}{
 		FWMark:             fwMark,
 		FWMarkOutput:       fwMarkOutput,
@@ -32,7 +33,8 @@ func renderNFTTemplateOpts(t *testing.T, enableDNSRedirect, bypassFakeIP, enable
 		EnableDNSRedirect:  enableDNSRedirect,
 		EnableIPv6:         enableIPv6,
 		DropQUIC:           dropQUIC,
-		BypassIPv4Elements: buildBypassIPv4Elements(bypassFakeIP, bypassCIDR),
+		BypassIPv4Elements: buildBypassIPv4Elements(bypassFakeIP, bypassCIDR, defaultFakeIPRange),
+		FakeIPRange:        defaultFakeIPRange,
 	}
 
 	var buf bytes.Buffer
@@ -84,7 +86,7 @@ func TestNFTTemplate_DNSRedirectChainToggle(t *testing.T) {
 }
 
 func TestBuildBypassIPv4Elements_SkipsInvalidAndEmptyCIDR(t *testing.T) {
-	rendered := buildBypassIPv4Elements(true, []string{"", "  ", "invalid", "1.2.3.0/24"})
+	rendered := buildBypassIPv4Elements(true, []string{"", "  ", "invalid", "1.2.3.0/24"}, defaultFakeIPRange)
 
 	if strings.Contains(rendered, "invalid") {
 		t.Fatalf("expected invalid cidr to be skipped")
@@ -152,5 +154,65 @@ func TestNFTTemplate_NoBlankLineBeforeBypassSetClose(t *testing.T) {
 	rendered := renderNFTTemplate(t, false, false)
 	if strings.Contains(rendered, "240.0.0.0/4\n\n        }") {
 		t.Fatalf("expected no blank line before bypass set closing brace")
+	}
+}
+
+// TestNFTTemplate_CustomFakeIPRangeAppliedToOutputChainAndBypassSet guards
+// against regressing back to a hardcoded 198.18.0.0/15 in tproxy_output: a
+// chained upstream ClashForge can force this instance onto a different
+// fake-ip pool (config.SelectFakeIPRange), and if tproxy_output doesn't
+// track that, router-originated traffic (curl/wget/opkg, subscription
+// updates, ...) to fake-ip destinations silently stops being redirected into
+// the transparent proxy and times out instead.
+func TestNFTTemplate_CustomFakeIPRangeAppliedToOutputChainAndBypassSet(t *testing.T) {
+	const fakeIPRange = "28.18.0.0/16"
+	vars := struct {
+		FWMark             string
+		FWMarkOutput       string
+		TProxyPort         int
+		DNSPort            int
+		EnableDNSRedirect  bool
+		EnableIPv6         bool
+		DropQUIC           bool
+		BypassIPv4Elements string
+		FakeIPRange        string
+	}{
+		FWMark:             fwMark,
+		FWMarkOutput:       fwMarkOutput,
+		TProxyPort:         7895,
+		DNSPort:            7874,
+		BypassIPv4Elements: buildBypassIPv4Elements(true, nil, fakeIPRange),
+		FakeIPRange:        fakeIPRange,
+	}
+	var buf bytes.Buffer
+	if err := nftTableTemplate.Execute(&buf, vars); err != nil {
+		t.Fatalf("render nft template: %v", err)
+	}
+	rendered := buf.String()
+	if !strings.Contains(rendered, "ip daddr 28.18.0.0/16 meta l4proto { tcp, udp } meta mark set") {
+		t.Fatalf("expected tproxy_output to match the configured fake-ip range, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "198.18.0.0/15") {
+		t.Fatalf("did not expect the historical default fake-ip range to appear when a custom one is configured")
+	}
+}
+
+func TestNormalizedFakeIPRange(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty falls back to default", "", defaultFakeIPRange},
+		{"invalid falls back to default", "not-a-cidr", defaultFakeIPRange},
+		{"host address is masked down to its network", "28.18.0.1/16", "28.18.0.0/16"},
+		{"already network-aligned is unchanged", "198.18.0.0/15", "198.18.0.0/15"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := normalizedFakeIPRange(c.in); got != c.want {
+				t.Fatalf("normalizedFakeIPRange(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
 	}
 }

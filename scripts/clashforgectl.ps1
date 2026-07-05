@@ -359,7 +359,7 @@ if ($Action -eq "netdiag") {
             if ($server) { $a.Server = $server }
             $r  = Resolve-DnsName @a
             $ip = ($r | Where-Object Type -eq 'A' | Select-Object -First 1).IPAddress
-            return @{ ok = $true; ip = ($ip ?? '?'); fakeip = ($ip -match '^198\.1[89]\.')}
+            return @{ ok = $true; ip = ($ip ?? '?'); fakeip = ($ip -match '^(198\.1[89]|28\.18|29\.18)\.')}
         } catch {
             return @{ ok = $false; ip = ''; fakeip = $false }
         }

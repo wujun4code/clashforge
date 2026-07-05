@@ -1781,7 +1781,7 @@ _nd_probe_suite() {
     _ip="$(nslookup "$_d" 2>/dev/null | awk '/^Address/{a=$NF} END{print a}' | grep -v ':')"
     if [ -n "$_ip" ]; then
       case "$_ip" in
-        198.18.*|198.19.*) printf "  %-16s : %s [fake-ip]\n" "$_d" "$_ip" ;;
+        198.18.*|198.19.*|28.18.*|29.18.*) printf "  %-16s : %s [fake-ip]\n" "$_d" "$_ip" ;;
         *)                 printf "  %-16s : %s\n" "$_d" "$_ip" ;;
       esac
     else
