@@ -33,6 +33,12 @@ type Config struct {
 	DropQUIC          bool   // drop UDP 443 to force immediate TCP fallback
 	WANInterface      string // WAN-facing interface name (e.g. "pppoe-wan", "eth1")
 	TunDevice         string // TUN interface name when Mode == "tun" (e.g. "Meta"); empty uses mihomo's default
+	// FakeIPRange is mihomo's actually-configured dns.fake-ip-range (see
+	// config.SelectFakeIPRange / config.ReadRuntimeFakeIPRange) — passed
+	// through to NftablesBackend so router-originated traffic to fake-ip
+	// destinations is matched and redirected correctly even when it isn't
+	// the historical 198.18.0.0/16 default. Empty falls back to that default.
+	FakeIPRange string
 }
 
 // NewManager creates a Manager and detects the appropriate backend.
@@ -41,7 +47,7 @@ func NewManager(cfg Config) *Manager {
 	var applier Applier
 	switch kind {
 	case BackendNftables:
-		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR, EnableIPv6: cfg.EnableIPv6, DropQUIC: cfg.DropQUIC, WANInterface: cfg.WANInterface}
+		applier = &NftablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect, BypassFakeIP: cfg.BypassFakeIP, BypassCIDR: cfg.BypassCIDR, EnableIPv6: cfg.EnableIPv6, DropQUIC: cfg.DropQUIC, WANInterface: cfg.WANInterface, FakeIPRange: cfg.FakeIPRange}
 	case BackendIptables:
 		applier = &IptablesBackend{TProxyPort: cfg.TProxyPort, DNSPort: cfg.DNSPort, EnableDNSRedirect: cfg.EnableDNSRedirect}
 	default:

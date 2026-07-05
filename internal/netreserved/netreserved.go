@@ -52,6 +52,7 @@ var IANARanges = []string{
 // added here as they're discovered.
 var KnownNonReservedFakeIPRanges = []string{
 	"28.0.0.0/8", // historically DoD-assigned, effectively unused on the public Internet
+	"29.0.0.0/8", // same rationale as 28.0.0.0/8 — config.fakeIPRangeCandidates' third fallback
 }
 
 // ParsePrefixes converts a list of CIDR strings to netip.Prefix, silently

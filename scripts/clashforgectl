@@ -476,7 +476,7 @@ nd_probe_suite() {
         group="${row#*|}"
         ip="$(nd_dns_resolve "$domain")"
         fake=""
-        case "$ip" in 198.18.*|198.19.*) fake=" [fake-ip]" ;; esac
+        case "$ip" in 198.18.*|198.19.*|28.18.*|29.18.*) fake=" [fake-ip]" ;; esac
         if [ -n "$ip" ]; then
             nd_write "  $(printf '%-18s' "$domain") ${group}  $ip$fake"
         else
@@ -630,7 +630,7 @@ nd_monitor_loop() {
             nd_write "[#${loss_count}] 恢复 断了 ${dur}s，总 +${elapsed}s"
         fi
         fake=""
-        case "$dns_ip" in 198.18.*|198.19.*) fake="(fake-ip)" ;; esac
+        case "$dns_ip" in 198.18.*|198.19.*|28.18.*|29.18.*) fake="(fake-ip)" ;; esac
         nd_write "+${elapsed}s  rtr=${ping_router}  wan=${ping_wan}  dns=$([ -n "$dns_ip" ] && printf OK || printf FAIL)${fake}  http=$([ "$internet" -eq 1 ] && printf OK || printf FAIL)  ${ms}ms"
         sleep 2
     done

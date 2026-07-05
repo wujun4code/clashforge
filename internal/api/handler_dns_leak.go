@@ -23,7 +23,7 @@ type dnsPathResult struct {
 	Server string `json:"server"`
 	// IPs contains the A-record addresses returned (empty on error or fake-ip).
 	IPs []string `json:"ips,omitempty"`
-	// IsFakeIP is true when ANY returned IP is in Mihomo's fake-ip range (198.18/15 or 28/8).
+	// IsFakeIP is true when ANY returned IP is in Mihomo's fake-ip range (198.18/15, 28/8, or 29/8).
 	IsFakeIP bool `json:"is_fake_ip"`
 	// Error holds any resolution failure message.
 	Error string `json:"error,omitempty"`
