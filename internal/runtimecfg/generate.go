@@ -180,6 +180,9 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 	if err := os.MkdirAll(cfg.Core.RuntimeDir, 0o755); err != nil {
 		return false, err
 	}
+	// Must run before the overwrite below — it needs to read the *previous*
+	// generation's fake-ip-range to detect a change.
+	invalidateStaleFakeIPCache(cfg, outPath, fakeIPRangeFromGenerated(generated))
 	if err := os.WriteFile(outPath, data, 0o644); err != nil {
 		return false, err
 	}
@@ -190,4 +193,51 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 		Msg("config-gen: mihomo 配置文件已写入 ✓")
 
 	return true, nil
+}
+
+// fakeIPRangeFromGenerated reads dns.fake-ip-range out of the in-memory
+// generated config map (avoids re-parsing YAML for the value we just built).
+func fakeIPRangeFromGenerated(generated map[string]interface{}) string {
+	dnsSection, ok := generated["dns"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	v, _ := dnsSection["fake-ip-range"].(string)
+	return v
+}
+
+// invalidateStaleFakeIPCache deletes Mihomo's persisted cache.db when the
+// fake-ip-range is about to change from whatever the last-generated config
+// used. Mihomo's "profile.store-fake-ip: true" persists fake-ip↔domain
+// mappings across restarts for connection stability — but that means a
+// domain already cached under the OLD range keeps its OLD (now out-of-range)
+// fake-ip indefinitely after fake-ip-range changes, silently reproducing
+// whatever collision the range change was meant to fix (e.g. the historical
+// 198.18.0.0/16 default overlapping the lancidr rule-set — see SelectFakeIPRange).
+// There is no partial-invalidation API for this, so the whole cache is
+// dropped; the only user-visible cost is proxy-group selections resetting to
+// their config default and DNS answers needing to be re-learned, both of
+// which Mihomo does transparently on the next queries/connections.
+func invalidateStaleFakeIPCache(cfg *config.MetaclashConfig, outPath, newRange string) {
+	if newRange == "" {
+		return
+	}
+	oldData, err := os.ReadFile(outPath)
+	if err != nil {
+		return // no previous generation to compare against (first run)
+	}
+	oldRange := config.ExtractFakeIPRange(oldData)
+	if oldRange == "" || oldRange == newRange {
+		return
+	}
+	cachePath := filepath.Join(cfg.Core.DataDir, "cache.db")
+	if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("path", cachePath).Msg("config-gen: fake-ip-range 变更后清理 cache.db 失败")
+		return
+	}
+	log.Warn().
+		Str("old_range", oldRange).
+		Str("new_range", newRange).
+		Str("cache_path", cachePath).
+		Msg("config-gen: fake-ip-range 已变更，已清空 Mihomo 的 cache.db——否则旧域名会继续沿用旧网段的 fake-ip，重新引发同样的冲突")
 }

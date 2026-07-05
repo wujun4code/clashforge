@@ -296,7 +296,11 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 
 	if effectiveDNSMode == "fake-ip" {
 		dnsMap["enhanced-mode"] = "fake-ip"
-		dnsMap["fake-ip-range"] = "198.18.0.1/16"
+		fakeIPRange, fakeIPWarning := SelectFakeIPRange(cfg.Core.DataDir)
+		if fakeIPWarning != "" {
+			log.Warn().Str("fake_ip_range", fakeIPRange).Msg("config: " + fakeIPWarning)
+		}
+		dnsMap["fake-ip-range"] = fakeIPRange
 		dnsMap["fake-ip-filter-mode"] = "blacklist"
 		filter := cfg.DNS.FakeIPFilter
 		// When geosite.dat is present, prepend geosite:cn so that all domestic

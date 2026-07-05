@@ -21,11 +21,23 @@ var KnownFakeIPRanges = []string{
 
 // DefaultFallbackDNS is the built-in list of DoH servers offered as replacement
 // when user-configured UDP nameservers are found to be hijacked.
+// Domestic (AliDNS/DNSPod) entries only clear a *network-path* hijack (e.g. an
+// upstream router transparently redirecting UDP:53) — if the resolver itself
+// applies a *content-level* block to the queried domain (a domestic recursive
+// resolver refusing/poisoning a known proxy-seller domain, independent of any
+// network interception), asking the same operator over DoH doesn't help,
+// since it's still that operator's own resolution policy answering. Foreign
+// entries (Cloudflare/Google/Quad9) are the only candidates with a chance of
+// clearing that case — they're kept diverse (three separate anycast networks/
+// operators) because GFW's blocking of specific foreign IPs is inconsistent
+// and can vary between attempts; having more than two hedges against whichever
+// one or two happen to be blocked at probe time.
 var DefaultFallbackDNS = []string{
 	"https://dns.alidns.com/dns-query", // Alibaba DNS (China-friendly)
 	"https://doh.pub/dns-query",        // DNSPod / Tencent (China-friendly)
 	"https://1.1.1.1/dns-query",        // Cloudflare
 	"https://8.8.8.8/dns-query",        // Google
+	"https://9.9.9.9/dns-query",        // Quad9 — separate operator/network from the two above
 }
 
 // ProbeResult is the result of a single DNS lookup via one nameserver.
@@ -48,8 +60,44 @@ type NSProbeReport struct {
 	// SuggestedFallbacks holds DoH servers from DefaultFallbackDNS that are reachable
 	// and returned real IPs. Only populated when hijacking was detected.
 	SuggestedFallbacks []string `json:"suggested_fallbacks,omitempty"`
-	// Results contains the raw per-probe detail.
+	// Results contains the raw per-probe detail for the original nameservers.
 	Results []ProbeResult `json:"results"`
+	// FallbackResults contains the raw per-probe detail for each DoH candidate
+	// tried after hijacking was detected (one entry per candidate — only the
+	// first sample hostname is used per candidate to keep the probe fast).
+	// Only populated when hijacking was detected. Kept separate from Results
+	// so callers can tell "why did the fallback search fail" apart from the
+	// original-nameserver hijack detection itself.
+	FallbackResults []ProbeResult `json:"fallback_results,omitempty"`
+}
+
+// SummarizeFallbackFailures groups FallbackResults by failure kind — network
+// unreachable/timeout vs. reachable-but-still-returned-a-fake-ip — so a "all
+// fallbacks failed" message can say *why* instead of just "all failed".
+// Returns "" when there's nothing to summarize (no fallback was attempted, or
+// every candidate is missing a result — should not normally happen).
+func (r NSProbeReport) SummarizeFallbackFailures() string {
+	var unreachable, poisoned []string
+	for _, res := range r.FallbackResults {
+		switch {
+		case res.Err != "":
+			unreachable = append(unreachable, res.Nameserver)
+		case res.Hijacked:
+			poisoned = append(poisoned, res.Nameserver)
+		}
+	}
+	var parts []string
+	if len(unreachable) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"%d 个连接超时/不可达，疑似网络层被拦截（与域名污染无关）: %s",
+			len(unreachable), strings.Join(unreachable, ", ")))
+	}
+	if len(poisoned) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"%d 个返回了假 IP，疑似该服务商对此域名做了污染: %s",
+			len(poisoned), strings.Join(poisoned, ", ")))
+	}
+	return strings.Join(parts, "；")
 }
 
 // ProbeNameservers tests each nameserver against a sample of hostnames and
@@ -108,13 +156,33 @@ func ProbeNameservers(ctx context.Context, nameservers []string, hostnames []str
 	}
 
 	// If any UDP nameservers are hijacked, find working DoH fallbacks.
+	// Try DoH on the user's own hijacked nameserver IPs first — the upstream
+	// hijack rule matches on udp dport 53 only, so re-asking the exact same
+	// resolver over DoH (443) keeps the user's chosen provider and sidesteps
+	// the hijack without switching to an unrelated public resolver. Only fall
+	// back to DefaultFallbackDNS if that doesn't clear the hijack.
 	if len(hijacked) > 0 && len(sample) > 0 {
+		var candidates []string
+		seen := make(map[string]bool)
+		addCandidate := func(c string) {
+			if c != "" && !seen[c] {
+				seen[c] = true
+				candidates = append(candidates, c)
+			}
+		}
+		for _, ns := range hijacked {
+			addCandidate(dohCandidateForIP(ns))
+		}
 		for _, fb := range DefaultFallbackDNS {
+			addCandidate(fb)
+		}
+		for _, cand := range candidates {
 			fbCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
-			r := probeOne(fbCtx, fb, sample[0], fakeRanges)
+			r := probeOne(fbCtx, cand, sample[0], fakeRanges)
 			cancel()
+			report.FallbackResults = append(report.FallbackResults, r)
 			if r.Err == "" && !r.Hijacked {
-				report.SuggestedFallbacks = append(report.SuggestedFallbacks, fb)
+				report.SuggestedFallbacks = append(report.SuggestedFallbacks, cand)
 			}
 		}
 	}
@@ -206,6 +274,20 @@ func queryDoH(ctx context.Context, dohURL, hostname string) ([]string, error) {
 		}
 	}
 	return ips, nil
+}
+
+// dohCandidateForIP converts a bare-IP (or IP:port) nameserver into a DoH URL
+// pointing at the same address, e.g. "223.5.5.5" -> "https://223.5.5.5/dns-query".
+// Returns "" if ns is not a bare IP (already a DoH/DoT URL, or a hostname).
+func dohCandidateForIP(ns string) string {
+	host, _, err := net.SplitHostPort(ns)
+	if err != nil {
+		host = ns
+	}
+	if net.ParseIP(host) == nil {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/dns-query", host)
 }
 
 func parsePrefixes(cidrs []string) []netip.Prefix {
