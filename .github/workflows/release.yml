@@ -512,6 +512,8 @@ jobs:
             scripts/clashforgectl
             scripts/install.ps1
             scripts/install.sh
+            scripts/uninstall.ps1
+            scripts/uninstall.sh
           retention-days: 7
 
   # ────────────────────────────────────────────────────────────
@@ -821,7 +823,7 @@ jobs:
         run: |
           cd r2-assets
           shopt -s nullglob
-          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl install.ps1 install.sh version.txt )
+          ASSETS=( *.ipk *.apk clashforgectl.sh clashforgectl.ps1 clashforgectl.cmd clashforgectl install.ps1 install.sh uninstall.ps1 uninstall.sh version.txt )
           sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -858,6 +860,8 @@ jobs:
           test -f r2-assets/clashforgectl
           test -f r2-assets/install.ps1
           test -f r2-assets/install.sh
+          test -f r2-assets/uninstall.ps1
+          test -f r2-assets/uninstall.sh
 
           # Versioned release path and moving latest path used by installers.
           rclone copy r2-assets/ "r2:${R2_BUCKET}/releases/${TAG}/" \
@@ -883,6 +887,10 @@ jobs:
           rclone copyto r2-assets/install.ps1 "r2:${R2_BUCKET}/install.ps1" \
             --s3-no-check-bucket --progress --stats-one-line
           rclone copyto r2-assets/install.sh "r2:${R2_BUCKET}/install.sh" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/uninstall.ps1 "r2:${R2_BUCKET}/uninstall.ps1" \
+            --s3-no-check-bucket --progress --stats-one-line
+          rclone copyto r2-assets/uninstall.sh "r2:${R2_BUCKET}/uninstall.sh" \
             --s3-no-check-bucket --progress --stats-one-line
           rclone copyto r2-assets/version.txt "r2:${R2_BUCKET}/version.txt" \
             --s3-no-check-bucket --progress --stats-one-line
@@ -922,4 +930,7 @@ jobs:
           - \`clashforge-latest-x86_64.ipk\`
           - \`install.ps1\` (irm https://dl.wei1xuan.com/install.ps1 | iex)
           - \`install.sh\` (curl -fsSL https://dl.wei1xuan.com/install.sh | sh)
+          - \`uninstall.ps1\` (irm https://dl.wei1xuan.com/uninstall.ps1 | iex)
+          - \`uninstall.sh\` (curl -fsSL https://dl.wei1xuan.com/uninstall.sh | sh)
+          - \`version.txt\`
           EOF

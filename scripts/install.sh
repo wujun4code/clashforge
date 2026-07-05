@@ -15,6 +15,9 @@
 #
 # After installing, open a new terminal and `clashforgectl` works from any
 # directory.
+#
+# To uninstall:
+#   curl -fsSL https://dl.wei1xuan.com/uninstall.sh | sh
 
 set -e
 
@@ -62,6 +65,7 @@ case ":$PATH:" in
 esac
 
 log "clashforgectl installed ✓ ($VERSION) — open a new terminal and run 'clashforgectl' from anywhere."
+log "To uninstall: curl -fsSL https://dl.wei1xuan.com/uninstall.sh | sh"
 
 if [ "$#" -gt 0 ]; then
     log "Running: clashforgectl $*"

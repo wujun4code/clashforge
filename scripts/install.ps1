@@ -15,6 +15,9 @@
 # downloaded text in a scriptblock and invoke it with `&` instead:
 #   &([scriptblock]::Create((irm dl.wei1xuan.com/install.ps1))) -Router 192.168.20.1 upgrade
 #
+# To uninstall:
+#   irm dl.wei1xuan.com/uninstall.ps1 | iex
+#
 # Compatible with PowerShell 5.1 and 7+.
 
 param(
@@ -112,6 +115,9 @@ Write-Host '    clashforgectl hyperv -SubscriptionURL "https://..."' -Foreground
 Write-Host ''
 Write-Host '  In the current session, you can run it right now:' -ForegroundColor Yellow
 Write-Host "    & `"$ps1Path`" help" -ForegroundColor White
+Write-Host ''
+Write-Host '  To uninstall:' -ForegroundColor Yellow
+Write-Host '    irm https://dl.wei1xuan.com/uninstall.ps1 | iex' -ForegroundColor White
 Write-Host ''
 
 # ── 6. Optional: run Hyper-V setup immediately ────────────────────────────────
