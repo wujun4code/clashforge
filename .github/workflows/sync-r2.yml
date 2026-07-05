@@ -52,7 +52,9 @@ jobs:
           cp scripts/clashforgectl dist/clashforgectl
           cp scripts/install.ps1 dist/install.ps1
           cp scripts/install.sh dist/install.sh
-          chmod +x dist/clashforgectl.sh dist/clashforgectl dist/install.sh
+          cp scripts/uninstall.ps1 dist/uninstall.ps1
+          cp scripts/uninstall.sh dist/uninstall.sh
+          chmod +x dist/clashforgectl.sh dist/clashforgectl dist/install.sh dist/uninstall.sh
           echo "$TAG" > dist/version.txt
           echo "=== Release assets plus current ctl scripts ==="
           ls -lh dist/
@@ -103,6 +105,8 @@ jobs:
           # Root-level one-liner installer entrypoints.
           [ -f dist/install.ps1 ] && rclone copyto dist/install.ps1 r2:${R2_BUCKET}/install.ps1 --s3-no-check-bucket --progress --stats-one-line
           [ -f dist/install.sh ] && rclone copyto dist/install.sh r2:${R2_BUCKET}/install.sh --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/uninstall.ps1 ] && rclone copyto dist/uninstall.ps1 r2:${R2_BUCKET}/uninstall.ps1 --s3-no-check-bucket --progress --stats-one-line
+          [ -f dist/uninstall.sh ] && rclone copyto dist/uninstall.sh r2:${R2_BUCKET}/uninstall.sh --s3-no-check-bucket --progress --stats-one-line
           [ -f dist/version.txt ] && rclone copyto dist/version.txt r2:${R2_BUCKET}/version.txt --s3-no-check-bucket --progress --stats-one-line
 
           echo "=== Uploaded to R2 ==="
@@ -119,7 +123,7 @@ jobs:
           echo "- \`releases/latest/\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`clashforgectl.ps1\`, \`clashforgectl.cmd\`, \`clashforgectl.sh\`, \`clashforgectl\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`clashforge-latest-x86_64.ipk\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`install.ps1\`, \`install.sh\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`install.ps1\`, \`install.sh\`, \`uninstall.ps1\`, \`uninstall.sh\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Files:**" >> $GITHUB_STEP_SUMMARY
           ls dist/ | while read f; do
