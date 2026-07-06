@@ -3189,43 +3189,68 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
         Ok "Router arch : $RouterMachine → $IpkArch"
 
         # ── 2. Resolve version ─────────────────────────────────────────────────
-        # When version is "latest", walk releases newest-first and pick the first
-        # one that actually contains the IPK asset for this architecture.
-        # This avoids installing a half-published release that has no IPK yet.
+        # Default source is the R2 mirror (dl.wei1xuan.com/version.txt) — a
+        # single fast request that's reachable without a proxy from mainland
+        # China, unlike api.github.com. Falls back to walking the GitHub
+        # releases API (newest-first, picking the first release that actually
+        # has the IPK asset for this architecture) only if R2 is unreachable
+        # or the user explicitly overrode the source with -BaseUrl.
         $Tag = $Version
         if ($Tag -eq "latest") {
-            Log "── Step 2: Resolving latest release with IPK for $IpkArch..."
-            try {
-                $Releases = Invoke-RestMethod `
-                    -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50" `
-                    -Headers @{ "Accept" = "application/vnd.github+json" } `
-                    -TimeoutSec 15
-                # GitHub returns releases newest-first; walk until we find one
-                # that has clashforge_<ver>_<arch>.ipk as a published asset.
-                foreach ($rel in $Releases) {
-                    $tagCandidate = $rel.tag_name
-                    if (-not $tagCandidate) { continue }
-                    $pkgVerCandidate = $tagCandidate.TrimStart("v")
-                    $ipkAssetName    = "clashforge_${pkgVerCandidate}_${IpkArch}.ipk"
-                    $hasIpk = $rel.assets | Where-Object { $_.name -eq $ipkAssetName }
-                    if ($hasIpk) {
-                        $Tag = $tagCandidate
-                        break
+            Log "── Step 2: Resolving latest release version..."
+
+            if ($BaseUrl -ne "") {
+                try {
+                    $Tag = (Invoke-WebRequest -Uri "$($BaseUrl.TrimEnd('/'))/version.txt" -TimeoutSec 10 -UseBasicParsing).Content.Trim()
+                    Ok "Resolved via $BaseUrl : $Tag"
+                } catch {
+                    Die "Failed to resolve latest version from -BaseUrl ${BaseUrl}: $_"
+                }
+            } else {
+                try {
+                    $Tag = (Invoke-WebRequest -Uri "https://dl.wei1xuan.com/version.txt" -TimeoutSec 10 -UseBasicParsing).Content.Trim()
+                    Ok "Resolved via R2: $Tag"
+                } catch {
+                    Warn "R2 version lookup failed, falling back to GitHub API..."
+                    $Tag = $null
+                    try {
+                        $Releases = Invoke-RestMethod `
+                            -Uri "https://api.github.com/repos/wujun4code/clashforge/releases?per_page=50" `
+                            -Headers @{ "Accept" = "application/vnd.github+json" } `
+                            -TimeoutSec 15
+                        # GitHub returns releases newest-first; walk until we find one
+                        # that has clashforge_<ver>_<arch>.ipk as a published asset.
+                        foreach ($rel in $Releases) {
+                            $tagCandidate = $rel.tag_name
+                            if (-not $tagCandidate) { continue }
+                            $pkgVerCandidate = $tagCandidate.TrimStart("v")
+                            $ipkAssetName    = "clashforge_${pkgVerCandidate}_${IpkArch}.ipk"
+                            $hasIpk = $rel.assets | Where-Object { $_.name -eq $ipkAssetName }
+                            if ($hasIpk) {
+                                $Tag = $tagCandidate
+                                break
+                            }
+                        }
+                    } catch {
+                        Die "Failed to resolve latest version from GitHub API: $_"
                     }
                 }
-            } catch {
-                Die "Failed to resolve latest version from GitHub API: $_"
             }
         }
-        if (-not $Tag) { Die "Could not find a published release with an IPK for $IpkArch. Check https://github.com/wujun4code/clashforge/releases" }
+        if (-not $Tag) { Die "Could not find a published release with an IPK for $IpkArch. Check https://dl.wei1xuan.com/version.txt or https://github.com/wujun4code/clashforge/releases" }
         $PkgVer  = $Tag.TrimStart("v")
         $IpkName = "clashforge_${PkgVer}_${IpkArch}.ipk"
         Ok "Version     : $Tag"
         Ok "Package     : $IpkName"
 
         # ── 3. Download IPK to local machine ──────────────────────────────────
+        # Default priority: R2 mirror (reachable in mainland China without a
+        # proxy) → direct GitHub → an explicit -Mirror or the built-in GitHub
+        # reverse-proxy list as the last-resort fallback. An explicit -BaseUrl
+        # is a deliberate override and always wins outright.
         Log "── Step 3: Downloading IPK locally..."
         $LocalIpk  = Join-Path ([System.IO.Path]::GetTempPath()) $IpkName
+        $R2Url     = "https://dl.wei1xuan.com/releases/$Tag/$IpkName"
         $GhUrl     = "https://github.com/wujun4code/clashforge/releases/download/$Tag/$IpkName"
         $GhProxies = @(
             "https://ghproxy.com",
@@ -3244,24 +3269,39 @@ if ($Action -eq "upgrade" -and -not $RemoteDownload) {
             } catch {
                 Die "Download failed from base URL: $Url`n$_"
             }
-        } elseif ($Mirror -ne "") {
-            $Url = "$($Mirror.TrimEnd('/'))/$GhUrl"
-            Log "Downloading via mirror: $Mirror"
-            try {
-                Invoke-WebRequest -Uri $Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
-                $Downloaded = $true
-            } catch {
-                Die "Download failed from mirror ${Mirror}: $_"
-            }
         } else {
             try {
-                Log "Downloading from GitHub..."
-                Invoke-WebRequest -Uri $GhUrl -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                Log "Downloading from R2 mirror..."
+                Invoke-WebRequest -Uri $R2Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
                 $Downloaded = $true
-                Ok "Downloaded from GitHub"
+                Ok "Downloaded from R2 ($R2Url)"
             } catch {
-                Warn "Direct GitHub download failed, trying mirrors..."
+                Warn "R2 download failed, trying GitHub directly..."
                 Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+            }
+
+            if (-not $Downloaded) {
+                try {
+                    Invoke-WebRequest -Uri $GhUrl -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                    $Downloaded = $true
+                    Ok "Downloaded from GitHub"
+                } catch {
+                    Warn "Direct GitHub download failed, trying mirrors..."
+                    Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            if (-not $Downloaded -and $Mirror -ne "") {
+                $Url = "$($Mirror.TrimEnd('/'))/$GhUrl"
+                Log "Trying mirror: $Mirror"
+                try {
+                    Invoke-WebRequest -Uri $Url -OutFile $LocalIpk -TimeoutSec 120 -UseBasicParsing
+                    $Downloaded = $true
+                    Ok "Downloaded via mirror $Mirror"
+                } catch {
+                    Warn "Mirror $Mirror failed"
+                    Remove-Item $LocalIpk -Force -ErrorAction SilentlyContinue
+                }
             }
 
             if (-not $Downloaded) {

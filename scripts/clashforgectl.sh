@@ -21,6 +21,7 @@
 set -e
 
 REPO="wujun4code/clashforge"
+R2_BASE="https://dl.wei1xuan.com"
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 CLASHFORGE_VERSION="latest"
@@ -250,9 +251,30 @@ resolve_version() {
   # Detect it now if not already set by download_ipk.
   [ -n "${IPK_ARCH:-}" ] || IPK_ARCH=$(detect_ipk_arch)
 
-  log "Resolving latest release with IPK for ${IPK_ARCH}..."
-  _api_path="repos/${REPO}/releases?per_page=50"
+  log "Resolving latest release version..."
   TAG=""
+
+  # Default source is the R2 mirror (dl.wei1xuan.com/version.txt) — a single
+  # fast request reachable without a proxy from mainland China, unlike
+  # api.github.com. An explicit --base-url override takes that source
+  # instead. Only falls back to walking the GitHub releases API (newest
+  # first, picking the release that actually has the IPK asset for this
+  # arch) if the R2/override lookup fails outright.
+  if [ -n "$BASE_URL" ]; then
+    TAG="$(_fetch_text "${BASE_URL}/version.txt" || true)"
+    [ -n "$TAG" ] || die "Failed to resolve latest version from --base-url ${BASE_URL}/version.txt"
+    ok "Resolved via ${BASE_URL}: ${TAG}"
+    return 0
+  fi
+
+  TAG="$(_fetch_text "${R2_BASE}/version.txt" || true)"
+  if [ -n "$TAG" ]; then
+    ok "Resolved via R2: ${TAG}"
+    return 0
+  fi
+
+  log "R2 version lookup failed, falling back to GitHub API..."
+  _api_path="repos/${REPO}/releases?per_page=50"
   _json=""
 
   if [ -n "$MIRROR" ]; then
@@ -297,23 +319,48 @@ download_ipk() {
   log "Version : $TAG"
   log "Package : $IPK_NAME"
 
-  # Custom base URL (Cloudflare R2, self-hosted CDN)
+  # Custom base URL (explicit override — always wins outright)
   if [ -n "$BASE_URL" ]; then
     _url="${BASE_URL}/releases/${TAG}/${IPK_NAME}"
     log "Downloading from custom base URL: $BASE_URL"
     _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ] \
       || die "Download failed from base URL: $_url"
-  elif [ -n "$MIRROR" ]; then
-    # Forced mirror
-    _url="${MIRROR}/${GH_URL}"
-    log "Downloading via mirror: $MIRROR"
-    _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ] \
-      || die "Download failed from mirror: $MIRROR"
   else
-    # Direct GitHub, then auto-fallback through proxies
-    if ! (_fetch_file "$GH_URL" "$TMP_IPK" && [ -s "$TMP_IPK" ]); then
+    # Default priority: R2 mirror (reachable in mainland China without a
+    # proxy) → direct GitHub → an explicit --mirror or the built-in GitHub
+    # reverse-proxy list as the last-resort fallback.
+    _dl_ok=0
+    _r2_url="${R2_BASE}/releases/${TAG}/${IPK_NAME}"
+    log "Downloading from R2 mirror..."
+    if _fetch_file "$_r2_url" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+      ok "Downloaded from R2 ($_r2_url)"
+      _dl_ok=1
+    else
       rm -f "$TMP_IPK"
-      _dl_ok=0
+      log "R2 download failed, trying GitHub directly..."
+    fi
+
+    if [ "$_dl_ok" -eq 0 ] && _fetch_file "$GH_URL" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+      ok "Downloaded from GitHub"
+      _dl_ok=1
+    elif [ "$_dl_ok" -eq 0 ]; then
+      rm -f "$TMP_IPK"
+      log "Direct GitHub download failed, trying mirrors..."
+    fi
+
+    if [ "$_dl_ok" -eq 0 ] && [ -n "$MIRROR" ]; then
+      _url="${MIRROR}/${GH_URL}"
+      log "Trying mirror: $MIRROR"
+      if _fetch_file "$_url" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
+        ok "Downloaded via mirror $MIRROR"
+        _dl_ok=1
+      else
+        rm -f "$TMP_IPK"
+        log "Mirror $MIRROR failed"
+      fi
+    fi
+
+    if [ "$_dl_ok" -eq 0 ]; then
       for _proxy in $GH_PROXIES; do
         log "Trying mirror: $_proxy"
         if _fetch_file "${_proxy}/${GH_URL}" "$TMP_IPK" && [ -s "$TMP_IPK" ]; then
@@ -323,9 +370,10 @@ download_ipk() {
         fi
         rm -f "$TMP_IPK"
       done
-      [ "$_dl_ok" -eq 1 ] \
-        || die "Download failed from all sources. Try: clashforgectl upgrade --mirror https://ghproxy.com"
     fi
+
+    [ "$_dl_ok" -eq 1 ] \
+      || die "Download failed from all sources. Try: clashforgectl upgrade --mirror https://ghproxy.com  or  --base-url <your-cdn>"
   fi
 
   # Validate: some mirrors return HTTP 200 with an HTML error body.
