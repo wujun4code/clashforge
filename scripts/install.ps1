@@ -29,7 +29,9 @@ $ErrorActionPreference = 'Stop'
 
 $cdnBase    = 'https://dl.wei1xuan.com'
 $installDir = Join-Path $env:USERPROFILE '.clashforge'
-$ps1Path    = Join-Path $installDir 'clashforgectl.ps1'
+# Saved under a name that does NOT match the bare "clashforgectl" command —
+# see the note above the .cmd shim below for why this matters.
+$ps1Path    = Join-Path $installDir 'clashforgectl.core.ps1'
 $cmdPath    = Join-Path $installDir 'clashforgectl.cmd'
 $shPath     = Join-Path $installDir 'clashforgectl.sh'
 
@@ -89,11 +91,26 @@ try {
 # exit code and ALSO runs block (b) — silently double-invoking the script,
 # with the second (5.1) run always failing on `??`. `if/else` on `where`'s
 # own captured errorlevel avoids that.
+#
+# CRITICAL: the local .ps1 copy must NOT be named "clashforgectl.ps1" (i.e.
+# must not share its base name with this .cmd). PowerShell's own bare-word
+# command resolution ranks "ExternalScript" (.ps1) ABOVE "Application"
+# (.cmd/.exe) — that ranking is internal to PowerShell and has nothing to
+# do with $env:PATHEXT (which is a cmd.exe-only concept). So if a same-named
+# .ps1 sits next to this .cmd, typing bare `clashforgectl` at ANY PowerShell
+# prompt (5.1 or 7+) resolves straight to the .ps1 and runs it with THAT
+# prompt's own engine — never invoking this .cmd at all, silently bypassing
+# every bit of pwsh-detection logic below. On a 5.1 prompt (still the
+# default "Windows PowerShell" on most machines — indistinguishable from
+# pwsh by its identical "PS >" prompt) that means Windows PowerShell 5.1
+# parses the whole `??`-laden file itself and fails immediately. Saving the
+# script as clashforgectl.core.ps1 leaves this .cmd as the only match for
+# the bare word, so bare invocations always go through the pwsh check.
 @'
 @echo off
 where pwsh >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-    pwsh -NoLogo -NoProfile -File "%~dp0clashforgectl.ps1" %*
+    pwsh -NoLogo -NoProfile -File "%~dp0clashforgectl.core.ps1" %*
     exit /b %ERRORLEVEL%
 )
 echo.
@@ -128,19 +145,24 @@ Write-Host '    clashforgectl help' -ForegroundColor White
 Write-Host '    clashforgectl hyperv -SubscriptionURL "https://..."' -ForegroundColor White
 Write-Host ''
 Write-Host '  In the current session, you can run it right now:' -ForegroundColor Yellow
-Write-Host "    & `"$ps1Path`" help" -ForegroundColor White
+Write-Host "    & `"$cmdPath`" help" -ForegroundColor White
 Write-Host ''
 Write-Host '  To uninstall:' -ForegroundColor Yellow
 Write-Host '    irm https://dl.wei1xuan.com/uninstall.ps1 | iex' -ForegroundColor White
 Write-Host ''
 
 # ── 6. Optional: run Hyper-V setup immediately ────────────────────────────────
+# Invoke via $cmdPath (the .cmd shim), not $ps1Path directly — install.ps1
+# itself may be running under Windows PowerShell 5.1 (e.g. `irm ... | iex`
+# typed at a plain "PS >" prompt, indistinguishable from pwsh by its prompt
+# alone), and a direct `& $ps1Path` call would parse the `??`-laden script
+# with THAT engine instead of going through the .cmd's pwsh detection.
 $subUrl = if ($env:CF_SUB) { $env:CF_SUB.Trim() } else { '' }
 if ($subUrl) {
     Write-Host '  CF_SUB is set — launching Hyper-V setup now...' -ForegroundColor Cyan
     Write-Host '  (A UAC prompt will appear to request Administrator privileges)' -ForegroundColor DarkGray
     Write-Host ''
-    & $ps1Path hyperv -SubscriptionURL $subUrl
+    & $cmdPath hyperv -SubscriptionURL $subUrl
 }
 
 # ── 7. Optional: forward any extra arguments straight to clashforgectl ────────
