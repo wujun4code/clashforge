@@ -92,8 +92,12 @@ func TestApplyPerDeviceSubRules_GeneratesShadowGroupsAndANDRules(t *testing.T) {
 		got = append(got, rs)
 	}
 
-	if len(got) != 6 {
-		t.Fatalf("expected 6 rules, got %d: %#v", len(got), got)
+	// "Final" is a select group whose default member is "Proxy", which both
+	// device groups override directly. MATCH,Final must resolve through that
+	// chain and gain a per-device fallback too, mirroring how the loyalsoldier
+	// template's "🐟 漏网之鱼" defaults to "🚀 节点选择".
+	if len(got) != 8 {
+		t.Fatalf("expected 8 rules, got %d: %#v", len(got), got)
 	}
 	if got[0] != "RULE-SET,reject,REJECT" {
 		t.Fatalf("expected first rule to remain global reject, got %q", got[0])
@@ -104,8 +108,17 @@ func TestApplyPerDeviceSubRules_GeneratesShadowGroupsAndANDRules(t *testing.T) {
 	if got[2] != "AND,((RULE-SET,cf-device-group-windows,src,no-resolve),(RULE-SET,google)),Windows - Proxy" {
 		t.Fatalf("unexpected second AND rule: %q", got[2])
 	}
-	if got[3] != "RULE-SET,google,Proxy" || got[4] != "GEOIP,CN,DIRECT,no-resolve" || got[5] != "MATCH,Final" {
-		t.Fatalf("unexpected fallback rules: %#v", got[3:])
+	if got[3] != "RULE-SET,google,Proxy" || got[4] != "GEOIP,CN,DIRECT,no-resolve" {
+		t.Fatalf("unexpected fallback rules: %#v", got[3:5])
+	}
+	if got[5] != "RULE-SET,cf-device-group-iphone,iPhone - Proxy,src,no-resolve" {
+		t.Fatalf("expected iPhone MATCH fallback resolved through Final->Proxy, got %q", got[5])
+	}
+	if got[6] != "RULE-SET,cf-device-group-windows,Windows - Proxy,src,no-resolve" {
+		t.Fatalf("expected Windows MATCH fallback resolved through Final->Proxy, got %q", got[6])
+	}
+	if got[7] != "MATCH,Final" {
+		t.Fatalf("expected global MATCH to remain last, got %q", got[7])
 	}
 
 	providers, ok := result["rule-providers"].(map[string]interface{})
@@ -224,6 +237,82 @@ func TestApplyPerDeviceSubRules_ExpandsMatchAsPerDeviceFallback(t *testing.T) {
 	}
 	if got[2] != "MATCH,Proxy" {
 		t.Fatalf("MATCH should stay as final global fallback, got %q", got[2])
+	}
+}
+
+// TestApplyPerDeviceSubRules_ExpandsMatchThroughWrappingSelector mirrors the
+// loyalsoldier template, where the MATCH rule targets "🐟 漏网之鱼" — a select
+// group that itself defaults to "🚀 节点选择" — rather than the overridden
+// group directly. A device group overriding only "🚀 节点选择" should still get
+// a per-device MATCH fallback, without needing a separate override on
+// "🐟 漏网之鱼" itself.
+func TestApplyPerDeviceSubRules_ExpandsMatchThroughWrappingSelector(t *testing.T) {
+	base := map[string]interface{}{
+		"proxies": []interface{}{
+			map[string]interface{}{"name": "node-sg"},
+			map[string]interface{}{"name": "node-us"},
+		},
+		"proxy-groups": []interface{}{
+			map[string]interface{}{
+				"name":    "🚀 节点选择",
+				"type":    "select",
+				"proxies": []interface{}{"node-sg", "node-us"},
+			},
+			map[string]interface{}{
+				"name":    "🎯 全球直连",
+				"type":    "select",
+				"proxies": []interface{}{"DIRECT", "🚀 节点选择"},
+			},
+			map[string]interface{}{
+				"name":    "🐟 漏网之鱼",
+				"type":    "select",
+				"proxies": []interface{}{"🚀 节点选择", "🎯 全球直连"},
+			},
+		},
+		"rules": []interface{}{
+			"RULE-SET,google,🚀 节点选择",
+			"MATCH,🐟 漏网之鱼",
+		},
+	}
+
+	deviceGroups := []config.DeviceGroup{
+		{
+			ID:   "pxtj",
+			Name: "PXTJ",
+			Devices: []config.Device{
+				{IP: "192.168.1.100", Prefix: 32},
+			},
+			Overrides: []config.ProxyGroupOverride{
+				{OriginalGroup: "🚀 节点选择", Proxies: []string{"node-sg"}},
+			},
+		},
+	}
+
+	result := config.ApplyPerDeviceSubRules(base, deviceGroups)
+	rules, ok := result["rules"].([]interface{})
+	if !ok {
+		t.Fatalf("rules should be []interface{}, got %T", result["rules"])
+	}
+	got := make([]string, 0, len(rules))
+	for _, r := range rules {
+		rs, _ := r.(string)
+		got = append(got, rs)
+	}
+
+	if len(got) != 4 {
+		t.Fatalf("expected 4 rules, got %d: %#v", len(got), got)
+	}
+	if got[0] != "AND,((RULE-SET,cf-device-group-pxtj,src,no-resolve),(RULE-SET,google)),PXTJ - 🚀 节点选择" {
+		t.Fatalf("unexpected AND rule for the directly-overridden RULE-SET,google line: %q", got[0])
+	}
+	if got[1] != "RULE-SET,google,🚀 节点选择" {
+		t.Fatalf("expected global RULE-SET,google rule to remain, got %q", got[1])
+	}
+	if got[2] != "RULE-SET,cf-device-group-pxtj,PXTJ - 🚀 节点选择,src,no-resolve" {
+		t.Fatalf("expected MATCH fallback to resolve through 🐟 漏网之鱼 -> 🚀 节点选择, got %q", got[2])
+	}
+	if got[3] != "MATCH,🐟 漏网之鱼" {
+		t.Fatalf("expected global MATCH to remain last, got %q", got[3])
 	}
 }
 

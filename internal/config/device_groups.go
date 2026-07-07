@@ -439,21 +439,27 @@ func ApplyPerDeviceSubRulesWithProviders(base map[string]interface{}, groups []D
 		if !ok {
 			continue
 		}
-		if !overriddenGroups[parsed.Policy] {
-			continue
-		}
 
 		if strings.EqualFold(parsed.RuleType, "MATCH") {
 			// Mihomo does not support MATCH inside logic rules like:
 			// AND,((SRC-IP-CIDR,...),(MATCH)),...
 			// Use an equivalent per-device fallback rule and keep global MATCH as final fallback.
+			//
+			// The MATCH policy (e.g. "🐟 漏网之鱼") is often a select group that
+			// itself defaults to an overridden group (e.g. "🚀 节点选择") rather
+			// than being overridden directly, so resolve through that chain
+			// instead of requiring an explicit override on the MATCH policy.
 			for _, ctx := range validContexts {
-				shadow, ok := ctx.Shadows[parsed.Policy]
+				shadowName, ok := resolveDeviceShadowPolicy(parsed.Policy, ctx, proxyGroupNames)
 				if !ok {
 					continue
 				}
-				matchDeviceRules = append(matchDeviceRules, fmt.Sprintf("RULE-SET,%s,%s,src,no-resolve", ctx.DeviceProvider.Name, shadow.Name))
+				matchDeviceRules = append(matchDeviceRules, fmt.Sprintf("RULE-SET,%s,%s,src,no-resolve", ctx.DeviceProvider.Name, shadowName))
 			}
+			continue
+		}
+
+		if !overriddenGroups[parsed.Policy] {
 			continue
 		}
 
@@ -564,6 +570,51 @@ func buildDeviceRuleContexts(groups []DeviceGroup, existingGroups map[string]map
 
 func buildShadowProxyGroupName(groupName, originalGroup string) string {
 	return fmt.Sprintf("%s - %s", groupName, originalGroup)
+}
+
+// maxPolicyResolveDepth bounds how many select-group hops resolveDeviceShadowPolicy
+// will follow (e.g. "🐟 漏网之鱼" -> "🚀 节点选择") before giving up.
+const maxPolicyResolveDepth = 8
+
+// resolveDeviceShadowPolicy finds the device-group shadow that should stand in
+// for policy. It first checks policy itself, then — if policy is a "select"
+// proxy-group that was not overridden directly — follows its default (first)
+// member chain looking for an overridden group. This lets a device override
+// on "🚀 节点选择" also apply to a MATCH rule that targets a wrapping selector
+// like "🐟 漏网之鱼" whose default choice is "🚀 节点选择", without requiring a
+// separate explicit override on the wrapping group.
+func resolveDeviceShadowPolicy(policy string, ctx deviceRuleContext, proxyGroupNames map[string]map[string]interface{}) (string, bool) {
+	current := policy
+	visited := map[string]bool{}
+	for depth := 0; depth < maxPolicyResolveDepth; depth++ {
+		if shadow, ok := ctx.Shadows[current]; ok {
+			return shadow.Name, true
+		}
+		if visited[current] {
+			return "", false
+		}
+		visited[current] = true
+
+		group, ok := proxyGroupNames[current]
+		if !ok {
+			return "", false
+		}
+		groupType, _ := group["type"].(string)
+		if !strings.EqualFold(groupType, "select") {
+			return "", false
+		}
+		proxies, ok := group["proxies"].([]interface{})
+		if !ok || len(proxies) == 0 {
+			return "", false
+		}
+		next, ok := proxies[0].(string)
+		next = strings.TrimSpace(next)
+		if !ok || next == "" {
+			return "", false
+		}
+		current = next
+	}
+	return "", false
 }
 
 func collectDeviceRuleProviderSpecs(contexts []deviceRuleContext) []DeviceRuleProviderSpec {
