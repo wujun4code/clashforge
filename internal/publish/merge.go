@@ -243,7 +243,10 @@ func InjectRuleProviders(yamlStr string, ruleSets []RuleSet) (string, error) {
 			"behavior": "classical",
 			"url":      rs.AccessURL,
 			"interval": 86400,
-			"format":   "text",
+			// buildRulePayload (handler_publish_rulesets.go) always wraps rules in a
+			// "payload:" YAML list, so the provider format must match — "text" makes
+			// mihomo parse the raw body line-by-line and silently drop every rule.
+			"format": "yaml",
 		}
 		ruleKeys = append(ruleKeys, key)
 	}
