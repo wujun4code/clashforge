@@ -163,6 +163,30 @@ abstract class AppLocalizations {
   String get tileLanguageSubtitle;
   String get tileDnsStrategyTitle;
   String tileDnsStrategySub(String current);
+  String get tilePowerProfileTitle;
+  String tilePowerProfileSub(String current);
+  String get powerProfileSheetTitle;
+  String get powerProfileBatteryLabel;
+  String get powerProfileBatteryDesc;
+  String get powerProfileBalancedLabel;
+  String get powerProfileBalancedDesc;
+  String get powerProfilePerformanceLabel;
+  String get powerProfilePerformanceDesc;
+  String get powerProfileApplying;
+  String get powerProfileApplied;
+  String get tileAppRoutingTitle;
+  String tileAppRoutingSub(String mode, int count);
+  String get appRoutingSheetTitle;
+  String get appRoutingAllLabel;
+  String get appRoutingAllDesc;
+  String get appRoutingAllowlistLabel;
+  String get appRoutingAllowlistDesc;
+  String get appRoutingBypassLabel;
+  String get appRoutingBypassDesc;
+  String get appRoutingSelectApps;
+  String get appRoutingSearchHint;
+  String get appRoutingNoApps;
+  String get appRoutingSelectionRequired;
 
   // ── DNS mode (enhanced-mode) picker ───────────────────────────────────────
   String get tileDnsModeTitle;
@@ -528,6 +552,63 @@ class _AppLocalizationsEn extends AppLocalizations {
   String get tileLanguageTitle => 'Language';
   @override
   String get tileLanguageSubtitle => 'App display language';
+  @override
+  String get tilePowerProfileTitle => 'Runtime Profile';
+  @override
+  String tilePowerProfileSub(String current) => 'Current: $current';
+  @override
+  String get powerProfileSheetTitle => 'Runtime Profile';
+  @override
+  String get powerProfileBatteryLabel => 'Battery Saver';
+  @override
+  String get powerProfileBatteryDesc =>
+      'Uses lean rules, fewer latency tests and less per-connection work.';
+  @override
+  String get powerProfileBalancedLabel => 'Balanced';
+  @override
+  String get powerProfileBalancedDesc =>
+      'Recommended defaults with reduced logging and moderate health checks.';
+  @override
+  String get powerProfilePerformanceLabel => 'Performance';
+  @override
+  String get powerProfilePerformanceDesc =>
+      'Faster connection racing and more frequent latency checks; uses more power.';
+  @override
+  String get powerProfileApplying => 'Applying runtime profile…';
+  @override
+  String get powerProfileApplied => 'Runtime profile applied';
+  @override
+  String get tileAppRoutingTitle => 'App Routing';
+  @override
+  String tileAppRoutingSub(String mode, int count) => switch (mode) {
+        'allowlist' => 'Only $count selected apps use VPN',
+        'bypass' => '$count selected apps bypass VPN',
+        _ => 'All apps use VPN',
+      };
+  @override
+  String get appRoutingSheetTitle => 'App Routing';
+  @override
+  String get appRoutingAllLabel => 'All Apps';
+  @override
+  String get appRoutingAllDesc => 'Route every app through the VPN.';
+  @override
+  String get appRoutingAllowlistLabel => 'Selected Apps Only';
+  @override
+  String get appRoutingAllowlistDesc =>
+      'Best battery life when only a few apps need the VPN.';
+  @override
+  String get appRoutingBypassLabel => 'Bypass Selected Apps';
+  @override
+  String get appRoutingBypassDesc =>
+      'Selected high-traffic apps use the physical network directly.';
+  @override
+  String get appRoutingSelectApps => 'Select apps';
+  @override
+  String get appRoutingSearchHint => 'Search apps or package names';
+  @override
+  String get appRoutingNoApps => 'No launchable apps found';
+  @override
+  String get appRoutingSelectionRequired => 'Select at least one app';
   @override
   String get tileDnsModeTitle => 'DNS Interception Mode';
   @override
@@ -949,6 +1030,58 @@ class _AppLocalizationsZh extends AppLocalizations {
   String get tileLanguageTitle => '语言';
   @override
   String get tileLanguageSubtitle => '应用显示语言';
+  @override
+  String get tilePowerProfileTitle => '运行模式';
+  @override
+  String tilePowerProfileSub(String current) => '当前：$current';
+  @override
+  String get powerProfileSheetTitle => '运行模式';
+  @override
+  String get powerProfileBatteryLabel => '省电';
+  @override
+  String get powerProfileBatteryDesc => '使用精简规则、降低测速频率并减少每条连接的处理工作。';
+  @override
+  String get powerProfileBalancedLabel => '均衡';
+  @override
+  String get powerProfileBalancedDesc => '推荐默认值，降低日志开销并使用适中的健康检查间隔。';
+  @override
+  String get powerProfilePerformanceLabel => '性能';
+  @override
+  String get powerProfilePerformanceDesc => '启用并发连接与更频繁测速，速度优先但耗电更高。';
+  @override
+  String get powerProfileApplying => '正在应用运行模式…';
+  @override
+  String get powerProfileApplied => '运行模式已应用';
+  @override
+  String get tileAppRoutingTitle => '应用路由';
+  @override
+  String tileAppRoutingSub(String mode, int count) => switch (mode) {
+        'allowlist' => '仅 $count 个选中应用使用 VPN',
+        'bypass' => '$count 个选中应用绕过 VPN',
+        _ => '所有应用使用 VPN',
+      };
+  @override
+  String get appRoutingSheetTitle => '应用路由';
+  @override
+  String get appRoutingAllLabel => '所有应用';
+  @override
+  String get appRoutingAllDesc => '所有应用流量都进入 VPN。';
+  @override
+  String get appRoutingAllowlistLabel => '仅选中应用';
+  @override
+  String get appRoutingAllowlistDesc => '只有少数应用需要代理时最省电。';
+  @override
+  String get appRoutingBypassLabel => '选中应用绕过';
+  @override
+  String get appRoutingBypassDesc => '让选中的高流量应用直接使用物理网络。';
+  @override
+  String get appRoutingSelectApps => '选择应用';
+  @override
+  String get appRoutingSearchHint => '搜索应用或包名';
+  @override
+  String get appRoutingNoApps => '未找到可启动应用';
+  @override
+  String get appRoutingSelectionRequired => '请至少选择一个应用';
   @override
   String get tileDnsModeTitle => 'DNS 拦截模式';
   @override

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.VpnService
@@ -81,7 +82,6 @@ class ClashVpnService : VpnService(), Runnable {
     @Synchronized
     private fun stopVpn() {
         if (!isRunning) {
-            LogEventBridge.warn("vpn", "stopVpn called but not running")
             return
         }
         isRunning     = false
@@ -98,9 +98,10 @@ class ClashVpnService : VpnService(), Runnable {
         sendVpnStateBroadcast(false)
         logConnectivitySnapshot("stop_requested")
 
-        coreProcess?.destroy()
+        val process = coreProcess
         coreProcess = null
-        LogEventBridge.debug("vpn", "Mihomo process destroyed")
+        process?.destroy()
+        LogEventBridge.debug("vpn", "Mihomo process stop requested")
 
         try {
             vpnInterface?.close()
@@ -136,6 +137,7 @@ class ClashVpnService : VpnService(), Runnable {
                 val probe = ConfigGen.probeAndPatchDNS(configFile.absolutePath)
                 LogEventBridge.info("dns", probe.summary)
             }
+            if (!isRunning) return
 
             // ── Step 2: Establish VPN interface ──────────────────────────────────
             LogEventBridge.info("vpn", "Building VPN interface",
@@ -167,17 +169,15 @@ class ClashVpnService : VpnService(), Runnable {
                 ))
             }
 
-            try {
-                builder.addDisallowedApplication(packageName)
-                LogEventBridge.info("vpn", "Excluded app from VPN routing",
-                    mapOf("package" to packageName))
-            } catch (e: Exception) {
-                LogEventBridge.warn("vpn", "Failed to exclude app from VPN routing",
-                    mapOf("error" to (e.message ?: "unknown")))
-            }
+            applyAppRouting(builder)
 
             vpnInterface = builder.establish() ?: run {
                 LogEventBridge.error("vpn", "builder.establish() returned null")
+                return
+            }
+            if (!isRunning) {
+                vpnInterface?.close()
+                vpnInterface = null
                 return
             }
             val tunFd = vpnInterface!!.fd
@@ -192,6 +192,10 @@ class ClashVpnService : VpnService(), Runnable {
             // "flutter.dns_mode") when the user chooses fake-ip or redir-host.
             val dnsMode = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
                 .getString("flutter.dns_mode", "fake-ip") ?: "fake-ip"
+            val powerProfile = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .getString("flutter.power_profile", "balanced")
+                ?.takeIf { it == "battery" || it == "performance" }
+                ?: "balanced"
 
             if (isCiMode) {
                 configFile.writeText(buildCiConfig(0))
@@ -200,14 +204,17 @@ class ClashVpnService : VpnService(), Runnable {
                 LogEventBridge.warn("vpn", "config.yaml not found — skipping core apply")
             } else {
                 val geoDataDir = filesDir.absolutePath
-                val ok = ConfigGen.generateConfig(configFile.absolutePath, 0, geoDataDir, dnsMode)
+                val ok = ConfigGen.generateConfig(
+                    configFile.absolutePath, 0, geoDataDir, dnsMode, powerProfile,
+                )
                 LogEventBridge.info("vpn", "Core apply complete",
-                    mapOf("ok" to ok, "dnsMode" to dnsMode, "stack" to "gvisor", "note" to "stdin(fd0)=TUN"))
+                    mapOf("ok" to ok, "dnsMode" to dnsMode, "powerProfile" to powerProfile,
+                        "stack" to "gvisor", "note" to "stdin(fd0)=TUN"))
                 logRuntimeConfigSummary(configFile, ok, dnsMode)
             }
 
             // ── Step 4: Start mihomo core ─────────────────────────────────────────
-            startMihomoCore(tunFd)
+            val process = startMihomoCore(tunFd) ?: return
 
             // ── Step 5: Wait for mihomo to be ready ───────────────────────────────
             // Prevents Android ConnectivityManager from marking the VPN as "no
@@ -216,8 +223,14 @@ class ClashVpnService : VpnService(), Runnable {
             waitForMihomoReady()
             logConnectivitySnapshot("after_core_ready")
 
-            LogEventBridge.info("vpn", "VPN loop running")
-            while (isRunning) Thread.sleep(1000)
+            LogEventBridge.info("vpn", "VPN core running")
+            val exitCode = process.waitFor()
+            mihomoRunning = false
+            mihomoPid = -1
+            if (isRunning) {
+                LogEventBridge.warn("mihomo", "Core exited unexpectedly",
+                    mapOf("exit_code" to exitCode))
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "VPN run error", e)
@@ -442,7 +455,7 @@ sniffer:
 
     // ── Mihomo process ────────────────────────────────────────────────────────
 
-    private fun startMihomoCore(tunFd: Int) {
+    private fun startMihomoCore(tunFd: Int): Process? {
         val appDir     = filesDir.absolutePath
         // nativeLibraryDir is on an executable partition; filesDir is mounted
         // noexec on API 29+, so we cannot execute binaries placed there.
@@ -451,7 +464,7 @@ sniffer:
 
         if (!coreBin.exists()) {
             LogEventBridge.error("mihomo", "Binary not found", mapOf("path" to coreBin.absolutePath))
-            return
+            return null
         }
         coreBin.setExecutable(true)
 
@@ -466,7 +479,7 @@ sniffer:
 
         val tunFdObj = vpnInterface?.fileDescriptor ?: run {
             LogEventBridge.error("mihomo", "vpnInterface null before spawn")
-            return
+            return null
         }
 
         // Android closes ALL fds >= 3 in the child before exec (closeDescriptors).
@@ -484,10 +497,22 @@ sniffer:
             pb.environment().apply {
                 // Return freed pages to the kernel immediately (not lazily via MADV_FREE).
                 put("GODEBUG",    "madvdontneed=1")
-                // GC at 40 % heap growth — reduces peak live-object dirty pages.
-                put("GOGC",       "40")
-                // Soft memory cap; runtime scavenges aggressively to stay under.
-                put("GOMEMLIMIT", "100MiB")
+                val profile = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                    .getString("flutter.power_profile", "balanced")
+                when (profile) {
+                    "battery" -> {
+                        put("GOGC", "100")
+                        put("GOMEMLIMIT", "160MiB")
+                    }
+                    "performance" -> {
+                        put("GOGC", "80")
+                        put("GOMEMLIMIT", "256MiB")
+                    }
+                    else -> {
+                        put("GOGC", "100")
+                        put("GOMEMLIMIT", "192MiB")
+                    }
+                }
             }
             pb.redirectInput(ProcessBuilder.Redirect.INHERIT)  // fd 0 = TUN
             pb.redirectErrorStream(true)                        // merge stderr into stdout
@@ -507,20 +532,75 @@ sniffer:
         mihomoRunning = true
         LogEventBridge.info("mihomo", "Core started", mapOf("pid" to pid, "tun_fd" to tunFd))
 
+        val process = coreProcess ?: return null
         Thread {
             try {
-                coreProcess?.inputStream?.bufferedReader()?.forEachLine { line ->
-                    Log.d("MihomoCore", line)
-                    LogEventBridge.debug("mihomo", line)
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        LogEventBridge.coreLine(line)
+                    }
                 }
-                val exit = coreProcess?.exitValue() ?: -1
-                mihomoRunning = false
-                mihomoPid     = -1
-                LogEventBridge.warn("mihomo", "Core exited", mapOf("exit_code" to exit))
             } catch (e: Exception) {
-                LogEventBridge.error("mihomo", "Log reader error: ${e.message}")
+                if (isRunning) {
+                    LogEventBridge.error("mihomo", "Log reader error: ${e.message}")
+                }
             }
-        }.start()
+        }.apply {
+            name = "MihomoLogPump"
+            isDaemon = true
+            start()
+        }
+        return process
+    }
+
+    private fun applyAppRouting(builder: Builder) {
+        val prefs = getSharedPreferences("vpn_routing", MODE_PRIVATE)
+        val mode = prefs.getString("mode", "all") ?: "all"
+        val packages = prefs.getStringSet("packages", emptySet())
+            .orEmpty()
+            .filter { it.isNotBlank() && it != packageName }
+            .sorted()
+
+        try {
+            if (mode == "allowlist" && packages.isNotEmpty()) {
+                var applied = 0
+                for (appPackage in packages) {
+                    try {
+                        builder.addAllowedApplication(appPackage)
+                        applied++
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        LogEventBridge.warn("vpn", "Allowed app is no longer installed",
+                            mapOf("package" to appPackage))
+                    }
+                }
+                if (applied > 0) {
+                    LogEventBridge.info("vpn", "Applied VPN app allowlist",
+                        mapOf("count" to applied))
+                    return
+                }
+                LogEventBridge.warn("vpn", "VPN allowlist is empty; using all-app mode")
+            }
+
+            builder.addDisallowedApplication(packageName)
+            var bypassed = 0
+            if (mode == "bypass") {
+                for (appPackage in packages) {
+                    try {
+                        builder.addDisallowedApplication(appPackage)
+                        bypassed++
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        LogEventBridge.warn("vpn", "Bypassed app is no longer installed",
+                            mapOf("package" to appPackage))
+                    }
+                }
+            }
+            LogEventBridge.info("vpn", "Applied VPN app routing",
+                mapOf("mode" to if (mode == "bypass") "bypass" else "all",
+                    "bypass_count" to bypassed))
+        } catch (e: Exception) {
+            LogEventBridge.warn("vpn", "Failed to apply app routing",
+                mapOf("mode" to mode, "error" to (e.message ?: "unknown")))
+        }
     }
 
     // ── Asset extraction ──────────────────────────────────────────────────────

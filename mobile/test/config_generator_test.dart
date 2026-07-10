@@ -52,6 +52,8 @@ void main() {
       final groups = config['proxy-groups'] as List;
       expect(groups[0]['name'], equals('Auto'));
       expect(groups[0]['type'], equals('url-test'));
+      expect(groups[0]['interval'], equals(900));
+      expect(groups[0]['lazy'], isTrue);
       expect(groups[1]['name'], equals('🚀 Proxy'));
       expect(groups[1]['type'], equals('select'));
       expect(
@@ -82,6 +84,56 @@ void main() {
       expect(rules, contains('GEOSITE,cn,DIRECT'));
       expect(rules, contains('GEOIP,CN,DIRECT'));
       expect(rules, contains('MATCH,🚀 Proxy'));
+      expect(config['log-level'], equals('warning'));
+      expect(config['unified-delay'], isFalse);
+      expect(config['tcp-concurrent'], isTrue);
+      expect(config['find-process-mode'], equals('strict'));
+    });
+
+    test('battery profile uses lite rules and reduces periodic work', () {
+      final config = ConfigGenerator.generate(
+        nodes: _twoNodes(),
+        geodataPath: '/nonexistent',
+        powerProfile: PowerProfile.battery,
+      );
+
+      expect(config['unified-delay'], isFalse);
+      expect(config['tcp-concurrent'], isFalse);
+      expect(config['find-process-mode'], equals('off'));
+      final groups = config['proxy-groups'] as List;
+      expect(groups.first['interval'], equals(1800));
+      expect(groups.first['lazy'], isTrue);
+      final providers = config['rule-providers'] as Map<String, dynamic>;
+      expect(providers, isNot(contains('applications')));
+      expect(providers['reject']['url'], contains('clash-rules-lite'));
+    });
+
+    test('performance profile enables connection racing and short checks', () {
+      final config = ConfigGenerator.generate(
+        nodes: _twoNodes(),
+        geodataPath: '/nonexistent',
+        powerProfile: PowerProfile.performance,
+      );
+
+      expect(config['unified-delay'], isTrue);
+      expect(config['tcp-concurrent'], isTrue);
+      final groups = config['proxy-groups'] as List;
+      expect(groups.first['interval'], equals(300));
+      expect(groups.first['lazy'], isTrue);
+    });
+
+    test('battery profile keeps process matching for process rules', () {
+      final config = ConfigGenerator.generate(
+        nodes: _twoNodes(),
+        geodataPath: '/nonexistent',
+        powerProfile: PowerProfile.battery,
+        customRules: const [
+          'PROCESS-NAME,com.example.app,DIRECT',
+          'MATCH,🚀 Proxy',
+        ],
+      );
+
+      expect(config['find-process-mode'], equals('strict'));
     });
 
     test('DNS strategy: legacy — no nameserver-policy, fallback-filter present',

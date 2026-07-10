@@ -27,7 +27,8 @@ type GenerateResult struct {
 // dnsMode controls dns.enhanced-mode: "fake-ip" (default) or "redir-host".
 // On single-device TUN both modes work; fake-ip is more robust against DNS
 // pollution.  redir-host gives better compatibility with NTP/STUN/games.
-func GenerateConfig(configPath string, tunFd int, geoDataDir string, dnsMode string) GenerateResult {
+// powerProfile controls optional work that affects mobile CPU/radio usage.
+func GenerateConfig(configPath string, tunFd int, geoDataDir string, dnsMode string, powerProfile string) GenerateResult {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return GenerateResult{Error: "read config: " + err.Error()}
@@ -43,6 +44,7 @@ func GenerateConfig(configPath string, tunFd int, geoDataDir string, dnsMode str
 	if dnsMode == "" {
 		dnsMode = "fake-ip"
 	}
+	powerProfile = normalizePowerProfile(powerProfile)
 
 	// Rebuild DNS section, preserving probe-patched nameservers.
 	cfg["dns"] = buildDNSSection(cfg, geoDataDir, dnsMode)
@@ -52,9 +54,10 @@ func GenerateConfig(configPath string, tunFd int, geoDataDir string, dnsMode str
 	delete(cfg, "tun")
 	delete(cfg, "sniffer")
 
-	// Append canonical Android TUN and sniffer blocks.
+	// Append canonical Android TUN and sniffer blocks. fake-ip already carries
+	// domain context, so battery mode can avoid parsing every TLS/QUIC flow.
 	cfg["tun"] = buildAndroidTUN(tunFd)
-	cfg["sniffer"] = buildSniffer()
+	cfg["sniffer"] = buildSniffer(powerProfile != "battery" || dnsMode == "redir-host")
 
 	// Runtime-owned fields that must not come from the subscription config.
 	cfg["external-controller"] = "127.0.0.1:9090"
@@ -62,6 +65,10 @@ func GenerateConfig(configPath string, tunFd int, geoDataDir string, dnsMode str
 	cfg["mode"] = "rule"
 	cfg["geodata-mode"] = false
 	cfg["geodata-path"] = geoDataDir
+	cfg["geodata-loader"] = "memconservative"
+	cfg["log-level"] = "warning"
+	cfg["unified-delay"] = powerProfile == "performance"
+	cfg["tcp-concurrent"] = powerProfile != "battery"
 	delete(cfg, "secret") // keep API endpoint reachable without auth
 
 	out, err := yaml.Marshal(cfg)
@@ -79,7 +86,8 @@ func GenerateConfig(configPath string, tunFd int, geoDataDir string, dnsMode str
 // Android-mandatory settings: enhanced-mode, filters, and respect-rules.
 //
 // dnsMode: "fake-ip" (default) — returns 198.18.x.x synthetic IPs, most robust
-//          "redir-host"        — returns real upstream IPs, better NTP/STUN compat
+//
+//	"redir-host"        — returns real upstream IPs, better NTP/STUN compat
 func buildDNSSection(cfg map[string]interface{}, geoDataDir string, dnsMode string) map[string]interface{} {
 	existing := extractStringMap(cfg, "dns")
 
@@ -180,8 +188,8 @@ func buildAndroidTUN(tunFd int) map[string]interface{} {
 		// partial improvement. gvisor is epoll-driven and handles the
 		// non-blocking fd correctly, which is presumably why it was chosen
 		// originally.
-		"stack":           "gvisor",
-		"file-descriptor": tunFd,
+		"stack":                 "gvisor",
+		"file-descriptor":       tunFd,
 		"auto-route":            false,
 		"auto-detect-interface": false,
 		"dns-hijack":            defaultDNSHijack,
@@ -199,7 +207,10 @@ func buildAndroidTUN(tunFd int) map[string]interface{} {
 	}
 }
 
-func buildSniffer() map[string]interface{} {
+func buildSniffer(enabled bool) map[string]interface{} {
+	if !enabled {
+		return map[string]interface{}{"enable": false}
+	}
 	return map[string]interface{}{
 		"enable": true,
 		// Global override-destination must be false (mihomo's own official
@@ -233,6 +244,15 @@ func buildSniffer() map[string]interface{} {
 				"ports": []interface{}{443},
 			},
 		},
+	}
+}
+
+func normalizePowerProfile(value string) string {
+	switch value {
+	case "battery", "performance":
+		return value
+	default:
+		return "balanced"
 	}
 }
 

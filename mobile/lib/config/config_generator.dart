@@ -2,6 +2,24 @@ import 'dart:io';
 import 'loyalsoldier_template.dart';
 import '../subscription/proxy_node.dart';
 
+enum PowerProfile {
+  battery,
+  balanced,
+  performance;
+
+  static PowerProfile parse(String? value) => switch (value) {
+        'battery' => PowerProfile.battery,
+        'performance' => PowerProfile.performance,
+        _ => PowerProfile.balanced,
+      };
+
+  int get healthCheckInterval => switch (this) {
+        PowerProfile.battery => 1800,
+        PowerProfile.balanced => 900,
+        PowerProfile.performance => 300,
+      };
+}
+
 class ConfigGenerator {
   static const _cnPlainDns = ['223.5.5.5', '119.29.29.29'];
   static const _cnDoh = [
@@ -67,10 +85,11 @@ class ConfigGenerator {
   ///
   /// [dnsStrategy]: 'split' (default) | 'privacy' | 'legacy'
   /// [dnsMode]: 'fake-ip' (default) | 'redir-host'
-  /// [templateId]: 'loyalsoldier_standard' (default) | 'lite' — selects the
+  /// [templateId]: 'loyalsoldier_standard' | 'lite' — selects the
   ///   built-in rule-provider template when no [customRules] are provided.
   ///   'lite' uses wujun4code/clash-rules-lite (~68k rules, ~60 MB RAM);
   ///   'loyalsoldier_standard' uses the full Loyalsoldier set (~320k rules).
+  ///   When omitted, battery mode selects lite and other modes select standard.
   static Map<String, dynamic> generate({
     required List<ProxyNode> nodes,
     required String geodataPath,
@@ -81,7 +100,8 @@ class ConfigGenerator {
     Map<String, Map<String, dynamic>> customRuleProviders = const {},
     String dnsStrategy = 'split',
     String dnsMode = 'fake-ip',
-    String templateId = 'loyalsoldier_standard',
+    String? templateId,
+    PowerProfile powerProfile = PowerProfile.balanced,
   }) {
     final out = <String, dynamic>{};
 
@@ -92,10 +112,22 @@ class ConfigGenerator {
     out['allow-lan'] = false;
     out['bind-address'] = '127.0.0.1';
     out['mode'] = 'rule';
-    out['log-level'] = 'info';
+    // A mobile VPN can emit one log line per connection even at info level.
+    // Keep production output actionable without waking Kotlin, Flutter and
+    // flash storage for routine connection churn.
+    out['log-level'] = 'warning';
     out['external-controller'] = '127.0.0.1:9090';
-    out['unified-delay'] = true;
-    out['tcp-concurrent'] = true;
+    out['unified-delay'] = powerProfile == PowerProfile.performance;
+    out['tcp-concurrent'] = powerProfile != PowerProfile.battery;
+    out['geodata-loader'] = 'memconservative';
+    final hasProcessRules = customRules.any((rule) {
+      final type = rule.split(',').first.trim().toUpperCase();
+      return type.startsWith('PROCESS-');
+    });
+    out['find-process-mode'] =
+        powerProfile == PowerProfile.battery && !hasProcessRules
+            ? 'off'
+            : 'strict';
     out['geodata-mode'] = false;
     out['geodata-path'] = geodataPath;
 
@@ -131,7 +163,7 @@ class ConfigGenerator {
       // that are known to break Android TUN/fake-ip when imported verbatim.
       out['proxy-groups'] = customProxyGroups.isNotEmpty
           ? customProxyGroups
-          : _defaultProxyGroups(proxyNames, selectedNodeName);
+          : _defaultProxyGroups(proxyNames, selectedNodeName, powerProfile);
       final normalizedRules = _normalizeCustomRules(customRules);
       out['rules'] = normalizedRules;
       // Build rule-providers for the custom rules:
@@ -153,8 +185,14 @@ class ConfigGenerator {
       if (ruleProviders.isNotEmpty) out['rule-providers'] = ruleProviders;
     } else {
       // Builtin template mode: build standard groups, add rule-providers + rules.
-      out['proxy-groups'] = _defaultProxyGroups(proxyNames, selectedNodeName);
-      final useLite = templateId == 'lite' || templateId == 'clash_rules_lite';
+      out['proxy-groups'] =
+          _defaultProxyGroups(proxyNames, selectedNodeName, powerProfile);
+      final effectiveTemplate = templateId ??
+          (powerProfile == PowerProfile.battery
+              ? 'lite'
+              : 'loyalsoldier_standard');
+      final useLite = effectiveTemplate == 'lite' ||
+          effectiveTemplate == 'clash_rules_lite';
       out['rule-providers'] = useLite
           ? LiteTemplate.ruleProviders()
           : LoyalsoldierTemplate.ruleProviders();
@@ -417,6 +455,7 @@ class ConfigGenerator {
   static List<Map<String, dynamic>> _defaultProxyGroups(
     List<String> proxyNames,
     String? selectedNodeName,
+    PowerProfile powerProfile,
   ) {
     final selected = selectedNodeName?.trim();
     final ordered = <String>[];
@@ -438,7 +477,8 @@ class ConfigGenerator {
         'name': 'Auto',
         'type': 'url-test',
         'url': 'http://www.gstatic.com/generate_204',
-        'interval': 300,
+        'interval': powerProfile.healthCheckInterval,
+        'lazy': true,
         'tolerance': 50,
         'proxies': autoProxies,
       },

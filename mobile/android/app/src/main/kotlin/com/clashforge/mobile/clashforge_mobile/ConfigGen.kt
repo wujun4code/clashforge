@@ -36,6 +36,7 @@ object ConfigGen {
         tunFd: Int,
         geoDataDir: String,
         dnsMode: String,
+        powerProfile: String,
     ): String
 
     // ── Typed wrappers ────────────────────────────────────────────────────
@@ -72,11 +73,20 @@ object ConfigGen {
      *                   onto stdin (fd 0) before forking mihomo.
      * @param geoDataDir directory containing geosite.dat / country.mmdb
      * @param dnsMode    "fake-ip" (default) or "redir-host"; see cfgen/generator.go
+     * @param powerProfile "battery", "balanced" (default), or "performance"
      * @return true on success
      */
-    fun generateConfig(configPath: String, tunFd: Int, geoDataDir: String, dnsMode: String = "fake-ip"): Boolean {
+    fun generateConfig(
+        configPath: String,
+        tunFd: Int,
+        geoDataDir: String,
+        dnsMode: String = "fake-ip",
+        powerProfile: String = "balanced",
+    ): Boolean {
         val json = try {
-            JSONObject(nativeGenerateConfig(configPath, tunFd, geoDataDir, dnsMode))
+            JSONObject(nativeGenerateConfig(
+                configPath, tunFd, geoDataDir, dnsMode, powerProfile,
+            ))
         } catch (e: Exception) {
             LogEventBridge.error("cfgen", "generateConfig parse error: ${e.message}")
             return false

@@ -429,7 +429,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static const _logChannel = EventChannel('com.clashforge.mobile/logs');
   // (url, source-label, parse-type)  parse-type: 'upaiyun' | 'ipsb' | 'ipinfo'
   static const _directIpCandidates = [
     ('https://pubstatic.b0.upaiyun.com/?_upnode', 'UpaiYun', 'upaiyun'),
@@ -516,6 +515,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const _kDnsStrategyKey = 'dns_strategy';
   static const _kDnsModeKey = 'dns_mode';
+  static const _kPowerProfileKey = 'power_profile';
+  static const _kVpnRoutingModeKey = 'vpn_routing_mode';
+  static const _kVpnRoutingPackagesKey = 'vpn_routing_packages';
 
   int _tabIndex = 0;
   bool _isConnected = false;
@@ -536,13 +538,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _activeSubscriptionId;
   String _dnsStrategy = 'split';
   String _dnsMode = 'fake-ip';
+  PowerProfile _powerProfile = PowerProfile.balanced;
+  String _vpnRoutingMode = 'all';
+  Set<String> _vpnRoutingPackages = {};
 
   @override
   void initState() {
     super.initState();
-    _logChannel.receiveBroadcastStream().listen(_onNativeLog, onError: (e) {
-      AppLogger.instance.error('native', 'EventChannel error: $e');
-    });
     AppLogger.instance.info('app', 'ClashForge started');
     _loadPersistedData();
   }
@@ -557,6 +559,25 @@ class _HomeScreenState extends State<HomeScreen> {
     final savedMode = prefs.getString(_kDnsModeKey);
     if (savedMode != null && ['fake-ip', 'redir-host'].contains(savedMode)) {
       setState(() => _dnsMode = savedMode);
+    }
+    final savedPowerProfile = PowerProfile.parse(
+      prefs.getString(_kPowerProfileKey),
+    );
+    setState(() => _powerProfile = savedPowerProfile);
+    final savedRoutingMode = prefs.getString(_kVpnRoutingModeKey);
+    final routingMode = const {'allowlist', 'bypass'}.contains(savedRoutingMode)
+        ? savedRoutingMode!
+        : 'all';
+    final routingPackages =
+        (prefs.getStringList(_kVpnRoutingPackagesKey) ?? const <String>[])
+            .where((value) => value.isNotEmpty)
+            .toSet();
+    setState(() {
+      _vpnRoutingMode = routingMode;
+      _vpnRoutingPackages = routingPackages;
+    });
+    if (Platform.isAndroid) {
+      await VpnManager.setAppRouting(routingMode, routingPackages);
     }
 
     final subs = await SubscriptionStore.loadSubscriptions();
@@ -625,6 +646,58 @@ class _HomeScreenState extends State<HomeScreen> {
         content: Text(result.success ? l10n.dnsModeApplied : result.message),
         duration: const Duration(seconds: 3),
       ));
+  }
+
+  Future<void> _setPowerProfile(PowerProfile profile) async {
+    if (_powerProfile == profile) return;
+    setState(() => _powerProfile = profile);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kPowerProfileKey, profile.name);
+    if (!_isConnected || !mounted) return;
+
+    final l10n = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(l10n.powerProfileApplying),
+        duration: const Duration(seconds: 10),
+      ));
+    final result = await _restartVpnAfterSubscriptionChange();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content:
+            Text(result.success ? l10n.powerProfileApplied : result.message),
+        duration: const Duration(seconds: 3),
+      ));
+  }
+
+  Future<void> _setAppRouting(String mode, Set<String> packages) async {
+    final normalizedMode =
+        const {'allowlist', 'bypass'}.contains(mode) ? mode : 'all';
+    if (normalizedMode == 'allowlist' && packages.isEmpty) return;
+    setState(() {
+      _vpnRoutingMode = normalizedMode;
+      _vpnRoutingPackages = Set<String>.from(packages);
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kVpnRoutingModeKey, normalizedMode);
+    await prefs.setStringList(
+      _kVpnRoutingPackagesKey,
+      packages.toList(growable: false)..sort(),
+    );
+    final result = await VpnManager.setAppRouting(normalizedMode, packages);
+    if (!mounted) return;
+    if (result.startsWith('error')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result), duration: const Duration(seconds: 3)),
+      );
+      return;
+    }
+    if (_isConnected) {
+      await _restartVpnAfterSubscriptionChange();
+    }
   }
 
   void _showDnsModeAfterImport() {
@@ -887,19 +960,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return String.fromCharCodes(plain);
     } catch (_) {
       return fallback;
-    }
-  }
-
-  void _onNativeLog(dynamic event) {
-    try {
-      final map = json.decode(event as String) as Map<String, dynamic>;
-      final level = map['level'] as String? ?? 'info';
-      final component = map['component'] as String? ?? 'native';
-      final message = map['message'] as String? ?? '';
-      final fields = (map['fields'] as Map<String, dynamic>?) ?? {};
-      AppLogger.instance.log(level, component, message, fields: fields);
-    } catch (_) {
-      AppLogger.instance.debug('native', event.toString());
     }
   }
 
@@ -1238,6 +1298,8 @@ class _HomeScreenState extends State<HomeScreen> {
         customProxyGroups: activeSub.customProxyGroups,
         customRuleProviders: activeSub.customRuleProviders,
         dnsStrategy: _dnsStrategy,
+        dnsMode: _dnsMode,
+        powerProfile: _powerProfile,
       );
       final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
       logger.debug('vpn', 'Restart config write result: $writeResult');
@@ -1333,6 +1395,7 @@ class _HomeScreenState extends State<HomeScreen> {
         customRuleProviders: sub.customRuleProviders,
         dnsStrategy: _dnsStrategy,
         dnsMode: _dnsMode,
+        powerProfile: _powerProfile,
       );
       final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
       logger.info('subscription',
@@ -1518,6 +1581,7 @@ class _HomeScreenState extends State<HomeScreen> {
           customRuleProviders: activeSub?.customRuleProviders ?? const {},
           dnsStrategy: _dnsStrategy,
           dnsMode: _dnsMode,
+          powerProfile: _powerProfile,
         );
         final writeResult = await VpnManager.writeConfig(_mapToYaml(configMap));
         logger.debug('vpn', 'Config write result: $writeResult');
@@ -2165,6 +2229,11 @@ class _HomeScreenState extends State<HomeScreen> {
         onDnsStrategyChanged: _setDnsStrategy,
         dnsMode: _dnsMode,
         onDnsModeChanged: _setDnsMode,
+        powerProfile: _powerProfile,
+        onPowerProfileChanged: _setPowerProfile,
+        vpnRoutingMode: _vpnRoutingMode,
+        vpnRoutingPackages: _vpnRoutingPackages,
+        onAppRoutingChanged: _setAppRouting,
       ),
     ];
 
@@ -5019,6 +5088,11 @@ class _SettingsTab extends StatelessWidget {
     required this.onDnsStrategyChanged,
     required this.dnsMode,
     required this.onDnsModeChanged,
+    required this.powerProfile,
+    required this.onPowerProfileChanged,
+    required this.vpnRoutingMode,
+    required this.vpnRoutingPackages,
+    required this.onAppRoutingChanged,
   });
   final int nodeCount;
   final void Function(Locale) onLocaleChanged;
@@ -5026,6 +5100,11 @@ class _SettingsTab extends StatelessWidget {
   final void Function(String) onDnsStrategyChanged;
   final String dnsMode;
   final void Function(String) onDnsModeChanged;
+  final PowerProfile powerProfile;
+  final void Function(PowerProfile) onPowerProfileChanged;
+  final String vpnRoutingMode;
+  final Set<String> vpnRoutingPackages;
+  final Future<void> Function(String, Set<String>) onAppRoutingChanged;
 
   void _showLanguagePicker(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -5225,6 +5304,112 @@ class _SettingsTab extends StatelessWidget {
     );
   }
 
+  void _showPowerProfilePicker(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: _kBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(children: [
+              const Icon(Icons.battery_saver_outlined,
+                  color: _kConnected, size: 20),
+              const SizedBox(width: 8),
+              Text(l10n.powerProfileSheetTitle,
+                  style: const TextStyle(
+                      color: _kTextHi,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
+            ]),
+            const SizedBox(height: 16),
+            _DnsStrategyCard(
+              value: 'battery',
+              selected: powerProfile == PowerProfile.battery,
+              label: l10n.powerProfileBatteryLabel,
+              badge: 'Eco',
+              badgeColor: _kConnected,
+              description: l10n.powerProfileBatteryDesc,
+              onTap: () {
+                Navigator.pop(context);
+                onPowerProfileChanged(PowerProfile.battery);
+              },
+            ),
+            const SizedBox(height: 10),
+            _DnsStrategyCard(
+              value: 'balanced',
+              selected: powerProfile == PowerProfile.balanced,
+              label: l10n.powerProfileBalancedLabel,
+              badge: 'Default',
+              badgeColor: _kBrand,
+              description: l10n.powerProfileBalancedDesc,
+              onTap: () {
+                Navigator.pop(context);
+                onPowerProfileChanged(PowerProfile.balanced);
+              },
+            ),
+            const SizedBox(height: 10),
+            _DnsStrategyCard(
+              value: 'performance',
+              selected: powerProfile == PowerProfile.performance,
+              label: l10n.powerProfilePerformanceLabel,
+              badge: 'Fast',
+              badgeColor: const Color(0xFFFFB74D),
+              description: l10n.powerProfilePerformanceDesc,
+              onTap: () {
+                Navigator.pop(context);
+                onPowerProfileChanged(PowerProfile.performance);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAppRoutingPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kCard,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _AppRoutingSheet(
+        initialMode: vpnRoutingMode,
+        initialPackages: vpnRoutingPackages,
+        onSave: onAppRoutingChanged,
+      ),
+    );
+  }
+
+  String _powerProfileLabel(PowerProfile profile, AppLocalizations l10n) {
+    return switch (profile) {
+      PowerProfile.battery => l10n.powerProfileBatteryLabel,
+      PowerProfile.performance => l10n.powerProfilePerformanceLabel,
+      PowerProfile.balanced => l10n.powerProfileBalancedLabel,
+    };
+  }
+
   String _strategyLabel(String strategy, AppLocalizations l10n) {
     switch (strategy) {
       case 'privacy':
@@ -5252,84 +5437,308 @@ class _SettingsTab extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                     letterSpacing: -0.5)),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              children: [
-                _SettingsTile(
-                  iconColor: _kBrand,
-                  icon: Icons.dns_outlined,
-                  title: l10n.tileDnsStrategyTitle,
-                  subtitle: l10n
-                      .tileDnsStrategySub(_strategyLabel(dnsStrategy, l10n)),
-                  onTap: () => _showDnsStrategyPicker(context),
-                ),
-                const SizedBox(height: 8),
-                _SettingsTile(
-                  iconColor: const Color(0xFF8B5CF6),
-                  icon: Icons.tune_outlined,
-                  title: l10n.tileDnsModeTitle,
-                  subtitle: l10n.tileDnsModeSub(dnsMode),
-                  onTap: () => _showDnsModePicker(context),
-                ),
-                const SizedBox(height: 8),
-                _SettingsTile(
-                  iconColor: const Color(0xFF22D3EE),
-                  icon: Icons.terminal_outlined,
-                  title: l10n.tileLogsTitle,
-                  subtitle: l10n.tileLogsSubtitle,
-                  onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const Scaffold(
-                          backgroundColor: _kBg,
-                          body: _LogsTab(),
-                        ),
-                      )),
-                ),
-                const SizedBox(height: 8),
-                _SettingsTile(
-                  iconColor: const Color(0xFF34D399),
-                  icon: Icons.system_update_alt_outlined,
-                  title: l10n.tileUpdatesTitle,
-                  subtitle: l10n.tileUpdatesSubtitle,
-                  onTap: () => showModalBottomSheet(
-                    context: context,
-                    backgroundColor: _kCard,
-                    shape: const RoundedRectangleBorder(
-                      borderRadius:
-                          BorderRadius.vertical(top: Radius.circular(20)),
-                    ),
-                    builder: (_) => const _UpdateSheet(),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                children: [
+                  _SettingsTile(
+                    iconColor: _kBrand,
+                    icon: Icons.dns_outlined,
+                    title: l10n.tileDnsStrategyTitle,
+                    subtitle: l10n
+                        .tileDnsStrategySub(_strategyLabel(dnsStrategy, l10n)),
+                    onTap: () => _showDnsStrategyPicker(context),
                   ),
-                ),
-                const SizedBox(height: 8),
-                _SettingsTile(
-                  iconColor: const Color(0xFFBEBEBE),
-                  icon: Icons.info_outline,
-                  title: l10n.tileAboutTitle,
-                  subtitle: l10n.tileAboutSubtitle,
-                  onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => Scaffold(
-                          backgroundColor: _kBg,
-                          body: _AboutTab(nodeCount: nodeCount),
-                        ),
-                      )),
-                ),
-                const SizedBox(height: 8),
-                _SettingsTile(
-                  iconColor: const Color(0xFFFFB74D),
-                  icon: Icons.language_outlined,
-                  title: l10n.tileLanguageTitle,
-                  subtitle: l10n.tileLanguageSubtitle,
-                  onTap: () => _showLanguagePicker(context),
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  _SettingsTile(
+                    iconColor: const Color(0xFF8B5CF6),
+                    icon: Icons.tune_outlined,
+                    title: l10n.tileDnsModeTitle,
+                    subtitle: l10n.tileDnsModeSub(dnsMode),
+                    onTap: () => _showDnsModePicker(context),
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsTile(
+                    iconColor: _kConnected,
+                    icon: Icons.battery_saver_outlined,
+                    title: l10n.tilePowerProfileTitle,
+                    subtitle: l10n.tilePowerProfileSub(
+                      _powerProfileLabel(powerProfile, l10n),
+                    ),
+                    onTap: () => _showPowerProfilePicker(context),
+                  ),
+                  if (Platform.isAndroid) ...[
+                    const SizedBox(height: 8),
+                    _SettingsTile(
+                      iconColor: const Color(0xFF60A5FA),
+                      icon: Icons.apps_outlined,
+                      title: l10n.tileAppRoutingTitle,
+                      subtitle: l10n.tileAppRoutingSub(
+                        vpnRoutingMode,
+                        vpnRoutingPackages.length,
+                      ),
+                      onTap: () => _showAppRoutingPicker(context),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  _SettingsTile(
+                    iconColor: const Color(0xFF22D3EE),
+                    icon: Icons.terminal_outlined,
+                    title: l10n.tileLogsTitle,
+                    subtitle: l10n.tileLogsSubtitle,
+                    onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const Scaffold(
+                            backgroundColor: _kBg,
+                            body: _LogsTab(),
+                          ),
+                        )),
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsTile(
+                    iconColor: const Color(0xFF34D399),
+                    icon: Icons.system_update_alt_outlined,
+                    title: l10n.tileUpdatesTitle,
+                    subtitle: l10n.tileUpdatesSubtitle,
+                    onTap: () => showModalBottomSheet(
+                      context: context,
+                      backgroundColor: _kCard,
+                      shape: const RoundedRectangleBorder(
+                        borderRadius:
+                            BorderRadius.vertical(top: Radius.circular(20)),
+                      ),
+                      builder: (_) => const _UpdateSheet(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsTile(
+                    iconColor: const Color(0xFFBEBEBE),
+                    icon: Icons.info_outline,
+                    title: l10n.tileAboutTitle,
+                    subtitle: l10n.tileAboutSubtitle,
+                    onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => Scaffold(
+                            backgroundColor: _kBg,
+                            body: _AboutTab(nodeCount: nodeCount),
+                          ),
+                        )),
+                  ),
+                  const SizedBox(height: 8),
+                  _SettingsTile(
+                    iconColor: const Color(0xFFFFB74D),
+                    icon: Icons.language_outlined,
+                    title: l10n.tileLanguageTitle,
+                    subtitle: l10n.tileLanguageSubtitle,
+                    onTap: () => _showLanguagePicker(context),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AppRoutingSheet extends StatefulWidget {
+  const _AppRoutingSheet({
+    required this.initialMode,
+    required this.initialPackages,
+    required this.onSave,
+  });
+
+  final String initialMode;
+  final Set<String> initialPackages;
+  final Future<void> Function(String, Set<String>) onSave;
+
+  @override
+  State<_AppRoutingSheet> createState() => _AppRoutingSheetState();
+}
+
+class _AppRoutingSheetState extends State<_AppRoutingSheet> {
+  final TextEditingController _searchController = TextEditingController();
+  late String _mode;
+  late Set<String> _selected;
+  List<VpnAppInfo> _apps = const [];
+  bool _loading = true;
+  bool _saving = false;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _mode = widget.initialMode;
+    _selected = Set<String>.from(widget.initialPackages);
+    _loadApps();
+  }
+
+  Future<void> _loadApps() async {
+    final apps = await VpnManager.listInstalledApps();
+    if (!mounted) return;
+    setState(() {
+      _apps = apps;
+      _loading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final l10n = AppLocalizations.of(context);
+    if (_mode == 'allowlist' && _selected.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.appRoutingSelectionRequired)),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    await widget.onSave(_mode, _selected);
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final query = _query.trim().toLowerCase();
+    final visibleApps = query.isEmpty
+        ? _apps
+        : _apps
+            .where((app) =>
+                app.label.toLowerCase().contains(query) ||
+                app.packageName.toLowerCase().contains(query))
+            .toList(growable: false);
+
+    return FractionallySizedBox(
+      heightFactor: 0.9,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: _kBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(l10n.appRoutingSheetTitle,
+                style: const TextStyle(
+                    color: _kTextHi,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            SegmentedButton<String>(
+              segments: [
+                ButtonSegment(
+                    value: 'all', label: Text(l10n.appRoutingAllLabel)),
+                ButtonSegment(
+                    value: 'allowlist',
+                    label: Text(l10n.appRoutingAllowlistLabel)),
+                ButtonSegment(
+                    value: 'bypass', label: Text(l10n.appRoutingBypassLabel)),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (value) =>
+                  setState(() => _mode = value.first),
+              showSelectedIcon: false,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              switch (_mode) {
+                'allowlist' => l10n.appRoutingAllowlistDesc,
+                'bypass' => l10n.appRoutingBypassDesc,
+                _ => l10n.appRoutingAllDesc,
+              },
+              style: const TextStyle(color: _kTextMuted, fontSize: 12),
+            ),
+            if (_mode != 'all') ...[
+              const SizedBox(height: 14),
+              TextField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _query = value),
+                style: const TextStyle(color: _kTextHi),
+                decoration: InputDecoration(
+                  hintText: l10n.appRoutingSearchHint,
+                  hintStyle: const TextStyle(color: _kTextMuted),
+                  prefixIcon: const Icon(Icons.search, color: _kTextMuted),
+                  filled: true,
+                  fillColor: _kSurface,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Expanded(
+              child: _mode == 'all'
+                  ? const SizedBox.shrink()
+                  : _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : visibleApps.isEmpty
+                          ? Center(
+                              child: Text(l10n.appRoutingNoApps,
+                                  style: const TextStyle(color: _kTextMuted)))
+                          : ListView.builder(
+                              itemCount: visibleApps.length,
+                              itemBuilder: (context, index) {
+                                final app = visibleApps[index];
+                                final selected =
+                                    _selected.contains(app.packageName);
+                                return CheckboxListTile(
+                                  value: selected,
+                                  activeColor: _kBrand,
+                                  checkColor: Colors.white,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(app.label,
+                                      style: const TextStyle(color: _kTextHi)),
+                                  subtitle: Text(app.packageName,
+                                      style: const TextStyle(
+                                          color: _kTextMuted, fontSize: 11)),
+                                  onChanged: (checked) {
+                                    setState(() {
+                                      if (checked == true) {
+                                        _selected.add(app.packageName);
+                                      } else {
+                                        _selected.remove(app.packageName);
+                                      }
+                                    });
+                                  },
+                                );
+                              },
+                            ),
+            ),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: Text(l10n.btnSave),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -5633,9 +6042,12 @@ class _LogsTab extends StatefulWidget {
 }
 
 class _LogsTabState extends State<_LogsTab> {
+  static const _logChannel = EventChannel('com.clashforge.mobile/logs');
   final ScrollController _scroll = ScrollController();
+  StreamSubscription<dynamic>? _nativeLogSubscription;
   String _filter = 'all';
   bool _autoScroll = true;
+  bool _refreshScheduled = false;
 
   static const _levels = ['all', 'debug', 'info', 'warn', 'error'];
   static const _levelColors = {
@@ -5649,25 +6061,47 @@ class _LogsTabState extends State<_LogsTab> {
   void initState() {
     super.initState();
     AppLogger.instance.addListener(_onLog);
+    _nativeLogSubscription =
+        _logChannel.receiveBroadcastStream().listen(_onNativeLog, onError: (e) {
+      AppLogger.instance.error('native', 'EventChannel error: $e');
+    });
   }
 
   @override
   void dispose() {
+    _nativeLogSubscription?.cancel();
     AppLogger.instance.removeListener(_onLog);
     _scroll.dispose();
     super.dispose();
   }
 
   void _onLog() {
-    setState(() {});
-    if (_autoScroll && _scroll.hasClients) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_refreshScheduled) return;
+    _refreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshScheduled = false;
+      if (!mounted) return;
+      setState(() {});
+      if (_autoScroll && _scroll.hasClients) {
         if (_scroll.hasClients) {
           _scroll.animateTo(_scroll.position.maxScrollExtent,
               duration: const Duration(milliseconds: 150),
               curve: Curves.easeOut);
         }
-      });
+      }
+    });
+  }
+
+  void _onNativeLog(dynamic event) {
+    try {
+      final map = json.decode(event as String) as Map<String, dynamic>;
+      final level = map['level'] as String? ?? 'info';
+      final component = map['component'] as String? ?? 'native';
+      final message = map['message'] as String? ?? '';
+      final fields = (map['fields'] as Map<String, dynamic>?) ?? {};
+      AppLogger.instance.log(level, component, message, fields: fields);
+    } catch (_) {
+      AppLogger.instance.debug('native', event.toString());
     }
   }
 
