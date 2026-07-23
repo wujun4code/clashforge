@@ -38,7 +38,7 @@
 
 set -euo pipefail
 
-MIHOMO_VER="v1.18.10"
+MIHOMO_VER="v1.19.29"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JNILIBS_ROOT="$SCRIPT_DIR/../android/app/src/main/jniLibs"
 BUILD_MODE="${1:-}"  # pass --build to compile from source
@@ -67,11 +67,12 @@ if [ "$BUILD_MODE" = "--build" ]; then
   GOMODCACHE=$(go env GOMODCACHE)
   SINGTUN_DIR="${GOMODCACHE}/github.com/metacubex/sing-tun@${SINGTUN_VER}"
   chmod -R u+w "$SINGTUN_DIR"
-  PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+  PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" -exec grep -l "FileDescriptor == 0" {} \; 2>/dev/null || true)
   if [ -n "$PATCHED" ]; then
-    echo "$PATCHED" | xargs sed -i \
+    sed -i \
       -e 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g' \
-      -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g'
+      -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g' \
+      -- "$PATCHED"
     echo "Patched sing-tun ${SINGTUN_VER}: ==0→<0 and >0→>=0"
   else
     echo "WARNING: sentinel not found in sing-tun ${SINGTUN_VER} — fd 0 TUN handoff may fail"
