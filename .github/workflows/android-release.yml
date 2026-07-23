@@ -104,7 +104,7 @@ jobs:
           #                   same approach used by ClashMetaForAndroid)
           #
           # This combination has no packages.xml read AND no TUN reconfiguration.
-          MIHOMO_VER="v1.18.10"
+          MIHOMO_VER="v1.19.29"
           BASE="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
@@ -120,11 +120,12 @@ jobs:
           GOMODCACHE=$(go env GOMODCACHE)
           SINGTUN_DIR="${GOMODCACHE}/github.com/metacubex/sing-tun@${SINGTUN_VER}"
           chmod -R u+w "$SINGTUN_DIR"
-          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" -exec grep -l "FileDescriptor == 0" {} \; 2>/dev/null || true)
           if [ -n "$PATCHED" ]; then
-            echo "$PATCHED" | xargs sed -i \
+            sed -i \
               -e 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g' \
-              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g'
+              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g' \
+              -- "$PATCHED"
             echo "Patched sing-tun ${SINGTUN_VER}: ==0→<0 and >0→>=0"
           else
             echo "WARNING: sentinel not found in sing-tun ${SINGTUN_VER}"

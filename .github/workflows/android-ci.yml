@@ -65,7 +65,7 @@ jobs:
       - name: Build arm64-v8a mihomo from source and verify metadata
         if: needs.changes.outputs.mobile == 'true'
         run: |
-          MIHOMO_VER="v1.18.10"
+          MIHOMO_VER="v1.19.29"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
 
@@ -186,9 +186,12 @@ jobs:
       - name: Build Mihomo Core (x86_64, GOOS=linux -tags cmfa,with_gvisor + sing-tun fd-0 patch)
         if: needs.changes.outputs.mobile == 'true'
         run: |
-          # Pinned to v1.18.10: v1.19.x reads /data/system/packages.xml unconditionally
-          # during TUN init ("build android rules"), which is denied by SELinux on API 29.
-          MIHOMO_VER="v1.18.10"
+          # buildAndroidRules() (which reads /data/system/packages.xml, denied by
+          # SELinux on non-rooted devices) lives in server_android.go, gated by
+          # `//go:build android && !cmfa`. With -tags cmfa, server_notandroid.go's
+          # true no-op stub (`//go:build !android || cmfa`) is compiled instead, so
+          # packages.xml is never touched — verified against source at MIHOMO_VER.
+          MIHOMO_VER="v1.19.29"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
 
@@ -205,11 +208,12 @@ jobs:
           GOMODCACHE=$(go env GOMODCACHE)
           SINGTUN_DIR="${GOMODCACHE}/github.com/metacubex/sing-tun@${SINGTUN_VER}"
           chmod -R u+w "$SINGTUN_DIR"
-          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" -exec grep -l "FileDescriptor == 0" {} \; 2>/dev/null || true)
           if [ -n "$PATCHED" ]; then
-            echo "$PATCHED" | xargs sed -i \
+            sed -i \
               -e 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g' \
-              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g'
+              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g' \
+              -- "$PATCHED"
             echo "Patched sing-tun ${SINGTUN_VER}: ==0→<0 and >0→>=0"
           else
             echo "WARNING: sentinel not found in sing-tun ${SINGTUN_VER}"
