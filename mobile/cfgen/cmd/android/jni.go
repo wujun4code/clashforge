@@ -25,6 +25,7 @@ static void release_string_utf_chars(JNIEnv *env, jstring s, const char *chars) 
 */
 import "C"
 import (
+	"runtime"
 	"unsafe"
 
 	cfgen "github.com/wujun4code/clashforge/mobile/cfgen"
@@ -40,6 +41,13 @@ import (
 func Java_com_clashforge_mobile_clashforge_1mobile_ConfigGen_nativeProbeAndPatchDNS(
 	env *C.JNIEnv, _ C.jclass, jConfigPath C.jstring,
 ) C.jstring {
+	// env is only valid on the OS thread the JVM handed it to us on. Pin this
+	// goroutine so the Go scheduler can't migrate it to another thread between
+	// the jstr()/tojstr() cgo calls below — ART's CheckJNI aborts the process
+	// (SIGABRT: "invalid JNI transition frame reference") if it does.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	configPath := jstr(env, jConfigPath)
 	result := cfgen.ProbeAndPatchDNS(configPath)
 	return tojstr(env, cfgen.MarshalProbeResult(result))
@@ -58,6 +66,11 @@ func Java_com_clashforge_mobile_clashforge_1mobile_ConfigGen_nativeGenerateConfi
 	env *C.JNIEnv, _ C.jclass,
 	jConfigPath C.jstring, jTunFd C.jint, jGeoDataDir C.jstring, jDnsMode C.jstring,
 ) C.jstring {
+	// See nativeProbeAndPatchDNS above: pin to the JVM's calling thread for the
+	// duration of this call since we reuse env across multiple cgo calls.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	configPath := jstr(env, jConfigPath)
 	tunFd := int(jTunFd)
 	geoDataDir := jstr(env, jGeoDataDir)
