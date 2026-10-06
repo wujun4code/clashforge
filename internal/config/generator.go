@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,12 +237,11 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 		wanIface = "eth1"
 	}
 
-	// Extract pure-IP bootstrap nameservers for default-nameserver / proxy-server-nameserver.
-	// Must be plain IPs (Mihomo requirement): used to resolve DoH/DoT resolver hostnames.
+	// Bootstrap endpoints must have an IP host; Mihomo also accepts encrypted
+	// and TCP endpoints here, not just bare IPs.
 	var bootstrapIPs []string
 	for _, ns := range cfg.DNS.Nameservers {
-		// Keep only bare IPs; skip dhcp://, https://, tls://, tcp:// entries.
-		if net.ParseIP(strings.TrimSpace(ns)) != nil {
+		if isIPNameserver(ns) {
 			bootstrapIPs = append(bootstrapIPs, ns)
 		}
 	}
@@ -375,11 +375,54 @@ func buildDNSMap(cfg *MetaclashConfig) map[string]interface{} {
 		Bool("nameserver_policy_applied", policyApplied).
 		Msg("config: DNS 策略")
 
+	if strategy == DNSStrategyAntiHijack {
+		applyAntiHijackDefaults(cfg, dnsMap, bootstrapIPs)
+	}
+
 	return dnsMap
 }
 
+func isIPNameserver(ns string) bool {
+	ns = strings.TrimSpace(ns)
+	if net.ParseIP(ns) != nil {
+		return true
+	}
+	u, err := url.Parse(ns)
+	if err != nil || net.ParseIP(u.Hostname()) == nil {
+		return false
+	}
+	switch u.Scheme {
+	case "tcp", "tls", "https", "quic":
+		return true
+	default:
+		return false
+	}
+}
+
+// managedDNS fills missing resolver settings, preserving user YAML. Only fields
+// coupled to DNS takeover and transparent routing remain owned by ClashForge.
+func managedDNS(cfg *MetaclashConfig, imported interface{}) map[string]interface{} {
+	defaults := buildDNSMap(cfg)
+	userDNS, _ := imported.(map[string]interface{})
+	dns := DeepMergeAny(defaults, userDNS)
+	for _, key := range []string{"enable", "listen", "ipv6", "enhanced-mode", "fake-ip-range", "fake-ip-range6"} {
+		if value, ok := defaults[key]; ok {
+			dns[key] = value
+		} else {
+			delete(dns, key)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.DNS.Strategy), DNSStrategyAntiHijack) {
+		dns["respect-rules"] = true
+		dns["use-hosts"] = true
+		dns["use-system-hosts"] = false
+	}
+	return dns
+}
+
 // GenerateFromBase uses rawYAML as the base Mihomo config, rewriting only the
-// DNS section from ClashForge settings.  All other sections (proxies,
+// runtime-owned DNS fields from ClashForge settings. User resolvers and policies
+// take precedence over generated defaults. All other sections (proxies,
 // proxy-groups, rules, rule-providers, …) are preserved as-is from the
 // subscription.  extraNodes are proxy nodes from additional subscriptions
 // (those without a raw YAML); they are appended, skipping duplicates by name.
@@ -402,9 +445,9 @@ func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscri
 		Str("dns_mode", cfg.DNS.Mode).
 		Msg("config: GenerateFromBase 开始基于订阅 YAML 生成配置")
 
-	// Rewrite DNS from ClashForge config
+	// Preserve user resolver settings while enforcing the local DNS runtime.
 	if cfg.DNS.Enable {
-		base["dns"] = buildDNSMap(cfg)
+		base["dns"] = managedDNS(cfg, base["dns"])
 	} else {
 		delete(base, "dns")
 	}
@@ -646,13 +689,7 @@ func ApplyManagedRuntimeSettings(cfg *MetaclashConfig, merged map[string]interfa
 		return merged
 	}
 
-	// DNS is runtime-managed by ClashForge.  Subscriptions and overrides may
-	// contain stale/partial mihomo DNS blocks, but the final runtime config must
-	// always follow ClashForge's selected DNS mode/strategy.  Replace the whole
-	// block instead of patching individual fields; otherwise DeepMerge may keep or
-	// append legacy nameserver/fallback/default-nameserver values and alter the
-	// effective DNS behaviour.
-	merged["dns"] = buildDNSMap(cfg)
+	merged["dns"] = managedDNS(cfg, merged["dns"])
 
 	return merged
 }

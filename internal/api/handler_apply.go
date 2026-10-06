@@ -38,10 +38,10 @@ type applySource struct {
 // applyDNS holds DNS settings. All fields are optional; nil/empty uses ClashForge defaults.
 type applyDNS struct {
 	Enable       *bool    `json:"enable"`
-	Mode         string   `json:"mode"`          // "fake-ip" | "redir-host"
-	Strategy     string   `json:"strategy"`      // "split" | "privacy" | "legacy"
-	DnsmasqMode  string   `json:"dnsmasq_mode"`  // "upstream" | "replace" | "none"
-	Listen       string   `json:"listen"`        // "0.0.0.0:17874"
+	Mode         string   `json:"mode"`         // "fake-ip" | "redir-host"
+	Strategy     string   `json:"strategy"`     // "split" | "privacy" | "legacy" | "anti-hijack"
+	DnsmasqMode  string   `json:"dnsmasq_mode"` // "upstream" | "replace" | "none"
+	Listen       string   `json:"listen"`       // "0.0.0.0:17874"
 	IPv6         *bool    `json:"ipv6"`
 	ApplyOnStart *bool    `json:"apply_on_start"`
 	Nameservers  []string `json:"nameservers"`
@@ -515,6 +515,8 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		udpNameservers := deps.Config.DNS.Nameservers
 
 		switch {
+		case strings.EqualFold(strings.TrimSpace(deps.Config.DNS.Strategy), config.DNSStrategyAntiHijack):
+			emitStep("dns-probe", "skip", "防劫持策略不发送明文 DNS 探测，也不会自动追加未选定的解析商", "")
 		case len(nodeHostnames) == 0:
 			emitStep("dns-probe", "skip", "暂无已缓存的代理节点，跳过 DNS 劫持检测", "")
 		case len(udpNameservers) == 0:

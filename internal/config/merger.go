@@ -36,7 +36,7 @@ func mergeField(key string, dst, src interface{}) interface{} {
 	dstSlice, dstIsSlice := toSlice(dst)
 	if srcIsSlice && dstIsSlice {
 		switch key {
-		case "proxies", "nameserver", "fallback", "default-nameserver":
+		case "proxies":
 			// append src to dst
 			return append(dstSlice, srcSlice...)
 		case "proxy-groups":
@@ -95,7 +95,7 @@ func toSlice(v interface{}) ([]interface{}, bool) {
 }
 
 // DeepMergeAny merges src into dst for ClashForge TOML config patches.
-// Unlike DeepMerge (which appends certain slices for YAML config merging),
+// Unlike DeepMerge (which appends proxies/rules for YAML config merging),
 // this always replaces slices so that config fields like "fallback" and
 // "nameservers" don't accumulate duplicates on every wizard save.
 func DeepMergeAny(dst, src map[string]interface{}) map[string]interface{} {

@@ -159,6 +159,9 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 	}
 
 	generated = config.ApplyManagedRuntimeSettings(cfg, generated)
+	if err := config.ValidateRuntimeDNS(cfg, generated); err != nil {
+		return false, err
+	}
 
 	deviceGroupsPath := config.DeviceGroupsPath(cfg.Core.DataDir)
 	sourceKey := currentActiveSourceKey(cfg.Core.DataDir)

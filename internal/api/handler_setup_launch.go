@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/core"
 	"github.com/wujun4code/clashforge/internal/dns"
 )
@@ -50,6 +51,7 @@ type setupLaunchDNS struct {
 	ApplyOnStart bool   `json:"apply_on_start"`
 	Listen       string `json:"listen"`
 	IPv6         bool   `json:"ipv6"`
+	Strategy     string `json:"strategy"`
 	// These carry the canonical ClashForge DNS values from the wizard form so
 	// the preview and launch config exactly match what the step-2 UI shows.
 	Nameservers  []string `json:"nameservers"`
@@ -114,6 +116,9 @@ func handleSetupFinalConfigPreview(deps Dependencies) http.HandlerFunc {
 		cfgCopy := *deps.Config
 		cfgCopy.DNS.Enable = req.DNS.Enable
 		cfgCopy.DNS.Mode = req.DNS.Mode
+		if req.DNS.Strategy != "" {
+			cfgCopy.DNS.Strategy = req.DNS.Strategy
+		}
 		cfgCopy.DNS.DnsmasqMode = req.DNS.DnsmasqMode
 		cfgCopy.DNS.ApplyOnStart = req.DNS.ApplyOnStart
 		if len(req.DNS.Nameservers) > 0 {
@@ -305,6 +310,9 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 
 		deps.Config.DNS.Enable = req.DNS.Enable
 		deps.Config.DNS.Mode = req.DNS.Mode
+		if req.DNS.Strategy != "" {
+			deps.Config.DNS.Strategy = req.DNS.Strategy
+		}
 		deps.Config.DNS.DnsmasqMode = req.DNS.DnsmasqMode
 		deps.Config.DNS.ApplyOnStart = req.DNS.ApplyOnStart
 		if len(req.DNS.Nameservers) > 0 {
@@ -365,6 +373,8 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		udpNameservers := deps.Config.DNS.Nameservers
 
 		switch {
+		case strings.EqualFold(strings.TrimSpace(deps.Config.DNS.Strategy), config.DNSStrategyAntiHijack):
+			emitStep("dns-probe", "skip", "防劫持策略不发送明文 DNS 探测，也不会自动追加未选定的解析商", "")
 		case len(nodeHostnames) == 0:
 			emitStep("dns-probe", "skip", "暂无已缓存的代理节点，跳过 DNS 劫持检测", "")
 		case len(udpNameservers) == 0:

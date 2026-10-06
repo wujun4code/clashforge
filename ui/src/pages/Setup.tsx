@@ -71,7 +71,7 @@ interface ClashParsed {
   dns?: ClashDNS
 }
 
-type DnsStrategy = 'legacy' | 'split' | 'privacy'
+type DnsStrategy = 'legacy' | 'split' | 'privacy' | 'anti-hijack'
 
 interface FormDNS {
   enable: boolean
@@ -827,7 +827,7 @@ export function Setup() {
       const c = cfg as Record<string, Record<string, unknown>>
       if (c.dns) {
         const rawStrategy = String(c.dns?.strategy || '')
-        const validStrategies: DnsStrategy[] = ['legacy', 'split', 'privacy']
+        const validStrategies: DnsStrategy[] = ['legacy', 'split', 'privacy', 'anti-hijack']
         const strategy: DnsStrategy = validStrategies.includes(rawStrategy as DnsStrategy)
           ? (rawStrategy as DnsStrategy)
           : 'split' // new install or config without strategy → default to split
@@ -946,18 +946,8 @@ export function Setup() {
       enable: dns.enable, mode: dns.mode, dnsmasq_mode: dns.dnsmasq_mode,
       apply_on_start: dns.apply_on_start, listen: dns.listen, ipv6: dns.ipv6,
       strategy: dns.strategy,
-      // Canonical values that drive buildDNSMap
-      nameservers: ['223.5.5.5', '119.29.29.29'],
-      fallback: ['tls://8.8.4.4', 'tls://1.1.1.1', 'https://dns.google/dns-query', 'https://cloudflare-dns.com/dns-query'],
-      // Deliberately omitted (not sent as []): core/apply's dns-probe step
-      // auto-probes and injects DoH when upstream hijacking is detected, and
-      // persists it to config.toml. Sending an explicit [] here would reset
-      // that already-proven-working result back to empty on every single
-      // apply, forcing a from-scratch re-probe each time — if that one probe
-      // attempt doesn't happen to succeed (GFW interference is inconsistent
-      // run to run), the node silently reverts to the hijacked nameservers
-      // even though a working fallback was found moments earlier.
-      fake_ip_filter: ['+.lan', '+.local', 'time.*.com', 'ntp.*.com', '+.ntp.org'],
+      // Preserve saved resolver lists and filters; user YAML takes precedence
+      // during generation. Selecting a strategy must not reset custom DNS.
     },
     network: { mode: net.mode, firewall_backend: net.firewall_backend, bypass_lan: net.bypass_lan, bypass_china: net.bypass_china, apply_on_start: net.apply_on_start, ipv6: net.ipv6 },
   }), [dns, net])
@@ -1763,10 +1753,11 @@ export function Setup() {
                 <h3 className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-2">
                   <Shield size={12} className="text-brand" />DNS 分流策略
                 </h3>
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid gap-2 sm:grid-cols-2">
                   {([
                     { value: 'split'   as DnsStrategy, label: '分流优先',   badge: '推荐',    badgeStyle: 'bg-brand/20 text-brand',           desc: '国内走 ISP DNS，国际走 DoH。ISP 无法截获国际查询。' },
-                    { value: 'privacy' as DnsStrategy, label: '全链路加密', badge: '隐私最大', badgeStyle: 'bg-violet-500/20 text-violet-300', desc: '所有查询走 DoH。DNS 泄露检测 100% 洁净，国内 CDN 略有损耗。' },
+                    { value: 'privacy' as DnsStrategy, label: '加密分流',   badge: '隐私',    badgeStyle: 'bg-violet-500/20 text-violet-300', desc: '网站解析使用加密 DNS，引导解析仍取决于上游配置。' },
+                    { value: 'anti-hijack' as DnsStrategy, label: '防劫持', badge: '严格', badgeStyle: 'bg-emerald-500/20 text-emerald-300', desc: '引导、节点和网站均使用验证证书的加密 DNS，禁止明文回退。需要可达的可信上游。' },
                     { value: 'legacy'  as DnsStrategy, label: '传统模式',   badge: '兼容',    badgeStyle: 'bg-slate-500/20 text-slate-400',   desc: '不生成 nameserver-policy，依赖 fallback-filter。' },
                   ] as const).map(opt => (
                     <button key={opt.value} type="button" onClick={() => dnsSet('strategy', opt.value)}
@@ -1780,6 +1771,11 @@ export function Setup() {
                     </button>
                   ))}
                 </div>
+                {dns.strategy === 'anti-hijack' && (
+                  <p className="text-xs text-muted leading-relaxed">
+                    默认使用 Cloudflare / Google 加密引导，直连不可达时不会降级为明文。请在来源 YAML 或覆盖配置中设置可达的可信加密 DNS；可分别指定国内、境外和节点解析。加密无法保证解析商本身返回正确记录。
+                  </p>
+                )}
               </div>
 
               {/* 透明代理模式 */}

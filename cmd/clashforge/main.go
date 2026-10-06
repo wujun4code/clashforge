@@ -117,8 +117,14 @@ func main() {
 	if err := subManager.Load(); err != nil {
 		log.Warn().Err(err).Msg("load subscriptions")
 	}
+	runtimeConfigReady := true
 	if err := writeRuntimeMihomoConfig(cfg, subManager); err != nil {
 		log.Error().Err(err).Msg("generate mihomo config")
+		// A stale runtime may still contain plaintext DNS. Keep the UI available
+		// for repair, but do not auto-start it under the strict strategy.
+		if strings.EqualFold(strings.TrimSpace(cfg.DNS.Strategy), config.DNSStrategyAntiHijack) {
+			runtimeConfigReady = false
+		}
 	}
 
 	// Netfilter
@@ -136,13 +142,10 @@ func main() {
 	})
 
 	// Crash watchdog: when mihomo exits unexpectedly (e.g. OOM kill), immediately
-	// release DNS/nft so clients can still resolve DNS via plain dnsmasq.
+	// release DNS/nft for availability, except strict DNS must not fail open.
 	// If auto-restart succeeds, re-apply the rules automatically.
 	coreManager.SetCrashCallback(func() {
-		log.Warn().Msg("mihomo crashed, releasing DNS/nft to prevent DNS blackout")
-		for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
-			_ = dns.Restore(mode)
-		}
+		restoreDNSAfterCrash(cfg, dns.Restore)
 		_ = (&netfilter.NftablesBackend{}).Cleanup()
 		_ = (&netfilter.IptablesBackend{DNSPort: cfg.Ports.DNS}).Cleanup()
 	})
@@ -163,7 +166,7 @@ func main() {
 	})
 
 	coreStarted := false
-	if cfg.Core.AutoStartCore {
+	if cfg.Core.AutoStartCore && runtimeConfigReady {
 		if err := coreManager.Start(context.Background()); err != nil {
 			log.Error().Err(err).Msg("auto-start mihomo failed")
 		} else {
@@ -477,6 +480,20 @@ func logStartupHealth(
 		Msg("startup_summary")
 }
 
+// Preserve the managed DNS forwarding on an unexpected core exit in strict mode.
+// Queries fail until restart instead of silently reverting to ISP DNS.
+func restoreDNSAfterCrash(cfg *config.MetaclashConfig, restore func(dns.DnsmasqMode) error) {
+	if cfg.DNS.Enable && cfg.DNS.ApplyOnStart && cfg.DNS.DnsmasqMode != "none" &&
+		strings.EqualFold(strings.TrimSpace(cfg.DNS.Strategy), config.DNSStrategyAntiHijack) {
+		log.Warn().Msg("mihomo crashed: 防劫持模式保留 DNS 接管，等待内核恢复，不回退到运营商 DNS")
+		return
+	}
+	log.Warn().Msg("mihomo crashed, releasing DNS/nft to prevent DNS blackout")
+	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
+		_ = restore(mode)
+	}
+}
+
 func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {
 	nodes := []subscription.ProxyNode{}
 	rawYAMLs := [][]byte{}
@@ -524,6 +541,9 @@ func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscript
 	}
 
 	generated = config.ApplyManagedRuntimeSettings(cfg, generated)
+	if err := config.ValidateRuntimeDNS(cfg, generated); err != nil {
+		return err
+	}
 
 	deviceGroupsPath := config.DeviceGroupsPath(cfg.Core.DataDir)
 	deviceGroups, err := config.LoadDeviceGroups(deviceGroupsPath)

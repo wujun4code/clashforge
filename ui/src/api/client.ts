@@ -462,7 +462,7 @@ export const previewSetupFinalConfig = (payload: {
   dns: {
     enable: boolean; mode: string; dnsmasq_mode: string; apply_on_start: boolean
     listen: string; ipv6: boolean
-    nameservers: string[]; fallback: string[]; doh?: string[]; fake_ip_filter: string[]
+    nameservers?: string[]; fallback?: string[]; doh?: string[]; fake_ip_filter?: string[]
     strategy: string
   }
   network: { mode: string; firewall_backend: string; bypass_lan: boolean; bypass_china: boolean; apply_on_start: boolean; ipv6: boolean }
@@ -505,7 +505,7 @@ export interface CoreApplySource {
 export interface CoreApplyDNS {
   enable?: boolean
   mode?: string          // "fake-ip" | "redir-host"
-  strategy?: string      // "split" | "privacy" | "legacy"
+  strategy?: string      // "split" | "privacy" | "legacy" | "anti-hijack"
   dnsmasq_mode?: string  // "upstream" | "replace" | "none"
   listen?: string        // e.g. "0.0.0.0:17874"
   ipv6?: boolean

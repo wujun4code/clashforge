@@ -99,13 +99,17 @@ type NetworkConfig struct {
 //     CN CDN), geosite:geolocation-!cn → international DoH, unknowns fall through
 //     to fallback-filter as a safety net. Requires geosite.dat.
 //   - "privacy"            — same routing as split, but nameserver is also replaced
-//     with CN DoH so the ISP never sees any DNS query. Requires geosite.dat.
+//     with CN DoH; bootstrap encryption depends on configuration. Requires geosite.dat.
+//   - "anti-hijack"        — encrypted IP bootstrap and independent node DNS;
+//     rejects plaintext/insecure YAML upstreams, with no ISP downgrade.
 type DNSStrategy = string
 
 const (
 	DNSStrategyLegacy  DNSStrategy = "legacy"
 	DNSStrategysplit   DNSStrategy = "split"
 	DNSStrategyPrivacy DNSStrategy = "privacy"
+	// AntiHijack uses authenticated encrypted resolvers and rejects plaintext fallback.
+	DNSStrategyAntiHijack DNSStrategy = "anti-hijack"
 )
 
 type DNSConfig struct {

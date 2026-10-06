@@ -665,7 +665,7 @@ func TestApplyManagedRuntimeSettings_NonTUN_StripsTUN(t *testing.T) {
 	}
 }
 
-func TestApplyManagedRuntimeSettings_DNSEnabled_ReplacesImportedDNS(t *testing.T) {
+func TestApplyManagedRuntimeSettings_DNSEnabled_PreservesImportedResolvers(t *testing.T) {
 	cfg := defaultTestCfg()
 	cfg.DNS.Enable = true
 	cfg.DNS.Mode = "fake-ip"
@@ -698,14 +698,14 @@ func TestApplyManagedRuntimeSettings_DNSEnabled_ReplacesImportedDNS(t *testing.T
 	if dns["enhanced-mode"] != "fake-ip" {
 		t.Errorf("expected enhanced-mode=fake-ip from ClashForge mode, got %v", dns["enhanced-mode"])
 	}
-	if stringsValueContains(dns["nameserver"], "1.2.3.4") {
-		t.Errorf("imported nameserver leaked into managed DNS: %v", dns["nameserver"])
+	if !stringsValueContains(dns["nameserver"], "1.2.3.4") {
+		t.Errorf("imported nameserver was lost: %v", dns["nameserver"])
 	}
-	if stringsValueContains(dns["fallback"], "tls://9.9.9.9") {
-		t.Errorf("imported fallback leaked into managed DNS: %v", dns["fallback"])
+	if !stringsValueContains(dns["fallback"], "tls://9.9.9.9") {
+		t.Errorf("imported fallback was lost: %v", dns["fallback"])
 	}
-	if stringsValueContains(dns["default-nameserver"], "8.8.8.8") {
-		t.Errorf("imported default-nameserver leaked into managed DNS: %v", dns["default-nameserver"])
+	if !stringsValueContains(dns["default-nameserver"], "8.8.8.8") {
+		t.Errorf("imported bootstrap resolver was lost: %v", dns["default-nameserver"])
 	}
 }
 
