@@ -6,12 +6,15 @@ import (
 	"strings"
 )
 
-// The strict preset has no dependency on UDP DNS or ISP-provided resolvers.
-// Reachability is network-dependent; users can replace these in their YAML.
+// Bootstrap and node lookups must work before a proxy can be connected. Use
+// independent encrypted IP endpoints, with Mihomo's native name-cert-verify
+// parameter retaining hostname verification. These DNS4EU endpoints were
+// validated on a WAN where Cloudflare and Google IPs cannot be reached directly.
+// Reachability remains network-dependent; users can replace them in their YAML.
 func applyAntiHijackDefaults(cfg *MetaclashConfig, dns map[string]interface{}, bootstrap []string) {
 	secureBootstrap := []string{
-		"https://1.1.1.1/dns-query#DIRECT",
-		"https://8.8.8.8/dns-query#DIRECT",
+		"https://86.54.11.100/dns-query#DIRECT&name-cert-verify=unfiltered.joindns4.eu",
+		"https://86.54.11.200/dns-query#DIRECT&name-cert-verify=unfiltered.joindns4.eu",
 	}
 	var encryptedBootstrap []string
 	for _, ns := range bootstrap {
@@ -23,15 +26,21 @@ func applyAntiHijackDefaults(cfg *MetaclashConfig, dns map[string]interface{}, b
 		secureBootstrap = encryptedBootstrap
 	}
 	nodes := secureBootstrap
+	// Domestic website DNS is separate from node DNS: retain local CDN answers
+	// without trusting a domestic provider to resolve the proxy's hostname.
+	domestic := []string{"https://doh.pub/dns-query#DIRECT"}
 	// DoH may have been populated by the legacy automatic probe. Strict mode
 	// must not adopt that provider as trusted without an explicit YAML choice.
 	foreign := cfg.DNS.Fallback
 	if len(foreign) == 0 {
 		foreign = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
 	}
+	foreign = rulesAwareNameservers(foreign)
 	dns["default-nameserver"] = secureBootstrap
 	dns["proxy-server-nameserver"] = nodes
 	dns["nameserver"] = foreign
+	dns["direct-nameserver"] = domestic
+	dns["direct-nameserver-follow-policy"] = true
 	dns["respect-rules"] = true
 	dns["use-hosts"] = true
 	dns["use-system-hosts"] = false
@@ -42,10 +51,25 @@ func applyAntiHijackDefaults(cfg *MetaclashConfig, dns map[string]interface{}, b
 	delete(dns, "nameserver-policy")
 	if geositeExists(cfg.Core.DataDir) {
 		dns["nameserver-policy"] = map[string]interface{}{
-			"geosite:cn":              nodes,
+			"geosite:cn":              domestic,
 			"geosite:geolocation-!cn": foreign,
 		}
 	}
+}
+
+// #RULES makes the DNS transport follow the user's routing rules. A resolver
+// already pinned to a proxy/interface keeps that explicit choice. No proxy
+// selector is invented, and DIRECT routing remains a user-controlled decision.
+func rulesAwareNameservers(servers []string) []string {
+	result := make([]string, len(servers))
+	for i, ns := range servers {
+		if strings.Contains(ns, "#") {
+			result[i] = ns
+		} else {
+			result[i] = ns + "#RULES"
+		}
+	}
+	return result
 }
 
 func encryptedNameserver(ns string) bool {

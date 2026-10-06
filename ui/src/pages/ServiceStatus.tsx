@@ -64,7 +64,7 @@ const DNS_STRATEGY_INFO: Record<string, ModeInfo> = {
   'anti-hijack': {
     label: '防劫持模式',
     tone: 'good',
-    description: '引导、节点和网站解析使用加密 DNS 并验证证书；拒绝明文上游和回退。解析商需可信且可达，国内外流量仍按路由规则分流。',
+    description: '节点先通过独立直连的加密 DNS 解析，网站 DNS 遵循分流规则；验证证书并拒绝明文回退，国内网站保持原有流量分流。',
   },
 }
 

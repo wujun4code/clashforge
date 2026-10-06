@@ -20,9 +20,10 @@ ClashForge 继续管理 DNS 开关、监听端口、IPv6 开关、解析模式�
 
 ## 防劫持模式的行为
 
-- 引导解析默认使用 Cloudflare / Google 的 HTTPS IP 端点；可通过 YAML 替换。
+- 引导和节点解析默认使用 DNS4EU 的 HTTPS IP 端点，通过 Mihomo 原生 `name-cert-verify` 校验证书域名。它们直连且不依赖代理；可通过 YAML 替换。Cloudflare / Google 在此线路无法直连，不再用于默认引导。
 - 节点解析独立直连，不依赖尚未连接的代理。旧的自动探测 `dns.doh` 不会被当作新策略的可信节点上游；请在 YAML 显式选择。
-- 网站默认使用配置中的加密 `fallback` 上游作为主解析；有 GeoSite 时保留国内、境外解析策略，允许用户分别指定可信服务。
+- 网站默认使用配置中的加密 `fallback` 上游作为主解析，未指定出口的上游补充 Mihomo 原生 `#RULES`，已有代理组或 `#DIRECT` 选择保持不变。有 GeoSite 时保留国内、境外解析策略，允许用户分别指定可信服务；直连网站解析也遵循 policy。
+- 国内网站和默认直连网站使用已验证可达的腾讯 DoH 保留国内 CDN 选择；它只负责普通网站，节点解析始终使用独立的 DNS4EU。可以在 YAML 替换国内网站的解析器。
 - 不使用 ISP/DHCP DNS，不生成明文 primary 与加密 fallback 的竞速。没有 GeoSite 时仍用加密主解析。
 - 所有最终合并后的 DNS 上游都必须是 DoH/DoT/DoQ，并验证证书。UDP DNS、`tcp://`、`system`、`dhcp://`、跳过证书验证会导致配置生成失败，保留原运行时文件；启动/重启不会应用这份错误配置。
 - `default-nameserver` 必须是 IP 端点。引导和节点 DNS 不能使用 `#RULES` 或代理组，避免启动循环。网站 DNS 可以使用 `#RULES` 或显式代理组。
@@ -33,9 +34,13 @@ ClashForge 继续管理 DNS 开关、监听端口、IPv6 开关、解析模式�
 
 此前在这条 WAN 上测试到：Cloudflare / Google 常见 DNS IP 直连超时；DNS4EU 的 `unfiltered.joindns4.eu` 通过 `86.54.11.100`、`86.54.11.200` 直连 HTTPS 可用，证书验证正常，节点域名结果正确。
 
-可参考 [DNS4EU 覆盖配置](../examples/dns-anti-hijack-dns4eu.yaml)。该示例通过配置 hosts 固定解析器入口 IP，保留 HTTPS 域名与 SNI，从而无需用明文 DNS 查找解析器域名。网站境外 DNS 使用 `#RULES`，需要现有路由规则将对应 DNS IP 送入可用代理。模板尚未部署到路由器，也尚未在升级后的路由器上验证冷启动。
+可参考 [DNS4EU 覆盖配置](../examples/dns-anti-hijack-dns4eu.yaml)。引导和节点直接连接解析器 IP，通过 `name-cert-verify=unfiltered.joindns4.eu` 保留证书域名校验；不跳过证书验证，也无需明文 DNS。普通域名的 HTTPS 解析器另通过配置 hosts 固定入口 IP，保留其域名与 SNI。网站境外 DNS 使用 `#RULES`，需要现有路由规则将对应 DNS IP 送入可用代理；`#RULES` 不会强制覆盖用户选择的 DIRECT。
 
-示例保留国内网站的流量分流，但国内域名使用境外解析器，可能影响 CDN 选择和延迟。需要国内 CDN 优化时，可以将 `geosite:cn` 替换为自己信任且验证可达的国内加密解析服务；该修改不会改变节点专用 DNS。入口 IP 固定后需要在服务商换地址时维护，不能保证永久可达。没有 GeoSite 时，应删除示例中的两条 geosite policy。
+2026-10-06 在目标路由器的独立 Mihomo 测试实例中，旧 Cloudflare / Google 直连预设复现解析超时和 Tokyo 连接失败；两台 DNS4EU 的 HTTPS 查询均返回 `20.18.48.221`，使用原生证书域名校验的独立节点 DNS 后，Tokyo AnyTLS 直连测试成功（首次测试 1210 ms，包含解析和建立连接）。这项测试没有修改原服务配置；它验证此线路的节点引导路径，不代表所有线路或所有网站都可达。
+
+最终预设还以当前订阅和规则进行完整实例验证：Tokyo 直连延迟 87 ms，Google DNS 查询成功，境外 HTTPS 返回 204，百度通过国内 DoH 获得 `180.101.51.73` / `180.101.49.44` 并返回 HTTPS 200。测试实例使用独立端口和数据目录，随后已停止。
+
+示例保留国内网站的流量分流，国内域名使用国内加密解析器，节点域名使用独立境外解析器。可以将 `geosite:cn` 和 `direct-nameserver` 替换为自己信任且验证可达的国内加密解析服务；该修改不会改变节点专用 DNS。入口 IP 固定后需要在服务商换地址时维护，不能保证永久可达。没有 GeoSite 时，应删除示例中的两条 geosite policy。
 
 普通模式也支持此前验证的 TCP 引导配置：
 

@@ -1773,7 +1773,7 @@ export function Setup() {
                 </div>
                 {dns.strategy === 'anti-hijack' && (
                   <p className="text-xs text-muted leading-relaxed">
-                    默认使用 Cloudflare / Google 加密引导，直连不可达时不会降级为明文。请在来源 YAML 或覆盖配置中设置可达的可信加密 DNS；可分别指定国内、境外和节点解析。加密无法保证解析商本身返回正确记录。
+                    引导和节点使用独立直连的 DNS4EU，国内网站使用国内 DoH，境外 DNS 遵循当前分流规则。可在来源 YAML 或覆盖配置中分别指定各类加密上游，国内流量保持原规则直连。解析器需可信且可达，加密不能保证解析商返回正确记录。
                   </p>
                 )}
               </div>

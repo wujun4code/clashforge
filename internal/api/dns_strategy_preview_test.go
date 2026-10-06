@@ -23,7 +23,7 @@ func TestSetupPreviewUsesRequestedDNSStrategyWithoutChangingSavedSettings(t *tes
 	if response.Code != http.StatusOK {
 		t.Fatalf("preview failed: %d %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), "https://1.1.1.1/dns-query#DIRECT") || strings.Contains(response.Body.String(), "dhcp://") {
+	if !strings.Contains(response.Body.String(), "https://86.54.11.100/dns-query#DIRECT") || strings.Contains(response.Body.String(), "dhcp://") {
 		t.Fatalf("preview did not use requested strict DNS strategy: %s", response.Body.String())
 	}
 	if cfg.DNS.Strategy != config.DNSStrategysplit {

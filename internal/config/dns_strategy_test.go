@@ -131,6 +131,103 @@ func generatedDNS(t *testing.T, generated map[string]interface{}) map[string]int
 	return dns
 }
 
+func TestAntiHijackSeparatesIndependentBootstrapAndRuleAwareWebsiteDNS(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategyAntiHijack
+	withoutGeosite(cfg)
+	cfg.DNS.Fallback = []string{
+		"https://dns.google/dns-query",
+		"tls://8.8.4.4",
+		"https://chosen.example/dns-query#MyProxy",
+		"https://local.example/dns-query#DIRECT",
+	}
+	generated, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.ValidateRuntimeDNS(cfg, generated); err != nil {
+		t.Fatal(err)
+	}
+	dns := generatedDNS(t, generated)
+	bootstrap := dns["default-nameserver"].([]string)
+	if len(bootstrap) < 2 {
+		t.Fatal("independent bootstrap must have multiple encrypted endpoints")
+	}
+	for _, ns := range bootstrap {
+		if !strings.Contains(ns, "#DIRECT&name-cert-verify=unfiltered.joindns4.eu") {
+			t.Errorf("bootstrap must use independent DNS4EU with certificate verification: %s", ns)
+		}
+		if strings.Contains(ns, "1.1.1.1/") || strings.Contains(ns, "8.8.8.8/") {
+			t.Errorf("bootstrap must not rely on the directly unreachable website resolvers: %s", ns)
+		}
+	}
+	if !reflect.DeepEqual(dns["proxy-server-nameserver"], bootstrap) {
+		t.Errorf("node lookups must stay independent of website proxy DNS: %v", dns)
+	}
+	if reflect.DeepEqual(dns["direct-nameserver"], bootstrap) || !stringsValueContains(dns["direct-nameserver"], "https://doh.pub/dns-query#DIRECT") {
+		t.Errorf("direct websites need domestic encrypted DNS separate from node DNS: %v", dns["direct-nameserver"])
+	}
+	wantForeign := []string{
+		"https://dns.google/dns-query#RULES",
+		"tls://8.8.4.4#RULES",
+		"https://chosen.example/dns-query#MyProxy",
+		"https://local.example/dns-query#DIRECT",
+	}
+	if !reflect.DeepEqual(dns["nameserver"], wantForeign) {
+		t.Errorf("website lookups must obey routing without replacing explicit transports: %v", dns["nameserver"])
+	}
+	if !reflect.DeepEqual(cfg.DNS.Fallback, []string{"https://dns.google/dns-query", "tls://8.8.4.4", "https://chosen.example/dns-query#MyProxy", "https://local.example/dns-query#DIRECT"}) {
+		t.Error("generation modified the saved user resolver list")
+	}
+	if dns["direct-nameserver-follow-policy"] != true {
+		t.Error("direct website lookups must honor domestic/custom DNS policy")
+	}
+}
+
+func TestAntiHijackDomesticPolicyNeverOverridesNodeDNS(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategyAntiHijack
+	defer withGeosite(t, cfg)()
+	generated, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dns := generatedDNS(t, generated)
+	policy := nameserverPolicy(dns)
+	if !reflect.DeepEqual(policy["geosite:cn"], dns["direct-nameserver"]) {
+		t.Error("domestic website policy must use the domestic direct resolver")
+	}
+	if !reflect.DeepEqual(policy["geosite:geolocation-!cn"], dns["nameserver"]) {
+		t.Error("foreign website policy must use rule-routed encrypted resolvers")
+	}
+	if stringsValueContains(dns["proxy-server-nameserver"], "https://doh.pub/dns-query#DIRECT") {
+		t.Error("domestic website provider leaked into independent node DNS")
+	}
+	if err := config.ValidateRuntimeDNS(cfg, generated); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAntiHijackKeepsExplicitEncryptedIPBootstrap(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.DNS.Strategy = config.DNSStrategyAntiHijack
+	withoutGeosite(cfg)
+	cfg.DNS.Nameservers = []string{"https://192.0.2.1/dns-query#DIRECT&name-cert-verify=trusted.example"}
+	generated, err := config.Generate(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.ValidateRuntimeDNS(cfg, generated); err != nil {
+		t.Fatal(err)
+	}
+	dns := generatedDNS(t, generated)
+	for _, field := range []string{"default-nameserver", "proxy-server-nameserver"} {
+		if !reflect.DeepEqual(dns[field], cfg.DNS.Nameservers) {
+			t.Errorf("%s replaced the explicitly selected encrypted bootstrap: %v", field, dns[field])
+		}
+	}
+}
+
 func TestDNSStrategyAntiHijackRejectsUnsafeMergedYAML(t *testing.T) {
 	cases := []struct{ name, yaml string }{
 		{"plaintext-bootstrap", "default-nameserver: [223.5.5.5]"},
