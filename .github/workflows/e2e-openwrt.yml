@@ -102,9 +102,10 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          GOMAXPROCS=2 go test -p 2 -count=1 ./internal/config ./internal/netfilter ./internal/dns ./internal/api ./internal/quickstart ./cmd/clashforge ./tests/integration
+          GOMAXPROCS=2 go test -p 2 -count=1 ./internal/config ./internal/runtimecfg ./internal/subscription ./internal/netfilter ./internal/dns ./internal/api ./internal/quickstart ./cmd/clashforge ./tests/integration
           python3 -m pip install 'PyYAML==6.0.2'
           python3 tests/e2e/test_openwrt_scripts.py
+          python3 tests/e2e/test_clashforgectl_reset.py
           python3 tests/e2e/test_mihomo_download.py
           python3 tests/e2e/test_probe_contract.py
           python3 tests/e2e/test_subscription_contract.py

@@ -159,6 +159,15 @@ test() {
         self.assertIn('sh /tmp/e2e-verify-tun-cleanup.sh', workflow_text)
         self.assertNotIn('192.168.10.1', workflow_text)
 
+    def test_coldboot_integrity_and_reset_regressions_are_ci_gates(self):
+        for file in ('ci.yml', 'e2e-openwrt.yml'):
+            text = '\n'.join(runs(job) for job in workflow(file)['jobs'].values() if 'steps' in job)
+            test_commands = re.findall(r'\bgo test[^\n]+', text)
+            for package in ('./internal/runtimecfg', './internal/subscription'):
+                self.assertTrue(any(package in shlex.split(command) for command in test_commands),
+                                f'{file}: changed package {package} must execute its tests')
+            self.assertIn('python3 tests/e2e/test_clashforgectl_reset.py', text)
+
     def test_subscription_regressions_are_ci_gates(self):
         for file in ('ci.yml', 'e2e-openwrt.yml'):
             text = '\n'.join(runs(job) for job in workflow(file)['jobs'].values() if 'steps' in job)
