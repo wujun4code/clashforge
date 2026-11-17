@@ -279,7 +279,7 @@ jobs:
           Maintainer: wujun4code
           Section: net
           Priority: optional
-          Depends: ca-bundle
+          Depends: ca-bundle, ip-full
           Source: https://github.com/wujun4code/clashforge
           Description: Mihomo (Clash.Meta) proxy manager for OpenWrt.
            Includes bundled mihomo ${MIHOMO_VER_CLEAN}. Web UI on port 7777.
@@ -461,7 +461,7 @@ jobs:
                 --info "origin:https://github.com/wujun4code/clashforge" \
                 --info "url:https://github.com/wujun4code/clashforge" \
                 --info "maintainer:wujun4code" \
-                --info "depends:ca-bundle" \
+                --info "depends:ca-bundle ip-full" \
                 --script "post-install:/work/apk-scripts/post-install" \
                 --script "pre-upgrade:/work/apk-scripts/pre-upgrade" \
                 --script "post-upgrade:/work/apk-scripts/post-upgrade" \
@@ -741,7 +741,11 @@ jobs:
 
             ### 手动安装 IPK
 
-            先下载对应架构的 IPK，再通过 opkg 安装（`--nodeps` 跳过依赖检查，因 mihomo 已打包在内）：
+            先安装必要的完整 iproute2（BusyBox ip 不支持安全的策略路由所有权），再下载对应架构的 IPK：
+
+            ```sh
+            opkg update && opkg install ca-bundle ip-full
+            ```
 
             #### x86_64（PC 路由 / x86 OpenWrt）
             ```sh

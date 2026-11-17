@@ -77,6 +77,14 @@ cf_preflight() {
         cf_preflight_error "unrecognized Mihomo version from selected core: $bin"; return 1;
     }
     logger -t clashforge "Selected core: $bin; $(printf '%s\n' "$version" | head -1)"
+    case "$mode" in
+        tproxy|tun)
+            # BusyBox hides protocol ownership and cannot select rule protocol
+            # on delete. Never fall back to its lossy textual rule/route output.
+            ip -N -d -o rule show >/dev/null 2>&1 || {
+                cf_preflight_error "policy routing requires iproute2 protocol ownership support: install ip-full (opkg update && opkg install ip-full); BusyBox ip is unsupported"; return 1;
+            } ;;
+    esac
     [ "$mode" = tun ] || return 0
 
     stack=$(cf_config_string "$config" network.tun stack mixed) || {

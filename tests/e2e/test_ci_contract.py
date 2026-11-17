@@ -18,6 +18,15 @@ def runs(job):
     return '\n'.join(step.get('run', '') for step in job['steps'])
 
 class WorkflowContracts(unittest.TestCase):
+    def test_openwrt_installs_full_iproute2_even_with_nodeps(self):
+        for name in ('release.yml', 'e2e-openwrt.yml'):
+            self.assertIn('Depends: ca-bundle, ip-full', (ROOT / '.github/workflows' / name).read_text())
+        text = (ROOT / '.github/workflows/e2e-openwrt.yml').read_text()
+        install = 'opkg update && opkg install ip-full && ip -N -d -o rule show >/dev/null'
+        self.assertIn('_ssh "' + install + '"', text)
+        self.assertLess(text.index(install), text.index('opkg install --nodeps --force-downgrade'))
+        self.assertNotIn(install + ' || true', text)
+
     def test_flutter_sdk_download_is_scoped_http1_and_cached(self):
         data = workflow('android-ci.yml')
         for name in ('test', 'e2e'):

@@ -30,6 +30,7 @@ class OpenWrtScripts(unittest.TestCase):
             self.executable(self.bin / name, 'printf "%s %s\\n" "${0##*/}" "$*" >> "$CALLS"\nexit 1\n')
         self.executable(self.bin / "id", 'echo 0\n')
         self.executable(self.bin / "logger", 'printf "logger %s\\n" "$*" >> "$CALLS"\n')
+        self.executable(self.bin / "ip", 'printf "ip %s\\n" "$*" >> "$CALLS"\n')
         (self.root / "dev").mkdir()
         (self.root / "dev/null").symlink_to("/dev/null")
         self.env = dict(os.environ, PATH=str(self.bin), CALLS=str(self.calls))
@@ -93,6 +94,17 @@ procd_add_reload_trigger() {{ echo "trigger $*" >> "$CALLS"; }}
         self.assertEqual(result.returncode, 0, result.stderr + self.log())
         self.assertEqual(self.config.read_text(), before)
         self.assertIn(f'procd_param command {self.root}/usr/bin/clashforge -config {self.config}', self.log())
+
+    def test_busybox_ip_blocks_policy_modes_before_dispatch(self):
+        self.executable(self.bin / "ip", 'echo "BusyBox v1.36.1" >&2\nexit 1\n')
+        for mode in ("tproxy", "tun"):
+            with self.subTest(mode=mode):
+                self.write_config(mode)
+                result = self.run_init()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ip-full", self.log())
+                self.assertIn("protocol ownership", self.log())
+                self.assertNotIn("procd_open", self.log())
 
     def test_core_check_without_timeout_uses_bounded_daemon_helper(self):
         self.write_config()
@@ -260,7 +272,7 @@ procd_add_reload_trigger() {{ echo "trigger $*" >> "$CALLS"; }}
 esac
 ''')
         self.executable(self.bin / "ip", '''case "$*" in
-  '-4 rule show') printf '%s\\n' '9020: from all lookup main suppress_prefixlength 0 proto 242' '9021: from all lookup 2022 proto 242' ;;
+  '-4 -d rule show') printf '%s\\n' '9020: from all lookup main suppress_prefixlength 0 proto 242' '9021: from all lookup 2022 proto 242' ;;
   '-4 route show table 2022') echo 'default dev Meta scope link' ;;
   *) echo '2: Meta: <POINTOPOINT,UP> mtu 1500 state UNKNOWN' ;;
 esac

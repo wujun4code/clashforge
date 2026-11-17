@@ -151,7 +151,7 @@ jobs:
           Maintainer: wujun4code
           Section: net
           Priority: optional
-          Depends: ca-bundle
+          Depends: ca-bundle, ip-full
           Source: https://github.com/wujun4code/clashforge
           Description: Mihomo (Clash.Meta) proxy manager for OpenWrt.
            Includes bundled mihomo ${MIHOMO_VER}. Web UI on port 7777.
@@ -343,6 +343,9 @@ jobs:
           echo "IPK 传输完成 — 本地: ${LOCAL_SIZE} bytes，路由器收到: ${IPK_SIZE} bytes"
           [ "$IPK_SIZE" = "$LOCAL_SIZE" ] || (echo "IPK 传输不完整：本地 ${LOCAL_SIZE} bytes，路由器只收到 ${IPK_SIZE} bytes（SSH 连接可能被中途打断，重跑一次即可）" && exit 1)
 
+          # --nodeps skips package dependencies, so install the product's full
+          # iproute2 requirement explicitly and fail on repository/install errors.
+          _ssh "opkg update && opkg install ip-full && ip -N -d -o rule show >/dev/null"
           _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
 
           # 安装内核模块

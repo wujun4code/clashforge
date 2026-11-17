@@ -178,7 +178,7 @@ else
 fi
 
 # These are control-plane assertions, NOT a LAN TCP/UDP forwarding test.
-RULES=$(ip -4 rule show 2>/dev/null || true)
+RULES=$(ip -4 -d rule show 2>/dev/null || true)
 if printf '%s\n' "$RULES" | grep -qE '^9020:[[:space:]]+from all lookup main .*suppress_prefixlength 0' &&
    printf '%s\n' "$RULES" | grep -qE '^9020:.*(proto|protocol) 242' &&
    printf '%s\n' "$RULES" | grep -qE '^9021:[[:space:]]+from all lookup 2022 (proto|protocol) 242'; then

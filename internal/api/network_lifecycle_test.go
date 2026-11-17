@@ -32,7 +32,7 @@ if [ -n "$CF_FAIL_COMMAND" ]; then case "$full" in *"$CF_FAIL_COMMAND"*) exit 1;
 case "$full" in
  ip:'-4 link show dev Meta') printf '9: Meta: <POINTOPOINT,UP,LOWER_UP> mtu 9000\n';;
  ip:'-4 route show table 2022') printf 'default dev Meta\n';;
- ip:'-4 rule show')
+ ip:'-4 -d rule show')
   printf '0: from all lookup local\n'
   IFS= read -r flag < "$CF_MOCK_STATE_DIR/9020"
   [ "$flag" = 1 ] && printf '9020: from all lookup main suppress_prefixlength 0 proto 242\n'

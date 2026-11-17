@@ -14,6 +14,9 @@ import (
 // This is not transactional rollback or a global fail-closed guarantee: earlier
 // commands and firewall rules may already be installed when an error is returned.
 func applyTProxyPolicyRouting(enableIPv6 bool) error {
+	if _, err := inspectPolicyRules(); err != nil {
+		return err
+	}
 	commands := [][]string{
 		{"rule", "add", "fwmark", fwMark, "table", routeTable},
 		{"route", "add", "local", "default", "dev", "lo", "table", routeTable},
@@ -42,6 +45,9 @@ func applyTProxyPolicyRouting(enableIPv6 bool) error {
 // flush or deletion of rules with extra source/interface/mask selectors. Inspect
 // complete tuples and use their priority only in conjunction with that tuple.
 func cleanupTProxyPolicyRouting() error {
+	if _, err := inspectPolicyRules(); err != nil {
+		return err
+	}
 	var errs []error
 	for _, spec := range []struct{ family, mark, table string }{
 		{"", fwMark, routeTable}, {"-6", fwMark, routeTable}, {"", fwMarkOutput, routeTableOutput},
@@ -60,7 +66,7 @@ func cleanupTProxyPolicyRouting() error {
 		}
 		// Numeric output avoids aliases from /etc/iproute2/rt_tables masking
 		// our table numbers during exact tuple matching.
-		out, err := run("-N", "-o", "rule", "show")
+		out, err := run("-N", "-d", "-o", "rule", "show")
 		if err != nil {
 			errs = append(errs, err)
 		} else {

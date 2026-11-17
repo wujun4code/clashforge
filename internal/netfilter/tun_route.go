@@ -77,9 +77,10 @@ func (r tunRouteSpec) matches(line string) bool {
 }
 
 func readTunRules() ([]string, error) {
-	out, err := exec.Command("ip", "-4", "rule", "show").CombinedOutput()
+	// Detailed output is required: the default rule listing hides protocols.
+	out, err := exec.Command("ip", "-4", "-d", "rule", "show").CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("inspect IPv4 TUN rules: %w: %s", err, out)
+		return nil, policyIPInspectionError("inspect IPv4 TUN rules", out, err)
 	}
 	return strings.Split(string(out), "\n"), nil
 }

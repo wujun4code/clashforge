@@ -54,6 +54,7 @@ if name in ['iptables','ip6tables']:
    del entries[chain]
   done()
 if name=='ip':
+ a=[x for x in a if x!='-d']
  family='6' if a and a[0]=='-6' else '4'
  if family=='6': a=a[1:]
  if a and a[0]=='-N': a=a[1:]
@@ -319,7 +320,7 @@ func TestOwnershipIptablesNFTAbsentIsIdempotent(t *testing.T) {
 }
 
 func TestOwnershipInspectionFailureRetainsPending(t *testing.T) {
-	for _, failure := range []string{"ip -N -o rule show", "ip -6 -N -o rule show", "ip -o route show", "ip -6 -o route show"} {
+	for _, failure := range []string{"ip -N -d -o rule show", "ip -6 -N -d -o rule show", "ip -o route show", "ip -6 -o route show"} {
 		t.Run(failure, func(t *testing.T) {
 			read, update := ownershipMock(t)
 			m := NewManager(Config{Mode: "tproxy", FirewallBackend: "nftables", EnableIPv6: true})

@@ -35,11 +35,12 @@ s=json.load(open(p)); args=sys.argv[1:]; name=os.path.basename(sys.argv[0]); cmd
 s['calls'].append(cmd)
 def done(out='',code=0):
  json.dump(s,open(p,'w')); print(out); sys.exit(code)
+cmd=cmd.replace(' -d ', ' ')
 failures=s['fail'] if isinstance(s['fail'],list) else [s['fail']]
 if any(f and f in cmd.replace(' -4 ', ' ') for f in failures): done('injected failure',1)
 if any(f in cmd.replace(' -4 ', ' ') for f in s.get('noop',[])): done()
 if name=='ip':
- a=[x for x in args if x not in ('-4','-6')]
+ a=[x for x in args if x not in ('-4','-6','-d')]
  if a[:2]==['rule','show']: done('\n'.join(s['rules'] or []))
  if a[:2]==['route','show']: done(s.get('route','default dev Meta scope link'))
  if a[:2]==['link','show']: done(s.get('link','9: Meta: <POINTOPOINT,UP> mtu 1500'))

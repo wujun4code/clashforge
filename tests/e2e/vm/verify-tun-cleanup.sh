@@ -1,7 +1,7 @@
 #!/bin/sh
 # Read-only TUN-specific cleanup assertions. No route/rule/firewall mutations.
 set -eu
-rules=$(ip -4 rule show) || { echo 'FAIL: cannot inspect IPv4 rules' >&2; exit 1; }
+rules=$(ip -4 -d rule show) || { echo 'FAIL: cannot inspect IPv4 rules' >&2; exit 1; }
 if printf '%s\n' "$rules" | grep -E '^902[01]:' | grep -qE '(proto|protocol) 242([[:space:]]|$)'; then
     echo 'FAIL: owned TUN policy rules remain after stop' >&2
     exit 1
