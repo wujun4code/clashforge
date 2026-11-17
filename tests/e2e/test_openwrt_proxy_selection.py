@@ -42,7 +42,7 @@ except Exception: sys.exit(1)
 
 
 class SelectionTest(unittest.TestCase):
-    def run_case(self, case='', generated=False, caller=None):
+    def run_case(self, case='', generated=False, caller=None, limited_tr=False, minimal_tools=False):
         main, root = ('Proxy', 'Final') if generated else (MAIN, ROOT)
         proxies = {
             NODE: {'name': NODE, 'type': 'AnyTLS'},
@@ -103,6 +103,32 @@ class SelectionTest(unittest.TestCase):
             if native: (bindir / 'jsonfilter').symlink_to(native)
             else:
                 shim = bindir / 'jsonfilter'; shim.write_text(SHIM); shim.chmod(0o700)
+            if limited_tr:
+                # OpenWrt 23.05.5's BusyBox tr silently treats POSIX character
+                # classes literally. Observed on the actual E2E VM: AnyTLS
+                # stays AnyTLS with [:upper:]/[:lower:], but A-Z/a-z works.
+                tr = bindir / 'tr'
+                tr.write_text('''#!/usr/bin/env python3
+import sys
+data = sys.stdin.buffer.read()
+args = sys.argv[1:]
+if args == ['[:upper:]', '[:lower:]']:
+    pass
+elif args == ['A-Z', 'a-z']:
+    data = data.translate(bytes.maketrans(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ', b'abcdefghijklmnopqrstuvwxyz'))
+else:
+    raise SystemExit('unexpected tr invocation in selector fixture')
+sys.stdout.buffer.write(data)
+''')
+                tr.chmod(0o700)
+            if minimal_tools:
+                # The actual OpenWrt image has no od. Do not inherit the
+                # developer host's larger utility set and hide that gap.
+                for tool in ['python3', 'curl', 'tr', 'sed', 'grep', 'cp', 'cmp', 'rm', 'mktemp', 'awk', 'sh']:
+                    if not (bindir / tool).exists():
+                        executable = shutil.which(tool)
+                        assert executable is not None, tool
+                        (bindir / tool).symlink_to(executable)
             server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
             thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
             script = HELPER
@@ -117,7 +143,7 @@ class SelectionTest(unittest.TestCase):
                 (Path(tmp) / 'select-proxy.sh').symlink_to(HELPER)
             try:
                 result = subprocess.run(['/bin/sh', str(script)], env=dict(os.environ,
-                    PATH=str(bindir) + os.pathsep + os.environ['PATH'], TMPDIR=tmp,
+                    PATH=str(bindir) if minimal_tools else str(bindir) + os.pathsep + os.environ['PATH'], TMPDIR=tmp,
                     CF_API=f'http://127.0.0.1:{server.server_port}/api/v1'),
                     capture_output=True, text=True, timeout=20)
             finally:
@@ -142,6 +168,34 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(len(puts), 2)
         for i in puts: self.assertEqual(events[i + 1][0], 'GET')
         self.assertEqual(events[-1][0], 'GET')
+
+    def test_busybox_tr_without_classes_selects_real_anytls(self):
+        result, events, proxies, main, root = self.run_case(limited_tr=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(proxies[main]['now'], NODE)
+        self.assertEqual(proxies[root]['now'], main)
+        for group in ['GLOBAL', 'Unrelated', '🎯 全球直连']:
+            self.assertEqual(proxies[group]['now'], 'DIRECT')
+        self.assertEqual(len([e for e in events if e[0] == 'PUT']), 2)
+
+    def test_busybox_tr_without_classes_rejects_wrong_protocol(self):
+        result, events, *_ = self.run_case('wrong-protocol', limited_tr=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('expected AnyTLS node missing or wrong protocol', result.stderr)
+        self.assertFalse(any(e[0] == 'PUT' for e in events))
+
+    def test_busybox_tr_without_classes_checks_final_leaf(self):
+        result, *_ = self.run_case('leaf-changed', limited_tr=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('final leaf protocol changed', result.stderr)
+
+    def test_minimal_openwrt_tools_without_od_preserve_utf8_selection(self):
+        result, events, proxies, main, root = self.run_case(limited_tr=True, minimal_tools=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(proxies[main]['now'], NODE)
+        self.assertEqual(proxies[root]['now'], main)
+        self.assertEqual(proxies['🎯 全球直连']['now'], 'DIRECT')
+        self.assertEqual(len([e for e in events if e[0] == 'PUT']), 2)
 
     def test_generated_proxy_final_chain(self):
         result, _, proxies, main, root = self.run_case(generated=True)

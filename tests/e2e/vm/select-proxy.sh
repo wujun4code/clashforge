@@ -16,7 +16,14 @@ get() { curl --noproxy '*' -sf --connect-timeout 3 --max-time 10 "$CF_API/$1" > 
 field() { jsonfilter -i "$1" -e "$2" 2>/dev/null || true; }
 quote() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 key() { printf '@.data.proxies["%s"]%s' "$(quote "$1")" "$2"; }
-urlencode() { printf '%s' "$1" | od -An -v -tx1 | awk '{for(i=1;i<=NF;i++) printf "%%%s",toupper($i)}'; }
+urlencode() {
+    # Encode UTF-8 bytes with awk already required by the helper. OpenWrt's
+    # minimal BusyBox image need not provide od; LC_ALL=C keeps byte semantics.
+    printf '%s' "$1" | LC_ALL=C awk '
+        BEGIN { for (i = 1; i < 256; i++) bytes[sprintf("%c", i)] = i }
+        { for (i = 1; i <= length($0); i++) printf "%%%02X", bytes[substr($0, i, 1)] }
+    '
+}
 has() { grep -Fxq -- "$1" "$2"; }
 # Line-oriented graph storage cannot represent control bytes. Reject, never
 # silently normalize names (emoji, spaces, percent signs and quotes are valid).
@@ -45,7 +52,9 @@ case "$ROOT" in *'
 '*|DIRECT|REJECT|GLOBAL) fail 'MATCH target is not a unique proxy group' ;; esac
 get proxies "$WORK/before.json"
 [ "$(field "$WORK/before.json" '@.ok')" = true ] || fail 'proxy response rejected'
-ACTUAL_TYPE=$(field "$WORK/before.json" "$(key "$NODE" '.type')" | tr '[:upper:]' '[:lower:]')
+# Protocol labels are ASCII. OpenWrt BusyBox may omit tr character-class
+# support, silently leaving AnyTLS unchanged with [:upper:]/[:lower:].
+ACTUAL_TYPE=$(field "$WORK/before.json" "$(key "$NODE" '.type')" | tr 'A-Z' 'a-z')
 [ "$ACTUAL_TYPE" = "$TYPE" ] && [ "$TYPE" = anytls ] || fail 'expected AnyTLS node missing or wrong protocol'
 field "$WORK/before.json" '@.data.proxies[*].name' > "$WORK/names"
 printf '%s\n' "$NODE" > "$WORK/reached"
@@ -119,5 +128,5 @@ while [ "$current" != "$NODE" ]; do
     [ -n "$next" ] && has "$next" "$WORK/members" || fail 'invalid final selected member'
     current=$next
 done
-[ "$(field "$WORK/final.json" "$(key "$NODE" '.type')" | tr '[:upper:]' '[:lower:]')" = anytls ] || fail 'final leaf protocol changed'
+[ "$(field "$WORK/final.json" "$(key "$NODE" '.type')" | tr 'A-Z' 'a-z')" = anytls ] || fail 'final leaf protocol changed'
 printf 'PASS proxy selection: rule MATCH chain read back to expected AnyTLS node\n'
