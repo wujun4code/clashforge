@@ -8,6 +8,82 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 class VpnControlRequestsTest {
+    private fun sourceRoot(): File = File(System.getProperty("vpn.wiring.root") ?: sequenceOf(
+        "src/main/kotlin/com/clashforge/mobile/clashforge_mobile",
+        "app/src/main/kotlin/com/clashforge/mobile/clashforge_mobile",
+        "mobile/android/app/src/main/kotlin/com/clashforge/mobile/clashforge_mobile",
+    ).first { File(it, "MainActivity.kt").exists() })
+
+    @Test fun loopbackReadinessCleartextIsExactAndExternalPolicyStaysClosed() {
+        val xml = File(sourceRoot(), "../../../../../res/xml/network_security_config.xml")
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml)
+        val base = doc.getElementsByTagName("base-config").item(0) as org.w3c.dom.Element
+        assertEquals("false", base.getAttribute("cleartextTrafficPermitted"))
+        val domains = doc.getElementsByTagName("domain")
+        val allowed = mutableSetOf<String>()
+        for (i in 0 until domains.length) {
+            val domain = domains.item(i) as org.w3c.dom.Element
+            assertEquals("false", domain.getAttribute("includeSubdomains"))
+            assertEquals("true", (domain.parentNode as org.w3c.dom.Element).getAttribute("cleartextTrafficPermitted"))
+            allowed += domain.textContent.trim()
+        }
+        assertEquals(setOf("127.0.0.1", "10.0.2.2"), allowed)
+        assertEquals(2, domains.length)
+    }
+
+    @Test fun duplicateStartRequiresReadinessThenCurrentOwnerAndLiveResources() {
+        // Android source wiring, not an Android runtime test.
+        val service = File(sourceRoot(), "ClashVpnService.kt").readText()
+        val duplicate = service.substringAfter("if (previous.owner === this && sessions.isCurrent(previous)) {")
+            .substringBefore("stopSession(previous)")
+        assertTrue(duplicate.contains("waitForMihomoReady(previous)"))
+        assertTrue(duplicate.indexOf("waitForMihomoReady(previous)") < duplicate.indexOf("sessions.withCurrent(previous)"))
+        assertTrue(duplicate.contains("check(epoch == generation.get())"))
+        assertTrue(duplicate.contains("requests.started(id)"))
+        assertTrue(duplicate.contains("processIsAlive(it)"))
+        assertTrue(duplicate.contains("previous.tun?.fileDescriptor?.valid() == true"))
+        assertFalse(duplicate.contains("vpnRunning"))
+        assertFalse(duplicate.contains("sessions.start("))
+        assertFalse(duplicate.contains("stopSession("))
+        assertFalse(duplicate.contains("startRequestId ="))
+        assertTrue(service.contains("if (owner != null && owner.startRequestId == id)"))
+        assertTrue(service.contains("timeoutMs: Long = 5000L"))
+        assertTrue(service.contains("if (code == HttpURLConnection.HTTP_OK)"))
+        assertTrue(service.contains("URL(\"http://127.0.0.1:9090/version\")"))
+        val delivered = service.substringAfter("ACTION_START -> {").substringBefore("ACTION_STOP -> {")
+        assertTrue(delivered.contains("sessions.withCurrent(owned)"))
+        assertTrue(delivered.contains("owned.owner === this"))
+        assertTrue(delivered.contains("sessionStartId = startId"))
+    }
+
+    @Test fun duplicateCompletionKeepsSameLeaseAndRejectsPendingDeadCancelledAndLate() {
+        for (mode in listOf("ready", "pending", "dead", "invalidTun", "cancelled", "late")) {
+            var disposed = 0; var spawns = 0
+            val owner = Any(); val gate = VpnSessionOwnership<Any, Any>({ disposed++ }, { disposed++ })
+            val s = gate.start(owner) {}!!
+            val tun = Any(); val process = Any()
+            gate.acquireTun(s) { tun }; gate.acquireProcess(s) { spawns++; process }
+            val c = Client(); val id = c.request()
+            if (mode == "late") c.timeout()
+            if (mode == "cancelled") gate.cancel(s)
+            val committed = try {
+                check(mode != "pending") { "readiness timeout" }
+                gate.withCurrent(s) {
+                    c.controller.started(id) {
+                        check(mode != "dead" && mode != "invalidTun") { "resource lost" }
+                        check(s.process === process && s.tun === tun)
+                    }
+                } ?: false
+            } catch (e: Exception) { c.controller.fail(id, e); false }
+            if (mode == "cancelled") c.controller.fail(id, IllegalStateException("cancelled"))
+            assertEquals(mode == "ready", committed)
+            assertEquals(mode == "ready", c.replies == listOf("started"))
+            assertEquals(1, c.replies.size)
+            assertSame(s, gate.currentSession()); assertSame(process, s.process); assertSame(tun, s.tun)
+            assertEquals(1, spawns); assertEquals(0, disposed)
+        }
+    }
+
     @Test fun asyncCloseAndLifecycleKeepControlDeadlineAndOwnership() {
         for (blockClose in listOf(true, false)) {
             val entered = CountDownLatch(1); val release = CountDownLatch(1)

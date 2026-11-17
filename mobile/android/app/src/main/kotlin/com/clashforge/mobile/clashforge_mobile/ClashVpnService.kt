@@ -93,6 +93,13 @@ class ClashVpnService : VpnService() {
         when (intent?.action) {
             ACTION_START -> {
                 val epoch = generation.incrementAndGet()
+                // Bind an existing live lease to this delivered command on the
+                // main thread, before a later STOP can install its newer startId.
+                sessions.currentSession()?.let { owned ->
+                    sessions.withCurrent(owned) {
+                        if (owned.owner === this) sessionStartId = startId
+                    }
+                }
                 controls.execute { startVpn(id, epoch, startId) }
             }
             ACTION_STOP -> {
@@ -114,9 +121,26 @@ class ClashVpnService : VpnService() {
         var starting: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>? = null
         try {
             sessions.currentSession()?.let { previous ->
-                if (previous.owner !== this || !sessions.isCurrent(previous)) {
-                    stopSession(previous)
+                if (previous.owner === this && sessions.isCurrent(previous)) {
+                    // Permission completion can start the service without a request
+                    // ID. A later Flutter START joins only this proven healthy lease.
+                    // Network I/O stays outside the ownership monitor.
+                    waitForMihomoReady(previous)
+                    val committed = sessions.withCurrent(previous) {
+                        check(epoch == generation.get()) { "VPN startup superseded" }
+                        requests.started(id) {
+                            check(previous.process?.let { processIsAlive(it) } == true &&
+                                previous.tun?.fileDescriptor?.valid() == true) {
+                                "Core or VPN interface lost before startup completion"
+                            }
+                        }
+                    } ?: false
+                    if (!committed) requests.fail(id, IllegalStateException("VPN startup cancelled"))
+                    // Do not replace the primary request ID: a duplicate waiter's
+                    // timeout must never cancel the healthy original session.
+                    return
                 }
+                stopSession(previous)
             }
             check(epoch == generation.get()) { "VPN startup cancelled" }
             if (id != null && !requests.isPending(id)) return
