@@ -74,6 +74,10 @@ func handlePreviewDeviceGroupsConfig(deps Dependencies) http.HandlerFunc {
 			}
 		}
 		generated = config.ApplyManagedRuntimeSettings(deps.Config, generated)
+		if err := config.ValidateRuntimeDNS(deps.Config, generated); err != nil {
+			Err(w, http.StatusBadRequest, "CONFIG_PREVIEW_FAILED", err.Error())
+			return
+		}
 		generated, _ = config.ApplyPerDeviceSubRulesWithProviders(generated, groups)
 
 		data, err := config.MarshalYAML(generated)

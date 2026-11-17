@@ -3,6 +3,7 @@ package quickstart
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -101,49 +102,30 @@ func autoConfigureClashForge(
 		return fmt.Errorf("generate mihomo config: %w", err)
 	}
 	if !generated {
-		emit(out, PhaseConfigure, "gen_config", StatusWarning, "未生成配置（暂无可用订阅源）")
+		err := fmt.Errorf("runtime config was not generated; refusing to start a stale runtime")
+		emit(out, PhaseConfigure, "gen_config", StatusError, "未生成 Mihomo 配置", err.Error())
+		return err
 	} else {
 		emit(out, PhaseConfigure, "gen_config", StatusOK, "Mihomo 配置已按 /setup 默认流程写入")
 	}
 
-	// Refresh netfilter manager with updated config so it uses the new mode/backend,
-	// then apply transparent-proxy + firewall rules immediately.
-	if deps.Netfilter != nil {
-		dnsRedirect := cfg.DNS.Enable && cfg.DNS.ApplyOnStart &&
-			strings.ToLower(strings.TrimSpace(cfg.DNS.DnsmasqMode)) == "replace"
-		bypassFakeIP := !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart ||
-			strings.ToLower(strings.TrimSpace(cfg.DNS.Mode)) != "fake-ip"
-		*deps.Netfilter = *netfilter.NewManager(netfilter.Config{
-			Mode:              cfg.Network.Mode,
-			FirewallBackend:   cfg.Network.FirewallBackend,
-			TProxyPort:        cfg.Ports.TProxy,
-			DNSPort:           cfg.Ports.DNS,
-			EnableDNSRedirect: dnsRedirect,
-			BypassFakeIP:      bypassFakeIP,
-			BypassCIDR:        cfg.Network.BypassCIDR,
-			EnableIPv6:        cfg.Network.IPv6,
-			DropQUIC:          cfg.Network.DropQUIC,
-			WANInterface:      cfg.Network.WANInterface,
-			TunDevice:         cfg.Network.TUN.Device,
-			FakeIPRange:       config.ReadRuntimeFakeIPRange(cfg.Core.RuntimeDir),
-		})
-	}
-
-	// Start core
-	emit(out, PhaseConfigure, "start_core", StatusRunning, "启动 Mihomo 内核...")
+	// Generation succeeded. Restore DNS and retire the old resource owner before
+	// installing a replacement or restarting the core with the new runtime.
+	emit(out, PhaseConfigure, "start_core", StatusRunning, "准备接管并启动 Mihomo 内核...")
 	startCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err := deps.Core.Start(startCtx); err != nil && err != core.ErrAlreadyRunning {
-		emit(out, PhaseConfigure, "start_core", StatusError, "内核启动失败", err.Error())
-		return fmt.Errorf("start core: %w", err)
+	if err := startQuickstartCore(startCtx, deps); err != nil {
+		emit(out, PhaseConfigure, "start_core", StatusError, "内核/接管准备失败", err.Error())
+		return err
 	}
 	emit(out, PhaseConfigure, "start_core", StatusOK, "Mihomo 内核已启动 ✓")
 
 	// Apply transparent-proxy firewall rules (透明代理 + 防火墙规则)
 	if deps.Netfilter != nil && cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
 		if err := deps.Netfilter.Apply(); err != nil {
-			emit(out, PhaseConfigure, "apply_netfilter", StatusWarning,
-				"透明代理规则应用失败（可在「代理服务」页手动接管）", err.Error())
+			emit(out, PhaseConfigure, "apply_netfilter", StatusError,
+				"透明代理规则应用失败", err.Error())
+			return fmt.Errorf("apply netfilter: %w", err)
 		} else {
 			emit(out, PhaseConfigure, "apply_netfilter", StatusOK, "透明代理规则已应用 ✓")
 		}
@@ -154,8 +136,9 @@ func autoConfigureClashForge(
 		dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
 		if dnsMode != dns.ModeNone {
 			if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
-				emit(out, PhaseConfigure, "apply_dns", StatusWarning,
-					"DNS 入口配置失败（可在「代理服务」页手动接管）", err.Error())
+				emit(out, PhaseConfigure, "apply_dns", StatusError,
+					"DNS 入口配置失败", err.Error())
+				return fmt.Errorf("setup DNS: %w", err)
 			} else {
 				emit(out, PhaseConfigure, "apply_dns", StatusOK,
 					fmt.Sprintf("DNS 入口已应用（%s 模式）✓", dnsMode))
@@ -164,6 +147,50 @@ func autoConfigureClashForge(
 	}
 
 	return nil
+}
+
+// startQuickstartCore is called only after successful runtime generation.
+// Cleanup ownership is not equivalent to IsApplied: a failed Apply/Cleanup may
+// leave retryable TUN resources, so always ask the old manager to clean up.
+func startQuickstartCore(ctx context.Context, deps Deps) error {
+	cfg := deps.Config
+	if err := config.ValidateDNSCoexistence(cfg); err != nil {
+		return err
+	}
+	if deps.Netfilter == nil && cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
+		return fmt.Errorf("netfilter manager is not initialized")
+	}
+	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
+		if err := dns.Restore(mode); err != nil {
+			return fmt.Errorf("restore DNS before quickstart: %w", err)
+		}
+	}
+	if deps.Netfilter != nil {
+		candidate := netfilter.NewManager(netfilter.Config{
+			Mode: cfg.Network.Mode, FirewallBackend: cfg.Network.FirewallBackend,
+			TProxyPort: cfg.Ports.TProxy, DNSPort: cfg.Ports.DNS,
+			EnableDNSRedirect: cfg.DNS.Enable && cfg.DNS.ApplyOnStart && strings.EqualFold(strings.TrimSpace(cfg.DNS.DnsmasqMode), "replace"),
+			BypassFakeIP:      !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart || !strings.EqualFold(strings.TrimSpace(cfg.DNS.Mode), "fake-ip"),
+			BypassCIDR:        cfg.Network.BypassCIDR, EnableIPv6: cfg.Network.IPv6,
+			DropQUIC: cfg.Network.DropQUIC, WANInterface: cfg.Network.WANInterface,
+			TunDevice: cfg.Network.TUN.Device, FakeIPRange: config.ReadRuntimeFakeIPRange(cfg.Core.RuntimeDir),
+		})
+		if err := deps.Netfilter.Cleanup(); err != nil {
+			return fmt.Errorf("cleanup previous takeover: %w", err)
+		}
+		*deps.Netfilter = *candidate
+	}
+	if err := deps.Core.Start(ctx); err != nil {
+		if !errors.Is(err, core.ErrAlreadyRunning) {
+			return fmt.Errorf("start core: %w", err)
+		}
+		if err := deps.Core.Restart(ctx); err != nil {
+			return fmt.Errorf("restart core: %w", err)
+		}
+	}
+	// CoreManager.Ready is process state, not controller or data-plane health.
+	// Check the real controller before emitting success or acquiring NF/DNS.
+	return waitQuickstartCoreHealthy(ctx, deps.Core)
 }
 
 func setActiveSubscriptionSource(dataDir, subID, subName string) error {

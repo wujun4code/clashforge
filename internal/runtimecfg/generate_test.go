@@ -9,6 +9,7 @@ import (
 
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/subscription"
+	"gopkg.in/yaml.v3"
 )
 
 func writeSubCache(t *testing.T, dataDir, subID string, nodes []subscription.ProxyNode, rawYAML string) {
@@ -28,6 +29,58 @@ func writeSubCache(t *testing.T, dataDir, subID string, nodes []subscription.Pro
 		if err := os.WriteFile(filepath.Join(cacheDir, subID+".raw.yaml"), []byte(rawYAML), 0o644); err != nil {
 			t.Fatalf("write raw cache: %v", err)
 		}
+	}
+}
+
+func TestGenerateAndWritePreservesUserDNSAndRejectsPlaintextInStrictMode(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Core.DataDir = dataDir
+	cfg.Core.RuntimeDir = filepath.Join(dataDir, "runtime")
+	subMgr := subscription.NewManager(dataDir)
+	subID, err := subMgr.Add(subscription.Subscription{Name: "dns-test", URL: "https://example.com/sub", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSubCache(t, dataDir, subID, nil, "dns:\n  default-nameserver: [tcp://192.0.2.1]\n  proxy-server-nameserver: [https://nodes.example/dns-query#DIRECT]\n")
+	writeActiveSourceJSON(t, dataDir, activeSource{Type: "subscription", SubID: subID})
+	overridesPath := filepath.Join(dataDir, "overrides.yaml")
+	if err := os.WriteFile(overridesPath, []byte("dns:\n  default-nameserver: [tcp://192.0.2.2]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := GenerateAndWrite(cfg, subMgr); err != nil || !wrote {
+		t.Fatalf("generate: wrote=%v, err=%v", wrote, err)
+	}
+	runtimePath := filepath.Join(cfg.Core.RuntimeDir, "mihomo-config.yaml")
+	before, err := os.ReadFile(runtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generated map[string]interface{}
+	if err := yaml.Unmarshal(before, &generated); err != nil {
+		t.Fatal(err)
+	}
+	dns := generated["dns"].(map[string]interface{})
+	bootstrap := dns["default-nameserver"].([]interface{})
+	if len(bootstrap) != 1 || bootstrap[0] != "tcp://192.0.2.2" {
+		t.Fatalf("overrides must replace subscription and managed bootstrap: %v", bootstrap)
+	}
+	if !strings.Contains(string(before), "https://nodes.example/dns-query#DIRECT") {
+		t.Fatal("subscription's node resolver was discarded")
+	}
+	cfg.DNS.Strategy = config.DNSStrategyAntiHijack
+	if wrote, err := GenerateAndWrite(cfg, subMgr); err == nil || wrote {
+		t.Fatalf("strict mode must reject plaintext before writing: wrote=%v, err=%v", wrote, err)
+	}
+	after, err := os.ReadFile(runtimePath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("invalid strict configuration overwrote working runtime: %v", err)
+	}
+	if err := os.WriteFile(overridesPath, []byte("dns:\n  default-nameserver: [https://192.0.2.2/dns-query#DIRECT]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := GenerateAndWrite(cfg, subMgr); err != nil || !wrote {
+		t.Fatalf("valid encrypted overrides must replace insecure subscription DNS: wrote=%v, err=%v", wrote, err)
 	}
 }
 
@@ -65,7 +118,10 @@ func TestResolveGenerationInputsUsesActiveSubscriptionOnly(t *testing.T) {
 	writeActiveSourceJSON(t, dataDir, activeSource{Type: "subscription", SubID: idB})
 
 	cfg := &config.MetaclashConfig{Core: config.CoreConfig{DataDir: dataDir}}
-	nodes, rawYAMLs := resolveGenerationInputs(cfg, subMgr)
+	nodes, rawYAMLs, _, err := resolveGenerationInputs(cfg, subMgr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(nodes) != 1 {
 		t.Fatalf("expected 1 active-sub node, got %d", len(nodes))
@@ -107,7 +163,10 @@ func TestResolveGenerationInputsFileSourceDisablesSubscriptionRawBase(t *testing
 	writeActiveSourceJSON(t, dataDir, activeSource{Type: "file", Filename: "20260429_v1.yaml"})
 
 	cfg := &config.MetaclashConfig{Core: config.CoreConfig{DataDir: dataDir}}
-	nodes, rawYAMLs := resolveGenerationInputs(cfg, subMgr)
+	nodes, rawYAMLs, _, err := resolveGenerationInputs(cfg, subMgr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(nodes) != 2 {
 		t.Fatalf("expected nodes from enabled subscriptions to remain available, got %d", len(nodes))

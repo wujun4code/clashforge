@@ -1,0 +1,39 @@
+# Merge this DNS overlay into your source YAML or overrides.yaml AFTER upgrading
+# ClashForge. Select DNS strategy "anti-hijack" separately in ClashForge settings.
+# DNS4EU addresses were checked on this user's WAN on 2026-10-06. Recheck them
+# when the provider changes addresses; TLS certificate verification stays on.
+hosts:
+  unfiltered.joindns4.eu:
+    - 86.54.11.100
+    - 86.54.11.200
+
+dns:
+  use-hosts: true
+  use-system-hosts: false
+  respect-rules: true
+  # Independent encrypted bootstrap, using Mihomo's native certificate-name
+  # verification. Do not use unreachable Cloudflare/Google IPs with #DIRECT.
+  default-nameserver:
+    - https://86.54.11.100/dns-query#DIRECT&name-cert-verify=unfiltered.joindns4.eu
+    - https://86.54.11.200/dns-query#DIRECT&name-cert-verify=unfiltered.joindns4.eu
+  proxy-server-nameserver:
+    - https://86.54.11.100/dns-query#DIRECT&name-cert-verify=unfiltered.joindns4.eu
+    - https://86.54.11.200/dns-query#DIRECT&name-cert-verify=unfiltered.joindns4.eu
+  nameserver:
+    - https://1.1.1.1/dns-query#RULES
+    - https://8.8.8.8/dns-query#RULES
+  direct-nameserver:
+    - https://doh.pub/dns-query#DIRECT
+  direct-nameserver-follow-policy: true
+  fallback: []
+  # GeoSite must already be installed for these two geosite policies.
+  # Foreign DNS follows routing rules: ensure 1.1.1.1 and 8.8.8.8 use a working
+  # proxy. #RULES alone does not force an outbound proxy.
+  nameserver-policy:
+    geosite:cn:
+      - https://doh.pub/dns-query#DIRECT
+    geosite:geolocation-!cn:
+      - https://1.1.1.1/dns-query#RULES
+      - https://8.8.8.8/dns-query#RULES
+    '+.youzhuzhu.com':
+      - https://unfiltered.joindns4.eu/dns-query#DIRECT

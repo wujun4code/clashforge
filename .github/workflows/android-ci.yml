@@ -65,9 +65,11 @@ jobs:
       - name: Build arm64-v8a mihomo from source and verify metadata
         if: needs.changes.outputs.mobile == 'true'
         run: |
-          MIHOMO_VER="v1.18.10"
+          MIHOMO_VER="v1.19.29"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+          # Upstream embeds this bundle; the source tag contains an empty file.
+          python3 mobile/scripts/prepare-mihomo-ca.py /tmp/mihomo-src
 
           DEST=/tmp/libmihomo-arm64.so
           GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
@@ -108,12 +110,19 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Configure Flutter SDK download transport
+        if: needs.changes.outputs.mobile == 'true'
+        run: sh .github/scripts/configure-flutter-curl.sh
+
       - name: Set up Flutter
         if: needs.changes.outputs.mobile == 'true'
         uses: subosito/flutter-action@v2
+        env:
+          CURL_HOME: ${{ env.FLUTTER_CURL_HOME }}
         with:
           flutter-version: '3.41.6'
           channel: 'stable'
+          cache: true
 
       - name: Install dependencies
         if: needs.changes.outputs.mobile == 'true'
@@ -164,12 +173,19 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Configure Flutter SDK download transport
+        if: needs.changes.outputs.mobile == 'true'
+        run: sh .github/scripts/configure-flutter-curl.sh
+
       - name: Set up Flutter
         if: needs.changes.outputs.mobile == 'true'
         uses: subosito/flutter-action@v2
+        env:
+          CURL_HOME: ${{ env.FLUTTER_CURL_HOME }}
         with:
           flutter-version: '3.41.6'
           channel: 'stable'
+          cache: true
 
       - name: Install dependencies
         if: needs.changes.outputs.mobile == 'true'
@@ -186,11 +202,16 @@ jobs:
       - name: Build Mihomo Core (x86_64, GOOS=linux -tags cmfa,with_gvisor + sing-tun fd-0 patch)
         if: needs.changes.outputs.mobile == 'true'
         run: |
-          # Pinned to v1.18.10: v1.19.x reads /data/system/packages.xml unconditionally
-          # during TUN init ("build android rules"), which is denied by SELinux on API 29.
-          MIHOMO_VER="v1.18.10"
+          # buildAndroidRules() (which reads /data/system/packages.xml, denied by
+          # SELinux on non-rooted devices) lives in server_android.go, gated by
+          # `//go:build android && !cmfa`. With -tags cmfa, server_notandroid.go's
+          # true no-op stub (`//go:build !android || cmfa`) is compiled instead, so
+          # packages.xml is never touched — verified against source at MIHOMO_VER.
+          MIHOMO_VER="v1.19.29"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+          # Upstream embeds this bundle; the source tag contains an empty file.
+          python3 mobile/scripts/prepare-mihomo-ca.py /tmp/mihomo-src
 
           # Download module dependencies into the module cache so we can patch sing-tun.
           (cd /tmp/mihomo-src && go mod download)
@@ -205,11 +226,12 @@ jobs:
           GOMODCACHE=$(go env GOMODCACHE)
           SINGTUN_DIR="${GOMODCACHE}/github.com/metacubex/sing-tun@${SINGTUN_VER}"
           chmod -R u+w "$SINGTUN_DIR"
-          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" | xargs grep -l "FileDescriptor == 0" 2>/dev/null || true)
+          PATCHED=$(find "$SINGTUN_DIR" -name "tun_linux.go" -exec grep -l "FileDescriptor == 0" {} \; 2>/dev/null || true)
           if [ -n "$PATCHED" ]; then
-            echo "$PATCHED" | xargs sed -i \
+            sed -i \
               -e 's/options\.FileDescriptor == 0/options.FileDescriptor < 0/g' \
-              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g'
+              -e 's/\.FileDescriptor > 0/.FileDescriptor >= 0/g' \
+              -- "$PATCHED"
             echo "Patched sing-tun ${SINGTUN_VER}: ==0→<0 and >0→>=0"
           else
             echo "WARNING: sentinel not found in sing-tun ${SINGTUN_VER}"
@@ -283,18 +305,8 @@ jobs:
               ./tests/android/tun_ip_probe.go
           ls -lh tests/android/tun_ip_probe_android_amd64
 
-      # Install and start Tor — provides a SOCKS5 proxy on 127.0.0.1:9050 that exits
-      # through a Tor relay (different IP than the CI host).  ClashVpnService detects
-      # the open port via adb-reverse and rewrites mihomo's config to use it, so the
-      # Round-2 VPN IP probe reliably returns a different IP than the baseline.
-      - name: Install and start Tor (CI VPN exit relay)
-        if: needs.changes.outputs.mobile == 'true'
-        run: |
-          sudo apt-get install -y tor
-          sudo systemctl start tor 2>/dev/null || sudo tor --RunAsDaemon 1 --DataDirectory /tmp/tor-data
-          echo "Waiting for Tor SOCKS5 on 127.0.0.1:9050 (up to 90 s)…"
-          for i in $(seq 1 45); do nc -z 127.0.0.1 9050 2>/dev/null && echo "Tor ready after $((i*2))s" && break; sleep 2; done
-          nc -z 127.0.0.1 9050 || (echo "ERROR: Tor did not start" && exit 1)
+      # Use the real subscription transport. Never substitute a Tor exit merely
+      # to produce a different IP; app_e2e_test asserts the live AnyTLS route.
 
       # Build APK outside the emulator runner so working-directory applies correctly.
       # android-emulator-runner@v2 runs each script: line in a separate sh -c invocation,
@@ -321,3 +333,16 @@ jobs:
           profile: Nexus 6
           script: |
             bash "${GITHUB_WORKSPACE}/tests/android/run_emulator_e2e.sh"
+
+      - name: Encrypt native diagnostics (no plaintext artifact)
+        if: always() && needs.changes.outputs.mobile == 'true'
+        run: bash tests/android/encrypt_diagnostics.sh
+
+      - name: Preserve encrypted Android diagnostics
+        if: always() && needs.changes.outputs.mobile == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-encrypted-diagnostics
+          path: ${{ runner.temp }}/clashforge-e2e-diagnostics.cms
+          if-no-files-found: ignore
+          retention-days: 3

@@ -17,19 +17,6 @@ log() {
     logger -t clashforge "$*"
 }
 
-find_mihomo() {
-    # Only check if executable exists — do NOT run -v (exit code is non-zero)
-    # Priority 1: User-installed system mihomo
-    if [ -x "/usr/bin/mihomo" ]; then
-        echo "/usr/bin/mihomo"; return 0
-    fi
-    # Priority 2: Bundled mihomo (shipped with this IPK)
-    if [ -x "/usr/bin/mihomo-clashforge" ]; then
-        echo "/usr/bin/mihomo-clashforge"; return 0
-    fi
-    return 1
-}
-
 check_memory() {
     local free_kb
     free_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || \
@@ -41,15 +28,14 @@ check_memory() {
     return 0
 }
 
-patch_config_mihomo() {
-    local bin="$1"
-    [ -f "$CONFIG" ] || return
-    # Match both non-indented (postinst template) and indented (config.Save TOML) binary keys.
-    sed -i "s|^[[:space:]]*binary[[:space:]]*=.*|  binary = \"$bin\"|" "$CONFIG" 2>/dev/null || true
-}
-
 start_service() {
     check_memory || return 1
+    # Validate the SAME path the daemon will read, without rewriting user TOML.
+    [ -r /usr/share/metaclash/preflight.sh ] || {
+        log "ERROR: missing packaged preflight helper"; return 1;
+    }
+    . /usr/share/metaclash/preflight.sh
+    cf_preflight "$CONFIG" || return 1
 
     mkdir -p /var/run/metaclash
     mkdir -p /etc/metaclash
@@ -62,24 +48,6 @@ start_service() {
     [ -f /etc/metaclash/overrides.yaml ] || \
         touch /etc/metaclash/overrides.yaml 2>/dev/null || true
 
-    # TUN mode requires /dev/net/tun. Ensure the device node exists and the
-    # kernel module is loaded before mihomo tries to open it.
-    _net_mode=$(grep -oE 'mode\s*=\s*"[^"]*"' "$CONFIG" 2>/dev/null | head -1 | grep -oE '"[^"]*"' | tr -d '"' || true)
-    if [ "$_net_mode" = "tun" ]; then
-        modprobe tun 2>/dev/null || true
-        mkdir -p /dev/net
-        [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true
-        log "TUN mode: /dev/net/tun ready"
-    fi
-
-    local mihomo_bin
-    mihomo_bin=$(find_mihomo)
-    if [ -z "$mihomo_bin" ]; then
-        log "ERROR: no mihomo binary found at /usr/bin/mihomo or /usr/bin/mihomo-clashforge"
-        return 1
-    fi
-    log "Using mihomo: $mihomo_bin"
-    patch_config_mihomo "$mihomo_bin"
 
     procd_open_instance instance1
     procd_set_param command "$PROG" -config "$CONFIG"
@@ -87,7 +55,7 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
-    log "clashforge started"
+    log "clashforge procd instance configured (runtime takeover not yet verified)"
 }
 
 stop_service() {

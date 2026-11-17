@@ -630,38 +630,103 @@ cmd_reset() {
     esac
   fi
 
+  # Reject redirected persistent roots before restore or any filesystem changes.
+  # Check the roots themselves, not normal system parent links (e.g. /var).
+  for _dir in /etc/metaclash /usr/share/metaclash; do
+    [ ! -L "$_dir" ] || die "Persistent data root is a symlink: $_dir; reset cancelled"
+  done
+
+  # Discover ownership before deleting anything. opkg may no-op a same-version
+  # install, so reset must leave every installed support asset intact itself.
+  _package_files=$(opkg files clashforge) || die "Cannot read installed package file list; reset cancelled"
+  [ -n "$_package_files" ] || die "Empty package file list; reset cancelled"
+  printf '%s\n' "$_package_files" | grep -Fxq '/usr/share/metaclash/preflight.sh' \
+    || die "Package file list lacks preflight helper; reset cancelled"
+  [ -f /usr/share/metaclash/preflight.sh ] && [ -r /usr/share/metaclash/preflight.sh ] \
+    || die "Packaged preflight helper is missing or unreadable; reset cancelled"
+
   # 1. Stop and restore network state first
   restore_system_state
 
-  # 2. Clear all runtime state
-  step "Clearing runtime state (/var/run/metaclash)..."
-  rm -rf /var/run/metaclash && ok "Cleared /var/run/metaclash" || true
+  # 2. Clear runtime and user files, not package-owned helpers/templates/geodata.
+  # Walk depth-first without following symlinks; package directories may contain
+  # user data, so preserving an entire directory would not be a reset.
+  rm -rf /var/run/metaclash || die "Cannot clear runtime state"
+  for _dir in /etc/metaclash /usr/share/metaclash; do
+    [ -d "$_dir" ] || continue
+    _reset_entries=$(find "$_dir" -depth -mindepth 1) || die "Cannot inspect user data in $_dir"
+    printf '%s\n' "$_reset_entries" | while IFS= read -r _file; do
+      [ -n "$_file" ] || continue
+      case "$_file" in
+        "$_dir"/*) ;;
+        *) exit 1 ;; # reject malformed/newline-split entries, never leave scope
+      esac
+      if [ -d "$_file" ] && [ ! -L "$_file" ]; then
+        continue
+      fi
+      case "$_file" in
+        /etc/metaclash/config.toml|/etc/metaclash/overrides.yaml) ;;
+        *) printf '%s\n' "$_package_files" | grep -Fxq "$_file" && continue ;;
+      esac
+      rm -f "$_file" || exit 1
+    done || die "Cannot clear user data in $_dir"
+  done
 
-  # 3. Clear all user config and data (subscriptions, overrides, rules, caches)
-  step "Clearing config and data (/etc/metaclash)..."
-  rm -rf /etc/metaclash && ok "Cleared /etc/metaclash" || true
+  # Old prerm snapshots must not resurrect subscriptions/secrets on upgrade.
+  rm -f /tmp/clashforge-config.bak /tmp/clashforge-ed25519.bak \
+    /tmp/clashforge-nodes.bak /tmp/clashforge-nodes-key.bak \
+    /tmp/clashforge-cf-config.bak || die "Cannot clear upgrade backups"
+  rm -f /var/log/clashforge.log /var/log/metaclash.log \
+    /tmp/clashforge.log /tmp/metaclash.log || die "Cannot clear logs"
+  mkdir -p /etc/metaclash /var/run/metaclash /usr/share/metaclash \
+    || die "Cannot recreate required directories"
 
-  # 4. Clear geodata and bundled support files
-  step "Clearing geodata (/usr/share/metaclash)..."
-  rm -rf /usr/share/metaclash && ok "Cleared /usr/share/metaclash" || true
-
-  # 5. Clear logs
-  step "Clearing logs..."
-  rm -f /var/log/clashforge.log  && ok "Cleared /var/log/clashforge.log"  || true
-  rm -f /var/log/metaclash.log   && ok "Cleared /var/log/metaclash.log"   || true
-  rm -f /tmp/clashforge.log      && ok "Cleared /tmp/clashforge.log"      || true
-  rm -f /tmp/metaclash.log       && ok "Cleared /tmp/metaclash.log"       || true
-
-  # 6. Recreate required directories (package may expect them to exist at startup)
-  step "Recreating required directories..."
-  mkdir -p /etc/metaclash /var/run/metaclash /usr/share/metaclash
-  ok "Directories recreated"
+  # Installed IPKs need not ship config.toml.example or the CONTROL postinst as
+  # a data file. Generate a safe first-install UI config without invoking an
+  # installer (which could restore old backups and start the service itself).
+  cat > /etc/metaclash/config.toml <<'TOML'
+[core]
+binary = "/usr/bin/mihomo-clashforge"
+runtime_dir = "/var/run/metaclash"
+data_dir = "/etc/metaclash"
+max_restarts = 3
+auto_start_core = false
+[ports]
+http = 17890
+socks = 17891
+mixed = 17893
+redir = 17892
+tproxy = 17895
+dns = 17874
+mihomo_api = 19090
+ui = 7777
+[network]
+mode = "none"
+firewall_backend = "none"
+apply_on_start = false
+bypass_lan = true
+[dns]
+enable = false
+dnsmasq_mode = "none"
+apply_on_start = false
+[security]
+api_secret = ""
+allow_lan = true
+[log]
+level = "warning"
+[update]
+auto_subscription = true
+subscription_interval = "6h"
+auto_geoip = false
+auto_geosite = false
+TOML
+  [ "$?" -eq 0 ] || die "Cannot write first-install configuration"
 
   if [ "$AUTO_START" = "1" ]; then
     step "Starting ClashForge..."
-    /etc/init.d/clashforge start 2>/dev/null \
-      && ok "ClashForge started. Open http://$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}'):7777" \
-      || warn "Start failed — check /etc/init.d/clashforge status"
+    /etc/init.d/clashforge start \
+      || die "Start failed — check /etc/init.d/clashforge status"
+    ok "ClashForge service start requested (runtime takeover not verified)."
   else
     echo "" >&2
     ok "Reset complete. Run '/etc/init.d/clashforge start' to start, or use --start flag."
@@ -724,10 +789,10 @@ cmd_upgrade() {
   if [ "$_was_running" = "1" ]; then
     log "Service was running before upgrade — restarting with new version..."
     /etc/init.d/clashforge enable 2>/dev/null || true
-    if /etc/init.d/clashforge start 2>/dev/null; then
-      ok "clashforge service restarted successfully"
+    if /etc/init.d/clashforge start; then
+      ok "clashforge service start requested (runtime takeover not verified)"
     else
-      warn "Service start returned non-zero — check: /etc/init.d/clashforge status"
+      die "Package installed, but service start failed — check: /etc/init.d/clashforge status"
     fi
   else
     log "Service was not running before upgrade — skipping auto-start"

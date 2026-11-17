@@ -4,14 +4,14 @@
 #
 # 三轮复用同一脚本，用 PHASE 区分断言逻辑：
 #   baseline  Round 1：安装前基准（直连，无代理）
-#   running   Round 2：代理运行期（tproxy 已接管，出口 IP 应变为代理节点 IP）
+#   running   Round 2：显式 mixed 代理入口连通性（不验收 LAN 透明接管）
 #   stopped   Round 3：停止后恢复（出口 IP 应还原为 Round 1 的基准 IP）
 #
-# 所有 curl 请求均无显式代理设置，流量由 tproxy 透明拦截（running 阶段）
-# 或走直连（baseline/stopped 阶段）。
+# running 的外部 HTTP 请求显式指定 mixed 代理；baseline/stopped 不指定代理。
+# mixed 成功只证明对应入口可用，不证明 LAN 透明接管或 rule-mode 分流策略。
 #
 # running 阶段额外执行路由器侧诊断探测（Router Diagnostic Probe），
-# 与 handler_overview.go 的 buildOverviewAccessChecks 逻辑严格一致：
+# 用于辅助诊断 mixed 入口（不等价于 handler_overview.go 全部检查）：
 #   1. 端口监听检查 → 2. DNS 解析 → 3. HTTP HEAD via proxy → 4. 错误分级
 #
 # 环境变量：
@@ -73,7 +73,7 @@ _proxy_curl() {
 
 case "$PHASE" in
     baseline) PHASE_LABEL="Round 1 — 基准（安装前直连）" ;;
-    running)  PHASE_LABEL="Round 2 — 代理运行期" ;;
+    running)  PHASE_LABEL="Round 2 — 显式 mixed 代理入口" ;;
     stopped)  PHASE_LABEL="Round 3 — 停止后恢复" ;;
     *) echo "ERROR: PHASE must be baseline|running|stopped"; exit 1 ;;
 esac
@@ -81,17 +81,20 @@ esac
 DIRECT_IP=$(cat "$SNAPSHOT_DIR/direct-ip" 2>/dev/null || echo "unknown")
 
 section "VM 内网络探测 — $PHASE_LABEL"
+if [ "$PHASE" = "running" ]; then
+    info "只验证显式 mixed 代理对应入口；不证明 LAN 透明接管或 rule-mode 分流策略"
+fi
 info "直连基准 IP: $(mask_ip "$DIRECT_IP")"
 [ -n "$PROXY_NODE_IP" ] && info "代理节点 IP: $(mask_ip "$PROXY_NODE_IP")"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PR-01: 出口 IP 检查
 # ═══════════════════════════════════════════════════════════════════════════════
-# tproxy 只拦截 PREROUTING（LAN 客户端入流量），不拦截路由器本机进程（OUTPUT）。
-# running 阶段用混合端口（HTTP/SOCKS）显式代理，确保出口 IP 经过代理节点。
-if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
+# 本机显式 mixed 请求不经过 LAN 客户端入口，不能证明 PREROUTING 透明接管。
+# running 始终通过显式 mixed 代理采集出口 IP（未给 URL 时使用本机默认端口）。
+if [ "$PHASE" = "running" ]; then
     CURRENT_IP=$(_proxy_curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
-    info "当前出口 IP（via 混合端口）: $(mask_ip "$CURRENT_IP")"
+    info "当前出口 IP（显式 mixed 代理）: $(mask_ip "$CURRENT_IP")"
 else
     CURRENT_IP=$(curl -sf --max-time 10 https://api.ipify.org 2>/dev/null || echo "FAILED")
     info "当前出口 IP: $(mask_ip "$CURRENT_IP")"
@@ -120,31 +123,31 @@ case "$PHASE" in
             # Check the mixed port directly here (MIXED_LISTENING is set later in the
             # diagnostic section, so we can't rely on it at this point in the script).
             if curl --connect-timeout 1 --max-time 2 -o /dev/null "http://127.0.0.1:${MIXED_PORT}" 2>/dev/null; then
-                record WARN PR-01 "出口 IP（代理运行期）" \
-                    "curl api.ipify.org（via 混合端口）" \
+                record WARN PR-01 "出口 IP（显式 mixed 代理）" \
+                    "curl api.ipify.org（显式 mixed 代理）" \
                     "出口 IP = 代理节点 IP ≠ 直连 IP" \
-                    "api.ipify.org 不可达（CI 节点无法访问国际站点），但混合端口正常监听，代理运行中"
+                    "显式 mixed 出口请求失败；仅本机 mixed 端口可连接，不能证明代理出口正常或归因 CI 网络"
             else
-                record FAIL PR-01 "出口 IP（代理运行期）" \
-                    "curl api.ipify.org（tproxy 透明拦截）" \
+                record FAIL PR-01 "出口 IP（显式 mixed 代理）" \
+                    "curl api.ipify.org（显式 mixed 代理）" \
                     "出口 IP = 代理节点 IP ≠ 直连 IP" \
                     "请求失败"
             fi
         elif [ -n "$PROXY_NODE_IP" ] && [ "$CURRENT_IP" = "$PROXY_NODE_IP" ]; then
-            record PASS PR-01 "出口 IP（代理运行期）" \
-                "curl api.ipify.org（tproxy 透明拦截）" \
+            record PASS PR-01 "出口 IP（显式 mixed 代理）" \
+                "curl api.ipify.org（显式 mixed 代理）" \
                 "出口 IP = 代理节点 IP ($(mask_ip "$PROXY_NODE_IP"))" \
                 "✓ $(mask_ip "$DIRECT_IP") → $(mask_ip "$CURRENT_IP") = 节点 IP"
         elif [ "$CURRENT_IP" != "$DIRECT_IP" ]; then
-            record PASS PR-01 "出口 IP（代理运行期）" \
-                "curl api.ipify.org（tproxy 透明拦截）" \
-                "出口 IP ≠ 直连 IP（流量走代理）" \
-                "IP 已变化: $(mask_ip "$DIRECT_IP") → $(mask_ip "$CURRENT_IP")（代理节点 IP 未配置，以 IP 变化作为代理生效依据）"
+            record PASS PR-01 "出口 IP（显式 mixed 代理）" \
+                "curl api.ipify.org（显式 mixed 代理）" \
+                "显式 mixed 请求出口 IP ≠ 直连基准 IP" \
+                "IP 已变化: $(mask_ip "$DIRECT_IP") → $(mask_ip "$CURRENT_IP")（仅观测显式 mixed 请求出口变化；不证明透明接管或分流）"
         else
-            record FAIL PR-01 "出口 IP（代理运行期）" \
-                "curl api.ipify.org（tproxy 透明拦截）" \
-                "出口 IP ≠ 直连 IP（代理应已生效）" \
-                "IP 未变化: $(mask_ip "$CURRENT_IP") = $(mask_ip "$DIRECT_IP")（tproxy 未生效）"
+            record FAIL PR-01 "出口 IP（显式 mixed 代理）" \
+                "curl api.ipify.org（显式 mixed 代理）" \
+                "显式 mixed 请求出口 IP ≠ 直连基准 IP" \
+                "IP 未变化: $(mask_ip "$CURRENT_IP") = $(mask_ip "$DIRECT_IP")（显式 mixed 请求出口与基准相同；未验证透明接管）"
         fi
         ;;
     stopped)
@@ -170,14 +173,14 @@ esac
 # ═══════════════════════════════════════════════════════════════════════════════
 # Router Diagnostic Probe（仅 running 阶段）
 #
-# 与 handler_overview.go → buildOverviewAccessChecks 逻辑严格一致：
+# 辅助诊断（系统默认 DNS + 显式 mixed HTTP；不是透明/分流验收）：
 #   1. 端口监听检查 (isTCPPortListening)
 #   2. DNS 解析 (resolveForDebug → 查询 mihomo DNS 端口)
 #   3. HTTP HEAD via 代理 (testHTTPProxyEndpoint → 经过 mixed 端口)
 #   4. 错误分级: proxy_port / dns / timeout / connect
 # ═══════════════════════════════════════════════════════════════════════════════
 if [ "$PHASE" = "running" ]; then
-    section "路由器侧诊断探测 — 对齐 handler_overview.go"
+    section "路由器侧诊断 — 系统默认 DNS / 显式 mixed 代理"
 
     # ── 检查端口可访问（跳过 nc -z，OpenWrt BusyBox 不可靠） ──────────────
     _tcp_ok() {
@@ -193,16 +196,16 @@ if [ "$PHASE" = "running" ]; then
     fi
 
     DNS_LISTENING="false"
-    # DNS 是 UDP 端口，用 nslookup 验证 DNS 链（对齐 SL-04b / SL-09）
+    # nslookup 仅测试系统默认解析器，不直接探测指定 mihomo DNS 端口。
     if nslookup google.com >/dev/null 2>&1; then
         DNS_LISTENING="true"
-        info "mihomo DNS 端口 $MIHOMO_DNS_PORT 解析正常 ✓"
+        info "系统默认 DNS 解析正常（未直接探测 mihomo :$MIHOMO_DNS_PORT）✓"
     else
-        info "mihomo DNS 端口 $MIHOMO_DNS_PORT DNS 不通 ✗"
+        info "系统默认 DNS 解析失败（未直接探测 mihomo :$MIHOMO_DNS_PORT）✗"
     fi
 
     # ── DNS 解析（对齐 resolveForDebug） ──────────────────────────────────
-    # 此时 DNS 已接管，直接 nslookup 走 dnsmasq → mihomo 链路即可
+    # 默认解析器可能是 dnsmasq；此请求不证明实际使用了 mihomo。
     _dns_resolve() {
         _host="$1"
         nslookup "$_host" 2>/dev/null \
@@ -290,7 +293,7 @@ if [ "$PHASE" = "running" ]; then
                 "端口未监听（mihomo 未运行或配置错误）"
             # 端口不通，DNS 和 HTTP 都跳过
             record FAIL "RD-${RD_TOTAL}b" "${name} DNS 解析" \
-                "nslookup ${HOST} via mihomo :${MIHOMO_DNS_PORT}" \
+                "nslookup ${HOST} via 系统默认解析器" \
                 "解析返回 IP" \
                 "跳过：mixed 端口不通"
             record FAIL "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
@@ -310,7 +313,7 @@ if [ "$PHASE" = "running" ]; then
                 FAKE_IP_MARKER=" (fake-ip)"
             fi
             record PASS "RD-${RD_TOTAL}b" "${name} DNS 解析" \
-                "nslookup ${HOST} via mihomo :${MIHOMO_DNS_PORT}" \
+                "nslookup ${HOST} via 系统默认解析器" \
                 "解析返回 IP" \
                 "解析: ${DNS_FIRST_IP}${FAKE_IP_MARKER}，共 $(echo "$DNS_IPS" | tr ',' '\n' | wc -l) 条"
             DNS_OK="true"
@@ -320,7 +323,7 @@ if [ "$PHASE" = "running" ]; then
                 DNS_FAIL_MSG="mihomo DNS 端口 ${MIHOMO_DNS_PORT} 未监听"
             fi
             record FAIL "RD-${RD_TOTAL}b" "${name} DNS 解析" \
-                "nslookup ${HOST} via mihomo :${MIHOMO_DNS_PORT}" \
+                "nslookup ${HOST} via 系统默认解析器" \
                 "解析返回 IP" \
                 "DNS 解析失败: ${DNS_FAIL_MSG}（stage=dns）"
             DNS_OK="false"
@@ -366,7 +369,7 @@ if [ "$PHASE" = "running" ]; then
                 record WARN "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
                     "curl --proxy <mixed> -I ${URL}" \
                     "HTTP 2xx/3xx" \
-                    "节点无法访问境外站点 (stage=${STAGE}，CI 环境限制，非 ClashForge 错误): HTTP ${HTTP_CODE:-error}${HTTP_TIME:+ (${HTTP_TIME}s)}"
+                    "显式 mixed 请求失败 (stage=${STAGE}，原因未归属): HTTP ${HTTP_CODE:-error}${HTTP_TIME:+ (${HTTP_TIME}s)}"
             else
                 record FAIL "RD-${RD_TOTAL}c" "${name} HTTP HEAD" \
                     "curl --proxy <mixed> -I ${URL}" \
@@ -387,21 +390,24 @@ TARGETS
     section "路由器侧探测汇总"
     if [ "$MIXED_LISTENING" != "true" ]; then
         record FAIL RD-SUM "路由器探测总览" \
-            "mixed 端口 ${MIXED_PORT} + DNS 端口 ${MIHOMO_DNS_PORT} 均正常监听" \
-            "端口未监听：mihomo 未运行或配置错误，所有路由器侧探测跳过"
+            "连接本机 mixed 端口 ${MIXED_PORT}" \
+            "mixed 端口可连接" \
+            "mixed 端口不可连接，不能验证该入口"
     elif [ "$RD_OK_COUNT" = "$RD_TOTAL" ]; then
         record PASS RD-SUM "路由器探测总览" \
-            "${RD_TOTAL} 个目标全部通过 HTTP HEAD via mixed proxy" \
-            "${RD_OK_COUNT}/${RD_TOTAL} 全部通过 ✓"
+            "HTTP HEAD via 显式 mixed 代理" \
+            "${RD_TOTAL} 个目标对应入口请求可达" \
+            "${RD_OK_COUNT}/${RD_TOTAL} 显式入口请求通过（不验证透明接管/分流）"
     else
         record WARN RD-SUM "路由器探测总览" \
-            "${RD_TOTAL} 个目标全部通过 HTTP HEAD via mixed proxy" \
-            "${RD_OK_COUNT}/${RD_TOTAL} 通过（部分失败可能是因为节点网络限制）"
+            "HTTP HEAD via 显式 mixed 代理" \
+            "${RD_TOTAL} 个目标对应入口请求可达" \
+            "${RD_OK_COUNT}/${RD_TOTAL} 显式入口请求通过；失败原因未归属"
     fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PR-02: 浏览器侧连通性检查（curl 透明代理 / 直连）
+# PR-02: 路由器本机连通性（running 显式 mixed 代理 / 其余直连）
 # ═══════════════════════════════════════════════════════════════════════════════
 section "连通性检查 — $PHASE_LABEL"
 
@@ -415,7 +421,7 @@ for entry in $TARGETS; do
     GROUP=$(echo "$entry" | cut -d: -f4)
     TOTAL_ACCESS=$((TOTAL_ACCESS+1))
     STARTED=$(date +%s%3N 2>/dev/null || date +%s)
-    if [ "$PHASE" = "running" ] && [ -n "$MIXED_PORT_URL" ]; then
+    if [ "$PHASE" = "running" ]; then
         CODE=$(_proxy_curl -sf -o /dev/null -w "%{http_code}" --max-time 12 "$URL" 2>/dev/null || echo "0")
     else
         CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 12 "$URL" 2>/dev/null || echo "0")
@@ -454,18 +460,18 @@ case "$PHASE" in
         ;;
     running)
         if [ "$OK_COUNT" = "$TOTAL_ACCESS" ]; then
-            record PASS PR-02 "连通性检查（代理运行期）" \
-                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（tproxy 透明拦截）" \
-                "所有站点通畅（国内直连 + 海外/AI 走代理）" \
+            record PASS PR-02 "连通性检查（显式 mixed 代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（显式 mixed 代理）" \
+                "所有站点通畅（仅显式 mixed 代理入口连通性）" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         elif [ "$OK_COUNT" -gt 0 ]; then
-            record WARN PR-02 "连通性检查（代理运行期）" \
-                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（tproxy 透明拦截）" \
+            record WARN PR-02 "连通性检查（显式 mixed 代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（显式 mixed 代理）" \
                 "所有站点通畅" \
                 "$OK_COUNT/$TOTAL_ACCESS: $DETAILS"
         else
-            record FAIL PR-02 "连通性检查（代理运行期）" \
-                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（tproxy 透明拦截）" \
+            record FAIL PR-02 "连通性检查（显式 mixed 代理）" \
+                "curl 淘宝/网易云/GitHub/Google/OpenAI/Gemini（显式 mixed 代理）" \
                 "所有站点通畅" \
                 "全部失败: $DETAILS"
         fi
@@ -484,6 +490,9 @@ FAIL_COUNT=$(printf "%b" "$RESULTS" | grep -c "^FAIL" || echo 0)
 WARN_COUNT=$(printf "%b" "$RESULTS" | grep -c "^WARN" || echo 0)
 
 summary "## 🌐 VM 网络探测 — $PHASE_LABEL"
+if [ "$PHASE" = "running" ]; then
+    summary "仅验证显式 mixed 代理对应入口；不证明 LAN 透明接管或 rule-mode 分流策略。透明 TCP/UDP 必须由独立 VM/LAN 客户端验收。"
+fi
 summary ""
 summary "| 项目 | 值 |"
 summary "|------|----|"

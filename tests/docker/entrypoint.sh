@@ -4,6 +4,8 @@ set -euo pipefail
 RUNTIME_DIR=/var/run/metaclash
 CONFIG_FILE=$RUNTIME_DIR/mihomo-config.yaml
 OVERRIDES=/testdata/sample-clash-config.yaml
+CONTRACT="$(dirname "$0")/subscription_contract.py"
+EXPECTED_NODE="${E2E_EXPECTED_NODE:-Tokyo-AnyTLS}"
 MIHOMO_PID=""
 
 RED='\033[0;31m'
@@ -85,9 +87,7 @@ fi
 # ----------------------------------------------------------------
 section "Step 4: Parse nodes from config"
 # ----------------------------------------------------------------
-NODE_COUNT=$(grep -c "^  - name:" "$OVERRIDES" 2>/dev/null || echo 0)
-info "nodes in sample config: $NODE_COUNT"
-grep "name:" "$CONFIG_FILE" | head -5
+info "node registration and count are verified through the parsed mihomo API in Step 6"
 
 # ----------------------------------------------------------------
 section "Step 5: Start mihomo"
@@ -114,44 +114,26 @@ done
 section "Step 6: Verify proxy groups via API"
 # ----------------------------------------------------------------
 API_OUT=$(curl -sf http://127.0.0.1:9090/proxies)
-if echo "$API_OUT" | grep -q "wujun-sg"; then
-    pass "node 'wujun-sg' registered in mihomo"
+SELECTOR_PATH=$(printf '%s' "$API_OUT" | python3 "$CONTRACT" selector) || {
+    fail "expected subscription node/type or selector membership missing"
+    exit 1
+}
+pass "node '$EXPECTED_NODE' registered with a selectable route (at least 1 node)"
+SELECT_PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"name":sys.argv[1]}))' "$EXPECTED_NODE")
+HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+    -X PUT "http://127.0.0.1:9090/proxies/${SELECTOR_PATH}" \
+    -H 'Content-Type: application/json' -d "$SELECT_PAYLOAD")
+case "$HTTP_CODE" in
+    200|204) pass "selected expected node (HTTP $HTTP_CODE)" ;;
+    *) fail "node selection failed (HTTP $HTTP_CODE)"; exit 1 ;;
+esac
+# A successful write alone is insufficient: read back the exact target.
+if curl -sf "http://127.0.0.1:9090/proxies/${SELECTOR_PATH}" | python3 "$CONTRACT" selection; then
+    pass "selector readback confirms '$EXPECTED_NODE' (not DIRECT)"
 else
-    fail "node 'wujun-sg' not found in mihomo API"
+    fail "selector did not retain the expected real node"
+    exit 1
 fi
-
-# Find the selector group name and set it to wujun-sg
-SELECTOR_NAME=$(echo "$API_OUT" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-for name,p in d['proxies'].items():
-    if p.get('type')=='Selector' and name not in ('GLOBAL',):
-        print(name)
-        break
-" 2>/dev/null || echo "")
-
-if [ -z "$SELECTOR_NAME" ]; then
-    fail "could not find Selector proxy group"
-else
-    info "found selector group: $SELECTOR_NAME"
-    HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-        -X PUT "http://127.0.0.1:9090/proxies/${SELECTOR_NAME}" \
-        -H 'Content-Type: application/json' \
-        -d '{"name":"wujun-sg"}')
-    if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-        pass "Proxy group '$SELECTOR_NAME' set to wujun-sg (HTTP $HTTP_CODE)"
-    else
-        # Some mihomo versions return 400 if group is already correct or needs different format
-        info "PUT returned HTTP $HTTP_CODE — checking current selection"
-    fi
-fi
-
-CURRENT_GROUP=$(curl -sf "http://127.0.0.1:9090/proxies/${SELECTOR_NAME:-Proxy}" 2>/dev/null | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-print(d.get('now','unknown'))
-" 2>/dev/null || echo "unknown")
-info "Proxy group '$SELECTOR_NAME' currently: $CURRENT_GROUP"
 
 # ----------------------------------------------------------------
 section "Step 7: Network baseline (direct, no proxy)"
@@ -169,7 +151,7 @@ DIRECT_GEO=$(curl -sf --connect-timeout 8 --max-time 10 "https://ipinfo.io/${DIR
 info "direct IP location: $DIRECT_GEO"
 
 # ----------------------------------------------------------------
-section "Step 8: Traffic via wujun-sg proxy"
+section "Step 8: Traffic via $EXPECTED_NODE proxy"
 # ----------------------------------------------------------------
 PROXY_IP=$(curl -sf --proxy http://127.0.0.1:7890 \
     --connect-timeout 10 --max-time 15 \
@@ -184,7 +166,7 @@ fi
 # ----------------------------------------------------------------
 section "Step 9: Verify IP changed (traffic went through proxy)"
 # ----------------------------------------------------------------
-if [ "$DIRECT_IP" != "$PROXY_IP" ] && [ "$PROXY_IP" != "FAILED" ]; then
+if [ "$DIRECT_IP" != "FAILED" ] && [ -n "$DIRECT_IP" ] && [ -n "$PROXY_IP" ] && [ "$DIRECT_IP" != "$PROXY_IP" ] && [ "$PROXY_IP" != "FAILED" ]; then
     pass "IP changed: direct=$DIRECT_IP → proxy=$PROXY_IP"
 else
     fail "IP did NOT change — traffic may not be going through proxy"
@@ -193,21 +175,11 @@ fi
 # ----------------------------------------------------------------
 section "Step 10: Verify proxy exit location"
 # ----------------------------------------------------------------
-PROXY_GEO=$(curl -sf --connect-timeout 8 --max-time 10 "https://ipinfo.io/${PROXY_IP}/json" \
-    | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-country=d.get('country','?')
-city=d.get('city','?')
-org=d.get('org','?')
-print(f'{country} / {city} — {org}')
-" 2>/dev/null || echo "lookup failed")
-info "proxy exit location: $PROXY_GEO"
-
-if echo "$PROXY_GEO" | grep -qi "SG\|Singapore"; then
-    pass "confirmed exit in Singapore ✈️"
+PROXY_GEO=$(curl -sf --connect-timeout 8 --max-time 10 "https://ipinfo.io/${PROXY_IP}/json" || echo '{}')
+if printf '%s' "$PROXY_GEO" | python3 "$CONTRACT" geo; then
+    pass "confirmed expected exit country/city (${E2E_EXPECTED_COUNTRY:-JP}/${E2E_EXPECTED_CITY:-Tokyo})"
 else
-    fail "unexpected exit location: $PROXY_GEO"
+    fail "unexpected or unavailable exit country/city"
 fi
 
 # ----------------------------------------------------------------
@@ -247,7 +219,7 @@ section "Summary"
 # ----------------------------------------------------------------
 echo ""
 echo -e "${BOLD}Direct IP:${RESET}   $DIRECT_IP ($DIRECT_GEO)"
-echo -e "${BOLD}Proxy IP:${RESET}    $PROXY_IP ($PROXY_GEO)"
+echo -e "${BOLD}Proxy IP:${RESET}    $PROXY_IP"
 echo ""
 if [ "$FAILED" -eq 0 ]; then
     echo -e "${GREEN}${BOLD}ALL TESTS PASSED${RESET}"

@@ -82,10 +82,10 @@ type NetworkConfig struct {
 	// WANInterface at startup because the configured value did not exist on
 	// this system. Not persisted to TOML; used only for UI indication.
 	WANInterfaceAutoDetected bool `toml:"-" json:"wan_interface_auto_detected"`
-	// DropQUIC controls whether QUIC (UDP 443) is dropped at the nftables level,
-	// forcing browsers to immediately fall back to TCP (which HTTP proxy nodes
-	// can tunnel). Set to true when using HTTP proxy nodes that cannot tunnel UDP.
-	// When false, QUIC bypasses tproxy entirely (legacy behaviour).
+	// DropQUIC blocks UDP 443 when true. Clients may retry over TCP, but
+	// their fallback timing is not guaranteed. When false, UDP 443 follows
+	// the normal transparent-proxy path, subject to the configured bypasses
+	// and Mihomo routing rules. The selected outbound must support UDP.
 	DropQUIC bool `toml:"drop_quic" json:"drop_quic"`
 	// TUN holds TUN-mode specific settings. Only used when Mode == "tun".
 	TUN TUNConfig `toml:"tun" json:"tun"`
@@ -99,13 +99,17 @@ type NetworkConfig struct {
 //     CN CDN), geosite:geolocation-!cn → international DoH, unknowns fall through
 //     to fallback-filter as a safety net. Requires geosite.dat.
 //   - "privacy"            — same routing as split, but nameserver is also replaced
-//     with CN DoH so the ISP never sees any DNS query. Requires geosite.dat.
+//     with CN DoH; bootstrap encryption depends on configuration. Requires geosite.dat.
+//   - "anti-hijack"        — encrypted IP bootstrap and independent node DNS;
+//     rejects plaintext/insecure YAML upstreams, with no ISP downgrade.
 type DNSStrategy = string
 
 const (
 	DNSStrategyLegacy  DNSStrategy = "legacy"
 	DNSStrategysplit   DNSStrategy = "split"
 	DNSStrategyPrivacy DNSStrategy = "privacy"
+	// AntiHijack uses authenticated encrypted resolvers and rejects plaintext fallback.
+	DNSStrategyAntiHijack DNSStrategy = "anti-hijack"
 )
 
 type DNSConfig struct {

@@ -1516,6 +1516,7 @@ const DNS_MODE_LABEL: Record<string, string> = {
 const DNS_STRATEGY_LABEL: Record<string, string> = {
   split:   '分流解析',
   privacy: '隐私解析',
+  'anti-hijack': '防劫持解析',
   legacy:  '传统解析',
 }
 

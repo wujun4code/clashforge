@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
+
 	"fmt"
 	"net/http"
 	"os"
@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/wujun4code/clashforge/internal/config"
-	"github.com/wujun4code/clashforge/internal/core"
+
 	"github.com/wujun4code/clashforge/internal/dns"
 	"gopkg.in/yaml.v3"
 )
@@ -38,10 +38,10 @@ type applySource struct {
 // applyDNS holds DNS settings. All fields are optional; nil/empty uses ClashForge defaults.
 type applyDNS struct {
 	Enable       *bool    `json:"enable"`
-	Mode         string   `json:"mode"`          // "fake-ip" | "redir-host"
-	Strategy     string   `json:"strategy"`      // "split" | "privacy" | "legacy"
-	DnsmasqMode  string   `json:"dnsmasq_mode"`  // "upstream" | "replace" | "none"
-	Listen       string   `json:"listen"`        // "0.0.0.0:17874"
+	Mode         string   `json:"mode"`         // "fake-ip" | "redir-host"
+	Strategy     string   `json:"strategy"`     // "split" | "privacy" | "legacy" | "anti-hijack"
+	DnsmasqMode  string   `json:"dnsmasq_mode"` // "upstream" | "replace" | "none"
+	Listen       string   `json:"listen"`       // "0.0.0.0:17874"
 	IPv6         *bool    `json:"ipv6"`
 	ApplyOnStart *bool    `json:"apply_on_start"`
 	Nameservers  []string `json:"nameservers"`
@@ -178,17 +178,20 @@ func saveApplyYAMLSource(deps Dependencies, content string) (string, error) {
 //
 // Step sequence:
 //
-//	0. source         — save/activate the source YAML (skipped for type=current)
-//	1. conflicts      — detect conflicting proxy services
-//	2. config-save    — apply DNS + network defaults and persist to config.toml
-//	2.5 dns-probe     — detect upstream fake-ip hijacking; auto-inject DoH before config-gen
-//	3. config-gen     — generate the final mihomo-config.yaml (DoH already set if needed)
-//	4. geodata-*      — verify / download GeoData files
-//	5. core-start     — start or restart the mihomo core
-//	6. proxy-takeover — apply nftables / iptables transparent-proxy rules
-//	7. dns-takeover   — configure dnsmasq redirect
+//  0. source         — save/activate the source YAML (skipped for type=current)
+//  1. conflicts      — detect conflicting proxy services
+//  2. config-save    — apply DNS + network defaults and persist to config.toml
+//     2.5 dns-probe     — detect upstream fake-ip hijacking; auto-inject DoH before config-gen
+//  3. config-gen     — generate the final mihomo-config.yaml (DoH already set if needed)
+//  4. geodata-*      — verify / download GeoData files
+//  5. core-start     — start or restart the mihomo core
+//  6. proxy-takeover — apply nftables / iptables transparent-proxy rules
+//  7. dns-takeover   — configure dnsmasq redirect
 func handleCoreApply(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Keep staged candidates request-local; successful saves still update
+		// the authoritative shared Config object below.
+		deps := deps
 		var req coreApplyRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
@@ -411,6 +414,9 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		// keep the existing config value, or fall back to the ClashForge default.
 		def := config.Default()
 
+		current := deps.Config
+		candidate := *current
+		deps.Config = &candidate
 		deps.Config.DNS.Enable = boolOr(req.DNS.Enable, true)
 		if req.DNS.Mode != "" {
 			deps.Config.DNS.Mode = req.DNS.Mode
@@ -493,12 +499,19 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		}
 
 		deps.Config.Core.AutoStartCore = true
+		if err := config.ValidateDNSCoexistence(deps.Config); err != nil {
+			emitStep("config-save", "error", "DNS / TUN 组合不受支持", err.Error())
+			emitDone(false, err.Error())
+			return
+		}
 
 		if err := saveRuntimeConfig(deps); err != nil {
 			emitStep("config-save", "error", "配置保存失败", err.Error())
 			emitDone(false, err.Error())
 			return
 		}
+		*current = candidate
+		deps.Config = current
 		emitStep("config-save", "ok",
 			fmt.Sprintf("配置已保存 — DNS: %s/%s | 代理: %s/%s | WAN: %s",
 				deps.Config.DNS.Mode, deps.Config.DNS.DnsmasqMode,
@@ -515,6 +528,8 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		udpNameservers := deps.Config.DNS.Nameservers
 
 		switch {
+		case strings.EqualFold(strings.TrimSpace(deps.Config.DNS.Strategy), config.DNSStrategyAntiHijack):
+			emitStep("dns-probe", "skip", "防劫持策略不发送明文 DNS 探测，也不会自动追加未选定的解析商", "")
 		case len(nodeHostnames) == 0:
 			emitStep("dns-probe", "skip", "暂无已缓存的代理节点，跳过 DNS 劫持检测", "")
 		case len(udpNameservers) == 0:
@@ -682,21 +697,11 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		startAction := "启动"
-		if err := deps.Core.Start(ctx); err != nil {
-			if errors.Is(err, core.ErrAlreadyRunning) {
-				// Restart to pick up new config
-				startAction = "重启"
-				if restartErr := deps.Core.Restart(ctx); restartErr != nil {
-					emitStep("core-start", "error", "内核重启失败", restartErr.Error())
-					emitDone(false, restartErr.Error())
-					return
-				}
-			} else {
-				emitStep("core-start", "error", "内核启动失败", err.Error())
-				emitDone(false, err.Error())
-				return
-			}
+		startAction, err := startConfiguredCore(ctx, deps)
+		if err != nil {
+			emitStep("core-start", "error", "内核启动/切换失败", err.Error())
+			emitDone(false, err.Error())
+			return
 		}
 		st := deps.Core.Status()
 		emitStep("core-start", "ok",
@@ -706,6 +711,13 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 		// ── Step 6: transparent proxy takeover ────────────────────────────────
 
 		netMode := deps.Config.Network.Mode
+		if deps.Netfilter != nil || (deps.Config.Network.ApplyOnStart && netMode != "none") {
+			if err := applyNetworkTakeover(deps); err != nil {
+				emitStep("proxy-takeover", "error", "透明代理 / TUN 接管失败", err.Error())
+				emitDone(false, err.Error())
+				return
+			}
+		}
 		switch {
 		case netMode == "tun" && deps.Config.Network.ApplyOnStart && deps.Netfilter != nil:
 			// TUN mode still needs two post-start fixups that mihomo's own auto-route
@@ -718,23 +730,17 @@ func handleCoreApply(deps Dependencies) http.HandlerFunc {
 			//      via the kernel's bare default route to the upstream gateway.
 			emitStep("proxy-takeover", "running",
 				"正在为 TUN 模式补充 LAN 转发规则 (fw4 forward_lan 放行 Meta + ip rule 9020/9021)…", "")
-			refreshNetfilterManager(deps)
-			_ = deps.Netfilter.Apply() // always returns nil for TUN; sub-steps log.Warn on failure
+
 			emitStep("proxy-takeover", "ok",
-				"TUN 模式已接管 ✓ — fw4 forward_lan 放行 Meta 设备 | ip rule 9020/9021 补全 LAN 转发路由",
-				"auto-route=true")
+				"TUN IPv4 补充规则已验证（fw4 forward_lan / 专用策略路由）",
+				"仅 IPv4 LAN zone；未验证 guest、自定义 zone、IPv6 防绕行、fw4 reload 持久化或端到端连通性")
 		case netMode == "tun":
 			emitStep("proxy-takeover", "ok",
 				"TUN 模式已启用（apply_on_start=false 或 netfilter 未初始化，跳过路由补充）", "")
 		case netMode != "none" && deps.Config.Network.ApplyOnStart && deps.Netfilter != nil:
 			emitStep("proxy-takeover", "running",
 				fmt.Sprintf("正在应用透明代理规则 (%s / %s)…", netMode, deps.Config.Network.FirewallBackend), "")
-			refreshNetfilterManager(deps)
-			if err := deps.Netfilter.Apply(); err != nil {
-				emitStep("proxy-takeover", "error", "透明代理规则应用失败", err.Error())
-				emitDone(false, err.Error())
-				return
-			}
+
 			emitStep("proxy-takeover", "ok",
 				fmt.Sprintf("透明代理已接管 ✓ — %s 模式 / %s 后端", netMode, deps.Netfilter.BackendName()), "")
 		default:

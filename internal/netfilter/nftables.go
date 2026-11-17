@@ -2,6 +2,7 @@ package netfilter
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os/exec"
@@ -17,56 +18,128 @@ import (
 // without touching anything fw4 itself manages.
 const tunForwardComment = "clashforge: allow forwarding into TUN device"
 
-var nftHandleRe = regexp.MustCompile(`# handle (\d+)`)
+var tunDeviceRe = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,15}$`)
+var tunForwardRuleRe = regexp.MustCompile(`^\s*(meta nfproto ipv4 )?oifname "([^"]+)" (?:counter(?: packets \d+ bytes \d+)? )?accept comment "` + regexp.QuoteMeta(tunForwardComment) + `" # handle (\d+)\s*$`)
 
-// EnsureTunForwardAccept inserts a forward-accept rule for the TUN device into
-// the live "inet fw4" ruleset. mihomo's TUN auto-route correctly diverts
-// LAN-client traffic into the TUN device at the IP routing layer (ip rule/ip
-// route), but stock OpenWrt fw4 only allowlists known zone devices (lan/wan)
-// in its forward chain — without this rule, that traffic is silently
-// dropped/rejected by fw4's handle_reject fallback before mihomo's TUN reader
-// ever sees it. This is a live edit to fw4's own table (not a separate
-// ClashForge-owned table) because nftables verdicts from a different table at
-// the same hook do not override fw4's own drop policy; it does not persist
-// across an OpenWrt firewall reload (`fw4 reload`/`service firewall restart`),
-// since fw4 regenerates from /etc/config/firewall — Apply() re-adds it on
-// every (re)start so this is re-asserted whenever ClashForge re-applies rules.
-func EnsureTunForwardAccept(device string) error {
+func tunDevice(device string) (string, error) {
 	if device == "" {
 		device = "Meta"
 	}
-	out, _ := exec.Command("nft", "list", "chain", "inet", "fw4", "forward_lan").CombinedOutput()
-	if strings.Contains(string(out), `oifname "`+device+`"`) {
-		return nil
+	if !tunDeviceRe.MatchString(device) {
+		return "", fmt.Errorf("unsupported TUN device name %q", device)
 	}
-	cmd := exec.Command("nft", "insert", "rule", "inet", "fw4", "forward_lan",
-		"oifname", device, "counter", "accept", "comment", `"`+tunForwardComment+`"`)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("nft insert tun forward rule: %w: %s", err, string(out))
-	}
-	log.Info().Str("device", device).Msg("netfilter: 已在 fw4 forward_lan 中放行 TUN 设备转发流量 ✓")
-	return nil
+	return device, nil
 }
 
-// RemoveTunForwardAccept deletes the rule added by EnsureTunForwardAccept.
-// Best-effort: if fw4 already reloaded and dropped it, this is a no-op.
-func RemoveTunForwardAccept(device string) error {
+func listTunForward() ([]string, error) {
 	out, err := exec.Command("nft", "-a", "list", "chain", "inet", "fw4", "forward_lan").CombinedOutput()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("inspect fw4 forward_lan (only supported TUN zone): %w: %s", err, out)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, tunForwardComment) {
+	return strings.Split(string(out), "\n"), nil
+}
+
+// ensureTunForwardAccept reports whether THIS invocation inserted a rule.
+// The rule is IPv4-only; it does not claim guest/custom-zone or IPv6 support.
+func ensureTunForwardAccept(device string) (bool, error) {
+	device, err := tunDevice(device)
+	if err != nil {
+		return false, err
+	}
+	lines, err := listTunForward()
+	if err != nil {
+		return false, err
+	}
+	count := 0
+	for _, line := range lines {
+		m := tunForwardRuleRe.FindStringSubmatch(line)
+		if m != nil && m[2] == device {
+			if m[1] == "" {
+				return false, fmt.Errorf("legacy all-family TUN forward rule for %s requires manual review", device)
+			}
+			count++
+		} else if strings.Contains(line, tunForwardComment) && strings.Contains(line, `oifname "`+device+`"`) {
+			return false, fmt.Errorf("incompatible owned TUN forward rule: %s", strings.TrimSpace(line))
+		}
+	}
+	if count > 1 {
+		return false, fmt.Errorf("duplicate owned TUN forward rules for %s", device)
+	}
+	if count == 1 {
+		return false, nil
+	}
+	out, err := exec.Command("nft", "insert", "rule", "inet", "fw4", "forward_lan",
+		"meta", "nfproto", "ipv4", "oifname", device, "counter", "accept", "comment", `"`+tunForwardComment+`"`).CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("insert IPv4 TUN forward rule: %w: %s", err, out)
+	}
+	lines, err = listTunForward()
+	if err != nil {
+		return true, err
+	}
+	count = 0
+	for _, line := range lines {
+		m := tunForwardRuleRe.FindStringSubmatch(line)
+		if m != nil && m[1] != "" && m[2] == device {
+			count++
+		}
+	}
+	if count != 1 {
+		return true, fmt.Errorf("IPv4 TUN forward rule verification failed for %s: got %d", device, count)
+	}
+	return true, nil
+}
+
+// EnsureTunForwardAccept is transactional on its own; Manager uses the internal
+// acquisition result to roll back only resources added by the current Apply.
+func EnsureTunForwardAccept(device string) error {
+	added, err := ensureTunForwardAccept(device)
+	if err != nil && added {
+		return errors.Join(err, RemoveTunForwardAccept(device))
+	}
+	return err
+}
+
+// RemoveTunForwardAccept removes only exact project-comment/device/accept rules,
+// including the legacy unqualified project rule. Other devices and foreign rules
+// are untouched. Inspection/deletion errors remain visible and retryable.
+func RemoveTunForwardAccept(device string) error {
+	device, err := tunDevice(device)
+	if err != nil {
+		return err
+	}
+	lines, err := listTunForward()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, line := range lines {
+		m := tunForwardRuleRe.FindStringSubmatch(line)
+		if m == nil || m[2] != device {
+			if strings.Contains(line, `comment "`+tunForwardComment+`"`) && strings.Contains(line, `oifname "`+device+`"`) {
+				errs = append(errs, fmt.Errorf("refusing cleanup of incompatible TUN forward rule: %s", strings.TrimSpace(line)))
+			}
 			continue
 		}
-		m := nftHandleRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
+		out, err := exec.Command("nft", "delete", "rule", "inet", "fw4", "forward_lan", "handle", m[3]).CombinedOutput()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("delete owned TUN forward handle %s: %w: %s", m[3], err, out))
 		}
-		_ = exec.Command("nft", "delete", "rule", "inet", "fw4", "forward_lan", "handle", m[1]).Run()
 	}
-	return nil
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	lines, err = listTunForward()
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		m := tunForwardRuleRe.FindStringSubmatch(line)
+		if m != nil && m[2] == device {
+			errs = append(errs, fmt.Errorf("owned TUN forward rule remains for %s", device))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 const fwMark = "0x1a3"
@@ -166,21 +239,18 @@ table inet metaclash {
         # (those packets carry {{ .FWMarkOutput }} and must be tproxied, not skipped).
         fib saddr type local meta mark != {{ .FWMarkOutput }} return
         ip daddr @bypass_ipv4 return
-        # QUIC (HTTP/3, UDP 443) handling.
-        # drop:   forces browsers to immediately fall back to TCP, which HTTP proxy
-        #         nodes can tunnel. Correct for all HTTP-proxy setups. Domestic apps
-        #         lose QUIC speed but still work via TCP.
-        # return: bypasses tproxy entirely (legacy). Only safe if proxy nodes support
-        #         UDP. With HTTP proxies, GFW-blocked domains (e.g. OpenAI) may not
-        #         be rejected fast enough, so the browser sends the real Chinese IP
-        #         before falling back to TCP — causing geo-detection failures.
-{{ if .DropQUIC }}        udp dport 443 drop
-{{ else }}        udp dport 443 return
-{{ end -}}
-        meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:{{ .TProxyPort }} meta mark set {{ .FWMark }}
 {{ if .EnableIPv6 }}
         ip6 daddr @bypass_ipv6 return
-        meta l4proto { tcp, udp } tproxy ip6 to [::1]:{{ .TProxyPort }} meta mark set {{ .FWMark }}
+{{ end }}
+        # QUIC (HTTP/3, UDP 443): conservatively block when configured.
+        # DROP may encourage TCP fallback; client support and timing vary.
+        # Otherwise use the ordinary UDP TProxy path, never a direct bypass.
+        # Successful HTTP/3 still requires UDP support in the selected outbound.
+{{ if .DropQUIC }}        udp dport 443 drop
+{{ end -}}
+        meta nfproto ipv4 meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:{{ .TProxyPort }} meta mark set {{ .FWMark }}
+{{ if .EnableIPv6 }}
+        meta nfproto ipv6 meta l4proto { tcp, udp } tproxy ip6 to [::1]:{{ .TProxyPort }} meta mark set {{ .FWMark }}
 {{ end }}
     }
 
@@ -278,7 +348,9 @@ func (n *NftablesBackend) Apply() error {
 	}
 
 	// First cleanup any existing rules
-	_ = n.Cleanup()
+	if err := n.Cleanup(); err != nil {
+		return fmt.Errorf("cleanup before nft apply: %w", err)
+	}
 
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = &buf
@@ -289,20 +361,9 @@ func (n *NftablesBackend) Apply() error {
 	}
 	log.Info().Msg("netfilter: nftables 规则已成功应用 ✓")
 
-	// Setup policy routing (IPv4)
-	_ = exec.Command("ip", "rule", "add", "fwmark", fwMark, "table", routeTable).Run()
-	_ = exec.Command("ip", "route", "add", "local", "default", "dev", "lo", "table", routeTable).Run()
-
-	// Setup policy routing (IPv6) — only when IPv6 tproxy is enabled
-	if n.EnableIPv6 {
-		_ = exec.Command("ip", "-6", "rule", "add", "fwmark", fwMark, "table", routeTable).Run()
-		_ = exec.Command("ip", "-6", "route", "add", "local", "default", "dev", "lo", "table", routeTable).Run()
+	if err := applyTProxyPolicyRouting(n.EnableIPv6); err != nil {
+		return err
 	}
-
-	// Setup policy routing for tproxy_output (router-originated traffic).
-	// tproxy_output only marks IPv4 fake-IP destinations, so only IPv4 rules needed.
-	_ = exec.Command("ip", "rule", "add", "fwmark", fwMarkOutput, "table", routeTableOutput).Run()
-	_ = exec.Command("ip", "route", "add", "local", "default", "dev", "lo", "table", routeTableOutput).Run()
 
 	log.Info().
 		Str("fwmark", fwMark).
@@ -316,21 +377,16 @@ func (n *NftablesBackend) Apply() error {
 
 // Cleanup removes all metaclash nftables rules.
 func (n *NftablesBackend) Cleanup() error {
+	var errs []error
 	out, err := exec.Command("nft", "delete", "table", "inet", "metaclash").CombinedOutput()
 	if err != nil {
 		s := string(out)
-		if strings.Contains(s, "No such file") || strings.Contains(s, "table not found") || strings.Contains(s, "does not exist") {
-			return nil
+		if !strings.Contains(s, "No such file or directory") && !strings.Contains(s, "table not found") && !strings.Contains(s, "does not exist") {
+			errs = append(errs, fmt.Errorf("nft cleanup: %w: %s", err, s))
 		}
-		return fmt.Errorf("nft cleanup: %w: %s", err, s)
 	}
-	_ = exec.Command("ip", "rule", "del", "fwmark", fwMark, "table", routeTable).Run()
-	_ = exec.Command("ip", "route", "flush", "table", routeTable).Run()
-	_ = exec.Command("ip", "-6", "rule", "del", "fwmark", fwMark, "table", routeTable).Run()
-	_ = exec.Command("ip", "-6", "route", "flush", "table", routeTable).Run()
-	_ = exec.Command("ip", "rule", "del", "fwmark", fwMarkOutput, "table", routeTableOutput).Run()
-	_ = exec.Command("ip", "route", "flush", "table", routeTableOutput).Run()
-	return nil
+	// The table may already be gone while policy routing still needs cleanup.
+	return errors.Join(append(errs, cleanupTProxyPolicyRouting())...)
 }
 
 func buildBypassIPv4Elements(bypassFakeIP bool, bypassCIDR []string, fakeIPRange string) string {

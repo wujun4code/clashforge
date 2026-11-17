@@ -149,7 +149,8 @@ class ConfigGenerator {
           p[k] = v;
         }
       });
-      if (p['tls'] == true) p['skip-cert-verify'] = true;
+      // Preserve the subscription's explicit certificate policy. Omission uses
+      // Mihomo's secure default; TLS alone is not permission to skip validation.
       proxies.add(p);
       proxyNames.add(node.name);
     }

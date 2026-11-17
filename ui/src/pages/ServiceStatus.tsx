@@ -59,7 +59,12 @@ const DNS_STRATEGY_INFO: Record<string, ModeInfo> = {
   privacy: {
     label: '隐私模式',
     tone: 'good',
-    description: '在分流模式基础上，所有 DNS 查询都强制走国内加密 DoH，运营商在链路上完全看不到任何查询内容。',
+    description: '网站查询按域名分流到加密 DNS；引导解析是否加密取决于配置的 default-nameserver。',
+  },
+  'anti-hijack': {
+    label: '防劫持模式',
+    tone: 'good',
+    description: '节点先通过独立直连的加密 DNS 解析，网站 DNS 遵循分流规则；验证证书并拒绝明文回退，国内网站保持原有流量分流。',
   },
 }
 

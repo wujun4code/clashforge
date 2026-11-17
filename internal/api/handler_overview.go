@@ -1280,7 +1280,7 @@ func moduleStatus(managedByClashforge bool, occupied bool) string {
 }
 
 func recommendedNetworkMode(current string) string {
-	if current == "redir" || current == "tproxy" {
+	if current == "redir" || current == "tproxy" || current == "tun" {
 		return current
 	}
 	return "tproxy"
@@ -1353,6 +1353,9 @@ func failedAccessCheckNames(checks []overviewAccessCheck) []string {
 }
 
 func takeoverTransparentProxy(deps Dependencies, mode string) (string, bool, error) {
+	current := deps.Config
+	candidate := *deps.Config
+	deps.Config = &candidate
 	if mode == "" {
 		mode = recommendedNetworkMode(deps.Config.Network.Mode)
 	}
@@ -1361,13 +1364,25 @@ func takeoverTransparentProxy(deps Dependencies, mode string) (string, bool, err
 	if deps.Config.Network.FirewallBackend == "none" || strings.TrimSpace(deps.Config.Network.FirewallBackend) == "" {
 		deps.Config.Network.FirewallBackend = "auto"
 	}
+	if err := config.ValidateDNSCoexistence(deps.Config); err != nil {
+		return "", false, err
+	}
 	if err := saveRuntimeConfig(deps); err != nil {
 		return "", false, err
 	}
-	refreshNetfilterManager(deps)
+	*current = candidate
+	deps.Config = current
 	if deps.Core.Status().Ready {
-		if err := deps.Netfilter.Apply(); err != nil {
+		if _, err := generateMihomoConfig(deps); err != nil {
 			return "", false, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if _, err := startConfiguredCore(ctx, deps); err != nil {
+			return "", false, err
+		}
+		if _, warnings := applyConfiguredStartupTakeover(deps); len(warnings) > 0 {
+			return "", false, fmt.Errorf("%s", strings.Join(warnings, "; "))
 		}
 		return fmt.Sprintf("ClashForge 已开始以 %s 模式接管透明代理和防火墙规则", mode), false, nil
 	}
@@ -1375,35 +1390,37 @@ func takeoverTransparentProxy(deps Dependencies, mode string) (string, bool, err
 }
 
 func takeoverDNS(deps Dependencies, mode string) (string, bool, error) {
+	current := deps.Config
+	candidate := *deps.Config
+	deps.Config = &candidate
 	if !deps.Config.DNS.Enable {
 		return "", false, fmt.Errorf("dns.enable=false，当前配置未启用 DNS；请先在配置中启用 DNS")
 	}
 
-	oldMode := dns.DnsmasqMode(deps.Config.DNS.DnsmasqMode)
 	if mode == "" {
 		mode = recommendedDNSMode(deps.Config.DNS.DnsmasqMode)
 	}
 	deps.Config.DNS.ApplyOnStart = true
 	deps.Config.DNS.DnsmasqMode = mode
+	if err := config.ValidateDNSCoexistence(deps.Config); err != nil {
+		return "", false, err
+	}
 	if err := saveRuntimeConfig(deps); err != nil {
 		return "", false, err
 	}
+	*current = candidate
+	deps.Config = current
 	if _, err := generateMihomoConfig(deps); err != nil {
 		return "", false, err
 	}
 	if deps.Core.Status().Ready {
-		if oldMode != dns.ModeNone {
-			_ = dns.Restore(oldMode)
-		}
-		if deps.Config.DNS.Enable {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := deps.Core.Restart(ctx); err != nil {
-				return "", false, err
-			}
-		}
-		if err := dns.Setup(dns.DnsmasqMode(mode), deps.Config.Ports.DNS); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if _, err := startConfiguredCore(ctx, deps); err != nil {
 			return "", false, err
+		}
+		if _, warnings := applyConfiguredStartupTakeover(deps); len(warnings) > 0 {
+			return "", false, fmt.Errorf("%s", strings.Join(warnings, "; "))
 		}
 		return fmt.Sprintf("ClashForge 已开始以 %s 模式接管 DNS 入口", mode), false, nil
 	}
@@ -1411,9 +1428,12 @@ func takeoverDNS(deps Dependencies, mode string) (string, bool, error) {
 }
 
 func takeoverAll(deps Dependencies) (string, bool, error) {
+	current := deps.Config
+	candidate := *deps.Config
+	deps.Config = &candidate
 	networkMode := recommendedNetworkMode(deps.Config.Network.Mode)
 	dnsMode := recommendedDNSMode(deps.Config.DNS.DnsmasqMode)
-	oldDNSMode := dns.DnsmasqMode(deps.Config.DNS.DnsmasqMode)
+
 	dnsEnabled := deps.Config.DNS.Enable
 
 	deps.Config.Network.Mode = networkMode
@@ -1426,40 +1446,26 @@ func takeoverAll(deps Dependencies) (string, bool, error) {
 		deps.Config.DNS.DnsmasqMode = dnsMode
 	}
 
+	if err := config.ValidateDNSCoexistence(deps.Config); err != nil {
+		return "", false, err
+	}
 	if err := saveRuntimeConfig(deps); err != nil {
 		return "", false, err
 	}
+	*current = candidate
+	deps.Config = current
 	if _, err := generateMihomoConfig(deps); err != nil {
 		return "", false, err
 	}
 
-	refreshNetfilterManager(deps)
-	coreWasRunning := deps.Core.Status().Ready
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	if coreWasRunning {
-		if dnsEnabled && oldDNSMode != dns.ModeNone {
-			_ = dns.Restore(oldDNSMode)
-		}
-		if err := deps.Core.Restart(ctx); err != nil {
-			return "", false, err
-		}
-	} else if err := deps.Core.Start(ctx); err != nil {
-		if err != core.ErrAlreadyRunning {
-			return "", false, err
-		}
+	if _, err := startConfiguredCore(ctx, deps); err != nil {
+		return "", false, err
 	}
-
-	if dnsEnabled {
-		if err := dns.Setup(dns.DnsmasqMode(dnsMode), deps.Config.Ports.DNS); err != nil {
-			return "", false, err
-		}
-	}
-	if deps.Netfilter != nil {
-		if err := deps.Netfilter.Apply(); err != nil {
-			return "", false, err
-		}
+	if _, warnings := applyConfiguredStartupTakeover(deps); len(warnings) > 0 {
+		return "", false, fmt.Errorf("%s", strings.Join(warnings, "; "))
 	}
 
 	if !dnsEnabled {
@@ -1474,30 +1480,24 @@ func releaseAllTakeover(deps Dependencies) (string, error) {
 	// Do NOT touch ApplyOnStart flags — they represent the user's intent and
 	// must remain sticky so that restarting the core re-applies the same setup.
 	//
-	// ORDER MATTERS for zero-blackout teardown:
-	//  1. DNS restore FIRST — deletes UCI port=0 override and restarts dnsmasq so
-	//     it is listening on :53 again.  While dnsmasq restarts, the metaclash
-	//     dns_redirect chain (:53→mihomo) is still active, so LAN clients keep
-	//     working throughout the dnsmasq restart window.
-	//  2. Nftables cleanup SECOND — by the time we delete table inet metaclash,
-	//     dnsmasq is already on :53 and takes over seamlessly.
+	// Availability-first teardown: request dnsmasq restoration while the old
+	// core and redirection are still alive, then release owned rules. A
+	// successful command is not proof that a real :53 query or LAN flow works.
 
 	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
-		_ = dns.Restore(mode) // best-effort; log inside Restore
+		if err := dns.Restore(mode); err != nil {
+			return "", fmt.Errorf("恢复 DNS 失败，保留核心及接管规则: %w", err)
+		}
 	}
 
 	if deps.Netfilter != nil {
-		_ = deps.Netfilter.Cleanup()
+		if err := deps.Netfilter.Cleanup(); err != nil {
+			return "", err
+		}
 	}
 
-	// Force cleanup even if manager state is out of sync.
-	_ = (&netfilter.NftablesBackend{}).Cleanup()
-	for _, dnsPort := range dedupeInts([]int{deps.Config.Ports.DNS, 17874, 7874}) {
-		if dnsPort <= 0 {
-			continue
-		}
-		_ = (&netfilter.IptablesBackend{DNSPort: dnsPort}).Cleanup()
-	}
+	// The retained manager owns active and pending cleanup, including retries.
+	// Do not sweep unowned backends: they may be absent or contain foreign rules.
 
 	if deps.Core.Status().Ready {
 		return "已停止 ClashForge 对系统模块的接管（DNS / NFT / 透明代理），核心保持运行", nil
@@ -1512,11 +1512,13 @@ func saveRuntimeConfig(deps Dependencies) error {
 	return nil
 }
 
-func refreshNetfilterManager(deps Dependencies) {
+func refreshNetfilterManager(deps Dependencies) error {
 	if deps.Netfilter == nil {
-		return
+		return fmt.Errorf("netfilter manager is not initialized")
 	}
-	*deps.Netfilter = *netfilter.NewManager(netfilter.Config{
+	// Construct the candidate before touching the active owner's rules. Config
+	// writes alone must not call this: activate only after generation succeeds.
+	next := netfilter.NewManager(netfilter.Config{
 		Mode:              deps.Config.Network.Mode,
 		FirewallBackend:   deps.Config.Network.FirewallBackend,
 		TProxyPort:        deps.Config.Ports.TProxy,
@@ -1530,6 +1532,11 @@ func refreshNetfilterManager(deps Dependencies) {
 		TunDevice:         deps.Config.Network.TUN.Device,
 		FakeIPRange:       config.ReadRuntimeFakeIPRange(deps.Config.Core.RuntimeDir),
 	})
+	if err := deps.Netfilter.Cleanup(); err != nil {
+		return fmt.Errorf("清理旧模式接管失败，保留原 manager 以便重试: %w", err)
+	}
+	*deps.Netfilter = *next
+	return nil
 }
 
 func shouldRedirectDNS(cfg *config.MetaclashConfig) bool {
