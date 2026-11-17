@@ -71,13 +71,11 @@ class MainActivity : FlutterActivity() {
                             startActivityForResult(intent, 0)
                             result.success("permission_needed")
                         } else {
-                            startVpnService()
-                            result.success("started")
+                            startVpnService(result)
                         }
                     }
                     "stopVpn" -> {
-                        stopVpnService()
-                        result.success("stopped")
+                        submitVpnControl(ClashVpnService.ACTION_STOP, result)
                     }
                     "getFilesDir" -> {
                         result.success(filesDir.absolutePath)
@@ -444,15 +442,34 @@ class MainActivity : FlutterActivity() {
         if (requestCode == 0 && resultCode == RESULT_OK) startVpnService()
     }
 
-    private fun startVpnService() {
-        startService(Intent(this, ClashVpnService::class.java).apply {
-            action = ClashVpnService.ACTION_START
+    private fun startVpnService(result: MethodChannel.Result? = null) {
+        if (result != null) submitVpnControl(ClashVpnService.ACTION_START, result)
+        else startService(Intent(this, ClashVpnService::class.java).apply {
+            action = ClashVpnService.ACTION_START // permission callback has no pending request
         })
     }
 
-    private fun stopVpnService() {
-        startService(Intent(this, ClashVpnService::class.java).apply {
-            action = ClashVpnService.ACTION_STOP
-        })
+    private fun submitVpnControl(action: String, result: MethodChannel.Result) {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        ClashVpnService.requests.submit(
+            scheduleTimeout = { timeout ->
+                val task = Runnable { timeout() }
+                handler.postDelayed(task, 20_000)
+                val cancelTimer: () -> Unit = { handler.removeCallbacks(task) }
+                cancelTimer
+            },
+            cancel = { id ->
+                if (action == ClashVpnService.ACTION_START) {
+                    ClashVpnService.cancelStart(id)
+                }
+            },
+            dispatch = { id ->
+                startService(Intent(this, ClashVpnService::class.java).apply {
+                    this.action = action
+                    putExtra(ClashVpnService.EXTRA_REQUEST_ID, id)
+                })
+            },
+            reply = { value -> handler.post { result.success(value) } },
+        )
     }
 }
