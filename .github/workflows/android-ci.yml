@@ -158,6 +158,11 @@ jobs:
           GOMAXPROCS: '2'
         run: go test -race -p 2 -count=1 ./...
 
+      - name: Test private APK pre-build contract (host-only)
+        if: needs.changes.outputs.mobile == 'true'
+        shell: bash
+        run: python3 tests/android/test_prebuild_debug_apk.py
+
       - name: Run Android JVM regression tests
         if: needs.changes.outputs.mobile == 'true'
         timeout-minutes: 15
@@ -347,11 +352,8 @@ jobs:
       # so "cd mobile" on one line does NOT persist to the next line's flutter call.
       - name: Pre-build debug APK (SUBSCRIPTION_URL embedded at compile time)
         if: needs.changes.outputs.mobile == 'true'
-        run: |
-          flutter build apk --debug \
-            "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
-            2>&1 | tail -20
-        working-directory: mobile
+        shell: bash
+        run: bash tests/android/prebuild_debug_apk.sh
         env:
           SUBSCRIPTION_URL: ${{ secrets.SUBSCRIPTION_URL }}
 

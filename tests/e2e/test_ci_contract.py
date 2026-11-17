@@ -253,6 +253,22 @@ test() {
                      "reason: 'VPN must be off'"):
             self.assertIn(gate, app)
 
+    def test_android_prebuild_is_private_fail_closed_before_emulator(self):
+        data = workflow('android-ci.yml')
+        steps = data['jobs']['e2e']['steps']
+        prebuild = next(i for i, s in enumerate(steps) if 'prebuild_debug_apk.sh' in s.get('run', ''))
+        emulator = next(i for i, s in enumerate(steps) if s.get('uses', '').startswith('reactivecircus/'))
+        self.assertLess(prebuild, emulator)
+        self.assertEqual(steps[prebuild]['shell'], 'bash')
+        self.assertNotIn('continue-on-error', steps[prebuild])
+        self.assertNotIn('always()', steps[emulator]['if'])
+        self.assertIn('python3 tests/android/test_prebuild_debug_apk.py', runs(data['jobs']['test']))
+        script = (ROOT / 'tests/android/prebuild_debug_apk.sh').read_text()
+        self.assertNotIn('tail ', script)
+        self.assertNotIn('tee ', script)
+        self.assertIn('clashforge-e2e-flutter.txt', script)
+        self.assertIn('test -s "$apk"', script)
+
     def test_android_uploads_only_encrypted_native_diagnostics(self):
         steps = workflow('android-ci.yml')['jobs']['e2e']['steps']
         uploads = [s for s in steps if s.get('uses', '').startswith('actions/upload-artifact@')]

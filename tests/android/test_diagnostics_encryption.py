@@ -23,6 +23,8 @@ class DiagnosticsEncryptionTest(unittest.TestCase):
             self.assertEqual(generated.returncode, 0)
             payload = b'MihomoCore synthetic-private-endpoint.invalid tls handshake error\n'
             (root / 'clashforge-e2e-logcat.txt').write_bytes(payload)
+            prebuild = b'synthetic-private-prebuild stdout and stderr\n'
+            (root / 'clashforge-e2e-flutter.txt').write_bytes(prebuild)
             completed = subprocess.run(['bash', str(ROOT / 'tests/android/encrypt_diagnostics.sh')],
                 env=dict(os.environ, RUNNER_TEMP=directory, GITHUB_WORKSPACE=directory),
                 capture_output=True, text=True)
@@ -36,7 +38,10 @@ class DiagnosticsEncryptionTest(unittest.TestCase):
                 '-inkey', str(key)], capture_output=True)
             self.assertEqual(plaintext.returncode, 0)
             with tarfile.open(fileobj=io.BytesIO(plaintext.stdout), mode='r:gz') as archive:
-                self.assertEqual(archive.getnames(), ['clashforge-e2e-logcat.txt'])
+                self.assertEqual(archive.getnames(), ['clashforge-e2e-logcat.txt', 'clashforge-e2e-flutter.txt'])
+                flutter_member = archive.extractfile('clashforge-e2e-flutter.txt')
+                assert flutter_member is not None
+                self.assertEqual(flutter_member.read(), prebuild)
                 member = archive.extractfile('clashforge-e2e-logcat.txt')
                 self.assertIsNotNone(member)
                 assert member is not None
