@@ -6,7 +6,7 @@
 #   - network.mode = "tun"（不是 tproxy）
 #   - 断言 /dev/net/tun 存在
 #   - 断言 TUN 虚拟网卡已被 mihomo 创建（ip link show 出现 Meta/utun/tun 设备）
-#   - 断言 nftables metaclash 表【不存在】（TUN 模式不使用 nftables）
+#   - 断言无传统 metaclash 表；检查 fw4 forward_lan 和 IPv4 补充路由
 #   - 断言 mihomo 进程已启动
 #   - 断言 DNS 解析可用（fake-ip 或真实 IP）
 #
@@ -24,6 +24,31 @@
 #   GITHUB_STEP_SUMMARY
 
 set -e
+
+check_tun_dns() {
+    local port="$1" name="$2" attempt=0 answer=""
+    case "$port" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$port" -gt 0 ] && [ "$port" -le 65535 ] || return 1
+    command -v dig >/dev/null 2>&1 || {
+        echo "dig required: do not substitute an unrelated system resolver" >&2; return 1;
+    }
+    while [ "$attempt" -lt 5 ]; do
+        attempt=$((attempt+1))
+        answer=$(dig +short +time=3 +tries=1 @127.0.0.1 -p "$port" "$name" A 2>/dev/null) || answer=""
+        answer=$(printf '%s\n' "$answer" | awk -F. '
+            NF == 4 { ok=1; for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || $i>255) ok=0; if(ok) {print; exit} }')
+        if [ -n "$answer" ]; then printf '%s\n' "$answer"; return 0; fi
+        [ "$attempt" -ge 5 ] || sleep 2
+    done
+    return 1
+}
+
+# Exercise the same DNS production function/argv safely in the host harness.
+if [ "${1:-}" = --check-dns ]; then
+    [ "$#" -eq 3 ] || exit 2
+    check_tun_dns "$2" "$3"
+    exit $?
+fi
 
 REUSE_SUBSCRIPTION="${REUSE_SUBSCRIPTION:-false}"
 
@@ -59,15 +84,7 @@ section "Step 5 (TUN) — TUN 模式启动验证"
 if [ -c /dev/net/tun ]; then
     record PASS TUN-01 "/dev/net/tun 设备存在" "/dev/net/tun 为字符设备" "$(ls -la /dev/net/tun)"
 else
-    # Try to create it (may succeed on some kernels even without modprobe)
-    modprobe tun 2>/dev/null || true
-    mkdir -p /dev/net
-    mknod /dev/net/tun c 10 200 2>/dev/null || true
-    if [ -c /dev/net/tun ]; then
-        record PASS TUN-01 "/dev/net/tun 设备存在" "/dev/net/tun 为字符设备" "已动态创建: $(ls -la /dev/net/tun)"
-    else
-        record FAIL TUN-01 "/dev/net/tun 设备存在" "/dev/net/tun 为字符设备" "设备不存在且无法创建（内核可能不支持 TUN）"
-    fi
+    record FAIL TUN-01 "/dev/net/tun 设备存在" "/dev/net/tun 为字符设备" "缺少设备：不由测试自修复/掩盖安装条件"
 fi
 
 # ── 订阅准备（复用或新建）────────────────────────────────────────────────────
@@ -98,7 +115,7 @@ else
 fi
 
 # ── TUN-02: setup/launch with mode=tun ────────────────────────────────────────
-LAUNCH_PAYLOAD='{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tun","firewall_backend":"none","bypass_lan":true,"bypass_china":false,"apply_on_start":true}}'
+LAUNCH_PAYLOAD='{"dns":{"enable":true,"mode":"fake-ip","dnsmasq_mode":"upstream","apply_on_start":true},"network":{"mode":"tun","firewall_backend":"nftables","ipv6":false,"bypass_lan":true,"bypass_china":false,"apply_on_start":true,"tun":{"device":"Meta","stack":"mixed","auto_route":true,"auto_detect_interface":true}}}'
 info "触发 setup/launch (mode=tun)..."
 LAUNCH_RESP=$(curl -sf --max-time 90 \
     -H "Content-Type: application/json" \
@@ -127,9 +144,10 @@ else
 fi
 
 # ── TUN-04: TUN 虚拟网卡已出现 ────────────────────────────────────────────────
-# mihomo names its TUN interface "Meta" by default; allow any tun/utun/Meta name.
+# Require the configured device, not an unrelated VPN's tun interface.
 sleep 3
-TUN_IFACE=$(ip link show 2>/dev/null | grep -oE 'Meta[0-9]*|utun[0-9]*|tun[0-9]+' | head -1 || echo "")
+TUN_IFACE=""
+ip -4 link show dev Meta >/dev/null 2>&1 && TUN_IFACE=Meta
 if [ -n "$TUN_IFACE" ]; then
     TUN_STATE=$(ip link show "$TUN_IFACE" 2>/dev/null | grep -oE 'state [A-Z]+' | head -1 || echo "")
     record PASS TUN-04 "TUN 虚拟网卡已创建" "ip link show 出现 Meta*/tun* 接口" "$TUN_IFACE ($TUN_STATE)"
@@ -149,33 +167,45 @@ fi
 # ── TUN-06: DNS 解析可用 ──────────────────────────────────────────────────────
 CFG_JSON=$(curl -sf --max-time 5 "$CF_API/config" 2>/dev/null || echo "{}")
 DNS_PORT=$(echo "$CFG_JSON" | grep -o '"dns":[0-9]*' | head -1 | sed 's/"dns"://')
-sleep 2
-DNS_RESULT=""
-if [ -n "${DNS_PORT:-}" ] && [ "${DNS_PORT:-0}" -gt 0 ] 2>/dev/null; then
-    if command -v dig >/dev/null 2>&1; then
-        DNS_RESULT=$(dig +short +time=3 @127.0.0.1 -p "$DNS_PORT" google.com 2>/dev/null \
-            | grep -v '^;' | grep -E '^[0-9]' | head -1 || echo "")
-    fi
-fi
-if [ -z "$DNS_RESULT" ]; then
-    DNS_RESULT=$(nslookup google.com 2>/dev/null \
-        | grep "Address:" | grep -vE "#53|^127\\.|:53" | head -1 | awk '{print $NF}' || echo "")
-fi
+DNS_RESULT=$(check_tun_dns "${DNS_PORT:-}" "${DNS_TEST_NAME:-example.com}") || DNS_RESULT=""
 
 if [ -n "$DNS_RESULT" ]; then
     IS_FAKEIP=""
     echo "$DNS_RESULT" | grep -qE "^198\.1[89]\." && IS_FAKEIP=" (fake-ip ✓)"
-    record PASS TUN-06 "DNS 解析可用" "google.com 解析返回 IP" "${DNS_RESULT}${IS_FAKEIP}"
+    record PASS TUN-06 "核心 DNS 端口响应" "配置的 Mihomo DNS 端口返回 A 记录" "${DNS_RESULT}${IS_FAKEIP}"
 else
-    record WARN TUN-06 "DNS 解析可用" "google.com 解析返回 IP" "解析无结果（TUN 模式下 DNS 可能需要额外时间收敛）"
+    record FAIL TUN-06 "核心 DNS 端口响应" "配置的 Mihomo DNS 端口返回 A 记录" "有限重试后仍无结果/缺少 dig"
+fi
+
+# These are control-plane assertions, NOT a LAN TCP/UDP forwarding test.
+RULES=$(ip -4 rule show 2>/dev/null || true)
+if printf '%s\n' "$RULES" | grep -qE '^9020:[[:space:]]+from all lookup main .*suppress_prefixlength 0' &&
+   printf '%s\n' "$RULES" | grep -qE '^9020:.*(proto|protocol) 242' &&
+   printf '%s\n' "$RULES" | grep -qE '^9021:[[:space:]]+from all lookup 2022 (proto|protocol) 242'; then
+    record PASS TUN-07 "TUN IPv4 补充路由" "9020/9021，protocol 242" "已发现带所有权标记的规则"
+else
+    record FAIL TUN-07 "TUN IPv4 补充路由" "9020/9021，protocol 242" "$RULES"
+fi
+ROUTES=$(ip -4 route show table 2022 2>/dev/null || true)
+if printf '%s\n' "$ROUTES" | grep -qE '^default .*dev Meta([[:space:]]|$)'; then
+    record PASS TUN-08 "TUN IPv4 默认路由" "table 2022 default dev Meta" "$ROUTES"
+else
+    record FAIL TUN-08 "TUN IPv4 默认路由" "table 2022 default dev Meta" "$ROUTES"
+fi
+FORWARD=$(nft -a list chain inet fw4 forward_lan 2>/dev/null || true)
+if printf '%s\n' "$FORWARD" | grep -qE 'meta nfproto ipv4 oifname "Meta" .*accept comment "clashforge: allow forwarding into TUN device"'; then
+    record PASS TUN-09 "fw4 LAN 补充规则" "IPv4 Meta accept，项目 comment" "规则存在（未证明 LAN 数据面）"
+else
+    record FAIL TUN-09 "fw4 LAN 补充规则" "IPv4 Meta accept，项目 comment" "$FORWARD"
 fi
 
 # ── Summary ────────────────────────────────────────────────────────────────────
-PASS_COUNT=$(printf "%b" "$RESULTS" | grep -c "^PASS" || echo 0)
-FAIL_COUNT=$(printf "%b" "$RESULTS" | grep -c "^FAIL" || echo 0)
-WARN_COUNT=$(printf "%b" "$RESULTS" | grep -c "^WARN" || echo 0)
+PASS_COUNT=$(printf "%b" "$RESULTS" | grep -c "^PASS" || true)
+FAIL_COUNT=$(printf "%b" "$RESULTS" | grep -c "^FAIL" || true)
+WARN_COUNT=$(printf "%b" "$RESULTS" | grep -c "^WARN" || true)
 
 summary "## 🌐 Step 5 (TUN) — TUN 模式启动验证"
+summary "范围：IPv4/fw4 forward_lan 控制面与核心 DNS 端口；不覆盖 LAN 无代理 TCP/UDP、IPv6 防绕行、guest zone、fw4 reload。"
 summary ""
 summary "| 结果 | 数量 |"
 summary "|------|------|"

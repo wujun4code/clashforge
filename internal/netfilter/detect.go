@@ -9,7 +9,7 @@ import (
 type Backend int
 
 const (
-	BackendNone     Backend = iota
+	BackendNone Backend = iota
 	BackendNftables
 	BackendIptables
 )

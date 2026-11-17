@@ -52,3 +52,22 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Go network domain regressions
+        env:
+          GOMAXPROCS: '2'
+        run: go test -p 2 -count=1 ./internal/config ./internal/netfilter ./internal/dns ./internal/api ./internal/quickstart ./cmd/clashforge
+
+  openwrt-scripts:
+    name: OpenWrt script and digest regressions (no router)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Production shell sandbox and downloader HTTP fixtures
+        run: |
+          python3 tests/e2e/test_openwrt_scripts.py
+          python3 tests/e2e/test_mihomo_download.py
+          python3 tests/e2e/test_probe_contract.py
+

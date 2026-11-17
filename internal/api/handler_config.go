@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 
@@ -47,6 +48,10 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 			Err(w, http.StatusBadRequest, "CONFIG_INVALID", err.Error())
 			return
 		}
+		if err := config.ValidateDNSCoexistence(&newCfg); err != nil {
+			Err(w, http.StatusBadRequest, "DNS_MODE_UNSUPPORTED", err.Error())
+			return
+		}
 		if newCfg.Security.APISecret == "***" && deps.Config.Security.APISecret != "" {
 			newCfg.Security.APISecret = deps.Config.Security.APISecret
 		}
@@ -56,7 +61,7 @@ func handleUpdateConfig(deps Dependencies) http.HandlerFunc {
 			return
 		}
 		*deps.Config = newCfg
-		refreshNetfilterManager(deps)
+		// Keep the live manager until an explicit runtime activation succeeds.
 		generated, genErr := generateMihomoConfig(deps)
 		if genErr != nil {
 			response := map[string]interface{}{
@@ -140,7 +145,7 @@ func handleUpdateOverrides(deps Dependencies) http.HandlerFunc {
 				Err(w, http.StatusInternalServerError, "CONFIG_WRITE_FAILED", err.Error())
 				return
 			}
-			refreshNetfilterManager(deps)
+			// Port changes become active only at the next explicit start/apply.
 		}
 
 		// Auto-generate mihomo config after overrides update
@@ -186,7 +191,14 @@ func handleGenerateConfig(deps Dependencies) http.HandlerFunc {
 
 // generateMihomoConfig generates and writes the mihomo config, returns true if successful
 func generateMihomoConfig(deps Dependencies) (bool, error) {
-	return runtimecfg.GenerateAndWrite(deps.Config, deps.SubManager)
+	if err := config.ValidateDNSCoexistence(deps.Config); err != nil {
+		return false, err
+	}
+	generated, err := runtimecfg.GenerateAndWrite(deps.Config, deps.SubManager)
+	if err == nil && !generated {
+		return false, fmt.Errorf("Mihomo 配置未生成，拒绝切换现有运行配置")
+	}
+	return generated, err
 }
 
 func compatibilityPortSelectionOptions(deps Dependencies) config.PortSelectionOptions {

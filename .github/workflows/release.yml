@@ -207,15 +207,8 @@ jobs:
 
       - name: Download bundled mihomo
         run: |
-          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "Downloading mihomo $MIHOMO_VER (${{ matrix.mihomo_asset }})"
-          curl -fsSL -o /tmp/mihomo.gz \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${{ matrix.mihomo_asset }}-${MIHOMO_VER}.gz"
-          gunzip /tmp/mihomo.gz
-          chmod +x /tmp/mihomo
-          echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
-          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
+          python3 .github/scripts/download-mihomo.py '${{ matrix.mihomo_asset }}' /tmp/mihomo
+          echo 'MIHOMO_VER=v1.19.32' >> "$GITHUB_ENV"
 
       - name: Download geodata artifact
         uses: actions/download-artifact@v4
@@ -263,6 +256,7 @@ jobs:
           # init.d
           cp openwrt/files/etc/init.d/metaclash ipk/etc/init.d/clashforge
           chmod 755 ipk/etc/init.d/clashforge
+          cp openwrt/files/usr/share/metaclash/preflight.sh ipk/usr/share/metaclash/preflight.sh
 
           # uninstall helper
           cp openwrt/files/etc/metaclash/uninstall-clashforge.sh ipk/usr/bin/uninstall-clashforge
@@ -361,15 +355,8 @@ jobs:
 
       - name: Download bundled mihomo
         run: |
-          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "Downloading mihomo $MIHOMO_VER (${{ matrix.mihomo_asset }})"
-          curl -fsSL -o /tmp/mihomo.gz \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/${{ matrix.mihomo_asset }}-${MIHOMO_VER}.gz"
-          gunzip /tmp/mihomo.gz
-          chmod +x /tmp/mihomo
-          echo "mihomo: $(/tmp/mihomo -v 2>&1 | head -1)"
-          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
+          python3 .github/scripts/download-mihomo.py '${{ matrix.mihomo_asset }}' /tmp/mihomo
+          echo 'MIHOMO_VER=v1.19.32' >> "$GITHUB_ENV"
 
       - name: Download geodata artifact
         uses: actions/download-artifact@v4
@@ -419,6 +406,7 @@ jobs:
           # init.d + helper
           cp openwrt/files/etc/init.d/metaclash apk-root/etc/init.d/clashforge
           chmod 755 apk-root/etc/init.d/clashforge
+          cp openwrt/files/usr/share/metaclash/preflight.sh apk-root/usr/share/metaclash/preflight.sh
           cp openwrt/files/etc/metaclash/uninstall-clashforge.sh apk-root/usr/bin/uninstall-clashforge
           chmod 755 apk-root/usr/bin/uninstall-clashforge
 

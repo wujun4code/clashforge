@@ -36,6 +36,22 @@ func defaultTestCfg() *config.MetaclashConfig {
 	return cfg
 }
 
+func TestGenerateRejectsTUNReplaceWithoutLocal53(t *testing.T) {
+	cfg := defaultTestCfg()
+	cfg.Network.Mode = "tun"
+	cfg.DNS.Enable = true
+	cfg.DNS.ApplyOnStart = true
+	cfg.DNS.DnsmasqMode = "replace"
+	cfg.Ports.DNS = 17874
+	if _, err := config.Generate(cfg, nil); err == nil || !strings.Contains(err.Error(), "upstream") {
+		t.Fatalf("TUN+replace must reject missing local :53 with actionable upstream error, got %v", err)
+	}
+	cfg.DNS.DnsmasqMode = "upstream"
+	if _, err := config.Generate(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGenerate_BasicStructure(t *testing.T) {
 	cfg := defaultTestCfg()
 	result, err := config.Generate(cfg, nil)

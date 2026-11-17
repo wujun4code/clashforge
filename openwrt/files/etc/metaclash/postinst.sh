@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+# Offline image/package staging must never act on the build host.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
 mkdir -p /etc/metaclash /var/run/metaclash
 
 # Restore persistent data backed up by prerm (handles opkg removing /etc/metaclash on upgrade)
@@ -57,6 +59,10 @@ if [ ! -f /etc/metaclash/overrides.yaml ]; then
   printf '# ClashForge overrides\n' > /etc/metaclash/overrides.yaml
 fi
 
+# Fail before disturbing an existing service when configured prerequisites fail.
+. /usr/share/metaclash/preflight.sh
+cf_preflight /etc/metaclash/config.toml || exit 1
+
 # Belt-and-suspenders: kill any surviving clashforge process before starting
 # (handles the case where prerm couldn't reach a manually-started process)
 for pid in $(ls /proc 2>/dev/null | grep '^[0-9]'); do
@@ -71,10 +77,8 @@ rm -f /var/run/metaclash/metaclash.pid
 # ip-full is NOT declared as an opkg Depends because on most OpenWrt x86_64
 # images it is baked into the base firmware and absent from the package index,
 # which caused a spurious "cannot find dependency" warning on every install.
-if ! ip rule add fwmark 0x1 table 1 2>/dev/null; then
+if ! ip -4 rule show >/dev/null 2>&1; then
   echo "⚠ ClashForge: iproute2 (ip-full) not available — transparent proxy (tproxy) will not work." >&2
-else
-  ip rule del fwmark 0x1 table 1 2>/dev/null || true
 fi
 
 # Seed bundled GeoData to data_dir on fresh install only.
@@ -86,18 +90,15 @@ for _gf in country.mmdb GeoIP.dat GeoSite.dat; do
   fi
 done
 
-# Ensure /dev/net/tun exists so TUN mode works on first boot after install.
-# The init.d script repeats this check at every start, but postinst runs
-# before the very first start so we need it here too.
-modprobe tun 2>/dev/null || true
-mkdir -p /dev/net
-[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true
-
-/etc/init.d/clashforge enable 2>/dev/null || true
-/etc/init.d/clashforge start 2>/dev/null || true
+# Install success is not TUN readiness; procd startup repeats the prerequisites.
+/etc/init.d/clashforge enable
+if ! /etc/init.d/clashforge start; then
+  echo "ClashForge installed, but service start failed; inspect logread -e clashforge. Runtime takeover is NOT verified." >&2
+  exit 1
+fi
 
 ROUTER_IP=$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')
 [ -z "$ROUTER_IP" ] && ROUTER_IP=$(ip -4 addr show 2>/dev/null | awk '/inet /{split($2,a,"/"); if(a[1]!="127.0.0.1"){print a[1];exit}}')
 [ -z "$ROUTER_IP" ] && ROUTER_IP="your-router-ip"
 echo ""
-echo "ClashForge installed! Web UI: http://${ROUTER_IP}:7777"
+echo "ClashForge installed; service start requested. Web UI: http://${ROUTER_IP}:7777 (runtime takeover not verified)"

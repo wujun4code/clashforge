@@ -13,8 +13,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ValidateDNSCoexistence rejects combinations without a managed local :53 entry.
+// TUN dns-hijack only handles packets already routed into the TUN device.
+func ValidateDNSCoexistence(cfg *MetaclashConfig) error {
+	if cfg != nil && cfg.Network.Mode == "tun" && cfg.DNS.Enable && cfg.DNS.ApplyOnStart && strings.EqualFold(strings.TrimSpace(cfg.DNS.DnsmasqMode), "replace") {
+		return fmt.Errorf("TUN 不支持 dnsmasq_mode=replace：dns-hijack 不能替代路由器本地/LAN 的 :53 入口；请改用 dnsmasq_mode=upstream（保留 dnsmasq:53 转发至 Mihomo）")
+	}
+	return nil
+}
+
 // Generate 从 MetaclashConfig + 节点列表生成 mihomo YAML 配置 map
 func Generate(cfg *MetaclashConfig, nodes []subscription.ProxyNode) (map[string]interface{}, error) {
+	if err := ValidateDNSCoexistence(cfg); err != nil {
+		return nil, err
+	}
 	log.Info().
 		Int("node_count", len(nodes)).
 		Bool("dns_enable", cfg.DNS.Enable).
@@ -428,6 +440,9 @@ func managedDNS(cfg *MetaclashConfig, imported interface{}) map[string]interface
 // (those without a raw YAML); they are appended, skipping duplicates by name.
 // Falls back to Generate if rawYAML is empty or unparseable.
 func GenerateFromBase(cfg *MetaclashConfig, rawYAML []byte, extraNodes []subscription.ProxyNode) (map[string]interface{}, error) {
+	if err := ValidateDNSCoexistence(cfg); err != nil {
+		return nil, err
+	}
 	if len(rawYAML) == 0 {
 		log.Warn().Msg("config: GenerateFromBase rawYAML 为空，回退到 Generate 模式")
 		return Generate(cfg, extraNodes)
