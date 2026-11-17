@@ -37,7 +37,9 @@ object LogEventBridge : EventChannel.StreamHandler {
     }
 
     fun emit(level: String, component: String, message: String, fields: Map<String, Any> = emptyMap()) {
-        NativeLogStore.append(level, component, message, fields)
+        // One identity for persisted/live copies, independent of their timestamps.
+        val eventFields = fields + ("_nativeEventId" to java.util.UUID.randomUUID().toString())
+        NativeLogStore.append(level, component, message, eventFields)
 
         // Nobody listening (Flutter side hasn't opened the debug log stream) —
         // skip building the payload at all, not just the post.
@@ -51,9 +53,9 @@ object LogEventBridge : EventChannel.StreamHandler {
             put("component", component)
             put("message", message)
             put("ts", System.currentTimeMillis())
-            if (fields.isNotEmpty()) {
+            if (eventFields.isNotEmpty()) {
                 val f = JSONObject()
-                fields.forEach { (k, v) -> f.put(k, v) }
+                eventFields.forEach { (k, v) -> f.put(k, v) }
                 put("fields", f)
             }
         }

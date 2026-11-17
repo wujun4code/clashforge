@@ -13,11 +13,13 @@ import 'subscription/subscription_parser.dart';
 import 'subscription/subscription_store.dart';
 import 'subscription/proxy_node.dart';
 import 'config/vpn_manager.dart';
+import 'config/app_routing_controller.dart';
 import 'config/config_generator.dart';
 import 'config/free_node_config.dart';
 import 'config/bundled_subscriptions_config.dart';
 import 'logger/app_logger.dart';
 import 'logger/log_entry.dart';
+import 'logger/native_log_history.dart';
 import 'update_checker.dart';
 import 'l10n/app_localizations.dart';
 
@@ -673,31 +675,44 @@ class _HomeScreenState extends State<HomeScreen> {
       ));
   }
 
-  Future<void> _setAppRouting(String mode, Set<String> packages) async {
+  late final _routingController = AppRoutingController(
+    setNative: (setting) => VpnManager.setAppRouting(setting.mode, setting.packages),
+    persist: (setting) async {
+      final prefs = await SharedPreferences.getInstance();
+      if (!await prefs.setString(_kVpnRoutingModeKey, setting.mode)) {
+        throw StateError('保存分应用模式失败');
+      }
+      if (!await prefs.setStringList(_kVpnRoutingPackagesKey,
+          setting.packages.toList()..sort())) {
+        throw StateError('保存分应用列表失败');
+      }
+    },
+    restart: () async {
+      final result = await _restartVpnAfterSubscriptionChange();
+      return AppRoutingResult(success: result.success, message: result.message);
+    },
+  );
+
+  Future<AppRoutingResult> _setAppRouting(String mode, Set<String> packages) async {
+    if (_isConnecting) {
+      return const AppRoutingResult(success: false, message: '连接操作进行中，请稍后重试');
+    }
     final normalizedMode =
         const {'allowlist', 'bypass'}.contains(mode) ? mode : 'all';
-    if (normalizedMode == 'allowlist' && packages.isEmpty) return;
-    setState(() {
-      _vpnRoutingMode = normalizedMode;
-      _vpnRoutingPackages = Set<String>.from(packages);
-    });
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kVpnRoutingModeKey, normalizedMode);
-    await prefs.setStringList(
-      _kVpnRoutingPackagesKey,
-      packages.toList(growable: false)..sort(),
+    final result = await _routingController.apply(
+      previous: AppRoutingSetting(_vpnRoutingMode, _vpnRoutingPackages),
+      desired: AppRoutingSetting(normalizedMode, packages),
+      connected: _isConnected,
+      preflightError: _selectedNode == null || _activeSubscription() == null
+          ? '重启失败：当前无可用节点' : null,
     );
-    final result = await VpnManager.setAppRouting(normalizedMode, packages);
-    if (!mounted) return;
-    if (result.startsWith('error')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result), duration: const Duration(seconds: 3)),
-      );
-      return;
+    if (mounted && result.success) {
+      setState(() {
+        _vpnRoutingMode = normalizedMode;
+        _vpnRoutingPackages = Set<String>.from(packages);
+      });
     }
-    if (_isConnected) {
-      await _restartVpnAfterSubscriptionChange();
-    }
+    return result;
   }
 
   void _showDnsModeAfterImport() {
@@ -1276,10 +1291,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final logger = AppLogger.instance;
+    var stopped = false;
     setState(() => _isConnecting = true);
     try {
       final stopRes = await VpnManager.stopVpn();
       logger.info('vpn', 'Restart (stop) result: $stopRes');
+      if (stopRes.toLowerCase().startsWith('error')) throw StateError(stopRes);
+      stopped = true;
       setState(() {
         _isConnected = false;
         _connectionStatus = '';
@@ -1339,7 +1357,7 @@ class _HomeScreenState extends State<HomeScreen> {
       logger.error('vpn', 'Restart failed: $e');
       if (mounted) {
         setState(() {
-          _isConnected = false;
+          if (stopped) _isConnected = false;
           _connectionStatus =
               AppLocalizations.of(context).connError(e.toString());
         });
@@ -5104,7 +5122,7 @@ class _SettingsTab extends StatelessWidget {
   final void Function(PowerProfile) onPowerProfileChanged;
   final String vpnRoutingMode;
   final Set<String> vpnRoutingPackages;
-  final Future<void> Function(String, Set<String>) onAppRoutingChanged;
+  final Future<AppRoutingResult> Function(String, Set<String>) onAppRoutingChanged;
 
   void _showLanguagePicker(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -5394,7 +5412,7 @@ class _SettingsTab extends StatelessWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => _AppRoutingSheet(
+      builder: (_) => AppRoutingSheet(
         initialMode: vpnRoutingMode,
         initialPackages: vpnRoutingPackages,
         onSave: onAppRoutingChanged,
@@ -5468,7 +5486,7 @@ class _SettingsTab extends StatelessWidget {
                     ),
                     onTap: () => _showPowerProfilePicker(context),
                   ),
-                  if (Platform.isAndroid) ...[
+                  if (Theme.of(context).platform == TargetPlatform.android) ...[
                     const SizedBox(height: 8),
                     _SettingsTile(
                       iconColor: const Color(0xFF60A5FA),
@@ -5545,8 +5563,9 @@ class _SettingsTab extends StatelessWidget {
   }
 }
 
-class _AppRoutingSheet extends StatefulWidget {
-  const _AppRoutingSheet({
+class AppRoutingSheet extends StatefulWidget {
+  const AppRoutingSheet({
+    super.key,
     required this.initialMode,
     required this.initialPackages,
     required this.onSave,
@@ -5554,19 +5573,20 @@ class _AppRoutingSheet extends StatefulWidget {
 
   final String initialMode;
   final Set<String> initialPackages;
-  final Future<void> Function(String, Set<String>) onSave;
+  final Future<AppRoutingResult> Function(String, Set<String>) onSave;
 
   @override
-  State<_AppRoutingSheet> createState() => _AppRoutingSheetState();
+  State<AppRoutingSheet> createState() => _AppRoutingSheetState();
 }
 
-class _AppRoutingSheetState extends State<_AppRoutingSheet> {
+class _AppRoutingSheetState extends State<AppRoutingSheet> {
   final TextEditingController _searchController = TextEditingController();
   late String _mode;
   late Set<String> _selected;
   List<VpnAppInfo> _apps = const [];
   bool _loading = true;
   bool _saving = false;
+  String? _saveError;
   String _query = '';
 
   @override
@@ -5600,9 +5620,21 @@ class _AppRoutingSheetState extends State<_AppRoutingSheet> {
       );
       return;
     }
-    setState(() => _saving = true);
-    await widget.onSave(_mode, _selected);
-    if (mounted) Navigator.pop(context);
+    if (_saving) return;
+    setState(() { _saving = true; _saveError = null; });
+    try {
+      final result = await widget.onSave(_mode, Set.from(_selected));
+      if (!mounted) return;
+      if (result.success) {
+        Navigator.pop(context);
+      } else {
+        setState(() => _saveError = result.message);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _saveError = '应用失败：$error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -5635,6 +5667,8 @@ class _AppRoutingSheetState extends State<_AppRoutingSheet> {
               ),
             ),
             const SizedBox(height: 16),
+            if (_saveError != null)
+              Text(_saveError!, style: const TextStyle(color: _kError)),
             Text(l10n.appRoutingSheetTitle,
                 style: const TextStyle(
                     color: _kTextHi,
@@ -6045,6 +6079,8 @@ class _LogsTabState extends State<_LogsTab> {
   static const _logChannel = EventChannel('com.clashforge.mobile/logs');
   final ScrollController _scroll = ScrollController();
   StreamSubscription<dynamic>? _nativeLogSubscription;
+  final _nativeHistory = NativeLogHistory();
+  int _historyEpoch = 0;
   String _filter = 'all';
   bool _autoScroll = true;
   bool _refreshScheduled = false;
@@ -6065,6 +6101,17 @@ class _LogsTabState extends State<_LogsTab> {
         _logChannel.receiveBroadcastStream().listen(_onNativeLog, onError: (e) {
       AppLogger.instance.error('native', 'EventChannel error: $e');
     });
+    _loadNativeHistory();
+  }
+
+  Future<void> _loadNativeHistory() async {
+    // iOS currently exposes only its live log stream, not readNativeLogs.
+    if (Platform.isIOS) return;
+    final epoch = _historyEpoch;
+    final history = await VpnManager.readNativeLogs();
+    if (!mounted || epoch != _historyEpoch) return;
+    _nativeHistory.addHistory(history);
+    setState(() {});
   }
 
   @override
@@ -6090,23 +6137,17 @@ class _LogsTabState extends State<_LogsTab> {
         }
       }
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _onNativeLog(dynamic event) {
-    try {
-      final map = json.decode(event as String) as Map<String, dynamic>;
-      final level = map['level'] as String? ?? 'info';
-      final component = map['component'] as String? ?? 'native';
-      final message = map['message'] as String? ?? '';
-      final fields = (map['fields'] as Map<String, dynamic>?) ?? {};
-      AppLogger.instance.log(level, component, message, fields: fields);
-    } catch (_) {
-      AppLogger.instance.debug('native', event.toString());
-    }
+    _nativeHistory.addLive(event);
+    _onLog();
   }
 
   List<LogEntry> get _visible {
-    final all = AppLogger.instance.entries;
+    final all = [...AppLogger.instance.entries, ..._nativeHistory.entries]
+      ..sort((a, b) => a.time.compareTo(b.time));
     if (_filter == 'all') return all;
     return all.where((e) => e.level == _filter).toList();
   }
@@ -6177,9 +6218,11 @@ class _LogsTabState extends State<_LogsTab> {
                   icon: const Icon(Icons.delete_outline,
                       size: 19, color: _kTextMuted),
                   onPressed: () async {
+                    _historyEpoch++;
+                    _nativeHistory.clear();
                     AppLogger.instance.clear();
                     await VpnManager.clearNativeLogs();
-                    setState(() {});
+                    if (mounted) setState(() {});
                   },
                 ),
               ],
