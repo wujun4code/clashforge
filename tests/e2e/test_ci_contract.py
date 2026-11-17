@@ -42,6 +42,70 @@ class WorkflowContracts(unittest.TestCase):
         self.assertNotIn('continue-on-error', steps[install])
         self.assertNotIn('continue-on-error', tun)
 
+    def test_openwrt_provisions_real_tun_before_scenarios(self):
+        steps = workflow('e2e-openwrt.yml')['jobs']['e2e-openwrt']['steps']
+        install = next(i for i, s in enumerate(steps) if s.get('id') == 'install')
+        script = steps[install]['run']
+        commands = [line.strip() for line in script.splitlines()
+                    if 'opkg install kmod-tun' in line]
+        self.assertEqual(len(commands), 1, 'install must provision the real TUN driver')
+        command = commands[0]
+        tokens = shlex.split(command)
+        self.assertEqual(tokens[0], '_ssh')
+        self.assertEqual(len(tokens), 2)
+        self.assertIn('opkg install kmod-tun && modprobe tun && test -c /dev/net/tun', tokens[1])
+        self.assertIn('/sys/class/misc/tun/dev', tokens[1])
+        self.assertIn('10:200', tokens[1])
+        self.assertNotIn('|| true', command)
+        self.assertNotIn('continue-on-error', steps[install])
+        self.assertIn('-p 2222 root@127.0.0.1', script)
+        self.assertLess(script.index(command), script.index('opkg install --nodeps'))
+        scenario = next(i for i, s in enumerate(steps)
+                        if s.get('uses') == './.github/actions/e2e-scenario')
+        self.assertLess(install, scenario)
+        tun = next(s for s in steps if 'TUN driver/device missing' in s.get('run', ''))
+        self.assertIn('test -c /dev/net/tun ||', tun['run'])
+        self.assertNotIn('continue-on-error', tun)
+        self.assertNotIn('if', tun)
+        self.assertNotRegex(command, r'\b(?:mknod|ln)\b')
+
+    def test_openwrt_tun_provision_failures_stop_install(self):
+        steps = workflow('e2e-openwrt.yml')['jobs']['e2e-openwrt']['steps']
+        script = next(s['run'] for s in steps if s.get('id') == 'install')
+        commands = [line.strip() for line in script.splitlines()
+                    if 'opkg install kmod-tun' in line]
+        self.assertEqual(len(commands), 1, 'install must provision the real TUN driver')
+        command = commands[0]
+        # Recording-only shell functions: never install/load/create on the host.
+        sandbox = r'''
+_ssh() { eval "$1"; }
+opkg() { echo opkg; builtin test "$FAIL" != opkg; }
+modprobe() { echo modprobe; builtin test "$FAIL" != modprobe; }
+cat() {
+    builtin test "$1" = /sys/class/misc/tun/dev || return 98
+    if builtin test "$FAIL" = cat; then echo 10:200; return 1; fi
+    if builtin test "$FAIL" = identity; then echo 1:3; else echo 10:200; fi
+}
+test() {
+    case "$1" in
+        -c) echo device; builtin test "$2" = /dev/net/tun && builtin test "$FAIL" != device ;;
+        -r) builtin test "$2" = /sys/class/misc/tun/dev && builtin test "$FAIL" != no_sysfs ;;
+        *) builtin test "$@" ;;
+    esac
+}
+'''
+        for failure in ('none', 'opkg', 'modprobe', 'device', 'cat', 'identity', 'no_sysfs'):
+            with self.subTest(failure=failure):
+                result = subprocess.run(['bash', '-e', '-c', sandbox + command + '\necho reached-install'],
+                    env={**os.environ, 'FAIL': failure}, capture_output=True, text=True)
+                success = failure in ('none', 'no_sysfs')
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                self.assertEqual('reached-install' in result.stdout, success)
+                if failure == 'opkg':
+                    self.assertNotIn('modprobe', result.stdout)
+                if failure in ('opkg', 'modprobe'):
+                    self.assertNotIn('device', result.stdout)
+
     def test_flutter_sdk_download_is_scoped_http1_and_cached(self):
         data = workflow('android-ci.yml')
         for name in ('test', 'e2e'):

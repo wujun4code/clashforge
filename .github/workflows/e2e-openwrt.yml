@@ -352,6 +352,9 @@ jobs:
           # Test-only dependency: TUN DNS probes must query the discovered core
           # port. BusyBox nslookup cannot replace dig's explicit-port query.
           _ssh "opkg install bind-dig && command -v dig >/dev/null && dig -v"
+          # Test-only VM prerequisite: load the real kernel driver; never create
+          # or substitute a device node. Any install/load/device failure is fatal.
+          _ssh 'opkg install kmod-tun && modprobe tun && test -c /dev/net/tun && { if test -r /sys/class/misc/tun/dev; then tun_dev=$(cat /sys/class/misc/tun/dev) && test "$tun_dev" = 10:200; fi; }'
           _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
 
           # 安装内核模块
