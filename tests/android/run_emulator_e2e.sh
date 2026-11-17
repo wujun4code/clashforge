@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077 # Raw local diagnostics may contain subscription endpoints.
 
 PKG="com.clashforge.mobile.clashforge_mobile"
 RESULT_REMOTE="/data/data/${PKG}/files/e2e_tun_probe_result.json"
@@ -78,8 +79,9 @@ cd "${GITHUB_WORKSPACE}/mobile"
     "--dart-define=SUBSCRIPTION_URL=${SUBSCRIPTION_URL}" \
     "--dart-define=E2E_REQUIRE_EXTERNAL_TUN_PROBE=true" \
     --reporter=expanded \
-    --timeout=540s 2>&1 |
-    tee "$FLUTTER_LOG_FILE"
+    --timeout=540s > "$FLUTTER_LOG_FILE" 2>&1
+  # Flutter output can include imported-node errors. Keep it local and encrypt
+  # it for private diagnosis; do not tee raw stdout/stderr to the CI console.
 ) &
 FLUTTER_PID=$!
 
@@ -96,6 +98,7 @@ for _ in $(seq 1 600); do
   sleep 1
 done
 
+RESULT_RC=0
 if [ "$READY" -eq 1 ]; then
   echo "Running adb-shell IP probe while VPN is connected..."
   VPN_IP="$(run_device_probe || true)"
@@ -107,12 +110,15 @@ if [ "$READY" -eq 1 ]; then
   fi
   printf '{"ok":%s,"baseline_ip":"%s","vpn_ip":"%s","detail":"%s"}\n' \
     "$OK" "$BASELINE_IP" "$VPN_IP" "$DETAIL" > "$RESULT_LOCAL"
+  # adb concatenates shell arguments: quote the remote sh -c payload so its
+  # redirection runs *inside* run-as, with the app's data directory and UID.
+  adb shell "run-as $PKG sh -c 'cat > files/e2e_tun_probe_result.json'" < "$RESULT_LOCAL" || RESULT_RC=$?
 else
-  printf '{"ok":false,"baseline_ip":"%s","vpn_ip":"","detail":"Flutter E2E readiness marker was not observed"}\n' \
-    "$BASELINE_IP" > "$RESULT_LOCAL"
+  # Flutter tears the test app down on failure. Do not write a result into its
+  # now-absent data directory and mask the real Flutter exit status.
+  RESULT_RC=1 # Even Flutter exit 0 cannot prove an external TUN probe ran.
+  echo "Flutter E2E readiness marker was not observed; preserving Flutter failure"
 fi
-
-adb shell run-as "$PKG" sh -c "cat > $RESULT_REMOTE" < "$RESULT_LOCAL"
 
 set +e
 wait "$FLUTTER_PID"
@@ -120,6 +126,26 @@ TEST_RC=$?
 set -e
 
 sleep 2
-echo "=== MihomoCore + ClashVpn + E2E Probe logcat ==="
-grep -E "MihomoCore|ClashVpn|E2E|TUN|gvisor|mihomo|PR-01|PR-02|PASS|FAIL|WARN|CONNECTIVITY|proxy|flutter|CF_IMPORT" "$LOGCAT_FILE" 2>/dev/null | tail -300 || true
-exit "$TEST_RC"
+echo "=== Private core log classification (counts only) ==="
+# Core logs can contain real subscription endpoints. Keep raw logcat local;
+# never print it or upload it as an unrestricted CI artifact.
+python3 - "$LOGCAT_FILE" <<'PY'
+import json
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text(errors='replace').lower()
+patterns = {
+    'certificate_error': ('x509:', 'certificate signed by unknown authority', 'certificate is valid for'),
+    'dial_timeout': ('i/o timeout', 'context deadline exceeded'),
+    'connection_refused': ('connection refused',),
+    'tls_error': ('tls handshake', 'handshake failure', 'handshake error'),
+    'core_exit': ('core exited',),
+    'app_excluded': ('excluded app from vpn routing',),
+}
+print(json.dumps({key: sum(text.count(p) for p in values)
+                  for key, values in patterns.items()}, sort_keys=True))
+PY
+if [ "$TEST_RC" -ne 0 ]; then
+  exit "$TEST_RC"
+fi
+exit "$RESULT_RC"

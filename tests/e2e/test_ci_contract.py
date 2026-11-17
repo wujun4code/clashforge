@@ -102,6 +102,19 @@ class WorkflowContracts(unittest.TestCase):
                      "reason: 'VPN must be off'"):
             self.assertIn(gate, app)
 
+    def test_android_uploads_only_encrypted_native_diagnostics(self):
+        steps = workflow('android-ci.yml')['jobs']['e2e']['steps']
+        uploads = [s for s in steps if s.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(uploads[0]['with']['path'], '${{ runner.temp }}/clashforge-e2e-diagnostics.cms')
+        self.assertEqual(uploads[0]['with']['retention-days'], 3)
+        self.assertIn('always()', uploads[0]['if'])
+        encrypt = next(i for i, s in enumerate(steps) if 'encrypt_diagnostics.sh' in s.get('run', ''))
+        self.assertLess(encrypt, steps.index(uploads[0]))
+        certificate = (ROOT / '.github/ci-diagnostics-recipient.pem').read_text()
+        self.assertIn('BEGIN CERTIFICATE', certificate)
+        self.assertNotIn('PRIVATE KEY', certificate)
+
     def test_all_workflow_topologies(self):
         for path in sorted((ROOT / '.github/workflows').glob('*.yml')):
             with self.subTest(path=path.name):

@@ -74,4 +74,6 @@ jobs:
           python3 tests/e2e/test_subscription_contract.py
           python3 tests/e2e/test_openwrt_proxy_selection.py
           python3 tests/e2e/test_ci_contract.py
+          python3 tests/android/test_emulator_runner.py
+          python3 tests/android/test_diagnostics_encryption.py
 

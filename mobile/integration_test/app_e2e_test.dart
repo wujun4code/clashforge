@@ -271,6 +271,17 @@ void main() {
       }
       _log('VPN service: running. Mihomo: running');
 
+      // Establish the actual selected AnyTLS chain before transport probes;
+      // a running process alone does not prove the imported outbound is used.
+      await _assertExpectedProxyRoute();
+      final coreVersion = await http
+          .get(Uri.parse('http://127.0.0.1:9090/version'))
+          .timeout(const Duration(seconds: 5));
+      expect(coreVersion.statusCode, 200,
+          reason: 'Live core version must be readable');
+      final version = jsonDecode(coreVersion.body) as Map<String, dynamic>;
+      _log('Live core version: ${version['version']}');
+
       // ── Round 2: IP probe through VPN ───────────────────────────────
       // MUST use mihomo HTTP proxy (127.0.0.1:7890), NOT a direct HTTP request.
       // Reason: the ClashForge app process is excluded from VPN routing via

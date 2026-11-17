@@ -329,3 +329,16 @@ jobs:
           profile: Nexus 6
           script: |
             bash "${GITHUB_WORKSPACE}/tests/android/run_emulator_e2e.sh"
+
+      - name: Encrypt native diagnostics (no plaintext artifact)
+        if: always() && needs.changes.outputs.mobile == 'true'
+        run: bash tests/android/encrypt_diagnostics.sh
+
+      - name: Preserve encrypted Android diagnostics
+        if: always() && needs.changes.outputs.mobile == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-encrypted-diagnostics
+          path: ${{ runner.temp }}/clashforge-e2e-diagnostics.cms
+          if-no-files-found: ignore
+          retention-days: 3
