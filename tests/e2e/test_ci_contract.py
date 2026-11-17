@@ -2,6 +2,8 @@
 """Parse workflow graphs/contracts with PyYAML; actionlint is a separate gate."""
 from pathlib import Path
 import shlex
+import re
+import subprocess
 import unittest
 import yaml
 
@@ -14,6 +16,61 @@ def runs(job):
     return '\n'.join(step.get('run', '') for step in job['steps'])
 
 class WorkflowContracts(unittest.TestCase):
+    def test_vm_workflow_never_executes_host_firewall_commands(self):
+        # bash -nv expands no commands; require firewall tokens to occur only
+        # inside the quoted _ssh payload, never as host commands or substitutions.
+        files = [ROOT / '.github/workflows/e2e-openwrt.yml', ROOT / '.github/actions/e2e-scenario/action.yml']
+        vm_firewall = []
+        for path in files:
+            data = yaml.safe_load(path.read_text())
+            steps = data.get('runs', {}).get('steps', [])
+            steps += [s for j in data.get('jobs', {}).values() for s in j.get('steps', [])]
+            for step in steps:
+                script = step.get('run', '')
+                if not script:
+                    continue
+                script = re.sub(r'\$\{\{.*?\}\}', 'EXPRESSION', script)
+                syntax = subprocess.run(['/bin/bash', '-n'], input=script, text=True, capture_output=True)
+                self.assertEqual(syntax.returncode, 0, syntax.stderr)
+                # shlex keeps quoted remote command bodies intact; separators
+                # stay separate, so sudo/env or line-wrapping cannot hide a host
+                # iptables/nft executable. Inspect substitutions separately too.
+                tokens = list(shlex.shlex(script, posix=True, punctuation_chars=True))
+                for token in tokens:
+                    if re.fullmatch(r'(?:.*/)?(?:ip6?tables(?:-legacy|-nft)?|nft)', token):
+                        self.fail(f'{path.name}: unquoted host firewall command')
+                    if re.search(r'\$\([^)]*\b(?:iptables|ip6tables|nft)\b', token):
+                        self.fail(f'{path.name}: host firewall command substitution')
+                vm_firewall += [t for t in tokens if 'nft ' in t]
+        self.assertTrue(any('nft delete table inet __cfnat_test' in t for t in vm_firewall))
+        workflow_text = (ROOT / '.github/workflows/e2e-openwrt.yml').read_text()
+        self.assertIn('uninstall-clashforge', workflow_text)
+        self.assertIn('sh /tmp/e2e-stop-verify.sh', workflow_text)
+        self.assertIn('sh /tmp/e2e-verify-tun-cleanup.sh', workflow_text)
+        self.assertNotIn('192.168.10.1', workflow_text)
+
+    def test_subscription_regressions_are_ci_gates(self):
+        for file in ('ci.yml', 'e2e-openwrt.yml'):
+            text = '\n'.join(runs(job) for job in workflow(file)['jobs'].values() if 'steps' in job)
+            self.assertIn('python3 tests/e2e/test_subscription_contract.py', text)
+            self.assertIn('python3 tests/e2e/test_ci_contract.py', text)
+            self.assertIn('./tests/integration', text)
+
+    def test_android_keeps_real_subscription_and_lifecycle_gates(self):
+        text = runs(workflow('android-ci.yml')['jobs']['e2e'])
+        self.assertNotIn('apt-get install -y tor', text)
+        runner = (ROOT / 'tests/android/run_emulator_e2e.sh').read_text()
+        self.assertIn('adb reverse --remove tcp:9050', runner)
+        self.assertIn('adb shell rm -f /data/local/tmp/clashforge_ci_tor.enable', runner)
+        self.assertNotIn('adb reverse tcp:9050 tcp:9050', runner)
+        app = (ROOT / 'mobile/integration_test/app_e2e_test.dart').read_text()
+        self.assertNotIn('markTestSkipped', app)
+        for gate in ('assertExpectedAnyTlsRoute(data, _expectedNode)',
+                     'isNot(equals(baselineIp))', 'equals(baselineIp)',
+                     'await _waitForExternalTunProbeIfRequired(baselineIp)',
+                     "reason: 'VPN must be off'"):
+            self.assertIn(gate, app)
+
     def test_all_workflow_topologies(self):
         for path in sorted((ROOT / '.github/workflows').glob('*.yml')):
             with self.subTest(path=path.name):

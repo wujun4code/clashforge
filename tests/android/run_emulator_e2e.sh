@@ -41,7 +41,10 @@ adb install -t -r "${GITHUB_WORKSPACE}/mobile/build/app/outputs/flutter-apk/app-
 adb push "$PROBE_BIN" /data/local/tmp/cf-tun-probe >/dev/null
 adb shell chmod 755 /data/local/tmp/cf-tun-probe
 adb shell run-as "$PKG" rm -f "$RESULT_REMOTE" 2>/dev/null || true
-adb reverse tcp:9050 tcp:9050
+# Remove opt-in synthetic Tor state from reused emulators. This E2E must use
+# the imported subscription, not the application's separate CI transport hook.
+adb reverse --remove tcp:9050 2>/dev/null || true
+adb shell rm -f /data/local/tmp/clashforge_ci_tor.enable
 adb logcat -c 2>/dev/null || true
 
 echo "Running adb-shell baseline IP probe before VPN starts..."

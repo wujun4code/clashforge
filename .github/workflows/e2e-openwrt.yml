@@ -70,6 +70,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
+      - name: Setup Python (offline sandbox regressions)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Compute version
         id: ver
         run: |
@@ -97,10 +102,13 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          GOMAXPROCS=2 go test -p 2 -count=1 ./internal/config ./internal/netfilter ./internal/dns ./internal/api ./internal/quickstart ./cmd/clashforge
+          GOMAXPROCS=2 go test -p 2 -count=1 ./internal/config ./internal/netfilter ./internal/dns ./internal/api ./internal/quickstart ./cmd/clashforge ./tests/integration
+          python3 -m pip install 'PyYAML==6.0.2'
           python3 tests/e2e/test_openwrt_scripts.py
           python3 tests/e2e/test_mihomo_download.py
           python3 tests/e2e/test_probe_contract.py
+          python3 tests/e2e/test_subscription_contract.py
+          python3 tests/e2e/test_ci_contract.py
           mkdir -p dist
           go build \
             -trimpath \
@@ -505,9 +513,8 @@ jobs:
           _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge || true"
           _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
 
-          # 清理宿主机 iptables 残留
-          iptables -D OUTPUT -p tcp --dport 443 -j REJECT 2>/dev/null || true
-          iptables -D OUTPUT -p tcp --dport 80  -j REJECT 2>/dev/null || true
+          # Only clean up state owned by this scenario, inside the dedicated VM.
+          # This workflow never acquires host OUTPUT rules; do not delete them.
 
           FINAL_IP=$(_ssh "curl -sf --max-time 8 https://api.ipify.org 2>/dev/null || echo 'FAILED'")
           FINAL_IP_MASKED=$(echo "$FINAL_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')

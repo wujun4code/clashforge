@@ -18,8 +18,11 @@ import 'package:integration_test/integration_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:clashforge_mobile/config/vpn_manager.dart';
 import 'package:clashforge_mobile/main.dart';
+import 'proxy_route_contract.dart';
 
 const _subUrl = String.fromEnvironment('SUBSCRIPTION_URL');
+const _expectedNode =
+    String.fromEnvironment('E2E_EXPECTED_NODE', defaultValue: 'Tokyo-AnyTLS');
 const _requireExternalTunProbe =
     bool.fromEnvironment('E2E_REQUIRE_EXTERNAL_TUN_PROBE');
 
@@ -29,10 +32,8 @@ void main() {
   testWidgets(
     'E2E: subscription import → VPN on (Round 2 probe) → VPN off (Round 3 restore)',
     (tester) async {
-      if (_subUrl.isEmpty) {
-        markTestSkipped('SUBSCRIPTION_URL not set — skipping E2E');
-        return;
-      }
+      expect(_subUrl, isNotEmpty,
+          reason: 'Real subscription E2E requires SUBSCRIPTION_URL');
 
       // Keep semantics disabled for the whole integration test run.
       // This avoids sporadic platform-driven semantics toggles that can leave
@@ -179,6 +180,8 @@ void main() {
         isTrue,
         reason: 'Proxy list must be non-empty after import',
       );
+      expect(find.text(_expectedNode), findsWidgets,
+          reason: 'The real v11 node must survive subscription import');
 
       // ── Step 3: Connect VPN ─────────────────────────────────────────
       _log('Navigating to Home tab');
@@ -297,29 +300,10 @@ void main() {
       );
       _log('[PASS] PR-01 Exit IP changed — $baselineIp → $vpnIp');
 
-      // ── PR-01b: Verify exit IP against proxy server ──────────────────────
-      // Mirrors OpenWrt probe.sh PR-01: if we know the proxy node's server IP,
-      // assert the exit IP matches.  CI uses Tor as exit relay so exit IP ≠
-      // proxy server IP — that gets a WARN (not FAIL).
-      _log('[E2E] PR-01b: querying mihomo API for active proxy node…');
-      final proxyServer = await _queryMihomoProxyServer();
-      if (proxyServer.isNotEmpty) {
-        final serverIp = await _resolveDoH(proxyServer);
-        if (serverIp.isEmpty) {
-          _log(
-              '[WARN] PR-01b Server IP resolve — DoH lookup failed for $proxyServer');
-        } else if (vpnIp == serverIp) {
-          _log(
-              '[PASS] PR-01b Exit IP matches proxy server — $vpnIp == $serverIp (server: $proxyServer)');
-        } else {
-          // In CI the exit is a Tor relay, so exit IP ≠ proxy server — expected.
-          _log(
-              '[WARN] PR-01b Exit IP vs server — $vpnIp ≠ $serverIp (server: $proxyServer); OK if Tor/multi-hop relay');
-        }
-      } else {
-        _log(
-            '[WARN] PR-01b Proxy server query — could not read active node from mihomo API at 127.0.0.1:9090');
-      }
+      // Ingress and exit IPs need not match (NAT/multi-hop). Require the
+      // imported AnyTLS node and selected chain, not a Tor replacement or a
+      // warning-only server-field query (/proxies does not expose server).
+      await _assertExpectedProxyRoute();
 
       // ── PR-02: Target website connectivity via mihomo HTTP proxy ─────────
       // All probes route through 127.0.0.1:7890 (mihomo HTTP proxy) so they
@@ -434,7 +418,7 @@ Future<String> _probeIp() async {
 // Probes the public IP by routing through mihomo's HTTP proxy via HTTP CONNECT.
 // Android VPN with route 0.0.0.0/0 does NOT send loopback traffic through TUN,
 // so 127.0.0.1:7890 reaches mihomo directly even when the VPN TUN is broken.
-// mihomo then forwards through Tor → different exit IP than Azure baseline.
+// mihomo must forward through the imported subscription's real proxy node.
 Future<String> _probeIpViaHttpProxy(String proxyHost, int proxyPort) async {
   for (final endpoint in [
     'https://api.ipify.org?format=json',
@@ -482,11 +466,11 @@ bool _hasText(WidgetTester tester, String substring) => tester.allWidgets
     .whereType<Text>()
     .any((t) => (t.data ?? '').contains(substring));
 
-bool _hasAnyTextCI(WidgetTester tester, List<String> keywords) => tester
-    .allWidgets
-    .whereType<Text>()
-    .map((t) => (t.data ?? '').toLowerCase())
-    .any((text) => keywords.any((k) => text.contains(k.toLowerCase())));
+bool _hasAnyTextCI(WidgetTester tester, List<String> keywords) =>
+    tester.allWidgets
+        .whereType<Text>()
+        .map((t) => (t.data ?? '').toLowerCase())
+        .any((text) => keywords.any((k) => text.contains(k.toLowerCase())));
 
 bool _isButtonEnabled<T extends ButtonStyleButton>(
     WidgetTester tester, Finder finder) {
@@ -543,63 +527,16 @@ void _drainPendingFlutterExceptions(WidgetTester tester) {
 
 // ── PR-01b / PR-02 helpers ────────────────────────────────────────────────────
 
-// Query mihomo REST API (127.0.0.1:9090/proxies) for the active proxy node's
-// server hostname.  Tries common proxy group names from subscription configs.
-Future<String> _queryMihomoProxyServer() async {
-  try {
-    final resp = await http
-        .get(Uri.parse('http://127.0.0.1:9090/proxies'))
-        .timeout(const Duration(seconds: 5));
-    if (resp.statusCode != 200) return '';
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    final proxies = data['proxies'] as Map<String, dynamic>? ?? {};
-    for (final groupName in ['🚀 Proxy', 'Proxy', 'GLOBAL']) {
-      final group = proxies[groupName] as Map<String, dynamic>?;
-      if (group == null) continue;
-      final now = group['now'] as String?;
-      if (now == null || now.isEmpty) continue;
-      final node = proxies[now] as Map<String, dynamic>?;
-      final server = node?['server'] as String?;
-      if (server != null && server.isNotEmpty) {
-        _log('Active proxy node: $now → server=$server');
-        return server;
-      }
-    }
-  } catch (e) {
-    _log('queryMihomoProxyServer: $e');
-  }
-  return '';
-}
-
-// Resolve a hostname to its first IPv4 A record via Google DNS-over-HTTPS.
-// Routes through mihomo HTTP proxy (127.0.0.1:7890) so it works whether
-// TUN is active or not (loopback bypasses Android VPN routing entirely).
-Future<String> _resolveDoH(String hostname) async {
-  final httpClient = HttpClient()..findProxy = (_) => 'PROXY 127.0.0.1:7890';
-  try {
-    final uri = Uri.parse(
-        'https://dns.google/resolve?name=${Uri.encodeComponent(hostname)}&type=A');
-    final request =
-        await httpClient.getUrl(uri).timeout(const Duration(seconds: 8));
-    final response = await request.close().timeout(const Duration(seconds: 8));
-    if (response.statusCode == 200) {
-      final body = await response.transform(utf8.decoder).join();
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final answers = (data['Answer'] as List<dynamic>?) ?? [];
-      for (final a in answers) {
-        final record = a as Map<String, dynamic>;
-        if (record['type'] == 1) {
-          final ip = record['data'] as String? ?? '';
-          if (ip.isNotEmpty) return ip;
-        }
-      }
-    }
-  } catch (e) {
-    _log('resolveDoH $hostname: $e');
-  } finally {
-    httpClient.close();
-  }
-  return '';
+// Resolve the selected group chain in the live core. A non-empty registry by
+// itself is not enough: DIRECT, a missing group or a cycle must fail.
+Future<void> _assertExpectedProxyRoute() async {
+  final resp = await http
+      .get(Uri.parse('http://127.0.0.1:9090/proxies'))
+      .timeout(const Duration(seconds: 5));
+  expect(resp.statusCode, 200, reason: 'Live proxy registry must be readable');
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  assertExpectedAnyTlsRoute(data, _expectedNode);
+  _log('[PASS] PR-01b Selected route reaches $_expectedNode / anytls');
 }
 
 // Probe a map of named URLs via mihomo HTTP proxy (127.0.0.1:7890).
@@ -647,7 +584,8 @@ Future<void> _resetExternalTunProbeResultIfNeeded() async {
   }
 }
 
-Future<void> _waitForExternalTunProbeIfRequired(String flutterBaselineIp) async {
+Future<void> _waitForExternalTunProbeIfRequired(
+    String flutterBaselineIp) async {
   if (!_requireExternalTunProbe) return;
 
   _log(

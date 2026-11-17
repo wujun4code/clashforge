@@ -26,6 +26,7 @@ COPY --from=builder /bin/clashforge /usr/local/bin/clashforge
 COPY --from=builder /bin/genconfig  /usr/local/bin/genconfig
 
 COPY tests/docker/entrypoint.sh /entrypoint.sh
+COPY tests/docker/subscription_contract.py /subscription_contract.py
 RUN chmod +x /entrypoint.sh
 
 RUN mkdir -p /etc/metaclash /var/run/metaclash

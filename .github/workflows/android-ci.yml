@@ -287,18 +287,8 @@ jobs:
               ./tests/android/tun_ip_probe.go
           ls -lh tests/android/tun_ip_probe_android_amd64
 
-      # Install and start Tor — provides a SOCKS5 proxy on 127.0.0.1:9050 that exits
-      # through a Tor relay (different IP than the CI host).  ClashVpnService detects
-      # the open port via adb-reverse and rewrites mihomo's config to use it, so the
-      # Round-2 VPN IP probe reliably returns a different IP than the baseline.
-      - name: Install and start Tor (CI VPN exit relay)
-        if: needs.changes.outputs.mobile == 'true'
-        run: |
-          sudo apt-get install -y tor
-          sudo systemctl start tor 2>/dev/null || sudo tor --RunAsDaemon 1 --DataDirectory /tmp/tor-data
-          echo "Waiting for Tor SOCKS5 on 127.0.0.1:9050 (up to 90 s)…"
-          for i in $(seq 1 45); do nc -z 127.0.0.1 9050 2>/dev/null && echo "Tor ready after $((i*2))s" && break; sleep 2; done
-          nc -z 127.0.0.1 9050 || (echo "ERROR: Tor did not start" && exit 1)
+      # Use the real subscription transport. Never substitute a Tor exit merely
+      # to produce a different IP; app_e2e_test asserts the live AnyTLS route.
 
       # Build APK outside the emulator runner so working-directory applies correctly.
       # android-emulator-runner@v2 runs each script: line in a separate sh -c invocation,
