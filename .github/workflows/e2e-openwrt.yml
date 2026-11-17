@@ -349,6 +349,9 @@ jobs:
           # --nodeps skips package dependencies, so install the product's full
           # iproute2 requirement explicitly and fail on repository/install errors.
           _ssh "opkg update && opkg install ip-full && ip -N -d -o rule show >/dev/null"
+          # Test-only dependency: TUN DNS probes must query the discovered core
+          # port. BusyBox nslookup cannot replace dig's explicit-port query.
+          _ssh "opkg install bind-dig && command -v dig >/dev/null && dig -v"
           _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
 
           # 安装内核模块

@@ -27,6 +27,21 @@ class WorkflowContracts(unittest.TestCase):
         self.assertLess(text.index(install), text.index('opkg install --nodeps --force-downgrade'))
         self.assertNotIn(install + ' || true', text)
 
+    def test_openwrt_installs_tun_dns_probe_before_scenarios(self):
+        steps = workflow('e2e-openwrt.yml')['jobs']['e2e-openwrt']['steps']
+        install = next(i for i, step in enumerate(steps) if step.get('id') == 'install')
+        script = steps[install]['run']
+        required = '_ssh "opkg install bind-dig && command -v dig >/dev/null && dig -v"'
+        self.assertIn(required, script)
+        self.assertNotIn(required + ' || true', script)
+        scenario = next(i for i, step in enumerate(steps)
+                        if step.get('uses') == './.github/actions/e2e-scenario')
+        self.assertLess(install, scenario)
+        tun = next(step for step in steps if 'TUN scenario requires bind-dig' in step.get('run', ''))
+        self.assertIn('command -v dig >/dev/null ||', tun['run'])
+        self.assertNotIn('continue-on-error', steps[install])
+        self.assertNotIn('continue-on-error', tun)
+
     def test_flutter_sdk_download_is_scoped_http1_and_cached(self):
         data = workflow('android-ci.yml')
         for name in ('test', 'e2e'):
