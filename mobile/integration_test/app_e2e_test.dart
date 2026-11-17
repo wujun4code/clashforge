@@ -20,6 +20,7 @@ import 'package:clashforge_mobile/config/vpn_manager.dart';
 import 'package:clashforge_mobile/main.dart';
 import 'proxy_route_contract.dart';
 import 'native_reconnect_contract.dart';
+import 'settings_about_navigation.dart';
 
 const _subUrl = String.fromEnvironment('SUBSCRIPTION_URL');
 const _expectedNode =
@@ -251,8 +252,7 @@ void main() {
       _log('Checking About screen for runtime status');
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('About'));
-      await tester.pumpAndSettle();
+      await openSettingsAbout(tester);
       await Future<void>.delayed(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
