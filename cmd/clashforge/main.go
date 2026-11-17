@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/wujun4code/clashforge/internal/nodes"
 	"github.com/wujun4code/clashforge/internal/publish"
 	"github.com/wujun4code/clashforge/internal/quickstart"
+	"github.com/wujun4code/clashforge/internal/runtimecfg"
 	"github.com/wujun4code/clashforge/internal/scheduler"
 	"github.com/wujun4code/clashforge/internal/selfupdate"
 	"github.com/wujun4code/clashforge/internal/subscription"
@@ -37,7 +37,12 @@ var buildVersion = version // overridden by ldflags: -X main.buildVersion=v1.0.0
 func main() {
 	cfgPath := flag.String("config", "/etc/metaclash/config.toml", "path to config file")
 	showVersion := flag.Bool("v", false, "print version and exit")
+	checkCore := flag.String("core-version-check", "", "run a bounded selected-core version check without starting services")
 	flag.Parse()
+
+	if *checkCore != "" {
+		os.Exit(coreVersionCheck(*checkCore, 5*time.Second, os.Stdout))
+	}
 
 	if *showVersion {
 		fmt.Println(buildVersion)
@@ -120,51 +125,18 @@ func main() {
 	runtimeConfigReady := true
 	if err := writeRuntimeMihomoConfig(cfg, subManager); err != nil {
 		log.Error().Err(err).Msg("generate mihomo config")
-		// A stale runtime may still contain plaintext DNS. Keep the UI available
-		// for repair, but do not auto-start it under the strict strategy.
-		if strings.EqualFold(strings.TrimSpace(cfg.DNS.Strategy), config.DNSStrategyAntiHijack) {
-			runtimeConfigReady = false
-		}
+		// Any generation failure can leave an obsolete runtime, not just strict DNS.
+		// Keep the management UI available, but never auto-start that old file.
+		runtimeConfigReady = false
 	}
 
 	// Netfilter
 	dnsMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
-	nfManager := netfilter.NewManager(netfilter.Config{
-		Mode:              cfg.Network.Mode,
-		FirewallBackend:   cfg.Network.FirewallBackend,
-		TProxyPort:        cfg.Ports.TProxy,
-		DNSPort:           cfg.Ports.DNS,
-		EnableDNSRedirect: shouldRedirectDNSOnStartup(cfg, dnsMode),
-		BypassFakeIP:      shouldBypassFakeIPOnStartup(cfg),
-		BypassCIDR:        cfg.Network.BypassCIDR,
-		TunDevice:         cfg.Network.TUN.Device,
-		FakeIPRange:       config.ReadRuntimeFakeIPRange(cfg.Core.RuntimeDir),
-	})
+	nfManager := netfilter.NewManager(startupNetfilterConfig(cfg))
 
-	// Crash watchdog: when mihomo exits unexpectedly (e.g. OOM kill), immediately
-	// release DNS/nft for availability, except strict DNS must not fail open.
-	// If auto-restart succeeds, re-apply the rules automatically.
-	coreManager.SetCrashCallback(func() {
-		restoreDNSAfterCrash(cfg, dns.Restore)
-		_ = (&netfilter.NftablesBackend{}).Cleanup()
-		_ = (&netfilter.IptablesBackend{DNSPort: cfg.Ports.DNS}).Cleanup()
-	})
-	coreManager.SetRestartSuccessCallback(func() {
-		currentDNSMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
-		if !cfg.DNS.Enable || !cfg.DNS.ApplyOnStart || currentDNSMode == dns.ModeNone {
-			return
-		}
-		log.Info().Str("dnsmasq_mode", string(currentDNSMode)).Msg("mihomo restarted, re-applying DNS/nft rules")
-		if err := dns.Setup(currentDNSMode, cfg.Ports.DNS); err != nil {
-			log.Warn().Err(err).Msg("dns re-apply after restart failed")
-		}
-		if cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
-			if err := nfManager.Apply(); err != nil {
-				log.Warn().Err(err).Msg("netfilter re-apply after restart failed")
-			}
-		}
-	})
+	recoveryMu := installStartupWatchdog(cfg, subManager, coreManager, nfManager)
 
+	recoveryMu.Lock()
 	coreStarted := false
 	if cfg.Core.AutoStartCore && runtimeConfigReady {
 		if err := coreManager.Start(context.Background()); err != nil {
@@ -172,30 +144,22 @@ func main() {
 		} else {
 			coreStarted = true
 		}
+	} else if !runtimeConfigReady {
+		log.Error().Msg("mihomo auto-start blocked: runtime generation failed; repair via UI/API")
 	} else {
 		log.Info().Msg("mihomo auto-start disabled (auto_start_core = false); start via Setup Wizard or API")
 	}
-	if coreStarted && cfg.Network.ApplyOnStart && cfg.Network.Mode != "none" {
-		if err := nfManager.Apply(); err != nil {
-			log.Warn().Err(err).Msg("apply netfilter rules (continuing without)")
-		}
-	} else if cfg.Network.Mode != "none" {
-		log.Info().Str("mode", cfg.Network.Mode).Msg("transparent proxy takeover disabled on startup")
-	}
-
-	// DNS / dnsmasq coexistence
 	dnsManaged := false
-	if coreStarted && cfg.DNS.Enable && cfg.DNS.ApplyOnStart && dnsMode != dns.ModeNone {
-		if err := dns.Setup(dnsMode, cfg.Ports.DNS); err != nil {
-			log.Warn().Err(err).Msg("dns setup failed (continuing)")
-		} else {
-			dnsManaged = true
+	if coreStarted {
+		var takeoverErr error
+		dnsManaged, takeoverErr = applyStartupTakeover(cfg, nfManager)
+		if takeoverErr != nil {
+			log.Error().Err(takeoverErr).Msg("startup network takeover failed; takeover is not ready")
 		}
-	} else if cfg.DNS.Enable && dnsMode != dns.ModeNone {
-		log.Info().Str("dnsmasq_mode", cfg.DNS.DnsmasqMode).Msg("dns takeover disabled on startup")
 	}
 
 	logStartupHealth(*cfgPath, cfg, coreManager, nfManager, dnsManaged, coreStarted, dnsMode, subManager)
+	recoveryMu.Unlock()
 
 	// SSE broker
 	sseBroker := api.NewSSEBroker()
@@ -236,24 +200,24 @@ func main() {
 	sched.Start()
 
 	deps := api.Dependencies{
-		Version:         buildVersion,
-		StartedAt:       time.Now(),
-		ConfigPath:      *cfgPath,
-		Config:          cfg,
-		Core:            coreManager,
-		SubManager:      subManager,
-		Netfilter:       nfManager,
-		SSEBroker:       sseBroker,
+		Version:          buildVersion,
+		StartedAt:        time.Now(),
+		ConfigPath:       *cfgPath,
+		Config:           cfg,
+		Core:             coreManager,
+		SubManager:       subManager,
+		Netfilter:        nfManager,
+		SSEBroker:        sseBroker,
 		LogBuffer:        logBuf,
 		RequestLogBuffer: reqLogBuf,
 		LogFilePath:      logFilePath,
-		NodeStore:       nodeStore,
-		NodeKeyPair:     nodeKeyPair,
-		PublishStore:    publishStore,
-		WorkerNodeStore: workerNodeStore,
-		GeoDataManager:  geoManager,
-		QuickStartStore: quickStartStore,
-		SelfUpdater:     selfUpdater,
+		NodeStore:        nodeStore,
+		NodeKeyPair:      nodeKeyPair,
+		PublishStore:     publishStore,
+		WorkerNodeStore:  workerNodeStore,
+		GeoDataManager:   geoManager,
+		QuickStartStore:  quickStartStore,
+		SelfUpdater:      selfUpdater,
 	}
 	// HTTP server
 	router := api.NewRouter(deps)
@@ -281,24 +245,25 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	recoveryMu.Lock()
+	shutdownFailed := false
+	if err := releaseStartupTakeover(nfManager); err != nil {
+		shutdownFailed = true
+		log.Error().Err(err).Msg("shutdown takeover cleanup failed")
+	}
 	if err := coreManager.Stop(); err != nil && !errors.Is(err, core.ErrNotRunning) {
+		shutdownFailed = true
 		log.Error().Err(err).Msg("stop core")
 	}
-	if dnsManaged || (cfg.DNS.Enable && cfg.DNS.ApplyOnStart) {
-		currentDNSMode := dns.DnsmasqMode(cfg.DNS.DnsmasqMode)
-		if currentDNSMode != dns.ModeNone {
-			if err := dns.Restore(currentDNSMode); err != nil {
-				log.Error().Err(err).Msg("dns restore failed")
-			}
-		}
-	}
-	if err := nfManager.Cleanup(); err != nil {
-		log.Error().Err(err).Msg("cleanup netfilter")
-	}
+	recoveryMu.Unlock()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("http shutdown")
 	}
-	log.Info().Msg("clashforge exited cleanly")
+	if shutdownFailed {
+		log.Error().Msg("clashforge exited with cleanup errors")
+	} else {
+		log.Info().Msg("clashforge exited cleanly")
+	}
 }
 
 func shouldRedirectDNSOnStartup(cfg *config.MetaclashConfig, dnsMode dns.DnsmasqMode) bool {
@@ -480,89 +445,34 @@ func logStartupHealth(
 		Msg("startup_summary")
 }
 
-// Preserve the managed DNS forwarding on an unexpected core exit in strict mode.
-// Queries fail until restart instead of silently reverting to ISP DNS.
-func restoreDNSAfterCrash(cfg *config.MetaclashConfig, restore func(dns.DnsmasqMode) error) {
-	if cfg.DNS.Enable && cfg.DNS.ApplyOnStart && cfg.DNS.DnsmasqMode != "none" &&
-		strings.EqualFold(strings.TrimSpace(cfg.DNS.Strategy), config.DNSStrategyAntiHijack) {
-		log.Warn().Msg("mihomo crashed: 防劫持模式保留 DNS 接管，等待内核恢复，不回退到运营商 DNS")
-		return
+// Strict crash protection is distinct from an explicit user stop: retain the
+// managed DNS destination (and its network owner) rather than restore ISP DNS.
+func retainDNSAfterCrash(cfg *config.MetaclashConfig) bool {
+	return cfg != nil && cfg.DNS.Enable && cfg.DNS.ApplyOnStart && cfg.DNS.DnsmasqMode != "none" &&
+		strings.EqualFold(strings.TrimSpace(cfg.DNS.Strategy), config.DNSStrategyAntiHijack)
+}
+
+func restoreDNSAfterCrash(cfg *config.MetaclashConfig, restore func(dns.DnsmasqMode) error) error {
+	if retainDNSAfterCrash(cfg) {
+		log.Warn().Msg("mihomo crashed: retaining strict DNS takeover until core recovery or explicit stop")
+		return nil
 	}
-	log.Warn().Msg("mihomo crashed, releasing DNS/nft to prevent DNS blackout")
+	log.Warn().Msg("mihomo crashed, restoring DNS before releasing network takeover")
 	for _, mode := range []dns.DnsmasqMode{dns.ModeReplace, dns.ModeUpstream} {
-		_ = restore(mode)
+		if err := restore(mode); err != nil {
+			return fmt.Errorf("restore crash DNS: %w", err)
+		}
 	}
+	return nil
 }
 
 func writeRuntimeMihomoConfig(cfg *config.MetaclashConfig, subManager *subscription.Manager) error {
-	nodes := []subscription.ProxyNode{}
-	rawYAMLs := [][]byte{}
-	if subManager != nil {
-		nodes = subManager.GetAllCachedNodes()
-		rawYAMLs = subManager.GetRawYAMLForEnabled()
-	}
-
-	overridesPath := filepath.Join(cfg.Core.DataDir, "overrides.yaml")
-	overridesData, _ := os.ReadFile(overridesPath)
-
-	var generated map[string]interface{}
-	var err error
-
-	if len(rawYAMLs) > 0 {
-		// Full subscription YAML available: preserve rules, proxy-groups, rule-providers.
-		generated, err = config.GenerateFromBase(cfg, rawYAMLs[0], nodes)
-		if err != nil {
-			return err
-		}
-		if len(overridesData) > 0 {
-			generated, err = config.MergeWithOverrides(generated, overridesData)
-			if err != nil {
-				return err
-			}
-		}
-	} else if len(overridesData) > 0 {
-		// No subscription YAML: treat overrides.yaml as the full user config.
-		generated, err = config.GenerateFromBase(cfg, overridesData, nodes)
-		if err != nil {
-			return err
-		}
-	} else {
-		// Fallback: generate a minimal config from available nodes.
-		generated, err = config.Generate(cfg, nodes)
-		if err != nil {
-			return err
-		}
-		if len(overridesData) > 0 {
-			generated, err = config.MergeWithOverrides(generated, overridesData)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	generated = config.ApplyManagedRuntimeSettings(cfg, generated)
-	if err := config.ValidateRuntimeDNS(cfg, generated); err != nil {
-		return err
-	}
-
-	deviceGroupsPath := config.DeviceGroupsPath(cfg.Core.DataDir)
-	deviceGroups, err := config.LoadDeviceGroups(deviceGroupsPath)
+	generated, err := runtimecfg.GenerateAndWrite(cfg, subManager)
 	if err != nil {
 		return err
 	}
-	generated, providerSpecs := config.ApplyPerDeviceSubRulesWithProviders(generated, deviceGroups)
-	if err := config.SyncDeviceRuleProviderFiles(cfg.Core.DataDir, providerSpecs); err != nil {
-		return err
+	if !generated {
+		return fmt.Errorf("runtime config was not generated; refusing to start a stale runtime")
 	}
-
-	data, err := config.MarshalYAML(generated)
-	if err != nil {
-		return err
-	}
-
-	outPath := filepath.Join(cfg.Core.RuntimeDir, "mihomo-config.yaml")
-	if err := os.MkdirAll(cfg.Core.RuntimeDir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(outPath, data, 0o644)
+	return nil
 }

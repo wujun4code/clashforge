@@ -119,10 +119,10 @@ func ProbeAndPatchDNS(configPath string) ProbeResult {
 	existingDoH := filterDoHNameservers(extractDNSStringList(cfg, "proxy-server-nameserver"))
 	existingIPDoH := filterIPLiteralDoH(existingDoH)
 
-	verifiedDoH := distinct(addSkipCertParam(suggestedDoH))
+	verifiedDoH := distinct(normalizeDoHNameservers(suggestedDoH))
 	verifiedIPDoH := filterIPLiteralDoH(verifiedDoH)
 
-	builtInDoH := distinct(addSkipCertParam(defaultDoHCandidates))
+	builtInDoH := distinct(normalizeDoHNameservers(defaultDoHCandidates))
 	builtInIPDoH := filterIPLiteralDoH(builtInDoH)
 
 	var finalDoH []string
@@ -461,21 +461,14 @@ func isIPLiteralHost(host string) bool {
 	return net.ParseIP(h) != nil
 }
 
-func addSkipCertParam(list []string) []string {
+// normalizeDoHNameservers trims entries without weakening certificate validation.
+// Missing skip-cert-verify keeps Mihomo's secure default; explicit true/false
+// (and routing fragments) belong to the caller and must remain unchanged.
+func normalizeDoHNameservers(list []string) []string {
 	out := make([]string, 0, len(list))
 	for _, doh := range list {
-		doh = strings.TrimSpace(doh)
-		if doh == "" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(doh), "skip-cert-verify=") {
+		if doh = strings.TrimSpace(doh); doh != "" {
 			out = append(out, doh)
-			continue
-		}
-		if strings.Contains(doh, "#") {
-			out = append(out, doh+"&skip-cert-verify=true")
-		} else {
-			out = append(out, doh+"#skip-cert-verify=true")
 		}
 	}
 	return out

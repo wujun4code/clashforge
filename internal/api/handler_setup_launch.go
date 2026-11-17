@@ -17,7 +17,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/wujun4code/clashforge/internal/config"
-	"github.com/wujun4code/clashforge/internal/core"
+
 	"github.com/wujun4code/clashforge/internal/dns"
 )
 
@@ -219,6 +219,9 @@ func defaultGeodataSpecs() []geodataSpec {
 //  8. dns-takeover   — configure dnsmasq redirect
 func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Candidate staging must not replace the registered handler's Config
+		// pointer when validation or persistence returns early.
+		deps := deps
 		var req setupLaunchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			Err(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
@@ -308,6 +311,9 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 
 		emitStep("config-save", "running", "保存 DNS / 网络配置到 config.toml…", "")
 
+		current := deps.Config
+		candidate := *current
+		deps.Config = &candidate
 		deps.Config.DNS.Enable = req.DNS.Enable
 		deps.Config.DNS.Mode = req.DNS.Mode
 		if req.DNS.Strategy != "" {
@@ -344,12 +350,19 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		deps.Config.Network.ApplyOnStart = req.Network.ApplyOnStart
 		deps.Config.Network.IPv6 = req.Network.IPv6
 		deps.Config.Core.AutoStartCore = true
+		if err := config.ValidateDNSCoexistence(deps.Config); err != nil {
+			emitStep("config-save", "error", "DNS / TUN 组合不受支持", err.Error())
+			emitDone(false, err.Error())
+			return
+		}
 
 		if err := saveRuntimeConfig(deps); err != nil {
 			emitStep("config-save", "error", "配置保存失败", err.Error())
 			emitDone(false, err.Error())
 			return
 		}
+		*current = candidate
+		deps.Config = current
 		emitStep("config-save", "ok",
 			fmt.Sprintf("配置已保存 — DNS: %s/%s | 代理: %s/%s",
 				req.DNS.Mode, req.DNS.DnsmasqMode,
@@ -508,18 +521,26 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		if err := deps.Core.Start(ctx); err != nil && err != core.ErrAlreadyRunning {
-			emitStep("core-start", "error", "内核启动失败", err.Error())
+		startAction, err := startConfiguredCore(ctx, deps)
+		if err != nil {
+			emitStep("core-start", "error", "内核启动/切换失败", err.Error())
 			emitDone(false, err.Error())
 			return
 		}
 		st := deps.Core.Status()
 		emitStep("core-start", "ok",
-			fmt.Sprintf("内核已启动 ✓ (PID %d)", st.PID),
+			fmt.Sprintf("内核已%s ✓ (PID %d)", startAction, st.PID),
 			fmt.Sprintf("binary: %s | api: :%d", deps.Config.Core.Binary, deps.Config.Ports.MihomoAPI))
 
 		// ── Step 6: transparent proxy takeover ────────────────────────────────
 
+		if deps.Netfilter != nil || (deps.Config.Network.ApplyOnStart && deps.Config.Network.Mode != "none") {
+			if err := applyNetworkTakeover(deps); err != nil {
+				emitStep("proxy-takeover", "error", "透明代理 / TUN 接管失败", err.Error())
+				emitDone(false, err.Error())
+				return
+			}
+		}
 		switch {
 		case req.Network.Mode == "tun" && req.Network.ApplyOnStart && deps.Netfilter != nil:
 			// TUN mode still needs two post-start fixups that mihomo's own auto-route
@@ -532,23 +553,17 @@ func handleSetupLaunch(deps Dependencies) http.HandlerFunc {
 			//      via the kernel's bare default route to the upstream gateway.
 			emitStep("proxy-takeover", "running",
 				"正在为 TUN 模式补充 LAN 转发规则 (fw4 forward_lan 放行 Meta + ip rule 9020/9021)…", "")
-			refreshNetfilterManager(deps)
-			_ = deps.Netfilter.Apply() // always returns nil for TUN; sub-steps log.Warn on failure
+
 			emitStep("proxy-takeover", "ok",
-				"TUN 模式已接管 ✓ — fw4 forward_lan 放行 Meta 设备 | ip rule 9020/9021 补全 LAN 转发路由",
-				"auto-route=true")
+				"TUN IPv4 补充规则已验证（fw4 forward_lan / 专用策略路由）",
+				"仅 IPv4 LAN zone；未验证 guest、自定义 zone、IPv6 防绕行、fw4 reload 持久化或端到端连通性")
 		case req.Network.Mode == "tun":
 			emitStep("proxy-takeover", "ok",
 				"TUN 模式已启用（apply_on_start=false 或 netfilter 未初始化，跳过路由补充）", "")
 		case req.Network.Mode != "none" && req.Network.ApplyOnStart && deps.Netfilter != nil:
 			emitStep("proxy-takeover", "running",
 				fmt.Sprintf("正在应用透明代理规则 (%s / %s)…", req.Network.Mode, req.Network.FirewallBackend), "")
-			refreshNetfilterManager(deps)
-			if err := deps.Netfilter.Apply(); err != nil {
-				emitStep("proxy-takeover", "error", "透明代理规则应用失败", err.Error())
-				emitDone(false, err.Error())
-				return
-			}
+
 			emitStep("proxy-takeover", "ok",
 				fmt.Sprintf("透明代理已接管 ✓ — %s 模式 / %s 后端", req.Network.Mode, deps.Netfilter.BackendName()), "")
 		default:

@@ -1,0 +1,310 @@
+diff --git a/rules/provider/provider.go b/rules/provider/provider.go
+index 2e7829a..54523db 100644
+--- a/rules/provider/provider.go
++++ b/rules/provider/provider.go
+@@ -140,7 +140,16 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
+ 		rp.strategy = rulesParseInline(payload, rp.strategy)
+ 	}
+ 	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (ruleStrategy, error) {
+-		return rulesParse(bytes, newStrategy(behavior, parse), format)
++		strategy, err := rulesParse(bytes, newStrategy(behavior, parse), format)
++		if err != nil {
++			return nil, err
++		}
++		// A transient empty HTTP response must not replace last-known-good
++		// rules or their cache. File and inline providers may be empty.
++		if vehicle.Type() == P.HTTP && strategy.Count() == 0 {
++			return nil, errors.New("HTTP rule provider contains no valid rules")
++		}
++		return strategy, nil
+ 	}, onUpdate)
+ 
+ 	wrapper := &RuleSetProvider{
+--- /dev/null
++++ b/rules/provider/provider_lkg_test.go
+@@ -0,0 +1,195 @@
++package provider
++
++import (
++	"bytes"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/metacubex/mihomo/common/utils"
++	"github.com/metacubex/mihomo/component/resource"
++	C "github.com/metacubex/mihomo/constant"
++	P "github.com/metacubex/mihomo/constant/provider"
++)
++
++type lkgTunnel struct {
++	callback *utils.Callback[P.RuleProvider]
++}
++
++func (*lkgTunnel) Providers() map[string]P.ProxyProvider                 { return nil }
++func (*lkgTunnel) RuleProviders() map[string]P.RuleProvider              { return nil }
++func (t *lkgTunnel) RuleUpdateCallback() *utils.Callback[P.RuleProvider] { return t.callback }
++
++func useLKGTunnel(t *testing.T) {
++	previous := tunnel
++	SetTunnel(&lkgTunnel{utils.NewCallback[P.RuleProvider]()})
++	t.Cleanup(func() { SetTunnel(previous) })
++}
++
++func TestHTTPRuleProviderPreservesLKG(t *testing.T) {
++	useLKGTunnel(t)
++	good := []byte("payload:\n  - audit-provider.invalid\n")
++	cases := []struct{ name, body string }{
++		{"empty-body", ""},
++		{"malformed-yaml", "payload: [unterminated\n"},
++		{"empty-payload", "payload: []\n"},
++		{"comments-only", "# transient response\n\n"},
++		{"invalid-rules", "payload:\n  - https://invalid.example/\n"},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			var body atomic.Value
++			body.Store(good)
++			var requests atomic.Int32
++			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				requests.Add(1)
++				_, _ = w.Write(body.Load().([]byte))
++			}))
++			defer origin.Close()
++			path := filepath.Join(t.TempDir(), "rules.yaml")
++			makeProvider := func() *RuleSetProvider {
++				vehicle := resource.NewHTTPVehicle(origin.URL, path, "", nil, time.Second, 0)
++				p := NewRuleSetProvider("lkg", P.Domain, P.YamlRule, 0, vehicle, nil, nil, nil).(*RuleSetProvider)
++				t.Cleanup(func() { _ = p.Close() })
++				return p
++			}
++			p := makeProvider()
++			if err := p.Initial(); err != nil {
++				t.Fatal(err)
++			}
++			if p.Count() != 1 {
++				t.Fatalf("initial count = %d", p.Count())
++			}
++			updatedAt := p.UpdatedAt()
++			body.Store([]byte(tc.body))
++			before := requests.Load()
++			// Repeated explicit failures must not install a bad response's hash.
++			for i := 0; i < 2; i++ {
++				if err := p.Update(); err == nil {
++					t.Error("bad HTTP response accepted; wanted error")
++				}
++				if p.Count() != 1 {
++					t.Errorf("LKG runtime count = %d; want 1", p.Count())
++				}
++				if !p.Match(&C.Metadata{Host: "audit-provider.invalid"}, C.RuleMatchHelper{}) {
++					t.Error("LKG no longer matches")
++				}
++				cache, err := os.ReadFile(path)
++				if err != nil || !bytes.Equal(cache, good) {
++					t.Errorf("LKG disk changed: %q, %v", cache, err)
++				}
++				if !p.UpdatedAt().Equal(updatedAt) {
++					t.Error("failed update changed updatedAt")
++				}
++			}
++			if got := requests.Load() - before; got != 2 {
++				t.Errorf("requests = %d; want one per explicit Update", got)
++			}
++			// Restart from disk while origin is still bad, then explicitly update.
++			restarted := makeProvider()
++			if err := restarted.Initial(); err != nil {
++				t.Errorf("cached Initial: %v", err)
++			}
++			if restarted.Count() != 1 {
++				t.Errorf("cached Initial lost LKG: %d", restarted.Count())
++			}
++			if err := restarted.Update(); err == nil {
++				t.Error("cached provider accepted bad origin")
++			}
++			if restarted.Count() != 1 {
++				t.Errorf("cached update lost LKG: %d", restarted.Count())
++			}
++			body.Store([]byte("payload:\n  - recovered.invalid\n"))
++			if err := p.Update(); err != nil {
++				t.Fatal(err)
++			}
++			if p.Count() != 1 || !p.Match(&C.Metadata{Host: "recovered.invalid"}, C.RuleMatchHelper{}) {
++				t.Error("valid update did not recover")
++			}
++			cache, err := os.ReadFile(path)
++			if err != nil || !bytes.Equal(cache, body.Load().([]byte)) {
++				t.Error("valid recovery not cached")
++			}
++		})
++	}
++}
++
++func TestHTTPRuleProviderEmptyInitial(t *testing.T) {
++	useLKGTunnel(t)
++	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("payload: []\n")) }))
++	defer origin.Close()
++	for _, fallback := range [][]string{nil, {"fallback.invalid"}} {
++		path := filepath.Join(t.TempDir(), "rules.yaml")
++		vehicle := resource.NewHTTPVehicle(origin.URL, path, "", nil, time.Second, 0)
++		p := NewRuleSetProvider("initial", P.Domain, P.YamlRule, 0, vehicle, fallback, nil, nil).(*RuleSetProvider)
++		if err := p.Initial(); err == nil {
++			t.Error("empty HTTP Initial should fail")
++		}
++		if p.Count() != len(fallback) {
++			t.Errorf("fallback count = %d, want %d", p.Count(), len(fallback))
++		}
++		if _, err := os.Stat(path); !os.IsNotExist(err) {
++			t.Errorf("bad initial response cached: %v", err)
++		}
++		_ = p.Close()
++	}
++}
++
++func TestFileAndInlineRuleProvidersAllowEmpty(t *testing.T) {
++	useLKGTunnel(t)
++	for _, format := range []P.RuleFormat{P.YamlRule, P.TextRule} {
++		path := filepath.Join(t.TempDir(), "rules")
++		if err := os.WriteFile(path, []byte{}, 0600); err != nil {
++			t.Fatal(err)
++		}
++		p := NewRuleSetProvider("file", P.Domain, format, 0, resource.NewFileVehicle(path), nil, nil, nil).(*RuleSetProvider)
++		if err := p.Initial(); err != nil {
++			t.Errorf("empty file Initial: %v", err)
++		}
++		if p.Count() != 0 {
++			t.Error("empty file has rules")
++		}
++		_ = p.Close()
++	}
++	p := NewInlineProvider("inline", P.Domain, nil, nil)
++	if err := p.Initial(); err != nil {
++		t.Fatal(err)
++	}
++	if err := p.Update(); err != nil {
++		t.Fatal(err)
++	}
++	if p.Count() != 0 {
++		t.Error("empty inline has rules")
++	}
++}
++
++func TestHTTPTextRuleProviderPreservesLKG(t *testing.T) {
++	useLKGTunnel(t)
++	var body atomic.Value
++	body.Store([]byte("audit-provider.invalid\n"))
++	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(body.Load().([]byte)) }))
++	defer origin.Close()
++	path := filepath.Join(t.TempDir(), "rules.txt")
++	p := NewRuleSetProvider("text", P.Domain, P.TextRule, 0, resource.NewHTTPVehicle(origin.URL, path, "", nil, time.Second, 0), nil, nil, nil).(*RuleSetProvider)
++	defer p.Close()
++	if err := p.Initial(); err != nil {
++		t.Fatal(err)
++	}
++	for _, bad := range []string{"", "# only comments\n", "https://invalid.example/\n"} {
++		body.Store([]byte(bad))
++		if err := p.Update(); err == nil {
++			t.Error("empty parsed HTTP text should fail")
++		}
++		if p.Count() != 1 {
++			t.Error("HTTP text lost runtime LKG")
++		}
++		cache, err := os.ReadFile(path)
++		if err != nil || string(cache) != "audit-provider.invalid\n" {
++			t.Error("HTTP text lost disk LKG")
++		}
++	}
++}
+--- /dev/null
++++ b/rules/provider/provider_lkg_formats_test.go
+@@ -0,0 +1,87 @@
++package provider
++
++import (
++	"bytes"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/metacubex/mihomo/component/resource"
++	C "github.com/metacubex/mihomo/constant"
++	P "github.com/metacubex/mihomo/constant/provider"
++	"github.com/metacubex/mihomo/rules/common"
++)
++
++func lkgMrs(t *testing.T, behavior P.RuleBehavior, payload []string) []byte {
++	t.Helper()
++	var buf bytes.Buffer
++	if err := ConvertToMrs([]byte(strings.Join(payload, "\n")), behavior, P.TextRule, &buf); err != nil {
++		t.Fatal(err)
++	}
++	return buf.Bytes()
++}
++
++func TestHTTPRuleProviderFormats(t *testing.T) {
++	useLKGTunnel(t)
++	parse := func(tp, payload, target string, params []string, subRules map[string][]C.Rule) (C.Rule, error) {
++		if tp != "DOMAIN" {
++			return nil, fmt.Errorf("unsupported test rule: %s", tp)
++		}
++		return common.NewDomain(payload, target), nil
++	}
++	cases := []struct {
++		name      string
++		behavior  P.RuleBehavior
++		format    P.RuleFormat
++		good, bad []byte
++	}{
++		{"ipcidr-yaml", P.IPCIDR, P.YamlRule, []byte("payload:\n  - 192.0.2.0/24\n"), []byte("payload: []\n")},
++		{"classical-yaml", P.Classical, P.YamlRule, []byte("payload:\n  - DOMAIN,audit-provider.invalid\n"), []byte("payload: []\n")},
++		{"domain-mrs-malformed", P.Domain, P.MrsRule, lkgMrs(t, P.Domain, []string{"audit-provider.invalid"}), []byte("invalid-mrs")},
++		{"ipcidr-mrs-malformed", P.IPCIDR, P.MrsRule, lkgMrs(t, P.IPCIDR, []string{"192.0.2.0/24"}), []byte("invalid-mrs")},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			// Exercise the shared parser/commit boundary used by HTTP updates
++			// via Fetcher.SideUpdate, without scheduling background pulls.
++			path := filepath.Join(t.TempDir(), "cache")
++			vehicle := resource.NewHTTPVehicle("http://127.0.0.1:1/unused", path, "", nil, 0, 0)
++			p := NewRuleSetProvider(tc.name, tc.behavior, tc.format, 0, vehicle, nil, nil, parse).(*RuleSetProvider)
++			defer p.Close()
++			if _, _, err := p.SideUpdate(tc.good); err != nil {
++				t.Fatal(err)
++			}
++			if p.Count() != 1 {
++				t.Fatalf("valid count = %d", p.Count())
++			}
++			if _, _, err := p.SideUpdate(tc.bad); err == nil {
++				t.Error("bad HTTP parsed strategy accepted")
++			}
++			if p.Count() != 1 {
++				t.Error("bad update lost runtime LKG")
++			}
++			cache, err := os.ReadFile(path)
++			if err != nil || !bytes.Equal(cache, tc.good) {
++				t.Error("bad update lost disk LKG")
++			}
++			if tc.format == P.MrsRule {
++				return // malformed MRS is not a legitimate empty file
++			}
++			// The identical valid empty YAML remains allowed for files.
++			filePath := filepath.Join(t.TempDir(), "empty")
++			if err := os.WriteFile(filePath, tc.bad, 0600); err != nil {
++				t.Fatal(err)
++			}
++			file := NewRuleSetProvider(tc.name, tc.behavior, tc.format, 0, resource.NewFileVehicle(filePath), nil, nil, parse).(*RuleSetProvider)
++			defer file.Close()
++			if err := file.Initial(); err != nil {
++				t.Fatal(err)
++			}
++			if file.Count() != 0 {
++				t.Error("empty file should be allowed")
++			}
++		})
++	}
++}

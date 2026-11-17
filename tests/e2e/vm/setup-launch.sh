@@ -2,16 +2,16 @@
 # tests/e2e/vm/setup-launch.sh
 # Step 5 — 模拟 Setup Wizard 操作 + 接管断言
 #
-# 模拟用户在 http://192.168.10.1:7777/setup 上完成的操作：
+# 仅在专用 OpenWrt VM 的 loopback API 上模拟 Setup Wizard 操作：
 #   1. 添加订阅并同步节点（可通过 REUSE_SUBSCRIPTION=true 跳过，复用上一 scenario 的数据）
 #   2. 配置 DNS（fake-ip + dnsmasq_mode 由环境变量控制）
 #   3. 配置网络（tproxy + nftables）
-#   4. 触发 setup/launch
+#   4. 通过 core/apply 显式选择订阅并启动
 #
 # 启动后只断言"接管是否到位"，不做连通性测试（连通性在 probe.sh 里）：
 #   SL-01  添加订阅 → 返回订阅 ID（REUSE_SUBSCRIPTION=true 时跳过，直接读快照）
 #   SL-02  sync-update → 节点拉取成功（REUSE_SUBSCRIPTION=true 时跳过）
-#   SL-03  setup/launch → success:true
+#   SL-03  core/apply → success:true，独立读回活跃订阅
 #   SL-04  mihomo 进程已启动
 #   SL-05  nftables metaclash 表已创建
 #   SL-06  nftables tproxy 规则已存在
@@ -34,6 +34,8 @@ set -e
 
 DNSMASQ_MODE="${DNSMASQ_MODE:-upstream}"
 REUSE_SUBSCRIPTION="${REUSE_SUBSCRIPTION:-false}"
+E2E_EXPECTED_NODE="${E2E_EXPECTED_NODE:-Tokyo-AnyTLS}"
+E2E_EXPECTED_TYPE="${E2E_EXPECTED_TYPE:-anytls}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -77,7 +79,7 @@ if [ "$REUSE_SUBSCRIPTION" = "true" ]; then
     SUB_ID=$(cat "$SNAPSHOT_DIR/sub-id" 2>/dev/null || echo "")
     if [ -n "$SUB_ID" ]; then
         record PASS SL-01 "订阅复用 (skip)" "REUSE_SUBSCRIPTION=true，从快照读取 sub-id" "订阅 ID: $SUB_ID"
-        record PASS SL-02 "订阅复用 (skip)" "REUSE_SUBSCRIPTION=true，跳过同步（复用已同步节点）" "节点已同步 ✓"
+        info "复用已有订阅；仍检查实际缓存节点，不以快照 ID 代替解析成功"
     else
         record FAIL SL-01 "订阅复用" "REUSE_SUBSCRIPTION=true 时 $SNAPSHOT_DIR/sub-id 必须存在" "文件不存在，无法复用"
         exit 1
@@ -96,12 +98,13 @@ if [ "$ADD_RESP" = "FAILED" ]; then
     exit 1
 fi
 
-SUB_ID=$(echo "$ADD_RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
-if [ -n "$SUB_ID" ]; then
+SUB_ID=$(printf '%s' "$ADD_RESP" | jsonfilter -e '@.data.id' 2>/dev/null || true)
+ADD_OK=$(printf '%s' "$ADD_RESP" | jsonfilter -e '@.ok' 2>/dev/null || true)
+if [ "$ADD_OK" = "true" ] && [ -n "$SUB_ID" ]; then
     echo "$SUB_ID" > "$SNAPSHOT_DIR/sub-id"
     record PASS SL-01 "添加订阅" "POST /subscriptions → 返回订阅 ID" "订阅 ID: $SUB_ID"
 else
-    record FAIL SL-01 "添加订阅" "POST /subscriptions → 返回订阅 ID" "响应中无 id 字段: $ADD_RESP"
+    record FAIL SL-01 "添加订阅" "POST /subscriptions → 返回订阅 ID" "响应中无 id 字段（响应已脱敏）"
     exit 1
 fi
 
@@ -111,38 +114,67 @@ SYNC_RESP=$(curl -sf --max-time 60 \
     -H "Content-Type: application/json" -d '{}' \
     "$CF_API/subscriptions/$SUB_ID/sync-update" 2>/dev/null || echo "FAILED")
 
-if echo "$SYNC_RESP" | grep -qE '"ok"|"true"|"success"|"nodes"|"proxies"'; then
-    NODE_COUNT=$(echo "$SYNC_RESP" | grep -o '"count":[0-9]*' | head -1 | sed 's/"count"://' || echo "?")
-    record PASS SL-02 "同步订阅节点" "POST /subscriptions/{id}/sync-update → 节点数 ≥ 1" "节点同步成功（count: $NODE_COUNT）"
-else
-    record FAIL SL-02 "同步订阅节点" "POST /subscriptions/{id}/sync-update → 节点数 ≥ 1" "sync 失败: $SYNC_RESP"
+SYNC_OK=$(printf '%s' "$SYNC_RESP" | jsonfilter -e '@.ok' 2>/dev/null || true)
+SYNC_STATUS=$(printf '%s' "$SYNC_RESP" | jsonfilter -e '@.data.status' 2>/dev/null || true)
+if [ "$SYNC_OK" != "true" ] || [ "$SYNC_STATUS" != "ok" ]; then
+    record FAIL SL-02 "同步订阅节点" "sync-update → ok:true/status:ok" "同步失败或响应无效（响应已脱敏）"
     exit 1
 fi
 
 fi # end REUSE_SUBSCRIPTION
 
+# sync-update returns status, not count. Read actual parsed cache even on reuse.
+NODES_RESP=$(curl -sf --max-time 15 "$CF_API/subscriptions/$SUB_ID/nodes" 2>/dev/null || echo '{}')
+NODES_OK=$(printf '%s' "$NODES_RESP" | jsonfilter -e '@.ok' 2>/dev/null || true)
+NODE_NAMES=$(printf '%s' "$NODES_RESP" | jsonfilter -e '@.data.nodes[*].name' 2>/dev/null || true)
+NODE_TYPES=$(printf '%s' "$NODES_RESP" | jsonfilter -e "@.data.nodes[@.name=\"$E2E_EXPECTED_NODE\"].type" 2>/dev/null || true)
+NODE_COUNT=$(printf '%s\n' "$NODE_NAMES" | grep -c . || true)
+if [ "$NODES_OK" = "true" ] && [ "$NODE_COUNT" -ge 1 ] && \
+    printf '%s\n' "$NODE_NAMES" | grep -Fxq "$E2E_EXPECTED_NODE" && \
+    printf '%s\n' "$NODE_TYPES" | grep -Fixq "$E2E_EXPECTED_TYPE"; then
+    record PASS SL-02 "验证实际订阅节点" "缓存节点 ≥ 1，含期望节点和协议" "节点数: $NODE_COUNT；$E2E_EXPECTED_NODE / $E2E_EXPECTED_TYPE"
+else
+    record FAIL SL-02 "验证实际订阅节点" "缓存节点 ≥ 1，含期望节点和协议" "缓存为空、响应失败或缺少期望节点/协议（响应已脱敏）"
+    exit 1
+fi
+
 # ── SL-03: setup/launch ───────────────────────────────────────────────────────
-LAUNCH_PAYLOAD="{\"dns\":{\"enable\":true,\"mode\":\"fake-ip\",\"dnsmasq_mode\":\"${DNSMASQ_MODE}\",\"apply_on_start\":true},\"network\":{\"mode\":\"tproxy\",\"firewall_backend\":\"nftables\",\"bypass_lan\":true,\"bypass_china\":false,\"apply_on_start\":true}}"
-info "触发 setup/launch..."
+LAUNCH_PAYLOAD="{\"source\":{\"type\":\"sub_id\",\"sub_id\":\"${SUB_ID}\",\"sync\":false},\"dns\":{\"enable\":true,\"mode\":\"fake-ip\",\"dnsmasq_mode\":\"${DNSMASQ_MODE}\",\"apply_on_start\":true},\"network\":{\"mode\":\"tproxy\",\"firewall_backend\":\"nftables\",\"bypass_lan\":true,\"bypass_china\":false,\"apply_on_start\":true}}"
+info "触发 core/apply（使用已同步订阅，不重复同步）..."
 info "DNS  选项: enable=true  mode=fake-ip  dnsmasq_mode=${DNSMASQ_MODE}  apply_on_start=true"
 info "网络选项: mode=tproxy  firewall_backend=nftables  bypass_lan=true  bypass_china=false  apply_on_start=true"
-info "完整 payload: $LAUNCH_PAYLOAD"
+
 LAUNCH_RESP=$(curl -sf --max-time 90 \
     -H "Content-Type: application/json" \
     -d "$LAUNCH_PAYLOAD" \
-    "$CF_API/setup/launch" 2>/dev/null || echo "FAILED")
+    "$CF_API/core/apply" 2>/dev/null || echo "FAILED")
 
 if echo "$LAUNCH_RESP" | grep -q '"success":true'; then
-    record PASS SL-03 "setup/launch" "POST /setup/launch → {success:true}" "launch 成功"
+    record PASS SL-03 "core/apply" "POST /core/apply → {success:true}" "launch 成功"
 else
-    # Extract the error field from any SSE data line, or fall back to the raw body.
-    LAUNCH_ERR=$(echo "$LAUNCH_RESP" \
-        | grep -o '"error":"[^"]*"' | head -1 \
-        | sed 's/"error":"//;s/"$//' 2>/dev/null || echo "")
-    [ -z "$LAUNCH_ERR" ] && LAUNCH_ERR=$(echo "$LAUNCH_RESP" | tail -3)
-    printf "${RED}SL-03 原始响应（最后5行）:${RESET}\n"
-    echo "$LAUNCH_RESP" | tail -5
-    record FAIL SL-03 "setup/launch" "POST /setup/launch → {success:true}" "失败: $LAUNCH_ERR"
+    record FAIL SL-03 "core/apply" "POST /core/apply → {success:true}" "启动失败或响应无效（响应已脱敏）"
+    exit 1
+fi
+
+# The Wizard activates source atomically in core/apply; verify persisted selection
+# independently before selector changes, warmup or any lifecycle assertions.
+ACTIVE_RESP=$(curl -sf --max-time 15 "$CF_API/config/active-source" 2>/dev/null || echo '{}')
+ACTIVE_OK=$(printf '%s' "$ACTIVE_RESP" | jsonfilter -e '@.ok' 2>/dev/null || true)
+ACTIVE_TYPE=$(printf '%s' "$ACTIVE_RESP" | jsonfilter -e '@.data.active_source.type' 2>/dev/null || true)
+ACTIVE_SUB_ID=$(printf '%s' "$ACTIVE_RESP" | jsonfilter -e '@.data.active_source.sub_id' 2>/dev/null || true)
+if [ "$ACTIVE_OK" = "true" ] && [ "$ACTIVE_TYPE" = "subscription" ] && [ "$ACTIVE_SUB_ID" = "$SUB_ID" ]; then
+    record PASS SL-03a "活跃订阅读回" "ok:true，subscription 且 sub_id 匹配" "独立 GET 已确认活跃订阅"
+else
+    record FAIL SL-03a "活跃订阅读回" "ok:true，subscription 且 sub_id 匹配" "来源缺失或不匹配（响应已脱敏）"
+    exit 1
+fi
+
+# Explicitly establish and read back the rule MATCH -> selector -> AnyTLS
+# chain before any warmup; successful launch alone can still select DIRECT.
+if CF_API="$CF_API" sh "${0%/*}/select-proxy.sh"; then
+    record PASS SL-03b "实际代理选择" "rule MATCH 链闭环到 AnyTLS" "独立 GET 已确认 selector 和叶子协议"
+else
+    record FAIL SL-03b "实际代理选择" "rule MATCH 链闭环到 AnyTLS" "选择/读回失败；不继续预热或出口验收"
     exit 1
 fi
 
@@ -307,15 +339,17 @@ else
 fi
 
 # ── 提取代理认证信息（供 host 端 browser-probe.mjs 使用）───────────────────────
+# A raw YAML's first '- name:' may be a proxy group, not a node. Reuse
+# the actual parsed subscription API and bind server to the verified node.
+NODE_NAME="$E2E_EXPECTED_NODE"
+SERVER_HOST=$(printf '%s' "$NODES_RESP" | jsonfilter -e "@.data.nodes[@.name=\"$E2E_EXPECTED_NODE\"].server" 2>/dev/null || true)
+rm -f "$SNAPSHOT_DIR/proxy-node"
+[ -n "$SERVER_HOST" ] && printf '%s:%s\n' "$NODE_NAME" "$SERVER_HOST" > "$SNAPSHOT_DIR/proxy-node"
 CACHE_FILE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1 || echo "")
 if [ -n "$CACHE_FILE" ]; then
     AUTH_LINE=$(grep -A1 'authentication:' "$CACHE_FILE" 2>/dev/null \
         | grep -v 'authentication:' | head -1 | tr -d ' -' || echo "")
-    # 从 proxies 列表中提取第一个节点的 name 和 server
-    # 找到 '- name:' 行，再向下找相邻的 server: 行
-    NODE_NAME=$(grep -m1 '^ *- *name:' "$CACHE_FILE" 2>/dev/null \
-        | sed 's/.*name: *//' | tr -d " '\"" || echo "")
-    SERVER_HOST=$(awk '/^ *- *name:/{found=1} found && /^ *server:/{print $2; exit}' "$CACHE_FILE" 2>/dev/null | tr -d " '\"" || echo "")
+    # Node identity/server came from the parsed nodes API above, not YAML grep.
     [ -n "$AUTH_LINE" ] && echo "$AUTH_LINE" > "$SNAPSHOT_DIR/proxy-auth"
     [ -n "$NODE_NAME" ] && [ -n "$SERVER_HOST" ] && \
         echo "${NODE_NAME}:${SERVER_HOST}" > "$SNAPSHOT_DIR/proxy-node"

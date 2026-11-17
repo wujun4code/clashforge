@@ -126,20 +126,29 @@ func TestNFTTemplate_QUICDropWhenDropQUICEnabled(t *testing.T) {
 	}
 }
 
-func TestNFTTemplate_QUICReturnWhenDropQUICDisabled(t *testing.T) {
-	rendered := renderNFTTemplateOpts(t, false, false, false, false)
-	if strings.Contains(rendered, "udp dport 443 drop") {
-		t.Fatalf("did not expect 'udp dport 443 drop' when DropQUIC=false")
-	}
-	if !strings.Contains(rendered, "udp dport 443 return") {
-		t.Fatalf("expected 'udp dport 443 return' when DropQUIC=false")
+func TestNFTTemplate_QUICTProxyWhenDropQUICDisabled(t *testing.T) {
+	for _, ipv6 := range []bool{false, true} {
+		rendered := renderNFTTemplateOpts(t, false, false, ipv6, false)
+		if strings.Contains(rendered, "udp dport 443 drop") || strings.Contains(rendered, "udp dport 443 return") {
+			t.Errorf("EnableIPv6=%v: allowed QUIC must use ordinary UDP TProxy, not drop or return", ipv6)
+		}
+		if !strings.Contains(rendered, "meta nfproto ipv4 meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:7895 meta mark set "+fwMark) {
+			t.Errorf("EnableIPv6=%v: missing family-scoped IPv4 TCP/UDP interception", ipv6)
+		}
+		if ipv6 && !strings.Contains(rendered, "meta nfproto ipv6 meta l4proto { tcp, udp } tproxy ip6 to [::1]:7895 meta mark set "+fwMark) {
+			t.Error("missing family-scoped IPv6 TCP/UDP interception")
+		}
 	}
 }
 
 func TestNFTTemplate_IPv6ForwardBlockWhenIPv6Disabled(t *testing.T) {
 	rendered := renderNFTTemplateOpts(t, false, false, false, false)
-	if !strings.Contains(rendered, "chain ipv6_forward_block") {
-		t.Fatalf("expected ipv6_forward_block chain when EnableIPv6=false")
+	if !strings.Contains(rendered, "chain ipv6_forward_block") ||
+		!strings.Contains(rendered, "meta nfproto ipv6 ip6 daddr != { ::1/128, fc00::/7, fe80::/10, ff00::/8 } drop") {
+		t.Fatalf("expected explicit global IPv6 forward block when EnableIPv6=false")
+	}
+	if strings.Contains(rendered, "tproxy ip6 to") {
+		t.Fatal("disabled IPv6 must be blocked, not intercepted without policy routing")
 	}
 }
 

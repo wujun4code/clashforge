@@ -27,11 +27,11 @@ const (
 )
 
 const (
-	dnsmasqConf             = "/etc/dnsmasq.conf"
+	dnsmasqConf              = "/etc/dnsmasq.conf"
 	dnsmasqGeneratedConfGlob = "/var/etc/dnsmasq.conf*"
-	dnsmasqDefaultDir       = "/etc/dnsmasq.d"
-	clashforgeConfName      = "clashforge.conf"
-	dnsmasqService          = "dnsmasq"
+	dnsmasqDefaultDir        = "/etc/dnsmasq.d"
+	clashforgeConfName       = "clashforge.conf"
+	dnsmasqService           = "dnsmasq"
 )
 
 // Setup configures dnsmasq coexistence according to mode.
@@ -53,65 +53,16 @@ func Setup(mode DnsmasqMode, mihmoDNSPort int) error {
 	}
 }
 
-// Restore undoes changes made by Setup.
-func Restore(mode DnsmasqMode) error {
-	switch mode {
-	case ModeReplace:
-		return restoreReplace()
-	case ModeUpstream:
-		return restoreUpstream()
-	default:
-		return nil
-	}
+// Restore releases the persisted owner, regardless of the current configured
+// mode. With no owned journal it is a side-effect-free no-op.
+func Restore(_ DnsmasqMode) error {
+	return restoreOwnedDNS()
 }
 
-// setupReplace disables dnsmasq's DNS listener so mihomo can bind to port 53.
-// On OpenWrt, uses UCI to set port=0 — writing port= to a conf-dir file would
-// cause "illegal repeated keyword" because UCI already sets port=53 in the
-// generated config. Falls back to a conf-dir file on non-OpenWrt systems.
-func setupReplace() error {
-	// Kill any non-dnsmasq process occupying port 53 before reconfiguring.
-	if n := KillPortOccupiers(53); n > 0 {
-		log.Info().Int("killed", n).Msg("dns: killed port-53 occupiers before replace setup")
-	}
-	if _, err := exec.LookPath("uci"); err == nil {
-		return setupReplaceUCI()
-	}
-	content := "# clashforge: disable dnsmasq DNS port so mihomo can take over\nport=0\n"
-	if err := writeManagedDNSMasqConfig(content); err != nil {
-		return err
-	}
-	if err := restartDnsmasqFull(); err != nil {
-		return err
-	}
-	removeDnsmasqNftHijack()
-	return nil
-}
-
-func setupReplaceUCI() error {
-	if out, err := exec.Command("uci", "set", "dhcp.@dnsmasq[0].port=0").CombinedOutput(); err != nil {
-		return fmt.Errorf("uci set dnsmasq port=0: %w: %s", err, out)
-	}
-	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
-		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
-	}
-	log.Info().Msg("dns: dnsmasq port=0 set via UCI (replace mode)")
-	// Full restart (not just SIGHUP) so the port=0 change takes effect.
-	if err := restartDnsmasqFull(); err != nil {
-		return err
-	}
-	// After dnsmasq restarts with port=0, remove its auto-injected nftables HIJACK
-	// rule (table inet dnsmasq, priority dstnat-5). If left in place it intercepts
-	// client DNS before clashforge's own dns_redirect chain (priority dstnat),
-	// redirecting packets to port 53 where nothing is listening — breaking DNS for
-	// all LAN clients even though mihomo is up and healthy.
-	//
-	// procd starts dnsmasq asynchronously; the hijack table typically appears ~500ms
-	// after procd returns.  Wait 1.5s so we reliably see and delete it.
-	time.Sleep(1500 * time.Millisecond)
-	removeDnsmasqNftHijack()
-	return nil
-}
+// setupReplace never kills unrelated port owners: listener conflicts must fail
+// without terminating user processes. The journal is acquired before mutation.
+func setupReplace() error    { return setupOwnedDNS(ModeReplace, 0) }
+func setupReplaceUCI() error { return setupOwnedDNS(ModeReplace, 0) }
 
 // removeDnsmasqNftHijack deletes the nftables table that dnsmasq injects on
 // startup to hijack port-53 traffic. In replace mode clashforge owns DNS, so
@@ -132,124 +83,12 @@ func removeDnsmasqNftHijack() {
 	log.Info().Msg("dns: removed dnsmasq nft hijack table (inet dnsmasq)")
 }
 
-func restoreReplace() error {
-	if _, err := exec.LookPath("uci"); err == nil {
-		return restoreReplaceUCI()
-	}
-	if err := removeManagedDNSMasqConfig(); err != nil {
-		return err
-	}
-	return reloadDnsmasq()
-}
-
-func restoreReplaceUCI() error {
-	// Remove the port override so dnsmasq returns to its default (53).
-	exec.Command("uci", "delete", "dhcp.@dnsmasq[0].port").Run() //nolint:errcheck
-	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
-		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
-	}
-	log.Info().Msg("dns: dnsmasq port restored via UCI (replace mode)")
-	// Full restart (not just SIGHUP) so the UCI port deletion takes effect.
-	// On OpenWrt, dnsmasq config is regenerated from UCI by the init script;
-	// SIGHUP only re-reads the existing config file which still has port=0.
-	return restartDnsmasqFull()
-}
-
-// setupUpstream configures dnsmasq to forward DNS queries to mihomo's DNS port.
-// On OpenWrt, uses UCI so the setting survives dnsmasq restarts (the UCI-generated
-// config is what dnsmasq actually reads, not /etc/dnsmasq.d which may be ignored).
-func setupUpstream(port int) error {
-	if _, err := exec.LookPath("uci"); err == nil {
-		return setupUpstreamUCI(port)
-	}
-	content := fmt.Sprintf(
-		"# clashforge: forward all DNS to mihomo\nserver=127.0.0.1#%d\nno-resolv\n",
-		port,
-	)
-	if err := writeManagedDNSMasqConfig(content); err != nil {
-		return err
-	}
-	log.Info().Int("port", port).Msg("dns: dnsmasq upstream set to mihomo (conf-file)")
-	return reloadDnsmasq()
-}
-
-func setupUpstreamUCI(port int) error {
-	// Clear any existing server overrides before adding ours.
-	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].server").Run()   //nolint:errcheck
-	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].noresolv").Run() //nolint:errcheck
-
-	uciServer := fmt.Sprintf("127.0.0.1#%d", port)
-	if out, err := exec.Command("uci", "add_list", "dhcp.@dnsmasq[0].server="+uciServer).CombinedOutput(); err != nil {
-		return fmt.Errorf("uci add_list dnsmasq.server: %w: %s", err, out)
-	}
-	if out, err := exec.Command("uci", "set", "dhcp.@dnsmasq[0].noresolv=1").CombinedOutput(); err != nil {
-		return fmt.Errorf("uci set dnsmasq.noresolv: %w: %s", err, out)
-	}
-	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
-		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
-	}
-	log.Info().Int("port", port).Msg("dns: dnsmasq upstream set to mihomo via UCI")
-	// Full restart so UCI-regenerated config takes effect immediately.
-	return restartDnsmasqFull()
-}
-
-func restoreUpstream() error {
-	if _, err := exec.LookPath("uci"); err == nil {
-		return restoreUpstreamUCI()
-	}
-	if err := removeManagedDNSMasqConfig(); err != nil {
-		return err
-	}
-	return reloadDnsmasq()
-}
-
-func restoreUpstreamUCI() error {
-	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].server").Run()   //nolint:errcheck
-	exec.Command("uci", "-q", "delete", "dhcp.@dnsmasq[0].noresolv").Run() //nolint:errcheck
-	if out, err := exec.Command("uci", "commit", "dhcp").CombinedOutput(); err != nil {
-		return fmt.Errorf("uci commit dhcp: %w: %s", err, out)
-	}
-	log.Info().Msg("dns: dnsmasq upstream restored via UCI")
-	return restartDnsmasqFull()
-}
-
-func writeManagedDNSMasqConfig(content string) error {
-	paths := dnsmasqManagedConfigPaths()
-	written := 0
-	var lastErr error
-
-	for _, target := range paths {
-		dir := filepath.Dir(target)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			lastErr = err
-			continue
-		}
-		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
-			lastErr = err
-			continue
-		}
-		written++
-		log.Info().Str("file", target).Msg("dns: wrote managed dnsmasq config")
-	}
-
-	if written > 0 {
-		return nil
-	}
-	if lastErr != nil {
-		return fmt.Errorf("write managed dnsmasq config: %w", lastErr)
-	}
-	return fmt.Errorf("write managed dnsmasq config: no writable config path")
-}
-
-func removeManagedDNSMasqConfig() error {
-	var lastErr error
-	for _, target := range dnsmasqManagedConfigPaths() {
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			lastErr = err
-		}
-	}
-	return lastErr
-}
+func restoreReplace() error           { return restoreOwnedDNS() }
+func restoreReplaceUCI() error        { return restoreOwnedDNS() }
+func setupUpstream(port int) error    { return setupOwnedDNS(ModeUpstream, port) }
+func setupUpstreamUCI(port int) error { return setupOwnedDNS(ModeUpstream, port) }
+func restoreUpstream() error          { return restoreOwnedDNS() }
+func restoreUpstreamUCI() error       { return restoreOwnedDNS() }
 
 func dnsmasqManagedConfigPaths() []string {
 	dirs := []string{dnsmasqDefaultDir}
@@ -321,14 +160,7 @@ func reloadDnsmasq() error {
 	}
 
 	// Fallback: restart service to ensure both config and cache are refreshed.
-	out, err := exec.Command("/etc/init.d/dnsmasq", "restart").CombinedOutput()
-	if err != nil {
-		// Not fatal – dnsmasq may not be running or on non-OpenWrt systems
-		log.Warn().Err(err).Str("output", string(out)).Msg("dns: dnsmasq restart failed (not fatal)")
-	} else {
-		log.Info().Msg("dns: dnsmasq restarted via init.d")
-	}
-	return nil
+	return restartDnsmasqFull()
 }
 
 func dnsmasqPIDs() []string {
@@ -387,9 +219,17 @@ func dnsmasqPIDs() []string {
 // restartDnsmasqFull performs a full dnsmasq restart (not just SIGHUP), which
 // is required when changing the listening port (e.g. port=0 in replace mode).
 func restartDnsmasqFull() error {
-	out, err := exec.Command("/etc/init.d/dnsmasq", "restart").CombinedOutput()
+	cmd := exec.Command("/etc/init.d/dnsmasq", "restart")
+	// OpenWrt's service wrapper dispatches to the same init script. Resolve it
+	// via PATH so isolated tests need never execute a host service manager.
+	if _, err := exec.LookPath("service"); err == nil {
+		cmd = exec.Command("service", "dnsmasq", "restart")
+	}
+	// Service output may include private DNS configuration; propagate failure
+	// without copying it into API errors or logs.
+	err := cmd.Run()
 	if err != nil {
-		log.Warn().Err(err).Str("output", string(out)).Msg("dns: dnsmasq full restart failed (not fatal)")
+		return fmt.Errorf("dnsmasq full restart failed: %w", err)
 	} else {
 		log.Info().Msg("dns: dnsmasq restarted via init.d (full restart)")
 	}

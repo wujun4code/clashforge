@@ -118,7 +118,10 @@ func TestResolveGenerationInputsUsesActiveSubscriptionOnly(t *testing.T) {
 	writeActiveSourceJSON(t, dataDir, activeSource{Type: "subscription", SubID: idB})
 
 	cfg := &config.MetaclashConfig{Core: config.CoreConfig{DataDir: dataDir}}
-	nodes, rawYAMLs := resolveGenerationInputs(cfg, subMgr)
+	nodes, rawYAMLs, _, err := resolveGenerationInputs(cfg, subMgr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(nodes) != 1 {
 		t.Fatalf("expected 1 active-sub node, got %d", len(nodes))
@@ -160,7 +163,10 @@ func TestResolveGenerationInputsFileSourceDisablesSubscriptionRawBase(t *testing
 	writeActiveSourceJSON(t, dataDir, activeSource{Type: "file", Filename: "20260429_v1.yaml"})
 
 	cfg := &config.MetaclashConfig{Core: config.CoreConfig{DataDir: dataDir}}
-	nodes, rawYAMLs := resolveGenerationInputs(cfg, subMgr)
+	nodes, rawYAMLs, _, err := resolveGenerationInputs(cfg, subMgr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(nodes) != 2 {
 		t.Fatalf("expected nodes from enabled subscriptions to remain available, got %d", len(nodes))

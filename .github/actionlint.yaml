@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - openwrt-x86
+    - linux-node

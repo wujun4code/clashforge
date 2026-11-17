@@ -61,18 +61,11 @@ jobs:
             ./cmd/clashforge
           echo "binary: $(ls -lh dist/clashforge-linux-amd64)"
 
-      # ── 3. Download latest mihomo ─────────────────────────────────────────
+      # ── 3. Download pinned, digest-verified mihomo ─────────────────────────
       - name: Download mihomo (amd64)
         run: |
-          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "mihomo $MIHOMO_VER"
-          curl -fsSL -o /tmp/mihomo.gz \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-compatible-${MIHOMO_VER}.gz"
-          gunzip /tmp/mihomo.gz
-          chmod +x /tmp/mihomo
-          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
+          python3 .github/scripts/download-mihomo.py mihomo-linux-amd64-compatible /tmp/mihomo
+          echo 'MIHOMO_VER=v1.19.32' >> "$GITHUB_ENV"
 
       # ── 4. Download GeoData ───────────────────────────────────────────────
       - name: Download GeoData
@@ -199,6 +192,7 @@ jobs:
 
           echo "=== Installing init.d + helpers ==="
           sudo cp openwrt/files/etc/init.d/metaclash /mnt/openwrt/etc/init.d/clashforge
+          sudo cp openwrt/files/usr/share/metaclash/preflight.sh /mnt/openwrt/usr/share/metaclash/preflight.sh
           sudo chmod 755 /mnt/openwrt/etc/init.d/clashforge
           # Enable at boot (rc.d symlink, as if opkg install had run)
           sudo ln -sf /etc/init.d/clashforge /mnt/openwrt/etc/rc.d/S99clashforge

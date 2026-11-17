@@ -70,6 +70,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
+      - name: Setup Python (offline sandbox regressions)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Compute version
         id: ver
         run: |
@@ -97,6 +102,17 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
+          GOMAXPROCS=2 go test -p 2 -count=1 ./internal/config ./internal/runtimecfg ./internal/subscription ./internal/netfilter ./internal/dns ./internal/api ./internal/quickstart ./cmd/clashforge ./tests/integration
+          python3 -m pip install 'PyYAML==6.0.2'
+          python3 tests/e2e/test_openwrt_scripts.py
+          python3 tests/e2e/test_clashforgectl_reset.py
+          python3 tests/e2e/test_mihomo_download.py
+          python3 tests/e2e/test_probe_contract.py
+          python3 tests/e2e/test_subscription_contract.py
+          python3 tests/e2e/test_openwrt_proxy_selection.py
+          python3 tests/e2e/test_ci_contract.py
+          python3 tests/android/test_emulator_runner.py
+          python3 tests/android/test_diagnostics_encryption.py
           mkdir -p dist
           go build \
             -trimpath \
@@ -107,14 +123,8 @@ jobs:
 
       - name: Download bundled mihomo
         run: |
-          MIHOMO_VER=$(curl -sfL -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "Downloading mihomo $MIHOMO_VER"
-          curl -fsSL -o /tmp/mihomo.gz \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-compatible-${MIHOMO_VER}.gz"
-          gunzip -f /tmp/mihomo.gz
-          chmod +x /tmp/mihomo
-          echo "MIHOMO_VER=$MIHOMO_VER" >> "$GITHUB_ENV"
+          python3 .github/scripts/download-mihomo.py mihomo-linux-amd64-compatible /tmp/mihomo
+          echo 'MIHOMO_VER=v1.19.32' >> "$GITHUB_ENV"
 
       - name: Package IPK
         id: pkg
@@ -135,6 +145,7 @@ jobs:
           cp openwrt/files/www/luci-static/resources/view/clashforge/main.js     ipk/www/luci-static/resources/view/clashforge/
           cp openwrt/files/usr/share/rpcd/acl.d/luci-app-clashforge.json         ipk/usr/share/rpcd/acl.d/
           cp openwrt/files/etc/init.d/metaclash                                  ipk/etc/init.d/clashforge       && chmod 755 ipk/etc/init.d/clashforge
+          cp openwrt/files/usr/share/metaclash/preflight.sh                      ipk/usr/share/metaclash/preflight.sh
           cp openwrt/files/etc/metaclash/uninstall-clashforge.sh                 ipk/usr/bin/uninstall-clashforge && chmod 755 ipk/usr/bin/uninstall-clashforge
 
           cat > ipk/CONTROL/control << EOF
@@ -144,7 +155,7 @@ jobs:
           Maintainer: wujun4code
           Section: net
           Priority: optional
-          Depends: ca-bundle
+          Depends: ca-bundle, ip-full
           Source: https://github.com/wujun4code/clashforge
           Description: Mihomo (Clash.Meta) proxy manager for OpenWrt.
            Includes bundled mihomo ${MIHOMO_VER}. Web UI on port 7777.
@@ -336,6 +347,15 @@ jobs:
           echo "IPK 传输完成 — 本地: ${LOCAL_SIZE} bytes，路由器收到: ${IPK_SIZE} bytes"
           [ "$IPK_SIZE" = "$LOCAL_SIZE" ] || (echo "IPK 传输不完整：本地 ${LOCAL_SIZE} bytes，路由器只收到 ${IPK_SIZE} bytes（SSH 连接可能被中途打断，重跑一次即可）" && exit 1)
 
+          # --nodeps skips package dependencies, so install the product's full
+          # iproute2 requirement explicitly and fail on repository/install errors.
+          _ssh "opkg update && opkg install ip-full && ip -N -d -o rule show >/dev/null"
+          # Test-only dependency: TUN DNS probes must query the discovered core
+          # port. BusyBox nslookup cannot replace dig's explicit-port query.
+          _ssh "opkg install bind-dig && command -v dig >/dev/null && dig -v"
+          # Test-only VM prerequisite: load the real kernel driver; never create
+          # or substitute a device node. Any install/load/device failure is fatal.
+          _ssh 'opkg install kmod-tun && modprobe tun && test -c /dev/net/tun && { if test -r /sys/class/misc/tun/dev; then tun_dev=$(cat /sys/class/misc/tun/dev) && test "$tun_dev" = 10:200; fi; }'
           _ssh "opkg install --nodeps --force-downgrade /tmp/clashforge.ipk"
 
           # 安装内核模块
@@ -466,6 +486,23 @@ jobs:
           reuse_subscription: 'true'
           scenario_label: 'Scenario 2/2 — dnsmasq_mode=replace'
 
+      # This is a TUN control-plane scenario, not mixed-port/LAN acceptance.
+      - name: "[TUN] IPv4/fw4 startup + strict core DNS (not LAN TCP/UDP)"
+        run: |
+          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+          _ssh 'command -v dig >/dev/null || { echo "TUN scenario requires bind-dig in the VM image" >&2; exit 1; }; test -c /dev/net/tun || { echo "TUN driver/device missing in VM; test will not manufacture it" >&2; exit 1; }'
+          _ssh 'cat > /tmp/e2e-setup-launch-tun.sh' < tests/e2e/vm/setup-launch-tun.sh
+          _ssh 'REUSE_SUBSCRIPTION=true sh /tmp/e2e-setup-launch-tun.sh'
+
+      - name: "[TUN] Stop and verify cleanup"
+        if: always()
+        run: |
+          _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
+          _ssh 'cat > /tmp/e2e-stop-verify.sh' < tests/e2e/vm/stop-verify.sh
+          _ssh 'sh /tmp/e2e-stop-verify.sh'
+          _ssh 'cat > /tmp/e2e-verify-tun-cleanup.sh' < tests/e2e/vm/verify-tun-cleanup.sh
+          _ssh 'sh /tmp/e2e-verify-tun-cleanup.sh'
+
       - name: "[Step 8.5] clashforgectl E2E"
         run: |
           chmod +x tests/e2e/clashforgectl/run.sh
@@ -489,9 +526,8 @@ jobs:
           _ssh "[ -x /usr/bin/uninstall-clashforge ] && uninstall-clashforge || true"
           _ssh "sed -i '/^Package: clashforge/,/^\$/d' /usr/lib/opkg/status 2>/dev/null || true"
 
-          # 清理宿主机 iptables 残留
-          iptables -D OUTPUT -p tcp --dport 443 -j REJECT 2>/dev/null || true
-          iptables -D OUTPUT -p tcp --dport 80  -j REJECT 2>/dev/null || true
+          # Only clean up state owned by this scenario, inside the dedicated VM.
+          # This workflow never acquires host OUTPUT rules; do not delete them.
 
           FINAL_IP=$(_ssh "curl -sf --max-time 8 https://api.ipify.org 2>/dev/null || echo 'FAILED'")
           FINAL_IP_MASKED=$(echo "$FINAL_IP" | sed 's/\([0-9]*\)\.[0-9]*\.[0-9]*\.\([0-9]*\)/\1.*.*.\2/')

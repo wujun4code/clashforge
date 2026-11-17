@@ -2,6 +2,7 @@ package runtimecfg
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/wujun4code/clashforge/internal/config"
 	"github.com/wujun4code/clashforge/internal/subscription"
+	"gopkg.in/yaml.v3"
 )
 
 type activeSource struct {
@@ -57,8 +59,8 @@ func sourceKeyFromActiveSource(as *activeSource) string {
 	if as == nil {
 		return ""
 	}
-	if key := buildConfigSourceKey(as.Type, as.Filename); key != "" {
-		return key
+	if strings.EqualFold(as.Type, "file") {
+		return buildConfigSourceKey(as.Type, as.Filename)
 	}
 	return buildConfigSourceKey(as.Type, as.SubID)
 }
@@ -71,44 +73,71 @@ func currentActiveSourceKey(dataDir string) string {
 	return sourceKeyFromActiveSource(activeSource)
 }
 
-func resolveGenerationInputs(cfg *config.MetaclashConfig, subMgr *subscription.Manager) ([]subscription.ProxyNode, [][]byte) {
-	nodes := subMgr.GetAllCachedNodes()
-	rawYAMLs := subMgr.GetRawYAMLForEnabled()
-	if cfg == nil {
-		return nodes, rawYAMLs
-	}
-
-	activeSource, err := readActiveSource(cfg.Core.DataDir)
-	if err != nil || activeSource == nil {
-		return nodes, rawYAMLs
-	}
-
-	switch strings.ToLower(strings.TrimSpace(activeSource.Type)) {
-	case "file":
-		rawYAMLs = nil
-	case "subscription":
-		subID := strings.TrimSpace(activeSource.SubID)
-		if subID == "" {
-			return nodes, rawYAMLs
+func resolveGenerationInputs(cfg *config.MetaclashConfig, subMgr *subscription.Manager) ([]subscription.ProxyNode, [][]byte, string, error) {
+	as, err := readActiveSource(cfg.Core.DataDir)
+	if err != nil {
+		// Absence is intentional only on a genuinely unconfigured installation.
+		if !os.IsNotExist(err) || len(subMgr.GetAll()) != 0 {
+			return nil, nil, "", errors.New("active source missing or corrupt; select source again")
 		}
-		selectedNodes, err := subMgr.GetCachedNodes(subID)
-		if err == nil {
-			for i := range selectedNodes {
-				selectedNodes[i].SourceSubID = subID
+		if overrides, readErr := readGenerationOverrides(cfg.Core.DataDir, false); readErr != nil || len(overrides) != 0 {
+			return nil, nil, "", errors.New("active source missing; select source again")
+		}
+		if _, statErr := os.Stat(filepath.Join(cfg.Core.DataDir, "device-groups.json")); !os.IsNotExist(statErr) {
+			return nil, nil, "", errors.New("active source missing; select source again")
+		}
+		return nil, nil, "", nil
+	}
+	key := sourceKeyFromActiveSource(as)
+	if key == "" || (as.Type != "file" && as.Type != "subscription") {
+		return nil, nil, "", errors.New("active source invalid; select source again")
+	}
+	var nodes []subscription.ProxyNode
+	var raws [][]byte
+	if as.Type == "subscription" {
+		sub, ok := subMgr.GetByID(as.SubID)
+		if !ok || !sub.Enabled {
+			return nil, nil, "", errors.New("selected subscription unavailable; select source again")
+		}
+		n, raw, err := subMgr.GenerationInput(as.SubID)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		nodes = n
+		if len(raw) > 0 {
+			raws = append(raws, raw)
+		}
+	} else {
+		// File input is independent; cached subscription nodes are optional
+		// historical extras, not mandatory sources of its rules/groups.
+		nodes = subMgr.GetAllCachedNodes()
+	}
+	return nodes, raws, key, nil
+}
+
+// readGenerationOverrides treats installer-created empty/comment-only files as
+// absent optional overrides. File sources still require a nonempty YAML mapping.
+func readGenerationOverrides(dataDir string, required bool) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, "overrides.yaml"))
+	if err != nil {
+		if os.IsNotExist(err) && !required {
+			return nil, nil
+		}
+		return nil, errors.New("persistent overrides unavailable; select source again")
+	}
+	var root yaml.Node
+	if yaml.Unmarshal(data, &root) == nil {
+		if len(root.Content) == 0 && !required {
+			return nil, nil
+		}
+		if len(root.Content) == 1 && root.Content[0].Kind == yaml.MappingNode {
+			var mapping map[string]interface{}
+			if yaml.Unmarshal(data, &mapping) == nil && (!required || len(mapping) > 0) {
+				return data, nil
 			}
-			nodes = selectedNodes
-		} else {
-			nodes = nil
-		}
-		raw, err := subMgr.GetRawYAML(subID)
-		if err == nil {
-			rawYAMLs = [][]byte{raw}
-		} else {
-			rawYAMLs = nil
 		}
 	}
-
-	return nodes, rawYAMLs
+	return nil, errors.New("persistent overrides invalid; select source again")
 }
 
 // GenerateAndWrite generates and writes runtime mihomo config using the same
@@ -118,7 +147,13 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 		log.Warn().Msg("config-gen: SubManager 为空，无法生成配置")
 		return false, nil
 	}
-	nodes, rawYAMLs := resolveGenerationInputs(cfg, subMgr)
+	if cfg == nil {
+		return false, errors.New("configuration unavailable")
+	}
+	nodes, rawYAMLs, sourceKey, err := resolveGenerationInputs(cfg, subMgr)
+	if err != nil {
+		return false, err
+	}
 
 	log.Info().
 		Int("node_count", len(nodes)).
@@ -129,11 +164,12 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 		log.Warn().Msg("config-gen: ⚠️ 没有可用的代理节点和订阅 YAML！生成的配置将缺少代理，国际流量将走 DIRECT")
 	}
 
-	overridesPath := cfg.Core.DataDir + "/overrides.yaml"
-	overridesData, _ := os.ReadFile(overridesPath)
+	overridesData, err := readGenerationOverrides(cfg.Core.DataDir, strings.HasPrefix(sourceKey, sourceKeyFilePrefix))
+	if err != nil {
+		return false, err
+	}
 
 	var generated map[string]interface{}
-	var err error
 
 	if len(rawYAMLs) > 0 {
 		generated, err = config.GenerateFromBase(cfg, rawYAMLs[0], nodes)
@@ -164,10 +200,9 @@ func GenerateAndWrite(cfg *config.MetaclashConfig, subMgr *subscription.Manager)
 	}
 
 	deviceGroupsPath := config.DeviceGroupsPath(cfg.Core.DataDir)
-	sourceKey := currentActiveSourceKey(cfg.Core.DataDir)
 	deviceGroups, err := config.LoadDeviceGroupsForSource(deviceGroupsPath, sourceKey)
 	if err != nil {
-		return false, err
+		return false, errors.New("persistent device profiles unavailable or corrupt")
 	}
 	generated, providerSpecs := config.ApplyPerDeviceSubRulesWithProviders(generated, deviceGroups)
 	if err := config.SyncDeviceRuleProviderFiles(cfg.Core.DataDir, providerSpecs); err != nil {

@@ -23,6 +23,14 @@ inputs:
     description: 'Human-readable label shown in the step summary header'
     required: false
     default: 'Scenario'
+  expected_node:
+    description: 'Friendly name of the real subscription node that must be parsed'
+    required: false
+    default: 'Tokyo-AnyTLS'
+  expected_type:
+    description: 'Expected subscription protocol'
+    required: false
+    default: 'anytls'
 
 outputs:
   proxy_auth:
@@ -59,12 +67,16 @@ runs:
       run: |
         _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
 
+        _ssh "cat > /tmp/select-proxy.sh && chmod 700 /tmp/select-proxy.sh" \
+          < tests/e2e/vm/select-proxy.sh
         _ssh "cat > /tmp/e2e-setup-launch.sh && chmod +x /tmp/e2e-setup-launch.sh" \
           < tests/e2e/vm/setup-launch.sh
 
         _ssh "SUBSCRIPTION_URL='$SUBSCRIPTION_URL' \
               DNSMASQ_MODE='${{ inputs.dnsmasq_mode }}' \
               REUSE_SUBSCRIPTION='${{ inputs.reuse_subscription }}' \
+              E2E_EXPECTED_NODE='${{ inputs.expected_node }}' \
+              E2E_EXPECTED_TYPE='${{ inputs.expected_type }}' \
               sh /tmp/e2e-setup-launch.sh"
 
         # 读出代理信息供 Step 6 使用

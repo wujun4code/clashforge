@@ -21,6 +21,7 @@ import (
 // Imported proxy node sets (type=static) are stored in node_imports.toml.
 type Manager struct {
 	mu      sync.RWMutex
+	cacheMu sync.RWMutex
 	dataDir string
 	list    SubscriptionList // URL-based config subscriptions only
 	imports SubscriptionList // imported proxy node sets only
@@ -448,25 +449,8 @@ func (m *Manager) doUpdate(sub Subscription) error {
 
 	filtered := ApplyFilter(nodes, sub.Filter)
 
-	cacheDir := filepath.Join(m.dataDir, "cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	if err := m.writeCache(sub.ID, filtered, content, false); err != nil {
 		return err
-	}
-	data, err := json.Marshal(filtered)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, sub.ID+".json"), data, 0o644); err != nil {
-		return err
-	}
-	// Save raw YAML content so the caller can extract rule-providers and other
-	// sections that are not captured by the node parser (e.g. rule-providers).
-	// We only save when the content looks like a YAML map (Clash full config).
-	rawPath := filepath.Join(cacheDir, sub.ID+".raw.yaml")
-	if isYAMLMap(content) {
-		_ = os.WriteFile(rawPath, content, 0o644)
-	} else {
-		_ = os.Remove(rawPath) // clean up stale file if format changed
 	}
 
 	m.mu.Lock()
