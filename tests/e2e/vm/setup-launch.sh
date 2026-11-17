@@ -163,6 +163,15 @@ else
     exit 1
 fi
 
+# Explicitly establish and read back the rule MATCH -> selector -> AnyTLS
+# chain before any warmup; successful launch alone can still select DIRECT.
+if CF_API="$CF_API" sh "${0%/*}/select-proxy.sh"; then
+    record PASS SL-03b "实际代理选择" "rule MATCH 链闭环到 AnyTLS" "独立 GET 已确认 selector 和叶子协议"
+else
+    record FAIL SL-03b "实际代理选择" "rule MATCH 链闭环到 AnyTLS" "选择/读回失败；不继续预热或出口验收"
+    exit 1
+fi
+
 # 等待接管生效
 sleep 5
 
@@ -324,15 +333,17 @@ else
 fi
 
 # ── 提取代理认证信息（供 host 端 browser-probe.mjs 使用）───────────────────────
+# A raw YAML's first '- name:' may be a proxy group, not a node. Reuse
+# the actual parsed subscription API and bind server to the verified node.
+NODE_NAME="$E2E_EXPECTED_NODE"
+SERVER_HOST=$(printf '%s' "$NODES_RESP" | jsonfilter -e "@.data.nodes[@.name=\"$E2E_EXPECTED_NODE\"].server" 2>/dev/null || true)
+rm -f "$SNAPSHOT_DIR/proxy-node"
+[ -n "$SERVER_HOST" ] && printf '%s:%s\n' "$NODE_NAME" "$SERVER_HOST" > "$SNAPSHOT_DIR/proxy-node"
 CACHE_FILE=$(ls /etc/metaclash/cache/*.raw.yaml 2>/dev/null | tail -1 || echo "")
 if [ -n "$CACHE_FILE" ]; then
     AUTH_LINE=$(grep -A1 'authentication:' "$CACHE_FILE" 2>/dev/null \
         | grep -v 'authentication:' | head -1 | tr -d ' -' || echo "")
-    # 从 proxies 列表中提取第一个节点的 name 和 server
-    # 找到 '- name:' 行，再向下找相邻的 server: 行
-    NODE_NAME=$(grep -m1 '^ *- *name:' "$CACHE_FILE" 2>/dev/null \
-        | sed 's/.*name: *//' | tr -d " '\"" || echo "")
-    SERVER_HOST=$(awk '/^ *- *name:/{found=1} found && /^ *server:/{print $2; exit}' "$CACHE_FILE" 2>/dev/null | tr -d " '\"" || echo "")
+    # Node identity/server came from the parsed nodes API above, not YAML grep.
     [ -n "$AUTH_LINE" ] && echo "$AUTH_LINE" > "$SNAPSHOT_DIR/proxy-auth"
     [ -n "$NODE_NAME" ] && [ -n "$SERVER_HOST" ] && \
         echo "${NODE_NAME}:${SERVER_HOST}" > "$SNAPSHOT_DIR/proxy-node"

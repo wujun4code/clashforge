@@ -264,6 +264,9 @@ procd_add_reload_trigger() {{ echo "trigger $*" >> "$CALLS"; }}
         (self.root / "dev/net/tun").symlink_to("/dev/null")
         self.executable(self.bin / "sleep", 'exit 0\n')
         self.executable(self.bin / "pgrep", 'echo 1234\n')
+        # The selector helper has its own stateful loopback suite. Dispatch
+        # only that dependency here; never fall through to a real host shell.
+        self.executable(self.bin / "sh", 'case "$1" in */select-proxy.sh) exit 0 ;; *) exit 91 ;; esac\n')
         self.executable(self.bin / "dig", 'printf "%s\\n" ' + repr(dns_answer) + '\n')
         self.executable(self.bin / "curl", '''case "$*" in
   */setup/launch) echo '{"success":true}' ;;

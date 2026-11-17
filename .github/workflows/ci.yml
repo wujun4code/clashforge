@@ -72,5 +72,6 @@ jobs:
           python3 tests/e2e/test_mihomo_download.py
           python3 tests/e2e/test_probe_contract.py
           python3 tests/e2e/test_subscription_contract.py
+          python3 tests/e2e/test_openwrt_proxy_selection.py
           python3 tests/e2e/test_ci_contract.py
 

@@ -133,6 +133,12 @@ else
     # Continue to collect diagnostics even after launch failure
 fi
 
+if CF_API="$CF_API" sh "${0%/*}/select-proxy.sh"; then
+    record PASS TUN-02b "实际代理选择" "rule MATCH 链闭环到 AnyTLS" "独立 GET 已确认 selector 和叶子协议"
+else
+    record FAIL TUN-02b "实际代理选择" "rule MATCH 链闭环到 AnyTLS" "选择/读回失败（继续收集控制面诊断）"
+fi
+
 sleep 5
 
 # ── TUN-03: mihomo 进程已启动 ──────────────────────────────────────────────────

@@ -67,6 +67,8 @@ runs:
       run: |
         _ssh() { ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "$@"; }
 
+        _ssh "cat > /tmp/select-proxy.sh && chmod 700 /tmp/select-proxy.sh" \
+          < tests/e2e/vm/select-proxy.sh
         _ssh "cat > /tmp/e2e-setup-launch.sh && chmod +x /tmp/e2e-setup-launch.sh" \
           < tests/e2e/vm/setup-launch.sh
 
