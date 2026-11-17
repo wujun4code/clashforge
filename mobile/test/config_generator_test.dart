@@ -36,6 +36,21 @@ List<ProxyNode> _twoNodes() => [
 
 void main() {
   group('ConfigGenerator Tests', () {
+    for (final mode in ['off', 'strict', 'always']) {
+      test('explicit find-process-mode $mode overrides profile inference', () {
+        for (final profile in PowerProfile.values) {
+          final config = ConfigGenerator.generate(
+            nodes: _twoNodes(),
+            geodataPath: '/nonexistent',
+            powerProfile: profile,
+            findProcessMode: mode,
+            customRules: const ['PROCESS-NAME,org.example.worker,DIRECT'],
+          );
+          expect(config['find-process-mode'], mode);
+          expect(config['rules'], ['PROCESS-NAME,org.example.worker,DIRECT']);
+        }
+      });
+    }
     test('Generate standard config with proxies and rules', () {
       final config = ConfigGenerator.generate(
         nodes: _twoNodes(),
