@@ -108,12 +108,19 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Configure Flutter SDK download transport
+        if: needs.changes.outputs.mobile == 'true'
+        run: sh .github/scripts/configure-flutter-curl.sh
+
       - name: Set up Flutter
         if: needs.changes.outputs.mobile == 'true'
         uses: subosito/flutter-action@v2
+        env:
+          CURL_HOME: ${{ env.FLUTTER_CURL_HOME }}
         with:
           flutter-version: '3.41.6'
           channel: 'stable'
+          cache: true
 
       - name: Install dependencies
         if: needs.changes.outputs.mobile == 'true'
@@ -164,12 +171,19 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Configure Flutter SDK download transport
+        if: needs.changes.outputs.mobile == 'true'
+        run: sh .github/scripts/configure-flutter-curl.sh
+
       - name: Set up Flutter
         if: needs.changes.outputs.mobile == 'true'
         uses: subosito/flutter-action@v2
+        env:
+          CURL_HOME: ${{ env.FLUTTER_CURL_HOME }}
         with:
           flutter-version: '3.41.6'
           channel: 'stable'
+          cache: true
 
       - name: Install dependencies
         if: needs.changes.outputs.mobile == 'true'

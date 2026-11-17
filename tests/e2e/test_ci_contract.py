@@ -6,6 +6,8 @@ import re
 import subprocess
 import unittest
 import yaml
+import os
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -16,6 +18,26 @@ def runs(job):
     return '\n'.join(step.get('run', '') for step in job['steps'])
 
 class WorkflowContracts(unittest.TestCase):
+    def test_flutter_sdk_download_is_scoped_http1_and_cached(self):
+        data = workflow('android-ci.yml')
+        for name in ('test', 'e2e'):
+            steps = data['jobs'][name]['steps']
+            setup = next(i for i, s in enumerate(steps) if s.get('uses', '').startswith('subosito/flutter-action@'))
+            self.assertTrue(any('.github/scripts/configure-flutter-curl.sh' in s.get('run', '') for s in steps[:setup]))
+            self.assertEqual(steps[setup]['env']['CURL_HOME'], '${{ env.FLUTTER_CURL_HOME }}')
+            self.assertTrue(steps[setup]['with']['cache'])
+        with tempfile.TemporaryDirectory() as tmp:
+            envfile = Path(tmp) / 'github-env'
+            result = subprocess.run(['sh', str(ROOT / '.github/scripts/configure-flutter-curl.sh')],
+                env={**os.environ, 'RUNNER_TEMP': tmp, 'GITHUB_ENV': str(envfile)}, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            curl_home = Path(envfile.read_text().strip().split('=', 1)[1])
+            self.assertTrue(curl_home.is_relative_to(tmp))
+            self.assertEqual((curl_home / '.curlrc').read_text(), 'http1.1\n')
+            # Do not add retry-all-errors to curl's redirected stdout download:
+            # partial SDK bytes could be concatenated across retries.
+            self.assertNotIn('retry-all-errors', (curl_home / '.curlrc').read_text())
+
     def test_vm_workflow_never_executes_host_firewall_commands(self):
         # bash -nv expands no commands; require firewall tokens to occur only
         # inside the quoted _ssh payload, never as host commands or substitutions.
