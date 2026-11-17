@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *   LogEventBridge.info("vpn", "VPN interface established", mapOf("addr" to "172.19.0.1"))
  */
 object LogEventBridge : EventChannel.StreamHandler {
-    private var sink: EventChannel.EventSink? = null
+    @Volatile private var sink: EventChannel.EventSink? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // Backpressure: mihomo's stdout is forwarded line-by-line from a
@@ -26,7 +26,7 @@ object LogEventBridge : EventChannel.StreamHandler {
     // String allocations on the queue until the app OOMs — observed crashing
     // even at log-level: info, since info still emits a line per connection.
     private val pending = AtomicInteger(0)
-    private const val MAX_PENDING = 500
+    private const val MAX_PENDING = 128
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         sink = events
@@ -37,7 +37,9 @@ object LogEventBridge : EventChannel.StreamHandler {
     }
 
     fun emit(level: String, component: String, message: String, fields: Map<String, Any> = emptyMap()) {
-        NativeLogStore.append(level, component, message, fields)
+        // One identity for persisted/live copies, independent of their timestamps.
+        val eventFields = fields + ("_nativeEventId" to java.util.UUID.randomUUID().toString())
+        NativeLogStore.append(level, component, message, eventFields)
 
         // Nobody listening (Flutter side hasn't opened the debug log stream) —
         // skip building the payload at all, not just the post.
@@ -51,9 +53,9 @@ object LogEventBridge : EventChannel.StreamHandler {
             put("component", component)
             put("message", message)
             put("ts", System.currentTimeMillis())
-            if (fields.isNotEmpty()) {
+            if (eventFields.isNotEmpty()) {
                 val f = JSONObject()
-                fields.forEach { (k, v) -> f.put(k, v) }
+                eventFields.forEach { (k, v) -> f.put(k, v) }
                 put("fields", f)
             }
         }
@@ -75,4 +77,16 @@ object LogEventBridge : EventChannel.StreamHandler {
 
     fun error(component: String, message: String, fields: Map<String, Any> = emptyMap()) =
         emit("error", component, message, fields)
+
+    fun coreLine(message: String) {
+        val normalized = message.lowercase()
+        val level = when {
+            "level=error" in normalized || normalized.startsWith("error") -> "error"
+            "level=warning" in normalized || "level=warn" in normalized ||
+                normalized.startsWith("warning") || normalized.startsWith("warn") -> "warn"
+            "level=info" in normalized || normalized.startsWith("info") -> "info"
+            else -> "debug"
+        }
+        emit(level, "mihomo", message)
+    }
 }

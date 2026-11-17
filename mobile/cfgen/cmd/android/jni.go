@@ -59,12 +59,14 @@ func Java_com_clashforge_mobile_clashforge_1mobile_ConfigGen_nativeProbeAndPatch
 // tunFd is the fd number to embed in tun.file-descriptor (always 0 on Android
 // because startMihomoCore dup2s the real TUN fd onto stdin before forking).
 // dnsMode: "fake-ip" or "redir-host" (empty string → "fake-ip").
+// powerProfile: "battery", "balanced", or "performance".
 // Returns JSON: {"ok":true,"error":""}
 //
 //export Java_com_clashforge_mobile_clashforge_1mobile_ConfigGen_nativeGenerateConfig
 func Java_com_clashforge_mobile_clashforge_1mobile_ConfigGen_nativeGenerateConfig(
 	env *C.JNIEnv, _ C.jclass,
 	jConfigPath C.jstring, jTunFd C.jint, jGeoDataDir C.jstring, jDnsMode C.jstring,
+	jPowerProfile C.jstring,
 ) C.jstring {
 	// See nativeProbeAndPatchDNS above: pin to the JVM's calling thread for the
 	// duration of this call since we reuse env across multiple cgo calls.
@@ -75,7 +77,8 @@ func Java_com_clashforge_mobile_clashforge_1mobile_ConfigGen_nativeGenerateConfi
 	tunFd := int(jTunFd)
 	geoDataDir := jstr(env, jGeoDataDir)
 	dnsMode := jstr(env, jDnsMode)
-	result := cfgen.GenerateConfig(configPath, tunFd, geoDataDir, dnsMode)
+	powerProfile := jstr(env, jPowerProfile)
+	result := cfgen.GenerateConfig(configPath, tunFd, geoDataDir, dnsMode, powerProfile)
 	return tojstr(env, cfgen.MarshalGenerateResult(result))
 }
 

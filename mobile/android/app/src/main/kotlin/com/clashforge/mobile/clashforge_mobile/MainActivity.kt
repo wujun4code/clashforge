@@ -71,13 +71,11 @@ class MainActivity : FlutterActivity() {
                             startActivityForResult(intent, 0)
                             result.success("permission_needed")
                         } else {
-                            startVpnService()
-                            result.success("started")
+                            startVpnService(result)
                         }
                     }
                     "stopVpn" -> {
-                        stopVpnService()
-                        result.success("stopped")
+                        submitVpnControl(ClashVpnService.ACTION_STOP, result)
                     }
                     "getFilesDir" -> {
                         result.success(filesDir.absolutePath)
@@ -104,6 +102,25 @@ class MainActivity : FlutterActivity() {
                         NativeLogStore.clear()
                         result.success("cleared")
                     }
+                    "listInstalledApps" -> {
+                        result.success(listLaunchableApps())
+                    }
+                    "setAppRouting" -> {
+                        val requestedMode = call.argument<String>("mode") ?: "all"
+                        val mode = requestedMode.takeIf {
+                            it == "allowlist" || it == "bypass"
+                        } ?: "all"
+                        val packages = (call.argument<List<*>>("packages") ?: emptyList<Any>())
+                            .mapNotNull { it as? String }
+                            .filter { it.isNotBlank() && it != packageName }
+                            .toSet()
+                        getSharedPreferences("vpn_routing", MODE_PRIVATE)
+                            .edit()
+                            .putString("mode", mode)
+                            .putStringSet("packages", packages)
+                            .apply()
+                        result.success("saved")
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -128,6 +145,27 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun listLaunchableApps(): List<Map<String, String>> {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        return packageManager.queryIntentActivities(launcherIntent, 0)
+            .asSequence()
+            .mapNotNull { resolveInfo ->
+                val appInfo = resolveInfo.activityInfo?.applicationInfo ?: return@mapNotNull null
+                val appPackage = appInfo.packageName ?: return@mapNotNull null
+                if (appPackage == packageName) return@mapNotNull null
+                mapOf(
+                    "package" to appPackage,
+                    "label" to packageManager.getApplicationLabel(appInfo).toString(),
+                )
+            }
+            .distinctBy { it["package"] }
+            .sortedBy { it["label"]?.lowercase() }
+            .toList()
     }
 
     private fun fetchUrlWithFallback(
@@ -281,6 +319,8 @@ class MainActivity : FlutterActivity() {
 
         val privateDnsMode = readGlobalSetting("private_dns_mode")
         val privateDnsSpecifier = readGlobalSetting("private_dns_specifier")
+        val flutterPrefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+        val routingPrefs = getSharedPreferences("vpn_routing", MODE_PRIVATE)
 
         val info = mutableMapOf<String, Any>(
             "app_version"         to versionName,
@@ -292,7 +332,10 @@ class MainActivity : FlutterActivity() {
             "memory_available_mb" to String.format("%.0f", memInfo.availMem / 1024.0 / 1024.0).toDouble(),
             "device_abi"          to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
             "private_dns_mode"    to privateDnsMode,
-            "private_dns_specifier" to privateDnsSpecifier
+            "private_dns_specifier" to privateDnsSpecifier,
+            "power_profile"       to (flutterPrefs.getString("flutter.power_profile", "balanced") ?: "balanced"),
+            "vpn_routing_mode"     to (routingPrefs.getString("mode", "all") ?: "all"),
+            "vpn_routing_app_count" to routingPrefs.getStringSet("packages", emptySet()).orEmpty().size,
         )
         info.putAll(buildNetworkDiagnostics())
         return info
@@ -399,15 +442,34 @@ class MainActivity : FlutterActivity() {
         if (requestCode == 0 && resultCode == RESULT_OK) startVpnService()
     }
 
-    private fun startVpnService() {
-        startService(Intent(this, ClashVpnService::class.java).apply {
-            action = ClashVpnService.ACTION_START
+    private fun startVpnService(result: MethodChannel.Result? = null) {
+        if (result != null) submitVpnControl(ClashVpnService.ACTION_START, result)
+        else startService(Intent(this, ClashVpnService::class.java).apply {
+            action = ClashVpnService.ACTION_START // permission callback has no pending request
         })
     }
 
-    private fun stopVpnService() {
-        startService(Intent(this, ClashVpnService::class.java).apply {
-            action = ClashVpnService.ACTION_STOP
-        })
+    private fun submitVpnControl(action: String, result: MethodChannel.Result) {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        ClashVpnService.requests.submit(
+            scheduleTimeout = { timeout ->
+                val task = Runnable { timeout() }
+                handler.postDelayed(task, 20_000)
+                val cancelTimer: () -> Unit = { handler.removeCallbacks(task) }
+                cancelTimer
+            },
+            cancel = { id ->
+                if (action == ClashVpnService.ACTION_START) {
+                    ClashVpnService.cancelStart(id)
+                }
+            },
+            dispatch = { id ->
+                startService(Intent(this, ClashVpnService::class.java).apply {
+                    this.action = action
+                    putExtra(ClashVpnService.EXTRA_REQUEST_ID, id)
+                })
+            },
+            reply = { value -> handler.post { result.success(value) } },
+        )
     }
 }

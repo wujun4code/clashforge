@@ -2,6 +2,24 @@ import 'dart:io';
 import 'loyalsoldier_template.dart';
 import '../subscription/proxy_node.dart';
 
+enum PowerProfile {
+  battery,
+  balanced,
+  performance;
+
+  static PowerProfile parse(String? value) => switch (value) {
+        'battery' => PowerProfile.battery,
+        'performance' => PowerProfile.performance,
+        _ => PowerProfile.balanced,
+      };
+
+  int get healthCheckInterval => switch (this) {
+        PowerProfile.battery => 1800,
+        PowerProfile.balanced => 900,
+        PowerProfile.performance => 300,
+      };
+}
+
 class ConfigGenerator {
   static const _cnPlainDns = ['223.5.5.5', '119.29.29.29'];
   static const _cnDoh = [
@@ -67,10 +85,14 @@ class ConfigGenerator {
   ///
   /// [dnsStrategy]: 'split' (default) | 'privacy' | 'legacy'
   /// [dnsMode]: 'fake-ip' (default) | 'redir-host'
-  /// [templateId]: 'loyalsoldier_standard' (default) | 'lite' — selects the
+  /// [templateId]: 'loyalsoldier_standard' | 'lite' — selects the
   ///   built-in rule-provider template when no [customRules] are provided.
   ///   'lite' uses wujun4code/clash-rules-lite (~68k rules, ~60 MB RAM);
   ///   'loyalsoldier_standard' uses the full Loyalsoldier set (~320k rules).
+  ///   When omitted, battery mode selects lite and other modes select standard.
+  /// [findProcessMode]: explicit user policy, preserved verbatim. When omitted,
+  /// battery mode disables lookup only for rules proven process-independent;
+  /// unknown provider contents retain strict matching.
   static Map<String, dynamic> generate({
     required List<ProxyNode> nodes,
     required String geodataPath,
@@ -81,7 +103,9 @@ class ConfigGenerator {
     Map<String, Map<String, dynamic>> customRuleProviders = const {},
     String dnsStrategy = 'split',
     String dnsMode = 'fake-ip',
-    String templateId = 'loyalsoldier_standard',
+    String? templateId,
+    PowerProfile powerProfile = PowerProfile.balanced,
+    String? findProcessMode,
   }) {
     final out = <String, dynamic>{};
 
@@ -92,10 +116,15 @@ class ConfigGenerator {
     out['allow-lan'] = false;
     out['bind-address'] = '127.0.0.1';
     out['mode'] = 'rule';
-    out['log-level'] = 'info';
+    // A mobile VPN can emit one log line per connection even at info level.
+    // Keep production output actionable without waking Kotlin, Flutter and
+    // flash storage for routine connection churn.
+    out['log-level'] = 'warning';
     out['external-controller'] = '127.0.0.1:9090';
-    out['unified-delay'] = true;
-    out['tcp-concurrent'] = true;
+    out['unified-delay'] = powerProfile == PowerProfile.performance;
+    out['tcp-concurrent'] = powerProfile != PowerProfile.battery;
+    out['geodata-loader'] = 'memconservative';
+
     out['geodata-mode'] = false;
     out['geodata-path'] = geodataPath;
 
@@ -132,7 +161,7 @@ class ConfigGenerator {
       // that are known to break Android TUN/fake-ip when imported verbatim.
       out['proxy-groups'] = customProxyGroups.isNotEmpty
           ? customProxyGroups
-          : _defaultProxyGroups(proxyNames, selectedNodeName);
+          : _defaultProxyGroups(proxyNames, selectedNodeName, powerProfile);
       final normalizedRules = _normalizeCustomRules(customRules);
       out['rules'] = normalizedRules;
       // Build rule-providers for the custom rules:
@@ -154,8 +183,14 @@ class ConfigGenerator {
       if (ruleProviders.isNotEmpty) out['rule-providers'] = ruleProviders;
     } else {
       // Builtin template mode: build standard groups, add rule-providers + rules.
-      out['proxy-groups'] = _defaultProxyGroups(proxyNames, selectedNodeName);
-      final useLite = templateId == 'lite' || templateId == 'clash_rules_lite';
+      out['proxy-groups'] =
+          _defaultProxyGroups(proxyNames, selectedNodeName, powerProfile);
+      final effectiveTemplate = templateId ??
+          (powerProfile == PowerProfile.battery
+              ? 'lite'
+              : 'loyalsoldier_standard');
+      final useLite = effectiveTemplate == 'lite' ||
+          effectiveTemplate == 'clash_rules_lite';
       out['rule-providers'] = useLite
           ? LiteTemplate.ruleProviders()
           : LoyalsoldierTemplate.ruleProviders();
@@ -165,10 +200,97 @@ class ConfigGenerator {
               proxyGroup: '🚀 Proxy', bypassChina: bypassChina);
     }
 
+    // Decide only after resolving the effective template and provider fallback.
+    // Explicit user policy takes precedence over power-profile defaults.
+    if (findProcessMode != null) {
+      out['find-process-mode'] = findProcessMode;
+    } else if (powerProfile != PowerProfile.battery) {
+      out['find-process-mode'] = 'strict';
+    } else {
+      final providers = out['rule-providers'] as Map? ?? const {};
+      // Share results across all effective rules, but never across generations.
+      final memo = <String, bool>{};
+      final visiting = <String>{};
+      final needsProcess = (out['rules'] as List<String>).any(
+        (rule) => _ruleNeedsProcess(rule, providers, memo, visiting),
+      );
+      out['find-process-mode'] = needsProcess ? 'strict' : 'off';
+    }
     return out;
   }
 
   // ── helpers ─────────────────────────────────────────────────────────────────
+
+  /// Unknown classical contents, malformed logical expressions and provider
+  /// cycles cannot prove process lookup unnecessary. Keep strict in those
+  /// cases, without rewriting any rule or downloading provider contents.
+  static bool _ruleNeedsProcess(
+      String rule, Map providers, Map<String, bool> memo, Set<String> visiting,
+      [int depth = 0]) {
+    if (depth > 32) return true;
+    final parts = _splitRuleParts(rule.trim());
+    if (parts == null || parts.isEmpty) return true;
+    final type = parts.first.toUpperCase();
+    if (type.startsWith('PROCESS-')) return true;
+    if (type == 'RULE-SET') {
+      if (parts.length < 2) return true;
+      final name = parts[1];
+      if (visiting.contains(name)) return true;
+      final cached = memo[name];
+      if (cached != null) return cached;
+      final provider = providers[name];
+      if (provider is! Map) return true;
+      final behavior = provider['behavior'];
+      if (behavior == 'domain' || behavior == 'ipcidr') {
+        return memo[name] = false;
+      }
+      if (behavior != 'classical' || provider['type'] != 'inline') return true;
+      final payload = provider['payload'];
+      if (payload is! List) return true;
+      visiting.add(name);
+      final needsProcess = payload.any((entry) =>
+          entry is! String ||
+          _ruleNeedsProcess(entry, providers, memo, visiting, depth + 1));
+      visiting.remove(name);
+      // Only completed scans are cached. Cycles and depth truncation propagate
+      // true (strict); neither can be mistaken for a process-free dependency.
+      return memo[name] = needsProcess;
+    }
+    if (type == 'AND' || type == 'OR' || type == 'NOT') {
+      if (parts.length < 2) return true;
+      final expression = parts[1];
+      if (!expression.startsWith('(') || !expression.endsWith(')')) return true;
+      final operands =
+          _splitRuleParts(expression.substring(1, expression.length - 1));
+      if (operands == null || operands.isEmpty) return true;
+      return operands.any((operand) {
+        if (!operand.startsWith('(') || !operand.endsWith(')')) return true;
+        return _ruleNeedsProcess(operand.substring(1, operand.length - 1),
+            providers, memo, visiting, depth + 1);
+      });
+    }
+    return false;
+  }
+
+  /// Split commas only outside logical-expression parentheses.
+  static List<String>? _splitRuleParts(String rule) {
+    final parts = <String>[];
+    var depth = 0;
+    var start = 0;
+    for (var i = 0; i < rule.length; i++) {
+      final char = rule[i];
+      if (char == '(') depth++;
+      if (char == ')') depth--;
+      if (depth < 0) return null;
+      if (char == ',' && depth == 0) {
+        parts.add(rule.substring(start, i).trim());
+        start = i + 1;
+      }
+    }
+    if (depth != 0) return null;
+    parts.add(rule.substring(start).trim());
+    return parts;
+  }
 
   static List<String> _normalizeCustomRules(List<String> rules) {
     final cleaned = rules
@@ -418,6 +540,7 @@ class ConfigGenerator {
   static List<Map<String, dynamic>> _defaultProxyGroups(
     List<String> proxyNames,
     String? selectedNodeName,
+    PowerProfile powerProfile,
   ) {
     final selected = selectedNodeName?.trim();
     final ordered = <String>[];
@@ -439,7 +562,8 @@ class ConfigGenerator {
         'name': 'Auto',
         'type': 'url-test',
         'url': 'http://www.gstatic.com/generate_204',
-        'interval': 300,
+        'interval': powerProfile.healthCheckInterval,
+        'lazy': true,
         'tolerance': 50,
         'proxies': autoProxies,
       },

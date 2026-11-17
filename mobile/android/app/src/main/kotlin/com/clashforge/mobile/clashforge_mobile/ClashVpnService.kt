@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.VpnService
@@ -24,11 +25,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-class ClashVpnService : VpnService(), Runnable {
-    private var vpnThread: Thread? = null
-    private var vpnInterface: ParcelFileDescriptor? = null
-    private var isRunning = false
-    private var coreProcess: Process? = null
+class ClashVpnService : VpnService() {
+    @Volatile private var session: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>? = null
 
     companion object {
         const val ACTION_START = "com.clashforge.mobile.START"
@@ -38,6 +36,41 @@ class ClashVpnService : VpnService(), Runnable {
         private const val TAG        = "ClashVpnService"
         private const val CHANNEL_ID = "clashforge_vpn"
         private const val NOTIF_ID   = 1001
+        // Serialize shared runtime-file preparation, without making STOP wait
+        // for DNS probing or asset/config I/O under the ownership gate.
+        private val startupLock = Any()
+
+        internal val requests = VpnControlRequests()
+        const val EXTRA_REQUEST_ID = "control_request_id"
+
+        private val controls = java.util.concurrent.Executors.newSingleThreadExecutor()
+        private val cleanup = java.util.concurrent.Executors.newSingleThreadExecutor()
+        private val generation = java.util.concurrent.atomic.AtomicLong()
+        private val sessions = VpnSessionOwnership<ParcelFileDescriptor, Process>(
+            closeTun = { it.close() },
+            stopProcess = { process ->
+                process.destroy()
+                val deadline = System.nanoTime() + 1_500_000_000L
+                while (processIsAlive(process) && System.nanoTime() < deadline) Thread.sleep(25)
+                if (processIsAlive(process)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        process.destroyForcibly()
+                        check(process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                            "Core did not terminate"
+                        }
+                    } else {
+                        error("Core did not terminate; retained for retry")
+                    }
+                }
+            },
+        )
+        private fun processIsAlive(process: Process): Boolean = try {
+            process.exitValue(); false
+        } catch (_: IllegalThreadStateException) { true }
+        fun cancelStart(id: Long) {
+            val owner = sessions.currentSession()?.owner as? ClashVpnService
+            if (owner != null && owner.startRequestId == id) owner.stopVpn(localOnly = true)
+        }
 
         @Volatile var vpnRunning     = false
         @Volatile var mihomoRunning  = false
@@ -46,185 +79,284 @@ class ClashVpnService : VpnService(), Runnable {
 
     override fun onCreate() {
         super.onCreate()
-        NativeLogStore.init(applicationContext)
-        LogEventBridge.info("vpn", "Service onCreate")
+        controls.execute {
+            NativeLogStore.init(applicationContext)
+            LogEventBridge.info("vpn", "Service onCreate")
+        }
     }
 
+    @Volatile private var startRequestId: Long? = null
+    @Volatile private var sessionStartId = 0
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val id = intent?.takeIf { it.hasExtra(EXTRA_REQUEST_ID) }?.getLongExtra(EXTRA_REQUEST_ID, 0)
         when (intent?.action) {
-            ACTION_START -> startVpn()
-            ACTION_STOP  -> stopVpn()
+            ACTION_START -> {
+                val epoch = generation.incrementAndGet()
+                // Bind an existing live lease to this delivered command on the
+                // main thread, before a later STOP can install its newer startId.
+                sessions.currentSession()?.let { owned ->
+                    sessions.withCurrent(owned) {
+                        if (owned.owner === this) sessionStartId = startId
+                    }
+                }
+                controls.execute { startVpn(id, epoch, startId) }
+            }
+            ACTION_STOP -> {
+                // Bind this STOP to its old lease, not to a later queued START.
+                (sessions.currentSession()?.owner as? ClashVpnService)?.sessionStartId = startId
+                stopVpn(id)
+            }
+
         }
         return START_STICKY
     }
 
-    @Synchronized
-    private fun startVpn() {
-        if (isRunning) {
-            LogEventBridge.warn("vpn", "startVpn called but already running")
+    private fun startVpn(id: Long? = null, epoch: Long, startId: Int) {
+        if (epoch != generation.get()) {
+            requests.fail(id, IllegalStateException("VPN startup superseded"))
             return
         }
-        isRunning  = true
-        vpnRunning = true
-        createNotificationChannel()
-        val notif = buildVpnNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIF_ID, notif)
-        }
-        sendVpnStateBroadcast(true)
-        LogEventBridge.info("vpn", "Starting VPN thread")
-        vpnThread = Thread(this, "ClashVpnThread").apply { start() }
-    }
-
-    @Synchronized
-    private fun stopVpn() {
-        if (!isRunning) {
-            LogEventBridge.warn("vpn", "stopVpn called but not running")
-            return
-        }
-        isRunning     = false
-        vpnRunning    = false
-        mihomoRunning = false
-        mihomoPid     = -1
-
-        @Suppress("DEPRECATION")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            stopForeground(Service.STOP_FOREGROUND_REMOVE)
-        } else {
-            stopForeground(true)
-        }
-        sendVpnStateBroadcast(false)
-        logConnectivitySnapshot("stop_requested")
-
-        coreProcess?.destroy()
-        coreProcess = null
-        LogEventBridge.debug("vpn", "Mihomo process destroyed")
-
+        if (id != null && !requests.isPending(id)) return
+        var starting: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>? = null
         try {
-            vpnInterface?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error closing VPN interface", e)
-            LogEventBridge.error("vpn", "Error closing VPN interface: ${e.message}")
-        }
-        vpnInterface = null
-        stopSelf()
-        LogEventBridge.info("vpn", "VPN stopped")
-    }
-
-    override fun run() {
-        try {
-            extractAssetsIfNeeded()
-
-            val configFile = File(filesDir, "config.yaml")
-            val isCiMode = shouldUseCiTorConfig()
-            LogEventBridge.info("vpn", "VPN run starting", mapOf(
-                "ciMode" to isCiMode,
-                "config_exists" to configFile.exists(),
-                "config_size" to configFile.length(),
-                "sdk" to Build.VERSION.SDK_INT,
-                "target_sdk" to applicationInfo.targetSdkVersion,
-            ))
-            logConnectivitySnapshot("before_establish")
-
-            // ── Step 1: DNS probe (before VPN interface is established) ─────────
-            // Probe sockets travel the physical network here.  Once the VPN
-            // tunnel is up they would be captured by the TUN and loop back,
-            // yielding false negatives.
-            if (!isCiMode && configFile.exists()) {
-                val probe = ConfigGen.probeAndPatchDNS(configFile.absolutePath)
-                LogEventBridge.info("dns", probe.summary)
+            sessions.currentSession()?.let { previous ->
+                if (previous.owner === this && sessions.isCurrent(previous)) {
+                    // Permission completion can start the service without a request
+                    // ID. A later Flutter START joins only this proven healthy lease.
+                    // Network I/O stays outside the ownership monitor.
+                    waitForMihomoReady(previous)
+                    val committed = sessions.withCurrent(previous) {
+                        check(epoch == generation.get()) { "VPN startup superseded" }
+                        requests.started(id) {
+                            check(previous.process?.let { processIsAlive(it) } == true &&
+                                previous.tun?.fileDescriptor?.valid() == true) {
+                                "Core or VPN interface lost before startup completion"
+                            }
+                        }
+                    } ?: false
+                    if (!committed) requests.fail(id, IllegalStateException("VPN startup cancelled"))
+                    // Do not replace the primary request ID: a duplicate waiter's
+                    // timeout must never cancel the healthy original session.
+                    return
+                }
+                stopSession(previous)
             }
-
-            // ── Step 2: Establish VPN interface ──────────────────────────────────
-            LogEventBridge.info("vpn", "Building VPN interface",
-                mapOf("addr" to "172.19.0.1/30", "route" to "0.0.0.0/0", "dns" to "172.19.0.2"))
-
-            val builder = Builder()
-                .addAddress("172.19.0.1", 30)
-                .addRoute("0.0.0.0", 0)
-                // DNS must be the /30 peer address (172.19.0.2), not the interface's
-                // own address (172.19.0.1).  The kernel's local-table intercepts
-                // packets to the interface's own IP before any VPN routing applies,
-                // so queries to 172.19.0.1:53 never reach the TUN fd.  172.19.0.2
-                // is forwarded through tun0 → gvisor → dns-hijack as expected.
-                .addDnsServer("172.19.0.2")
-                .setMtu(1500)
-                .setSession("ClashForge")
-                .setBlocking(false)
-
-            // VPNs default to metered for apps targeting Android Q+. Passing
-            // false does not force the VPN to be unmetered; Android then
-            // inherits meteredness from the underlying network. This keeps the
-            // VPN unmetered on unmetered Wi-Fi, but Play Store jobs requiring
-            // NOT_METERED may still wait forever on metered cellular data.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.setMetered(false)
-                LogEventBridge.info("vpn", "Applied VPN metered policy", mapOf(
-                    "set_metered" to false,
-                    "behavior" to "inherit_underlying_meteredness",
-                ))
-            }
-
-            try {
-                builder.addDisallowedApplication(packageName)
-                LogEventBridge.info("vpn", "Excluded app from VPN routing",
-                    mapOf("package" to packageName))
-            } catch (e: Exception) {
-                LogEventBridge.warn("vpn", "Failed to exclude app from VPN routing",
-                    mapOf("error" to (e.message ?: "unknown")))
-            }
-
-            vpnInterface = builder.establish() ?: run {
-                LogEventBridge.error("vpn", "builder.establish() returned null")
+            check(epoch == generation.get()) { "VPN startup cancelled" }
+            if (id != null && !requests.isPending(id)) return
+            val started = sessions.start(this, retirePrevious = false) { installed ->
+                starting = installed
+                session = installed
+                sessionStartId = startId
+                startRequestId = id
+                check(epoch == generation.get()) { "VPN startup cancelled" }
+                vpnRunning = true // ownership, including a failed-cleanup Disconnect
+                mihomoRunning = false
+                mihomoPid = -1
+            } ?: run {
+                requests.fail(id, IllegalStateException("VPN already starting or running"))
                 return
             }
-            val tunFd = vpnInterface!!.fd
-            LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
-            logConnectivitySnapshot("after_establish")
-
-            // ── Step 3: Core apply — write final config.yaml ─────────────────────
-            // tunFd argument is always 0: startMihomoCore dup2s the real fd onto
-            // stdin before forking, so file-descriptor: 0 in the YAML means fd 0.
-            //
-            // dns_mode is written by the Flutter UI (SharedPreferences key
-            // "flutter.dns_mode") when the user chooses fake-ip or redir-host.
-            val dnsMode = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
-                .getString("flutter.dns_mode", "fake-ip") ?: "fake-ip"
-
-            if (isCiMode) {
-                configFile.writeText(buildCiConfig(0))
-                LogEventBridge.info("vpn", "CI mode: wrote Tor config", mapOf("tunFd" to 0))
-            } else if (!configFile.exists()) {
-                LogEventBridge.warn("vpn", "config.yaml not found — skipping core apply")
-            } else {
-                val geoDataDir = filesDir.absolutePath
-                val ok = ConfigGen.generateConfig(configFile.absolutePath, 0, geoDataDir, dnsMode)
-                LogEventBridge.info("vpn", "Core apply complete",
-                    mapOf("ok" to ok, "dnsMode" to dnsMode, "stack" to "gvisor", "note" to "stdin(fd0)=TUN"))
-                logRuntimeConfigSummary(configFile, ok, dnsMode)
+            if (id != null && !requests.isPending(id)) {
+                stopSession(started)
+                return
             }
+            createNotificationChannel()
+            val notif = buildVpnNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+            Thread({ runSession(started, id) }, "ClashVpnThread").start()
+        } catch (e: Exception) {
+            requests.fail(id, e)
+            starting?.let { owned ->
+                try { stopSession(owned) } catch (cleanup: Exception) {
+                    Log.e(TAG, "Startup cleanup failed; owner retained", cleanup)
+                }
+            }
+        }
+    }
 
-            // ── Step 4: Start mihomo core ─────────────────────────────────────────
-            startMihomoCore(tunFd)
+    private fun stopVpn(id: Long? = null, localOnly: Boolean = false) {
+        // Only cancellation touches the main callback. Disk/process close happens off-thread.
+        if (!localOnly) generation.incrementAndGet()
+        val owned = if (localOnly) session else sessions.currentSession()
+        owned?.let { sessions.cancel(it) }
+        requests.fail((owned?.owner as? ClashVpnService)?.startRequestId,
+            IllegalStateException("VPN startup cancelled"))
+        controls.execute {
+            val target = if (localOnly) owned else sessions.currentSession()
+            requests.stop(id) { target?.let { stopSession(it) } }
+        }
+    }
+
+    private fun stopSession(owned: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>) {
+        val owner = owned.owner as ClashVpnService
+        sessions.requestRetire(owned, {
+            @Suppress("DEPRECATION")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                owner.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            } else {
+                owner.stopForeground(true)
+            }
+            owner.sendVpnStateBroadcast(false)
+            // Android rejects this stop if a newer START was already delivered,
+            // including when its control worker is still queued behind retirement.
+            owner.stopSelfResult(owner.sessionStartId)
+            vpnRunning = false
+            mihomoRunning = false
+            mihomoPid = -1
+        }, { cleanup.execute(it) })
+        check(sessions.awaitRetired(owned, 10_000)) { "VPN cleanup still pending" }
+    }
+
+    private fun runSession(owned: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>, id: Long?) {
+        try {
+            val process = synchronized(startupLock) {
+                if (!sessions.isCurrent(owned)) return
+                extractAssetsIfNeeded()
+
+                val configFile = File(filesDir, "config.yaml")
+                val isCiMode = shouldUseCiTorConfig()
+                LogEventBridge.info("vpn", "VPN run starting", mapOf(
+                    "ciMode" to isCiMode,
+                    "config_exists" to configFile.exists(),
+                    "config_size" to configFile.length(),
+                    "sdk" to Build.VERSION.SDK_INT,
+                    "target_sdk" to applicationInfo.targetSdkVersion,
+                ))
+                logConnectivitySnapshot("before_establish")
+
+                // ── Step 1: DNS probe (before VPN interface is established) ─────────
+                // Probe sockets travel the physical network here.  Once the VPN
+                // tunnel is up they would be captured by the TUN and loop back,
+                // yielding false negatives.
+                if (!isCiMode && configFile.exists()) {
+                    val probe = ConfigGen.probeAndPatchDNS(configFile.absolutePath)
+                    LogEventBridge.info("dns", probe.summary)
+                }
+                if (!sessions.isCurrent(owned)) return
+
+                // ── Step 2: Establish VPN interface ──────────────────────────────────
+                LogEventBridge.info("vpn", "Building VPN interface",
+                    mapOf("addr" to "172.19.0.1/30", "route" to "0.0.0.0/0", "dns" to "172.19.0.2"))
+
+                val builder = Builder()
+                    .addAddress("172.19.0.1", 30)
+                    .addRoute("0.0.0.0", 0)
+                    // DNS must be the /30 peer address (172.19.0.2), not the interface's
+                    // own address (172.19.0.1).  The kernel's local-table intercepts
+                    // packets to the interface's own IP before any VPN routing applies,
+                    // so queries to 172.19.0.1:53 never reach the TUN fd.  172.19.0.2
+                    // is forwarded through tun0 → gvisor → dns-hijack as expected.
+                    .addDnsServer("172.19.0.2")
+                    .setMtu(1500)
+                    .setSession("ClashForge")
+                    .setBlocking(false)
+
+                // VPNs default to metered for apps targeting Android Q+. Passing
+                // false does not force the VPN to be unmetered; Android then
+                // inherits meteredness from the underlying network. This keeps the
+                // VPN unmetered on unmetered Wi-Fi, but Play Store jobs requiring
+                // NOT_METERED may still wait forever on metered cellular data.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    builder.setMetered(false)
+                    LogEventBridge.info("vpn", "Applied VPN metered policy", mapOf(
+                        "set_metered" to false,
+                        "behavior" to "inherit_underlying_meteredness",
+                    ))
+                }
+
+                applyAppRouting(builder)
+
+                val tun = sessions.acquireTun(owned) { builder.establish() } ?: run {
+                    error("VPN interface unavailable or startup cancelled")
+                }
+                val tunFd = tun.fd
+                check(tunFd >= 0 && tun.fileDescriptor.valid()) { "Invalid VPN interface" }
+                LogEventBridge.info("vpn", "VPN interface established", mapOf("fd" to tunFd))
+                logConnectivitySnapshot("after_establish")
+
+                // ── Step 3: Core apply — write final config.yaml ─────────────────────
+                // tunFd argument is always 0: startMihomoCore dup2s the real fd onto
+                // stdin before forking, so file-descriptor: 0 in the YAML means fd 0.
+                //
+                // dns_mode is written by the Flutter UI (SharedPreferences key
+                // "flutter.dns_mode") when the user chooses fake-ip or redir-host.
+                val dnsMode = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                    .getString("flutter.dns_mode", "fake-ip") ?: "fake-ip"
+                val powerProfile = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                    .getString("flutter.power_profile", "balanced")
+                    ?.takeIf { it == "battery" || it == "performance" }
+                    ?: "balanced"
+
+                if (!sessions.isCurrent(owned)) return
+                if (isCiMode) {
+                    configFile.writeText(buildCiConfig(0))
+                    LogEventBridge.info("vpn", "CI mode: wrote Tor config", mapOf("tunFd" to 0))
+                } else if (!configFile.exists()) {
+                    error("config.yaml not found")
+                } else {
+                    val geoDataDir = filesDir.absolutePath
+                    val ok = ConfigGen.generateConfig(
+                        configFile.absolutePath, 0, geoDataDir, dnsMode, powerProfile,
+                    )
+                    check(ok) { "Core config generation failed" }
+                    LogEventBridge.info("vpn", "Core apply complete",
+                        mapOf("ok" to ok, "dnsMode" to dnsMode, "powerProfile" to powerProfile,
+                            "stack" to "gvisor", "note" to "stdin(fd0)=TUN"))
+                    logRuntimeConfigSummary(configFile, ok, dnsMode)
+                }
+
+                // ── Step 4: Start mihomo core ─────────────────────────────────────────
+                val process = sessions.acquireProcess(owned,
+                    installed = { startCoreLogPump(owned, it, tunFd) },
+                ) { ownedTun ->
+                    startMihomoCore(owned, ownedTun)
+                } ?: error("Core spawn failed or startup cancelled")
+                process
+            }
 
             // ── Step 5: Wait for mihomo to be ready ───────────────────────────────
             // Prevents Android ConnectivityManager from marking the VPN as "no
             // internet" during the ~1-2 s mihomo needs to bind its DNS server and
             // start intercepting packets from the TUN device.
-            waitForMihomoReady()
+            waitForMihomoReady(owned)
+            var committed = false
+            sessions.duringSession(owned) {
+                committed = sessions.withCurrent(owned) {
+                    requests.started(id) {
+                        check(processIsAlive(process) && owned.tun?.fileDescriptor?.valid() == true) {
+                            "Core or VPN interface lost before startup completion"
+                        }
+                    }
+                } ?: false
+                if (committed) sendVpnStateBroadcast(true)
+            }
+            if (!committed) return
             logConnectivitySnapshot("after_core_ready")
 
-            LogEventBridge.info("vpn", "VPN loop running")
-            while (isRunning) Thread.sleep(1000)
+            LogEventBridge.info("vpn", "VPN core running")
+            val exitCode = process.waitFor()
+            sessions.withCurrent(owned) {
+                mihomoRunning = false
+                mihomoPid = -1
+            }
+            LogEventBridge.warn("mihomo", "Core exited unexpectedly",
+                mapOf("exit_code" to exitCode))
 
         } catch (e: Exception) {
+            requests.fail(id, e)
             Log.e(TAG, "VPN run error", e)
             LogEventBridge.error("vpn", "VPN run() exception: ${e.message}",
                 mapOf("type" to e.javaClass.simpleName))
         } finally {
-            stopVpn()
+            requests.fail(id, IllegalStateException("VPN startup cancelled"))
+            try { if (sessions.isCurrent(owned)) stopSession(owned) } catch (e: Exception) {
+                Log.e(TAG, "VPN cleanup failed; owner retained for Disconnect retry", e)
+            }
         }
     }
 
@@ -419,9 +551,12 @@ sniffer:
 
     // ── Readiness probe ───────────────────────────────────────────────────────
 
-    private fun waitForMihomoReady(timeoutMs: Long = 5000L) {
+    private fun waitForMihomoReady(
+        owned: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>,
+        timeoutMs: Long = 5000L,
+    ) {
         val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline && isRunning) {
+        while (System.currentTimeMillis() < deadline && sessions.isCurrent(owned)) {
             try {
                 val conn = URL("http://127.0.0.1:9090/version").openConnection()
                     as HttpURLConnection
@@ -437,12 +572,16 @@ sniffer:
             } catch (_: Exception) {}
             Thread.sleep(200)
         }
-        LogEventBridge.warn("mihomo", "Core API not ready within ${timeoutMs}ms — continuing")
+        error("Core API not ready within ${timeoutMs}ms or startup cancelled")
     }
 
     // ── Mihomo process ────────────────────────────────────────────────────────
 
-    private fun startMihomoCore(tunFd: Int) {
+    private fun startMihomoCore(
+        owned: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>,
+        tun: ParcelFileDescriptor,
+    ): Process? {
+        val tunFd = tun.fd
         val appDir     = filesDir.absolutePath
         // nativeLibraryDir is on an executable partition; filesDir is mounted
         // noexec on API 29+, so we cannot execute binaries placed there.
@@ -451,7 +590,7 @@ sniffer:
 
         if (!coreBin.exists()) {
             LogEventBridge.error("mihomo", "Binary not found", mapOf("path" to coreBin.absolutePath))
-            return
+            return null
         }
         coreBin.setExecutable(true)
 
@@ -464,10 +603,7 @@ sniffer:
             "tun_fd"        to tunFd,
         ))
 
-        val tunFdObj = vpnInterface?.fileDescriptor ?: run {
-            LogEventBridge.error("mihomo", "vpnInterface null before spawn")
-            return
-        }
+        val tunFdObj = tun.fileDescriptor
 
         // Android closes ALL fds >= 3 in the child before exec (closeDescriptors).
         // Only fds 0/1/2 survive.  Strategy: dup the TUN fd onto fd 0 (stdin) in
@@ -476,6 +612,7 @@ sniffer:
         // POSIX dup2() clears FD_CLOEXEC on the new fd so fd 0 survives exec.
         // sing-tun is patched so file-descriptor: 0 means "use fd 0" rather than
         // "not set" (the original sentinel was ==0; we changed it to <0).
+        var spawned: Process? = null
         val savedStdin: FileDescriptor = Os.dup(FileDescriptor.`in`)
         try {
             Os.dup2(tunFdObj, 0)   // fd 0 in this process = TUN fd
@@ -484,43 +621,97 @@ sniffer:
             pb.environment().apply {
                 // Return freed pages to the kernel immediately (not lazily via MADV_FREE).
                 put("GODEBUG",    "madvdontneed=1")
-                // GC at 40 % heap growth — reduces peak live-object dirty pages.
-                put("GOGC",       "40")
-                // Soft memory cap; runtime scavenges aggressively to stay under.
-                put("GOMEMLIMIT", "100MiB")
+                val profile = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                    .getString("flutter.power_profile", "balanced")
+                when (profile) {
+                    "battery" -> {
+                        put("GOGC", "100")
+                        put("GOMEMLIMIT", "160MiB")
+                    }
+                    "performance" -> {
+                        put("GOGC", "80")
+                        put("GOMEMLIMIT", "256MiB")
+                    }
+                    else -> {
+                        put("GOGC", "100")
+                        put("GOMEMLIMIT", "192MiB")
+                    }
+                }
             }
             pb.redirectInput(ProcessBuilder.Redirect.INHERIT)  // fd 0 = TUN
             pb.redirectErrorStream(true)                        // merge stderr into stdout
-            coreProcess = pb.start()
+            spawned = pb.start().also { sessions.recordProcess(owned, it) }
         } finally {
-            Os.dup2(savedStdin, 0)   // restore parent's stdin unconditionally
-            Os.close(savedStdin)
+            try {
+                Os.dup2(savedStdin, 0)   // restore parent's stdin unconditionally
+            } catch (e: Exception) {
+                // Already adopted: retirement must retain the handle if destroy fails.
+                throw e
+            } finally {
+                try { Os.close(savedStdin) } catch (e: Exception) {
+                    throw e
+                }
+            }
         }
 
+        return spawned
+    }
+
+    private fun startCoreLogPump(
+        owned: VpnSessionOwnership.Session<ParcelFileDescriptor, Process>,
+        process: Process,
+        tunFd: Int,
+    ) {
         val pid = try {
-            val f = coreProcess!!.javaClass.getDeclaredField("pid")
+            val f = process.javaClass.getDeclaredField("pid")
             f.isAccessible = true
-            f.getInt(coreProcess)
+            f.getInt(process)
         } catch (_: Exception) { -1 }
 
-        mihomoPid     = pid
-        mihomoRunning = true
+        sessions.withCurrent(owned) {
+            mihomoPid = pid
+            mihomoRunning = true
+        }
         LogEventBridge.info("mihomo", "Core started", mapOf("pid" to pid, "tun_fd" to tunFd))
 
         Thread {
             try {
-                coreProcess?.inputStream?.bufferedReader()?.forEachLine { line ->
-                    Log.d("MihomoCore", line)
-                    LogEventBridge.debug("mihomo", line)
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        LogEventBridge.coreLine(line)
+                    }
                 }
-                val exit = coreProcess?.exitValue() ?: -1
-                mihomoRunning = false
-                mihomoPid     = -1
-                LogEventBridge.warn("mihomo", "Core exited", mapOf("exit_code" to exit))
             } catch (e: Exception) {
-                LogEventBridge.error("mihomo", "Log reader error: ${e.message}")
+                if (sessions.isCurrent(owned)) {
+                    LogEventBridge.error("mihomo", "Log reader error: ${e.message}")
+                }
             }
-        }.start()
+        }.apply {
+            name = "MihomoLogPump"
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun applyAppRouting(builder: Builder) {
+        val prefs = getSharedPreferences("vpn_routing", MODE_PRIVATE)
+        val mode = prefs.getString("mode", "all") ?: "all"
+        val packages = prefs.getStringSet("packages", emptySet()).orEmpty()
+        fun add(appPackage: String, allowed: Boolean): Boolean = try {
+            if (allowed) builder.addAllowedApplication(appPackage)
+            else builder.addDisallowedApplication(appPackage)
+            true
+        } catch (_: PackageManager.NameNotFoundException) {
+            LogEventBridge.warn("vpn", "Routing app is no longer installed",
+                mapOf("package" to appPackage, "allowed" to allowed))
+            false
+        }
+        // Deliberately propagate ineffective allowlists and builder failures:
+        // establishing without a successful allow entry would capture every app.
+        val applied = VpnAppRouting.apply(mode, packages, packageName,
+            allow = { add(it, true) }, disallow = { add(it, false) })
+        LogEventBridge.info("vpn", "Applied VPN app routing",
+            mapOf("mode" to mode, "count" to applied))
     }
 
     // ── Asset extraction ──────────────────────────────────────────────────────
@@ -641,14 +832,12 @@ sniffer:
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onRevoke() {
-        LogEventBridge.info("vpn", "VPN revoked by system — another VPN app took over")
-        stopVpn()
+        stopVpn(localOnly = true)
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        LogEventBridge.info("vpn", "Service onDestroy")
-        stopVpn()
+        stopVpn(localOnly = true)
         super.onDestroy()
     }
 }

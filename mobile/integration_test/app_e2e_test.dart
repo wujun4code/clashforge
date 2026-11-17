@@ -19,6 +19,8 @@ import 'package:http/http.dart' as http;
 import 'package:clashforge_mobile/config/vpn_manager.dart';
 import 'package:clashforge_mobile/main.dart';
 import 'proxy_route_contract.dart';
+import 'native_reconnect_contract.dart';
+import 'settings_about_navigation.dart';
 
 const _subUrl = String.fromEnvironment('SUBSCRIPTION_URL');
 const _expectedNode =
@@ -250,8 +252,7 @@ void main() {
       _log('Checking About screen for runtime status');
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('About'));
-      await tester.pumpAndSettle();
+      await openSettingsAbout(tester);
       await Future<void>.delayed(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
@@ -382,6 +383,28 @@ void main() {
         reason: 'Exit IP must return to baseline after VPN is stopped',
       );
       _log('Round 3 ✓ IP restored ($restoredIp == $baselineIp)');
+
+      // Real Android service regression, after all three original IP rounds.
+      // Keep the imported AnyTLS configuration and already-granted permission;
+      // use the real VpnManager MethodChannel, not the UI's busy-operation guard.
+      _log('Native rapid cancel/reconnect: dispatching START then STOP');
+      await assertNativeRapidReconnect(
+        start: VpnManager.startVpn,
+        stop: VpnManager.stopVpn,
+        systemInfo: VpnManager.getSystemInfo,
+        assertCoreReady: () async {
+          final response = await http
+              .get(Uri.parse('http://127.0.0.1:9090/version'))
+              .timeout(const Duration(seconds: 5));
+          expect(response.statusCode, 200,
+              reason: 'Replacement core API must be ready now');
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          expect(data['version'], isNotEmpty,
+              reason: 'Replacement must expose a live core version');
+          await _assertExpectedProxyRoute();
+        },
+      );
+      _log('[PASS] Native rapid cancel/reconnect completed and service is off');
 
       _log('=== E2E COMPLETE ✓ ===');
       await tester.pump(const Duration(milliseconds: 200));
