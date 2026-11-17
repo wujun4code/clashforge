@@ -108,6 +108,8 @@ jobs:
           BASE="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+          # Upstream embeds this bundle; the source tag contains an empty file.
+          python3 mobile/scripts/prepare-mihomo-ca.py /tmp/mihomo-src
 
           # Download module dependencies and patch sing-tun fd-0 sentinel.
           # ClashVpnService passes the TUN fd on fd 0 (stdin) past Android's closeDescriptors().

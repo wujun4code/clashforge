@@ -57,6 +57,10 @@ if [ "$BUILD_MODE" = "--build" ]; then
       https://github.com/MetaCubeX/mihomo.git "$SRC"
   fi
 
+  # Match upstream's embedded CA preparation; optional second argument is a
+  # public PEM bundle for hosts without Ubuntu's default bundle path.
+  python3 "$SCRIPT_DIR/prepare-mihomo-ca.py" "$SRC" "${2:-/etc/ssl/certs/ca-certificates.crt}"
+
   # Download module dependencies so we can patch sing-tun before building.
   (cd "$SRC" && go mod download)
 

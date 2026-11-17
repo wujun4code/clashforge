@@ -68,6 +68,8 @@ jobs:
           MIHOMO_VER="v1.19.29"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+          # Upstream embeds this bundle; the source tag contains an empty file.
+          python3 mobile/scripts/prepare-mihomo-ca.py /tmp/mihomo-src
 
           DEST=/tmp/libmihomo-arm64.so
           GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
@@ -208,6 +210,8 @@ jobs:
           MIHOMO_VER="v1.19.29"
           git clone --depth 1 --branch "${MIHOMO_VER}" \
             https://github.com/MetaCubeX/mihomo.git /tmp/mihomo-src
+          # Upstream embeds this bundle; the source tag contains an empty file.
+          python3 mobile/scripts/prepare-mihomo-ca.py /tmp/mihomo-src
 
           # Download module dependencies into the module cache so we can patch sing-tun.
           (cd /tmp/mihomo-src && go mod download)
