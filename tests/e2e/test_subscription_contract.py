@@ -152,9 +152,9 @@ class SubscriptionTrafficContract(SubscriptionSandbox):
 
 
 class OpenWrtSubscriptionContract(SubscriptionSandbox):
-    # Run the real SL-01/SL-02 prefix only. Its original network/lifecycle tail
-    # is deliberately not executed on a development host.
-    def run_subscription(self, case='', reuse=False):
+    # Execute the real subscription prefix, optionally through SL-03/readback.
+    # Stop before select-proxy and the network/lifecycle tail on this host.
+    def run_subscription(self, case='', reuse=False, launch=False):
         self.stub('jsonfilter', '#!' + sys.executable + '\n' + '''import json, re, sys
 try:
     data=json.load(sys.stdin)
@@ -162,6 +162,8 @@ try:
     if expr == '@.ok': values=[data.get('ok')]
     elif expr == '@.data.status': values=[data['data'].get('status')]
     elif expr == '@.data.id': values=[data['data'].get('id')]
+    elif expr == '@.data.active_source.type': values=[data['data']['active_source'].get('type')]
+    elif expr == '@.data.active_source.sub_id': values=[data['data']['active_source'].get('sub_id')]
     elif expr == '@.data.nodes[*].name': values=[n['name'] for n in data['data']['nodes']]
     else:
         match=re.fullmatch(r'@\\.data\\.nodes\\[@\\.name="(.*)"\\]\\.type', expr)
@@ -172,6 +174,7 @@ try:
 except (ValueError, KeyError, TypeError): sys.exit(1)
 ''')
         self.stub('curl', '#!' + sys.executable + '\n' + '''import json, os, sys
+from pathlib import Path
 args=sys.argv[1:]
 url=args[-1]
 with open(os.environ['CF_CALLS'], 'a') as f: f.write(json.dumps(args)+'\\n')
@@ -179,6 +182,24 @@ case=os.environ['CF_CASE']
 if url.endswith('/sync-update'):
     if case == 'malformed': print('not-json')
     else: print(json.dumps({'ok':case != 'sync-error','data':{'status':'ok'}}))
+elif url.endswith('/core/apply'):
+    payload=json.loads(args[args.index('-d')+1])
+    selected=payload.get('source')
+    valid=selected == {'type':'sub_id','sub_id':'synthetic-sub','sync':False}
+    if valid and case != 'apply-fail':
+        Path(os.environ['CF_STATE']).write_text('synthetic-sub')
+        print('data: {"type":"done","success":true}')
+    else:
+        print('data: {"type":"done","success":false,"error":"synthetic-private-marker"}')
+elif url.endswith('/setup/launch'):
+    print('data: {"type":"done","success":true}')
+elif url.endswith('/config/active-source'):
+    active={'type':'subscription','sub_id':Path(os.environ['CF_STATE']).read_text() if Path(os.environ['CF_STATE']).exists() else 'missing'}
+    if case == 'readback-id': active['sub_id']='other-sub'
+    if case == 'readback-type': active['type']='file'
+    if case == 'readback-null': active=None
+    if case == 'readback-malformed': print('not-json')
+    else: print(json.dumps({'ok':case != 'readback-error','data':{'active_source':active},'private':'synthetic-private-marker'}))
 elif url.endswith('/nodes'):
     nodes=[{'name':'Tokyo-AnyTLS','type':'anytls'}]
     if case == 'empty': nodes=[]
@@ -192,12 +213,22 @@ else: print(json.dumps({'ok':True,'data':{'id':'synthetic-sub'}}, separators=(',
         snapshot.mkdir()
         (snapshot/'sub-id').write_text('synthetic-sub')
         source = (REPO/'tests/e2e/vm/setup-launch.sh').read_text()
-        source = source.split('# ── SL-03: setup/launch')[0]
+        source = source.split('# Explicitly establish and read back' if launch else '# ── SL-03: setup/launch')[0]
+        if launch and case in ('missing-source', 'wrong-subid'):
+            lines=source.splitlines()
+            for index, line in enumerate(lines):
+                if line.startswith('LAUNCH_PAYLOAD='):
+                    if case == 'missing-source':
+                        lines[index]=line.replace('\\"source\\":{\\"type\\":\\"sub_id\\",\\"sub_id\\":\\"${SUB_ID}\\",\\"sync\\":false},', '')
+                    else:
+                        lines[index]=line.replace('${SUB_ID}', 'wrong-sub')
+            source='\n'.join(lines)
         source = source.replace('/tmp/cf-snapshot', str(snapshot))
+        source += ('\nprintf "AFTER_LAUNCH\\n"\n' if launch else '')
         source += '\nprintf "SUBSCRIPTION_PREFIX_COMPLETED\\n"\n'
         script = self.root/'subscription.sh'
         script.write_text(source)
-        env = dict(os.environ, PATH=str(self.bin), CF_CALLS=str(self.calls), CF_CASE=case, SUBSCRIPTION_URL='https://subscription.example.invalid/synthetic', REUSE_SUBSCRIPTION='true' if reuse else 'false', E2E_EXPECTED_NODE='Tokyo-AnyTLS', E2E_EXPECTED_TYPE='anytls')
+        env = dict(os.environ, PATH=str(self.bin), CF_CALLS=str(self.calls), CF_CASE=case, CF_STATE=str(self.state), SUBSCRIPTION_URL='https://subscription.example.invalid/synthetic', REUSE_SUBSCRIPTION='true' if reuse else 'false', E2E_EXPECTED_NODE='Tokyo-AnyTLS', E2E_EXPECTED_TYPE='anytls')
         return subprocess.run(['/bin/sh', str(script)], env=env, capture_output=True, text=True, timeout=10)
 
     def test_openwrt_single_node_sync(self):
@@ -231,6 +262,49 @@ else: print(json.dumps({'ok':True,'data':{'id':'synthetic-sub'}}, separators=(',
 
     def test_openwrt_error_cache_fails(self):
         self.assertNotEqual(self.run_subscription('nodes-error').returncode, 0)
+
+    def test_launch_fresh_selects_exact_subscription(self):
+        self.assert_launch_payload(False)
+
+    def test_launch_reuse_selects_exact_subscription_without_sync(self):
+        self.assert_launch_payload(True)
+
+    def assert_launch_payload(self, reuse):
+        result=self.run_subscription(reuse=reuse, launch=True)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('AFTER_LAUNCH', result.stdout)
+        calls=[json.loads(line) for line in self.calls.read_text().splitlines()]
+        apply=[call for call in calls if call[-1].endswith('/core/apply')]
+        self.assertEqual(len(apply), 1)
+        self.assertEqual(json.loads(apply[0][apply[0].index('-d')+1]), {
+            'source':{'type':'sub_id','sub_id':'synthetic-sub','sync':False},
+            'dns':{'enable':True,'mode':'fake-ip','dnsmasq_mode':'upstream','apply_on_start':True},
+            'network':{'mode':'tproxy','firewall_backend':'nftables','bypass_lan':True,'bypass_china':False,'apply_on_start':True}})
+        self.assertEqual(calls[-1][-1], 'http://127.0.0.1:7777/api/v1/config/active-source')
+        self.assertEqual(sum(call[-1].endswith('/sync-update') for call in calls), 0 if reuse else 1)
+
+    def assert_launch_failure(self, case):
+        result=self.run_subscription(case, launch=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertNotIn('AFTER_LAUNCH', result.stdout)
+        self.assertNotIn('synthetic-private-marker', result.stdout+result.stderr)
+        self.assertNotIn('https://subscription.example.invalid/synthetic', result.stdout+result.stderr)
+        if case in ('missing-source', 'wrong-subid'):
+            calls=[json.loads(line) for line in self.calls.read_text().splitlines()]
+            apply=[call for call in calls if call[-1].endswith('/core/apply')]
+            self.assertEqual(len(apply), 1)
+            payload=json.loads(apply[0][apply[0].index('-d')+1])
+            if case == 'missing-source': self.assertNotIn('source', payload)
+            else: self.assertEqual(payload['source']['sub_id'], 'wrong-sub')
+
+    def test_launch_missing_source_fails(self): self.assert_launch_failure('missing-source')
+    def test_launch_wrong_subid_fails(self): self.assert_launch_failure('wrong-subid')
+    def test_launch_apply_failure_fails(self): self.assert_launch_failure('apply-fail')
+    def test_launch_readback_wrong_id_fails(self): self.assert_launch_failure('readback-id')
+    def test_launch_readback_wrong_type_fails(self): self.assert_launch_failure('readback-type')
+    def test_launch_readback_null_fails(self): self.assert_launch_failure('readback-null')
+    def test_launch_readback_false_ok_fails(self): self.assert_launch_failure('readback-error')
+    def test_launch_readback_malformed_fails(self): self.assert_launch_failure('readback-malformed')
 
 
 if __name__ == '__main__':

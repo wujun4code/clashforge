@@ -6,12 +6,12 @@
 #   1. 添加订阅并同步节点（可通过 REUSE_SUBSCRIPTION=true 跳过，复用上一 scenario 的数据）
 #   2. 配置 DNS（fake-ip + dnsmasq_mode 由环境变量控制）
 #   3. 配置网络（tproxy + nftables）
-#   4. 触发 setup/launch
+#   4. 通过 core/apply 显式选择订阅并启动
 #
 # 启动后只断言"接管是否到位"，不做连通性测试（连通性在 probe.sh 里）：
 #   SL-01  添加订阅 → 返回订阅 ID（REUSE_SUBSCRIPTION=true 时跳过，直接读快照）
 #   SL-02  sync-update → 节点拉取成功（REUSE_SUBSCRIPTION=true 时跳过）
-#   SL-03  setup/launch → success:true
+#   SL-03  core/apply → success:true，独立读回活跃订阅
 #   SL-04  mihomo 进程已启动
 #   SL-05  nftables metaclash 表已创建
 #   SL-06  nftables tproxy 规则已存在
@@ -139,27 +139,33 @@ else
 fi
 
 # ── SL-03: setup/launch ───────────────────────────────────────────────────────
-LAUNCH_PAYLOAD="{\"dns\":{\"enable\":true,\"mode\":\"fake-ip\",\"dnsmasq_mode\":\"${DNSMASQ_MODE}\",\"apply_on_start\":true},\"network\":{\"mode\":\"tproxy\",\"firewall_backend\":\"nftables\",\"bypass_lan\":true,\"bypass_china\":false,\"apply_on_start\":true}}"
-info "触发 setup/launch..."
+LAUNCH_PAYLOAD="{\"source\":{\"type\":\"sub_id\",\"sub_id\":\"${SUB_ID}\",\"sync\":false},\"dns\":{\"enable\":true,\"mode\":\"fake-ip\",\"dnsmasq_mode\":\"${DNSMASQ_MODE}\",\"apply_on_start\":true},\"network\":{\"mode\":\"tproxy\",\"firewall_backend\":\"nftables\",\"bypass_lan\":true,\"bypass_china\":false,\"apply_on_start\":true}}"
+info "触发 core/apply（使用已同步订阅，不重复同步）..."
 info "DNS  选项: enable=true  mode=fake-ip  dnsmasq_mode=${DNSMASQ_MODE}  apply_on_start=true"
 info "网络选项: mode=tproxy  firewall_backend=nftables  bypass_lan=true  bypass_china=false  apply_on_start=true"
-info "完整 payload: $LAUNCH_PAYLOAD"
+
 LAUNCH_RESP=$(curl -sf --max-time 90 \
     -H "Content-Type: application/json" \
     -d "$LAUNCH_PAYLOAD" \
-    "$CF_API/setup/launch" 2>/dev/null || echo "FAILED")
+    "$CF_API/core/apply" 2>/dev/null || echo "FAILED")
 
 if echo "$LAUNCH_RESP" | grep -q '"success":true'; then
-    record PASS SL-03 "setup/launch" "POST /setup/launch → {success:true}" "launch 成功"
+    record PASS SL-03 "core/apply" "POST /core/apply → {success:true}" "launch 成功"
 else
-    # Extract the error field from any SSE data line, or fall back to the raw body.
-    LAUNCH_ERR=$(echo "$LAUNCH_RESP" \
-        | grep -o '"error":"[^"]*"' | head -1 \
-        | sed 's/"error":"//;s/"$//' 2>/dev/null || echo "")
-    [ -z "$LAUNCH_ERR" ] && LAUNCH_ERR=$(echo "$LAUNCH_RESP" | tail -3)
-    printf "${RED}SL-03 原始响应（最后5行）:${RESET}\n"
-    echo "$LAUNCH_RESP" | tail -5
-    record FAIL SL-03 "setup/launch" "POST /setup/launch → {success:true}" "失败: $LAUNCH_ERR"
+    record FAIL SL-03 "core/apply" "POST /core/apply → {success:true}" "启动失败或响应无效（响应已脱敏）"
+    exit 1
+fi
+
+# The Wizard activates source atomically in core/apply; verify persisted selection
+# independently before selector changes, warmup or any lifecycle assertions.
+ACTIVE_RESP=$(curl -sf --max-time 15 "$CF_API/config/active-source" 2>/dev/null || echo '{}')
+ACTIVE_OK=$(printf '%s' "$ACTIVE_RESP" | jsonfilter -e '@.ok' 2>/dev/null || true)
+ACTIVE_TYPE=$(printf '%s' "$ACTIVE_RESP" | jsonfilter -e '@.data.active_source.type' 2>/dev/null || true)
+ACTIVE_SUB_ID=$(printf '%s' "$ACTIVE_RESP" | jsonfilter -e '@.data.active_source.sub_id' 2>/dev/null || true)
+if [ "$ACTIVE_OK" = "true" ] && [ "$ACTIVE_TYPE" = "subscription" ] && [ "$ACTIVE_SUB_ID" = "$SUB_ID" ]; then
+    record PASS SL-03a "活跃订阅读回" "ok:true，subscription 且 sub_id 匹配" "独立 GET 已确认活跃订阅"
+else
+    record FAIL SL-03a "活跃订阅读回" "ok:true，subscription 且 sub_id 匹配" "来源缺失或不匹配（响应已脱敏）"
     exit 1
 fi
 
