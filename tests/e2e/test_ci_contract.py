@@ -175,6 +175,69 @@ test() {
             self.assertIn('python3 tests/e2e/test_ci_contract.py', text)
             self.assertIn('./tests/integration', text)
 
+    def test_android_cfgen_tls_regressions_are_executed(self):
+        steps = workflow('android-ci.yml')['jobs']['test']['steps']
+        gates = [s for s in steps if s.get('working-directory') == 'mobile/cfgen']
+        self.assertEqual(len(gates), 1)
+        gate = gates[0]
+        self.assertEqual(shlex.split(gate['run']), ['go', 'test', '-race', '-p', '2', '-count=1', './...'])
+        self.assertEqual(gate['env']['GOMAXPROCS'], '2')
+        self.assertEqual(gate['if'], "needs.changes.outputs.mobile == 'true'")
+        self.assertNotIn('continue-on-error', gate)
+        self.assertTrue(any(s.get('uses', '').startswith('actions/setup-go@')
+                            for s in steps[:steps.index(gate)]))
+
+    def test_android_jvm_regressions_are_a_required_test_gate(self):
+        steps = workflow('android-ci.yml')['jobs']['test']['steps']
+        gates = [s for s in steps if 'testDebugUnitTest' in s.get('run', '')]
+        self.assertEqual(len(gates), 1, 'native ownership/routing tests must execute in CI')
+        gate = gates[0]
+        self.assertEqual(gate['working-directory'], 'mobile/android')
+        self.assertEqual(gate['if'], "needs.changes.outputs.mobile == 'true'")
+        self.assertNotIn('continue-on-error', gate)
+        self.assertLessEqual(gate['timeout-minutes'], 15)
+        self.assertIn('--no-daemon --max-workers=2', gate['run'])
+        self.assertIn('-Xmx1536m', gate['run'])
+        self.assertIn('-Pkotlin.compiler.execution.strategy=in-process', gate['run'])
+        self.assertNotIn('|| true', gate['run'])
+        self.assertIn('test', workflow('android-ci.yml')['jobs']['e2e']['needs'])
+
+    def test_android_jvm_wrapper_bootstrap_preserves_failures_and_existing_files(self):
+        steps = workflow('android-ci.yml')['jobs']['test']['steps']
+        gates = [s for s in steps if 'testDebugUnitTest' in s.get('run', '')]
+        self.assertEqual(len(gates), 1)
+        # Recording-only wrapper; the actual Gradle/JUnit run is a separate gate.
+        for existing in (False, True):
+            for exit_code in (0, 23):
+                with self.subTest(existing=existing, exit_code=exit_code), tempfile.TemporaryDirectory() as d:
+                    root = Path(d)
+                    sdk = root / 'flutter'
+                    wrapper = sdk / 'bin/cache/artifacts/gradle_wrapper'
+                    (wrapper / 'gradle/wrapper').mkdir(parents=True)
+                    (sdk / 'bin/flutter').write_text('#!/bin/sh\nexit 0\n')
+                    (sdk / 'bin/flutter').chmod(0o755)
+                    stub = '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARG_LOG"\nexit "$TEST_EXIT"\n'
+                    (wrapper / 'gradlew').write_text(stub)
+                    (wrapper / 'gradle/wrapper/gradle-wrapper.jar').write_bytes(b'fixture-wrapper')
+                    android = root / 'android'
+                    (android / 'gradle/wrapper').mkdir(parents=True)
+                    if existing:
+                        (android / 'gradlew').write_text(stub + '# preserve existing\n')
+                        (android / 'gradle/wrapper/gradle-wrapper.jar').write_bytes(b'existing-wrapper')
+                    env = dict(os.environ, PATH=str(sdk / 'bin') + os.pathsep + os.environ['PATH'],
+                               ARG_LOG=str(root / 'args'), TEST_EXIT=str(exit_code))
+                    result = subprocess.run(['bash', '-e', '-c', gates[0]['run']], cwd=android,
+                                            env=env, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, exit_code, result.stderr)
+                    args = (root / 'args').read_text().splitlines()
+                    self.assertIn(':app:testDebugUnitTest', args)
+                    self.assertIn('--max-workers=2', args)
+                    self.assertIn('-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m', args)
+                    jar = (android / 'gradle/wrapper/gradle-wrapper.jar').read_bytes()
+                    self.assertEqual(jar, b'existing-wrapper' if existing else b'fixture-wrapper')
+                    if existing:
+                        self.assertIn('# preserve existing', (android / 'gradlew').read_text())
+
     def test_android_keeps_real_subscription_and_lifecycle_gates(self):
         text = runs(workflow('android-ci.yml')['jobs']['e2e'])
         self.assertNotIn('apt-get install -y tor', text)
